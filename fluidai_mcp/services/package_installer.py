@@ -17,24 +17,20 @@ AUTH_TOKEN = os.getenv("MCP_TOKEN")
 INSTALL_BASE = os.environ.get("MCP_INSTALLATION_DIR", Path.cwd() / ".fmcp-packages")
 proxy_port = int(os.environ.get("MCP_FASTAPI_PORT", "8080"))
 
-def parse_package_string(package_str) -> dict:
-    '''
-    Parses a package string in the format "author/name@version" or "name@version".
+def parse_package_string(package_input) -> dict:
+    # Handle both single string and list of strings
+    if isinstance(package_input, list):
+        package_str = ' '.join(package_input)
+    else:
+        package_str = package_input
     
-    Args:
-        package_str (str): The package string to parse.
-    
-    Returns:
-        dict: A dictionary containing the author, name, and version.
-    '''
-    # Regular expression to match the package string format
+    # Enhanced regex that's more explicit about parsing
     pattern = r'(?:(?P<author>[^/]+)/)?(?P<name>[^@]+)(?:@(?P<version>.+))?'
     match = re.match(pattern, package_str)
-    # Check if the package string matches the expected format
+    
     if not match:
-        # Raise an error if the package string does not match the expected format
         raise ValueError(f"Invalid package format: {package_str}")
-    # Return a dictionary containing the author, name, and version
+    
     return {
         'author': match.group('author') or 'default',
         'package_name': match.group('name'),
@@ -196,7 +192,7 @@ def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, A
     
     try:
         # Make the API request to fetch the package metadata
-        response = requests.get("https://registry-dev.fluidmcp.com/fetch-metadata", headers=headers, params=payload)
+        response = requests.get("https://registry.fluidmcp.com/fetch-metadata", headers=headers, params=payload)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
