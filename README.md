@@ -1,3 +1,14 @@
+# MCP
+A protocol(interface) that defines how a model interacts with its external context/environment without being tightly coupled
+
+Model = Your logic.
+Context = The thing which provides you data (API, DB).
+Protocol = A Rule that connects the two.
+
+Goal = to make code easy to test by keeping Logic and data seperate.
+
+
+
 # FluidMCP CLI
 
 A powerful command-line interface for managing and running MCP (Model Context Protocol) servers. FluidMCP CLI allows you to install, configure, and run MCP packages from the FluidMCP registry with ease.
@@ -38,7 +49,7 @@ fluidmcp list
 
 **Run a package:**
 ```bash
-fluidmcp run package --port --start-server
+fluidmcp run package --port 8111 --start-server
 ```
 
 ---
@@ -87,7 +98,8 @@ fluidmcp run <package|all|file> [options]
 # Run a specific package with FastAPI client server
 fluidmcp run Airbnb/airbnb@0.1.0 --port 8200 --start-server
 
-# Run all installed packages
+#Run all installed packages
+#For runn all, FluidMCP automatically assigns unique ports to each server
 fluidmcp run all
 
 # Run with master S3 configuration
@@ -100,7 +112,7 @@ fluidmcp run <path-to-your-directory>config.json --file
 fluidmcp run https://s3.amazonaws.com/bucket/config.json --s3
 
 # Run with secure mode and custom token
-fluidmcp run Fluid_Ai/jupyter@1.0.0 --secure your-bearer-token --port 8200 --start-server
+fluidmcp run Fluid_AI/jupyter@1.0.0 --secure your-bearer-token --port 8200 --start-server
 ```
 
 **Options:**
@@ -143,7 +155,7 @@ fluidmcp edit-env <authorname/package@version>
 **Example:**
 ```bash
 # Edit environment variables for a specific package
-fluidmcp edit-env Fluid_Ai/jupyter@1.0.0
+fluidmcp edit-env Fluid_AI/jupyter@1.0.0
 ```
 
 **Features:**
@@ -162,7 +174,8 @@ FluidMCP CLI uses several environment variables for configuration:
 
 ```bash
 
-# S3 Configuration (for --master mode)
+# S3 Configuration (for --master mode you must set the S3 environment variables. Without these, --master mode operations will fail.)
+
 export S3_BUCKET_NAME="your-bucket"
 export S3_ACCESS_KEY="your-access-key"
 export S3_SECRET_KEY="your-secret-key"
@@ -292,8 +305,10 @@ INFO:     Uvicorn running on http://0.0.0.0:8099 (Press CTRL+C to quit)
 ```
 
 ### Quick-trying out MCP server:
-```python
+
 # IMP NOTE: You have to add GOOGLE_MAPS_API_KEY in .fmcp-packages/{Package}/metadata.json
+
+```python
 import requests
 import json
 
@@ -366,15 +381,16 @@ Status code: 200
 }
 ```
 You can further checkout 'examples/chat_google_maps.ipynb'
-### Using Server-Sent Events (SSE) for Streaming Responses
-
-For MCP tools that support incremental or chunked data delivery, FluidMCP provides a Server-Sent Events (SSE) endpoint. This is particularly useful for long-running operations or when you want to process data as it arrives, rather than waiting for the entire response. To use this, you would typically make a POST request to the `/{package_name}/sse` endpoint with your standard JSON-RPC payload. The server will then hold the connection open and stream back events, where each event's data field will contain a part of the JSON response. Clients should be configured to listen for these events and process them accordingly. This allows for a more responsive user experience, especially when dealing with large language models or other tools that generate output progressively.
 
 
 
 ---
 
 ## Advanced Usage
+
+### Using Server-Sent Events (SSE) for Streaming Responses
+
+For MCP tools that support incremental or chunked data delivery, FluidMCP provides a Server-Sent Events (SSE) endpoint. This is particularly useful for long-running operations or when you want to process data as it arrives, rather than waiting for the entire response. To use this, you would typically make a POST request to the `/{package_name}/sse` endpoint with your standard JSON-RPC payload. The server will then hold the connection open and stream back events, where each event's data field will contain a part of the JSON response. Clients should be configured to listen for these events and process them accordingly. This allows for a more responsive user experience, especially when dealing with large language models or other tools that generate output progressively.
 
 ### Master Mode
 
