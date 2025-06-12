@@ -2,9 +2,10 @@ import os
 import signal
 import socket
 import psutil
+import platform
+import subprocess
 from pathlib import Path
 import json
-import subprocess
 import sys
 import threading
 from loguru import logger
@@ -18,20 +19,45 @@ def is_port_in_use(port):
     returns:
         bool: True if the port is in use, False otherwise.
     '''
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(('localhost', port)) == 0
+    try:
+        # Try to bind to the port
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(('localhost', port))
+            return False
+    except OSError:
+        return True
+
+def get_pid_on_port_macos(port):
+    """macOS-specific method to get PID on port using lsof"""
+    try:
+        # Use lsof command which works without special permissions
+        result = subprocess.run(
+            ['lsof', '-ti', f':{port}'], 
+            capture_output=True, 
+            text=True, 
+            check=False
+        )
+        if result.stdout.strip():
+            return int(result.stdout.strip().split('\n')[0])
+        return None
+    except (subprocess.SubprocessError, ValueError):
+        return None
 
 def get_pid_on_port(port):
-    '''
-    Get the PID of the process using a specific port.
-    args :
-        port (int): The port number to check.
-    returns:
-        int: The PID of the process using the port, or None if no process is found.
-    '''
-    for conn in psutil.net_connections():
-        if conn.status == 'LISTEN' and conn.laddr.port == port:
-            return conn.pid
+    """Get the PID of the process using the given port"""
+    
+    # Use macOS-specific method if on macOS
+    if platform.system() == "Darwin":
+        return get_pid_on_port_macos(port)
+    
+    # Original method for other platforms
+    try:
+        for conn in psutil.net_connections():
+            if conn.laddr.port == port and conn.status == psutil.CONN_LISTEN:
+                return conn.pid
+    except (psutil.AccessDenied, PermissionError):
+        # Fallback for permission issues
+        return None
     return None
 
 def kill_process(pid):
@@ -59,10 +85,19 @@ def kill_process_on_port(port):
     """
     pid = get_pid_on_port(port)
     if pid:
-        kill_process(pid)
-        print(f"Existing process on port {port} killed.")
+        print(f"🔄 Killing process {pid} on port {port}")
+        
+        # Use different methods based on OS
+        if platform.system() == "Darwin":
+            # macOS: Use kill command
+            subprocess.run(['kill', '-9', str(pid)], check=False)
+        else:
+            kill_process(pid)
+            print(f"Existing process on port {port} killed.")
         return True
-    return False
+    else:
+        print(f"📍 No process found on port {port}")
+        return False
 
 def find_free_port(start=8100, end=9000, taken_ports=None):
     """Find an available port in the given range that is not already taken.

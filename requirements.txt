@@ -39,3 +39,4 @@ urllib3==2.4.0
 uvicorn==0.34.2
 uv==0.7.2
 asyncio==3.4.3
+aiohttp==3.9.4
