@@ -5,9 +5,11 @@
 
 ---
 
-<img src="fluidai_mcp/media/file_1.gif" alt="Alt Text" style="width:55%; height:auto;">
+![fluidmcp_file+(online-video-cutter](https://github.com/user-attachments/assets/a73dbd21-56fc-4bde-9228-29de816d5816)
 
 </div>
+
+
 
 
 ---
@@ -83,7 +85,7 @@ fluidmcp run ./config.json --file
 
 
 
-![Secure Mode Demo](fluidai_mcp/media/secure_1.gif)
+![fluidmcp_secure+(online-video-cutter](https://github.com/user-attachments/assets/404a3f06-dda2-4e19-a365-e08322947fdc)
 
 
 ---
@@ -279,7 +281,10 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 
 ---
 
-<img src="fluidai_mcp/media/install.gif" alt="Alt Text" style="width:35%; height:auto;">
+
+![fluidmcp_install (1)](https://github.com/user-attachments/assets/658106c4-ebe4-4503-a64a-694ea9acd5f8)
+
+
 
 </div>
 
@@ -291,7 +296,8 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 
 ---
 
-<img src="fluidai_mcp/media/run_individual.gif" alt="Alt Text" style="width:35%; height:auto;">
+![fluidmcp_run_individual (1)](https://github.com/user-attachments/assets/11ac8c7e-1849-495a-bb7e-db89943bb3a0)
+
 
 </div>
 
@@ -303,7 +309,7 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 
 ---
 
-<img src="fluidai_mcp/media/edit_env.gif" alt="Alt Text" style="width:35%; height:auto;">
+![fluidmcp_edit-env (1)](https://github.com/user-attachments/assets/a399e667-22a5-4475-8789-dbe0bb14cb62)
 
 </div>
 
