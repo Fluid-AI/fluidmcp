@@ -8,7 +8,7 @@ from typing import Dict, Any
 from pathlib import Path
 from loguru import logger
 from io import BytesIO
-from .env_manager import write_keys_during_install
+from .env_manager import write_keys_during_install, prompt_for_env_variables
 from .package_list import get_latest_version_dir
 
 # Environment variables for configuration
@@ -115,16 +115,21 @@ def install_package(package_str, skip_env=False):
         else:
             raise Exception("Unknown file type received from S3")
 
+        # NEW: Handle environment variables during installation
         try:
-            write_keys_during_install(dest_dir, pkg, skip_env=skip_env)
+            if not skip_env:
+                prompt_for_env_variables(dest_dir, pkg)
+            else:
+                write_keys_during_install(dest_dir, pkg, skip_env=skip_env)
         except Exception as e:
-            print(f":x: Error writing keys during installation: {e}")
+            print(f":x: Error setting up environment variables: {e}")
             return
         
         print(f":white_check_mark: Installation completed successfully.")
     except Exception as e:
         # Handle any errors that occur during the installation process
         print(f":x: Installation failed: {e}")
+
 
 def package_exists(dest_dir: Path) -> bool:
     """Check if the destination directory exists.

@@ -603,17 +603,22 @@ def install_command(args):
     Handles the 'install' CLI command, including --master logic.
     """
     pkg = parse_package_string(args.package)
-    # Install the package, skip env prompts if --master
-    install_package(args.package, skip_env=getattr(args, "master", False))
+    # Install the package, skip env prompts ONLY if --master flag is used
+    skip_env = getattr(args, "master", False)
+    install_package(args.package, skip_env=skip_env)
+    
     try:
         dest_dir = resolve_package_dest_dir(args.package)
     except Exception as e:
         print(str(e))
         sys.exit(1)
+        
     if not package_exists(dest_dir):
         print(f"Package not found at {dest_dir}. Have you installed it?")
         sys.exit(1)
-    if getattr(args, "master", False):
+        
+    # Only use master env logic if --master flag is used
+    if skip_env:  # This means --master was used
         update_env_from_common_env(dest_dir, pkg)
 
 def run_from_source(source,source_path, secure_mode=False, token=None):
