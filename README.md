@@ -1,10 +1,11 @@
-<h1 align="center" style="font-size: 4.2em;">🌀 FluidMCP CLI</h1>
-<p align="center"><strong>Run your MCP server with just one file</strong></p>
+<h1  style="font-size: 4.2em;">🌀 FluidMCP CLI</h1>
+<p ><strong>Run your MCP server with just one file</strong></p>
 
-<div align="center">
+<div>
 
+---
 
-<img src="fluidai_mcp/media/file.gif" alt="Alt Text" style="width:75%; height:auto;">
+<img src="fluidai_mcp/media/file_1.gif" alt="Alt Text" style="width:55%; height:auto;">
 
 </div>
 
@@ -82,7 +83,7 @@ fluidmcp run ./config.json --file
 
 
 
-![Secure Mode Demo](fluidai_mcp/media/--secure.gif)
+![Secure Mode Demo](fluidai_mcp/media/secure_1.gif)
 
 
 ---
@@ -272,10 +273,40 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 
 ## 📸 Demo GIFs
 
+### Installing an individual package
 
-- ![Install Demo](media/install.gif)
-- ![Run All](media/run-all.gif)
-- ![Edit Env](media/edit-env.gif)
+<div>
+
+---
+
+<img src="fluidai_mcp/media/install.gif" alt="Alt Text" style="width:35%; height:auto;">
+
+</div>
+
+---
+
+### Running an individual package
+
+<div>
+
+---
+
+<img src="fluidai_mcp/media/run_individual.gif" alt="Alt Text" style="width:35%; height:auto;">
+
+</div>
+
+---
+
+### Edit environment of an package
+
+<div>
+
+---
+
+<img src="fluidai_mcp/media/edit_env.gif" alt="Alt Text" style="width:35%; height:auto;">
+
+</div>
+
 
 
 ---
