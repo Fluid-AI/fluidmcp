@@ -271,7 +271,7 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 ---
 
 
-## 📸 Demo GIFs
+## 📸 Demo 
 
 ### Installing an individual package
 
