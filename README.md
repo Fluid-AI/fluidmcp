@@ -1,13 +1,16 @@
 <h1  style="font-size: 4.2em;">🌀 FluidMCP CLI</h1>
 <p ><strong>Run your MCP server with just one file</strong></p>
 
-<div>
-
 ---
 
-![fluidmcp_file+(online-video-cutter](https://github.com/user-attachments/assets/a73dbd21-56fc-4bde-9228-29de816d5816)
+<p >
+  <img src="https://github.com/user-attachments/assets/124fe846-a343-46c4-a4c7-271573785b21" width="600"/>
+</p>
 
-</div>
+<p >
+  <img src="https://github.com/user-attachments/assets/096b8ae5-c695-45c4-b4e9-922629c1447c" width="600"/>
+</p>
+
 
 
 
@@ -277,43 +280,25 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 
 ### Installing an individual package
 
-<div>
-
----
-
-
-![fluidmcp_install (1)](https://github.com/user-attachments/assets/658106c4-ebe4-4503-a64a-694ea9acd5f8)
-
-
-
-</div>
+<p>
+  <img src="https://github.com/user-attachments/assets/658106c4-ebe4-4503-a64a-694ea9acd5f8" width="800"/>
+</p>
 
 ---
 
 ### Running an individual package
 
-<div>
+<p>
+  <img src="https://github.com/user-attachments/assets/11ac8c7e-1849-495a-bb7e-db89943bb3a0" width="800"/>
+</p>
 
 ---
 
-![fluidmcp_run_individual (1)](https://github.com/user-attachments/assets/11ac8c7e-1849-495a-bb7e-db89943bb3a0)
+### Edit environment of a package
 
-
-</div>
-
----
-
-### Edit environment of an package
-
-<div>
-
----
-
-![fluidmcp_edit-env (1)](https://github.com/user-attachments/assets/a399e667-22a5-4475-8789-dbe0bb14cb62)
-
-</div>
-
-
+<p>
+  <img src="https://github.com/user-attachments/assets/a399e667-22a5-4475-8789-dbe0bb14cb62" width="800"/>
+</p>
 
 ---
 
