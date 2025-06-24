@@ -18,6 +18,7 @@ from fluidai_mcp.services.package_list import get_latest_version_dir
 from fluidai_mcp.services.package_installer import package_exists,install_package_from_file,replace_package_metadata_from_package_name
 from fluidai_mcp.services.env_manager import update_env_from_config
 from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
+from fluidai_mcp.services.package_uploader import upload_package
 import requests
 from fastapi import FastAPI, Request, APIRouter
 import uvicorn
@@ -616,6 +617,62 @@ def install_command(args):
     if getattr(args, "master", False):
         update_env_from_common_env(dest_dir, pkg)
 
+def upload_command(args):
+    """
+    Handle the upload command to upload a package to the registry.
+    
+    Args:
+        args (argparse.Namespace): The parsed command line arguments.
+    """
+    try:
+        # Resolve package directory using existing function
+        dest_dir = resolve_package_dest_dir(args.package)
+        
+        if not package_exists(dest_dir):
+            print(f"Package not found at {dest_dir}. Have you installed it?")
+            sys.exit(1)
+        
+        # Parse package string using existing function
+        pkg = parse_package_string(args.package)
+        
+        
+        description = input("Enter package description: ").strip()
+        if not description:
+            print("Description is required for upload.")
+            sys.exit(1)
+        
+        
+        alias_input = input("Enter alias (optional, press Enter to skip): ").strip()
+        alias = alias_input if alias_input else None
+        
+        print(f"📦 Preparing to upload {pkg['author']}/{pkg['package_name']}@{pkg['version']}")
+        print(f"📁 Source directory: {dest_dir}")
+        print(f"📝 Description: {description}")
+        if alias:
+            print(f"🏷️  Alias: {alias}")
+        
+        # Confirm upload
+        confirm = input("\nProceed with upload? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("Upload cancelled.")
+            return
+        
+        # Upload package
+        success = upload_package(pkg, dest_dir, description, alias)
+        
+        if success:
+            print("✅ Package uploaded successfully!")
+        else:
+            print("❌ Upload failed. Check logs for details.")
+            sys.exit(1)
+            
+    except FileNotFoundError as e:
+        print(f"❌ {str(e)}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error uploading package: {str(e)}")
+        sys.exit(1)
+
 def run_from_source(source,source_path, secure_mode=False, token=None):
     try:
         if source == "file":
@@ -879,6 +936,10 @@ def main():
     run_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     run_parser.add_argument("--s3", action="store_true", help="Treat package argument as path to S3 URL to a JSON file containing server configurations (format: s3://bucket-name/key)")
 
+    #Upload command
+    upload_parser = subparsers.add_parser("upload", help="Upload a package to registry")
+    upload_parser.add_argument("package", type=str, help="<author/package@version>")
+
     # list command
     subparsers.add_parser("list", help="List installed packages")
 
@@ -924,5 +985,7 @@ def main():
         edit_env(args)
     elif args.command == "list":
         list_installed_packages()
+    elif args.command == "upload":
+        upload_command(args)
     else:
         parser.print_help()
