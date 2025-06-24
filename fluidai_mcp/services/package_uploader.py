@@ -82,6 +82,10 @@ def upload_package_to_registry(
         bool: True if upload successful, False otherwise
     """
     try:
+        if AUTH_TOKEN is None:
+            logger.error("Authentication token (MCP_TOKEN) is not set")
+            return False
+            
         headers = {"Authorization": AUTH_TOKEN}
         
         # Determine content type based on file extension
