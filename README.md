@@ -2,13 +2,9 @@
 <p ><strong>Run your MCP server with just one file</strong></p>
 
 ---
-<p >
-  <video autoplay loop muted playsinline width="800">
-    <source src="https://github.com/user-attachments/assets/ace6a67b-a2f7-45b8-a040-2db1aed8bcd2" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</p>
 
+
+![fluidmcp_file_](https://github.com/user-attachments/assets/56bac081-0027-48c5-9462-f06e83cabcf7)
 
 
 
@@ -85,25 +81,14 @@ fluidmcp run ./config.json --file
 `fluidmcp file_directory/config.json --file --secure --token your_token --start-server`
 
 
+![fluidmcp_secure_1](https://github.com/user-attachments/assets/6d5d38c5-c912-476a-af85-f7da44b15358)
 
-<p >
-  <video autoplay loop muted playsinline width="800">
-    <source src="https://github.com/user-attachments/assets/fb81db4e-e189-4cbe-9b34-befe7190840f" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</p>
 
 ---
 
 ### after authorisation
 
-<p >
-  <video autoplay loop muted playsinline width="800">
-    <source src="https://github.com/user-attachments/assets/1bbfd0e1-060e-4106-a1ce-77f46c7ac37d" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</p>
-
+![fluidmcp_secure_2](https://github.com/user-attachments/assets/5bc9e34c-99fc-46c3-ba75-025de9077811)
 
 
 
@@ -296,37 +281,21 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 
 ### Installing an individual package
 
-<p >
-  <video autoplay loop muted playsinline width="800">
-    <source src="https://github.com/user-attachments/assets/38f14459-7c62-4e88-8ffc-7bcd47191bba" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</p>
 
+![fluidmcp_install](https://github.com/user-attachments/assets/39b6fc64-6b46-4045-84df-63af298fe6bf)
 
 ---
 
 ### Running an individual package
 
-<p >
-  <video autoplay loop muted playsinline width="800">
-    <source src="https://github.com/user-attachments/assets/ccad65fe-f733-47cf-98b6-bcbb5c281022" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</p>
+![fluidmcp_run_individual (2)](https://github.com/user-attachments/assets/4073c072-3210-4e88-a84a-162e13af168b)
 
 
 ---
 
 ### Edit environment of a package
 
-<p >
-  <video autoplay loop muted playsinline width="800">
-    <source src="https://github.com/user-attachments/assets/a36a832d-0ac7-44ab-8831-ecbf7e3032c7" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-</p>
-
+![fluidmcp_edit-env (2)](https://github.com/user-attachments/assets/b8cf8a0c-3434-4730-8d0e-1e74b6357edd)
 
 ---
 
