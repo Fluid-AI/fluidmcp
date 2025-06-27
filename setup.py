@@ -25,7 +25,9 @@ setup(
         "loguru",
         "pathlib",
         "psutil",
-        "boto3"  # Added boto3 for S3 operations
+        "boto3",
+        "fastapi",
+        "uvicorn"  
     ],
     entry_points={
         'console_scripts': [
