@@ -18,6 +18,7 @@ from fluidai_mcp.services.package_list import get_latest_version_dir
 from fluidai_mcp.services.package_installer import package_exists,install_package_from_file,replace_package_metadata_from_package_name
 from fluidai_mcp.services.env_manager import update_env_from_config
 from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
+from fluidai_mcp.services import process_alias
 import requests
 from fastapi import FastAPI, Request, APIRouter
 import uvicorn
@@ -914,12 +915,15 @@ def main():
     if args.command == "install":
         # Join the package arguments into a single string to handle spaces
         package_str = ' '.join(args.package)
+
+
+        # Process alias if needed (no '/' in the package string)
+        if '/' not in package_str:
+            package_str = process_alias(package_str)
         
-        # Create a simple argparse.Namespace object with the package attribute
-        # This solves the AttributeError by providing an object with a package attribute
-        install_args = argparse.Namespace(package=package_str, master=getattr(args, 'master', False))
-        install_command(install_args)
+        install_package(package_str)
     elif args.command == "run":
+        
         # Handle the different cases where args.package is now a list
         
         if hasattr(args, 's3') and args.s3:
@@ -943,6 +947,17 @@ def main():
             # Normal package mode - run_server will handle the list via resolve_package_dest_dir
             run_server(args, secure_mode=secure_mode, token=token)
     elif args.command == "edit-env":
+        # Join the package arguments into a single string to handle spaces
+        package_str = ' '.join(args.package)
+        
+        # Process alias if needed (no '/' in the package string)
+        if '/' not in package_str:
+            package_str = process_alias(package_str)
+            
+        # Update the package attribute with the processed string
+        args.package = package_str
+        
+        # Call the edit_env function with the updated args
         edit_env(args)
     elif args.command == "list":
         list_installed_packages()
