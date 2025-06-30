@@ -156,6 +156,80 @@ def edit_env_variables(dest_dir: Union[str, Path]):
     except Exception as e:
         logger.info(f":x: Error editing environment variables: {e}")
 
+def prompt_for_env_variables(dest_dir: Path, pkg: dict):
+    """
+    Prompt user to set environment variables for the installed package.
+    
+    Args:
+        dest_dir (Path): The destination directory of the installed package.
+        pkg (dict): The package metadata dictionary.
+    """
+    metadata_path = dest_dir / "metadata.json"
+    
+    if not metadata_path.exists():
+        print(f":information_source: No metadata.json found for this package.")
+        return
+    
+    try:
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+    except json.JSONDecodeError:
+        print(f":x: Error reading metadata.json")
+        return
+    
+    # Get the package name from the metadata
+    package_name = pkg.get("package_name")
+    if not package_name:
+        print(f":x: Package name not found in metadata")
+        return
+    
+    # Check if this package has environment variables
+    mcp_servers = metadata.get("mcpServers", {})
+    if package_name not in mcp_servers:
+        # Sometimes the key might be different, try to find it
+        for key in mcp_servers.keys():
+            if key.lower() == package_name.lower():
+                package_name = key
+                break
+        else:
+            print(f":information_source: No server configuration found for {package_name}")
+            return
+    
+    server_config = mcp_servers[package_name]
+    env_vars = server_config.get("env", {})
+    
+    if not env_vars:
+        print(f":information_source: No environment variables required for this package.")
+        return
+    
+    print(f"\n:gear: Setting up environment variables for {package_name}")
+    print("Press Enter to skip any variable you don't want to set now.")
+    print("You can always use 'fmcp edit-env <package>' to modify these later.\n")
+    
+    updated_env = {}
+    
+    for env_key, env_value in env_vars.items():
+        # Always prompt with current value shown
+        prompt_text = f"Enter value for {env_key} (current: '{env_value}'): "
+        user_input = input(prompt_text).strip()
+        
+        if user_input:
+            updated_env[env_key] = user_input
+            print(f":white_check_mark: Set {env_key}")
+        else:
+            updated_env[env_key] = env_value  # Keep original value
+            print(f":information_source: Kept existing value for {env_key}")
+    
+    # Update the metadata with new environment values
+    mcp_servers[package_name]["env"] = updated_env
+    
+    try:
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"\n:white_check_mark: Environment variables updated successfully.")
+    except Exception as e:
+        print(f":x: Error saving environment variables: {e}")
+
 
 def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], skip_env: bool = False):
     '''
