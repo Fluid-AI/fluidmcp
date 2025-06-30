@@ -12,8 +12,8 @@ from .env_manager import write_keys_during_install
 from .package_list import get_latest_version_dir
 
 # Environment variables for configuration
-API_URL = os.getenv("MCP_FETCH_URL", "https://registry-dev.fluidmcp.com/fetch-mcp-package")
-AUTH_TOKEN = os.getenv("MCP_TOKEN", "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IjlyT1VYVjFHeTBNZTN6TTY1Sl9iTiJ9.eyJpc3MiOiJodHRwczovL2Rldi0zZTVlbTZhcTh2c3dmZTdxLnVzLmF1dGgwLmNvbS8iLCJzdWIiOiJnb29nbGUtb2F1dGgyfDEwOTY2NTMzOTE4NTYxNDgxNTg5NyIsImF1ZCI6WyJodHRwczovL2Rldi0zZTVlbTZhcTh2c3dmZTdxLnVzLmF1dGgwLmNvbS9hcGkvdjIvIiwiaHR0cHM6Ly9kZXYtM2U1ZW02YXE4dnN3ZmU3cS51cy5hdXRoMC5jb20vdXNlcmluZm8iXSwiaWF0IjoxNjc4ODYxOTE3LCJleHAiOjE2Nzg5NDgzMTcsImF6cCI6IlJUTVZEc3RQZ0RWYnpEQzVpU1J4VVFsdnhNTFIzUThPIiwic2NvcGUiOiJvcGVuaWQifQ.kzwoPCGYsnsHbzllAcx3pf3aJd8EOAsrocHxwUuWeMOfBhyZ10bnLrqfhtghHXOJUpyR8tvaj6pAcXhYtjaNyGLiQg3JpD0PcOIbXCQ6JwgGbaOpP7XC4dDPpcsbQGtXY4HHstE1YrQcHlT293MeXdHYcG1h8q9P-QXBeG3Ud8kP4aiOLAngPP5FlHFdSDKlJE3uOUFnepfdQUc5XnWyNZZSMzkwnlejSFwyW6un6yhtlpNedfKU1Oclyjv_BdvF3PmSt23CUyOCZANo-yIYk_KA2E4JMd_OVGp81xwfYA7g_Z4XmifzFykbA0Ne_Ldk11EluvJxILYgBgHl1anTKA")
+API_URL = os.getenv("MCP_FETCH_URL", "https://registry.fluidmcp.com/fetch-mcp-package")
+AUTH_TOKEN = os.getenv("MCP_TOKEN")
 INSTALL_BASE = os.environ.get("MCP_INSTALLATION_DIR", Path.cwd() / ".fmcp-packages")
 proxy_port = int(os.environ.get("MCP_FASTAPI_PORT", "8080"))
 
