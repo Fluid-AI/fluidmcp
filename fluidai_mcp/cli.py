@@ -884,7 +884,14 @@ def main():
 
     # edit-env commannd
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
-    edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
+    edit_env_parser.add_argument("package", type=str, help="<package[@version]>")    # Remote client parser
+    remote_parser = subparsers.add_parser("remote", help="Run FluidMCP remote client bridge")
+    remote_parser.add_argument("server_url", nargs="?", default="http://localhost:8099",
+                              help="FluidMCP server URL (default: http://localhost:8099)")
+    remote_parser.add_argument("--package-name", 
+                              help="Package name to connect to (auto-detect if not specified)")
+    remote_parser.add_argument("--bearer-token", 
+                              help="Bearer token for authentication")
 
     # Parse the command line arguments and run the appropriate command to the subparsers 
     args = parser.parse_args()
@@ -924,5 +931,26 @@ def main():
         edit_env(args)
     elif args.command == "list":
         list_installed_packages()
+    elif args.command == "remote":
+        run_remote_client(args)
     else:
         parser.print_help()
+
+def run_remote_client(args):
+    """Run FluidMCP remote client bridge"""
+    import asyncio
+    from fluidai_mcp.services.mcp_remote_client import FluidMCPRemoteClient
+    
+    # Set environment variables from args
+    os.environ["FMCP_SERVER_URL"] = args.server_url  # Now using positional arg
+    if args.package_name:
+        os.environ["FMCP_PACKAGE_NAME"] = args.package_name
+    if args.bearer_token:
+        os.environ["FMCP_BEARER_TOKEN"] = args.bearer_token
+    
+    print(f"🔗 Starting FluidMCP remote client", file=sys.stderr)
+    print(f"📡 Server: {args.server_url}", file=sys.stderr)
+    print(f"📦 Package: {os.environ.get('FMCP_PACKAGE_NAME', 'auto-detect')}", file=sys.stderr)
+    
+    client = FluidMCPRemoteClient()
+    asyncio.run(client.run())
