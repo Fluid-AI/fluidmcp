@@ -931,7 +931,12 @@ def main():
             else:
                 run_all(secure_mode=secure_mode, token=token)
         else:
+            # Join the package arguments into a single string to handle spaces
+            package_str = ' '.join(args.package)
             
+            # Update the package attribute with the processed string
+            args.package = package_str
+
             # Normal package mode - run_server will handle the list via resolve_package_dest_dir
             run_server(args, secure_mode=secure_mode, token=token)
     elif args.command == "edit-env":
