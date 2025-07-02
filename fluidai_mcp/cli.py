@@ -864,12 +864,12 @@ def main():
     # Add subparsers for different commands
     # install command 
     install_parser = subparsers.add_parser("install", help="Install a package")
-    install_parser.add_argument("package", type=str, help="<author/package@version>")
+    install_parser.add_argument("package",  nargs='+', type=str, help="<author/package@version>")
     install_parser.add_argument("--master", action="store_true", help="Use master env file for API keys")
 
     # run command
     run_parser = subparsers.add_parser("run", help="Run a package")
-    run_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
+    run_parser.add_argument("package",   nargs='+', type=str, help="<package[@version]> or path to JSON file when --file is used")
     run_parser.add_argument("--port", type=int, help="Port for SuperGateway (default: 8111)")
     run_parser.add_argument("--start-server", action="store_true", help="Start FastAPI client server")
     run_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
@@ -884,7 +884,7 @@ def main():
 
     # edit-env commannd
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
-    edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
+    edit_env_parser.add_argument("package", nargs='+',type=str, help="<package[@version]>")
 
     # Parse the command line arguments and run the appropriate command to the subparsers 
     args = parser.parse_args()
@@ -906,21 +906,47 @@ def main():
 
     # Main Command dispatch Logic 
     if args.command == "install":
-        install_command(args)
+        # Join the package arguments into a single string to handle spaces
+        package_str = ' '.join(args.package)
+        
+        install_package(package_str)
     elif args.command == "run":
+        
+        # Handle the different cases where args.package is now a list
+        
         if hasattr(args, 's3') and args.s3:
-            run_from_source("s3",args.package, secure_mode=secure_mode, token=token)
+            # For S3 mode, join the package arguments (could be a URL with spaces)
+            s3_url = ' '.join(args.package)
+            run_from_source("s3", s3_url, secure_mode=secure_mode, token=token)
+            
         elif hasattr(args, 'file') and args.file:
-            # When --file flag is used, treat args.package as the file path
-            run_from_source("file",args.package, secure_mode=secure_mode, token=token)
-        elif args.package.lower() == "all":
+            # For file mode, join the package arguments (could be a file path with spaces)
+            file_path = ' '.join(args.package)
+            run_from_source("file", file_path, secure_mode=secure_mode, token=token)
+            
+        elif ' '.join(args.package).lower() == "all":
+            # Check if the joined package string is "all"
             if args.master:
                 run_all_master(args, secure_mode=secure_mode, token=token)
             else:
                 run_all(secure_mode=secure_mode, token=token)
         else:
+            # Join the package arguments into a single string to handle spaces
+            package_str = ' '.join(args.package)
+            
+            # Update the package attribute with the processed string
+            args.package = package_str
+
+            # Normal package mode - run_server will handle the list via resolve_package_dest_dir
             run_server(args, secure_mode=secure_mode, token=token)
     elif args.command == "edit-env":
+        # Join the package arguments into a single string to handle spaces
+        package_str = ' '.join(args.package)
+            
+        # Update the package attribute with the processed string
+        args.package = package_str
+        
+        # Call the edit_env function with the updated args
         edit_env(args)
     elif args.command == "list":
         list_installed_packages()
