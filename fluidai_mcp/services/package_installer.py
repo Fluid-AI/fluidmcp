@@ -196,7 +196,7 @@ def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, A
     
     try:
         # Make the API request to fetch the package metadata
-        response = requests.get("https://registry-dev.fluidmcp.com/fetch-metadata", headers=headers, params=payload)
+        response = requests.get("https://registry.fluidmcp.com/fetch-metadata", headers=headers, params=payload)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
