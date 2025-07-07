@@ -18,6 +18,7 @@ from fluidai_mcp.services.package_list import get_latest_version_dir
 from fluidai_mcp.services.package_installer import package_exists,install_package_from_file,replace_package_metadata_from_package_name
 from fluidai_mcp.services.env_manager import update_env_from_config
 from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
+from fluidai_mcp.services.alias_resolver import process_alias
 import requests
 from fastapi import FastAPI, Request, APIRouter
 import uvicorn
@@ -440,10 +441,17 @@ def run_all_master(args, secure_mode=False, token=None):
         fmcp_packages.append(server_metadata.get("fmcp_package"))
 
     # Install packages using --master logic (skip_env=True and update_env_from_common_env)
-    for package in fmcp_packages:
-        print("**** Installing package:", package)
-        pkg = parse_package_string(package)
-        install_package(package, skip_env=True)
+    for original_package in fmcp_packages:
+        print("**** Installing package:", original_package)
+        
+        # Process alias if needed
+        resolved_package = original_package
+        if '/' not in original_package:
+            resolved_package = process_alias(original_package)
+            
+        pkg = parse_package_string(resolved_package)
+        install_package(resolved_package, skip_env=True)
+        
         # Find installed package directory
         author, package_name = pkg["author"], pkg["package_name"]
         version = pkg.get("version")
@@ -651,22 +659,27 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
             return
         
         # Install packages and use env variables from the config file
-        for package in fmcp_packages:
+        for original_package in fmcp_packages:
+            # Process alias if needed
+            resolved_package = original_package
+            if '/' not in original_package:
+                resolved_package = process_alias(original_package)
+            
             # Get the package metadata 
-            pkg = parse_package_string(package)
+            pkg = parse_package_string(resolved_package)
 
             # Install the package and skip asking user for env variables
             try:
-                dest_dir = install_package_from_file(package, INSTALLATION_DIR, pkg)
+                dest_dir = install_package_from_file(resolved_package, INSTALLATION_DIR, pkg)
                 
                 # Update the install_path in the configuration with the actual path
                 for server_name, server_config in config["mcpServers"].items():
-                    if server_config.get("fmcp_package") == package:
+                    if server_config.get("fmcp_package") == original_package:  # Compare with original
                         server_config["install_path"] = str(dest_dir)
-                        print(f"Updated installation path for {package} to {dest_dir}")
+                        print(f"Updated installation path for {original_package} to {dest_dir}")
                         
             except Exception as e:
-                print(f"Error installing package {package}: {str(e)}")
+                print(f"Error installing package {original_package}: {str(e)}")
                 continue
 
             # After installation, update env variables from the config file            
@@ -675,9 +688,9 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
                 print(f"No metadata.json found in '{dest_dir}', skipping env variable update")
                 continue
             try:
-                update_env_from_config(metadata_path, package, config, pkg)  
+                update_env_from_config(metadata_path, original_package, config, pkg)  
             except Exception as e:
-                print(f"Error updating environment variables for {package}: {str(e)}")
+                print(f"Error updating environment variables for {original_package}: {str(e)}")
 
         # Launch each MCP server based on installation paths in the metadata
         print("Starting MCP servers based on installation paths in config file")
@@ -825,7 +838,15 @@ def preprocess_metadata_file(metadata_path):
             continue
         # Check if the package name is a string, if yes, replace the package metadata with the actual metadata from the package name
         else:
-            # Fetch the acutal metadata from the package name using a rest API call
+            # Process alias if needed
+            original_package = raw_metadata['mcpServers'][package]
+            if '/' not in original_package:
+                resolved_package = process_alias(original_package)
+                if resolved_package != original_package:
+                    print(f"Resolved alias '{original_package}' to '{resolved_package}'")
+                    raw_metadata['mcpServers'][package] = resolved_package
+            
+            # Fetch the actual metadata from the package name using a rest API call
             replaced_metadata = replace_package_metadata_from_package_name(raw_metadata['mcpServers'][package])
             #Store the fmcp package name before deletion from the metadata
             fmcp_package = raw_metadata['mcpServers'][package]
@@ -908,6 +929,10 @@ def main():
     if args.command == "install":
         # Join the package arguments into a single string to handle spaces
         package_str = ' '.join(args.package)
+
+        # Process alias if needed (no '/' in the package string)
+        if '/' not in package_str:
+            package_str = process_alias(package_str)
         
         install_package(package_str)
     elif args.command == "run":
@@ -933,7 +958,12 @@ def main():
         else:
             # Join the package arguments into a single string to handle spaces
             package_str = ' '.join(args.package)
-            
+
+
+            # Process alias if needed (no '/' in the package string)
+            if '/' not in package_str:
+                package_str = process_alias(package_str)
+
             # Update the package attribute with the processed string
             args.package = package_str
 
@@ -942,6 +972,10 @@ def main():
     elif args.command == "edit-env":
         # Join the package arguments into a single string to handle spaces
         package_str = ' '.join(args.package)
+
+        # Process alias if needed (no '/' in the package string)
+        if '/' not in package_str:
+            package_str = process_alias(package_str)
             
         # Update the package attribute with the processed string
         args.package = package_str
