@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from fluidai_mcp.services import install_package, edit_env_variables, parse_package_string
 import socket
-import os
 import json
 import boto3
 from botocore.exceptions import ClientError
@@ -12,6 +11,8 @@ from loguru import logger
 import secrets
 import subprocess
 import threading
+import io
+import contextlib
 from fluidai_mcp.services.network_utils import is_port_in_use,kill_process_on_port,find_free_port
 from fluidai_mcp.services.s3_utils import s3_upload_file, s3_download_file, load_json_file, write_json_file,validate_metadata_config
 from fluidai_mcp.services.package_list import get_latest_version_dir
@@ -21,6 +22,10 @@ from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
 import requests
 from fastapi import FastAPI, Request, APIRouter
 import uvicorn
+import threading
+import subprocess
+import sys
+import time
 
 # Get S3 credentials from environment variables
 bucket_name = os.environ.get("S3_BUCKET_NAME")
@@ -616,7 +621,73 @@ def install_command(args):
     if getattr(args, "master", False):
         update_env_from_common_env(dest_dir, pkg)
 
+def start_uvicorn_with_logging(app, port, secure_mode=False, token=None):
+    """
+    Start uvicorn in a separate thread and log its output
+    """
+
+    # Capture stdout/stderr from uvicorn
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    
+    def run_uvicorn():
+        """Run uvicorn in thread with output capture"""
+        try:
+            # Redirect stdout/stderr to capture streams
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+                uvicorn.run(
+                    app, 
+                    host="0.0.0.0", 
+                    port=port,
+                    log_level="info",
+                    access_log=True
+                )
+        except Exception as e:
+            stderr_capture.write(f"Uvicorn error: {str(e)}\n")
+    
+    def log_captured_output():
+        """Log the captured output in real-time"""
+        last_stdout_pos = 0
+        last_stderr_pos = 0
+        
+        while True:
+            # Check for new stdout content
+            stdout_capture.seek(last_stdout_pos)
+            new_stdout = stdout_capture.read()
+            if new_stdout:
+                for line in new_stdout.split('\n'):
+                    if line.strip():
+                        logger.info(f"FastAPI server logs: {line.strip()}")
+                last_stdout_pos = stdout_capture.tell()
+            
+            # Check for new stderr content
+            stderr_capture.seek(last_stderr_pos)
+            new_stderr = stderr_capture.read()
+            if new_stderr:
+                for line in new_stderr.split('\n'):
+                    if line.strip():
+                        logger.error(f"FastAPI server error: {line.strip()}")
+                last_stderr_pos = stderr_capture.tell()
+            
+            time.sleep(0.1)  # Check every 100ms
+    
+    # Start uvicorn in separate thread
+    uvicorn_thread = threading.Thread(target=run_uvicorn, daemon=True)
+    uvicorn_thread.start()
+    
+    # Start logging thread
+    log_thread = threading.Thread(target=log_captured_output, daemon=True)
+    log_thread.start()
+    
+    logger.info(f"FastAPI server started in thread on port {port}")
+    if secure_mode and token:
+        logger.info("🔒 Secure mode enabled")
+    
+    return uvicorn_thread
+
+
 def run_from_source(source,source_path, secure_mode=False, token=None):
+
     try:
         if source == "file":
             # Load the configuration from the file
@@ -635,12 +706,13 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
             print(f"Error processing ports from s3_metadata_all.json: {e}")
             return
         
-        # ADD: Set up secure mode environment variables
+        # Set up secure mode environment variables
         if secure_mode and token:
             os.environ["FMCP_BEARER_TOKEN"] = token
             os.environ["FMCP_SECURE_MODE"] = "true"
             print(f"🔒 Secure mode enabled with bearer token")
         
+
         #Fetch all fmcp_packages from the file
         try:
             fmcp_packages = []
@@ -649,7 +721,7 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
         except:
             print(f"Error processing fmcp_packages from s3_metadata_all.json: {e}")
             return
-        
+    
         # Install packages and use env variables from the config file
         for package in fmcp_packages:
             # Get the package metadata 
@@ -685,7 +757,12 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
         # Track successful servers
         launched_servers = 0
         
-        app=FastAPI()
+        app = FastAPI(
+            title="FluidMCP Gateway",
+            description="Gateway for MCP servers from configuration file using STDIO",
+            version="2.0.0"
+        )
+        
         for server_name, server_config in config["mcpServers"].items():
             # Check if install_path exists in the config
             if "install_path" not in server_config:
@@ -704,27 +781,46 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
                 print(f"No metadata.json found in '{install_path}' for server '{server_name}' skipping")
                 continue
                 
-            print(f"✅ Launching server '{server_name}' from path: {install_path}")
-            
-            # Launch the MCP server from this path
-            pkg_name,router=launch_mcp_using_fastapi_proxy(install_path)
-            app.include_router(router)
-            launched_servers += 1
+            try:
+                print(f"🚀 Launching server '{server_name}' from path: {install_path}")
+                
+                # Launch the MCP server from this path
+                pkg_name, router = launch_mcp_using_fastapi_proxy(install_path)
+                
+                if router:
+                    app.include_router(router, tags=[server_name])
+                    print(f"✅ Added {pkg_name} endpoints to unified app")
+                    launched_servers += 1
+                else:
+                    print(f"❌ Failed to create router for {server_name}")
+                    
+            except Exception as e:
+                print(f"❌ Error launching server '{server_name}': {e}")
             
         # Report on launches
         if launched_servers > 0:
             print(f"✅ Successfully launched {launched_servers} MCP servers")
         else:
-            print("No servers were launched. Check if installation paths exist.")
+            print("❌ No servers were launched. Check if installation paths exist.")
+            return
 
         # Launch the FastAPI client server after all MCP servers are up
-        # Check if the port is already in use, if yes, restart the port
-
         pid_killed = kill_process_on_port(client_server_all_port)
+        
+        print(f"🚀 Starting unified FastAPI server with {launched_servers} MCP servers")
+        print(f"📖 Swagger UI available at: http://localhost:{client_server_all_port}/docs")
 
-        # Start the FastAPI client server with the specified environment variables
-        uvicorn.run(app, host="0.0.0.0",port=int(client_server_all_port))
+
+        # WITH: This line
+        uvicorn_thread = start_uvicorn_with_logging(app, int(client_server_all_port), secure_mode, token)
+        
         logger.info(f"FastAPI client server has started successfully")
+        
+        # Keep main thread alive
+        try:
+            uvicorn_thread.join()
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
                 
     except FileNotFoundError:
         print(f"Error: Configuration file not found: {source_path}")
