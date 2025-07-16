@@ -1,7 +1,46 @@
 <h1  style="font-size: 4.2em;">🌀 FluidMCP CLI</h1>
-<p ><strong>Run your MCP server with just one file</strong></p>
+<p ><strong>Orchestrate multiple MCP servers with a single configuration file</strong></p>
 
 ---
+
+## ⚡ Quick Start - Run Multiple MCP Servers
+
+The main power of FluidMCP is running multiple MCP servers from a single configuration file over a unified FastAPI endpoint.
+
+### 1. Create a Configuration File
+
+Create a `config.json` file with your MCP servers:
+
+```json
+{
+  "mcpServers": {
+    "google-maps": {
+      "command": "npx",
+      "args": ["-y", "@google-maps/mcp-server"],
+      "env": {
+        "GOOGLE_MAPS_API_KEY": "your-api-key"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/files"],
+      "env": {}
+    }
+  }
+}
+```
+
+### 2. Launch All Servers
+
+```bash
+fluidmcp run config.json --file --start-server
+```
+
+This will:
+- Install and configure all MCP servers listed in your config
+- Launch them through a unified FastAPI gateway
+- Make them available at `http://localhost:8099`
+- Provide automatic API documentation at `http://localhost:8099/docs`
 
 
 ![fluidmcp_file_](https://github.com/user-attachments/assets/56bac081-0027-48c5-9462-f06e83cabcf7)
@@ -11,6 +50,12 @@
 
 ---
 ## 🚀 Features
+
+
+- **📁 Multi-Server Orchestration**
+  - Define multiple MCP servers in a single JSON configuration file
+  - Launch all servers with one command: `fluidmcp run --file <config.json>`
+  - Unified FastAPI gateway serving all your MCP tools
 
 
 - **📦 Package Management**
@@ -45,10 +90,10 @@ pip install fluidmcp
 ---
 
 
-## ⚡ Quick Start
+## 🔧 Alternative Usage Patterns
 
 
-### 1. Install a Package
+### Install Individual Packages
 
 
 ```bash
@@ -56,7 +101,7 @@ fluidmcp install author/package@version
 ```
 
 
-### 2. List Installed Packages
+### List Installed Packages
 
 
 ```bash
@@ -64,21 +109,27 @@ fluidmcp list
 ```
 
 
-### 3. Run a Package
+### Run Individual Package
 
 
 ```bash
-fluidmcp run ./config.json --file
+fluidmcp run author/package@version --start-server
 ```
 
 
 ---
 
 
+## 🔐 Advanced Usage
 
-### 🔐 Secure Run (Token Auth)
 
-`fluidmcp file_directory/config.json --file --secure --token your_token --start-server`
+### Secure Mode with Authentication
+
+Run with bearer token authentication:
+
+```bash
+fluidmcp run config.json --file --secure --token your_token --start-server
+```
 
 
 ![fluidmcp_secure_1](https://github.com/user-attachments/assets/6d5d38c5-c912-476a-af85-f7da44b15358)
@@ -99,10 +150,7 @@ fluidmcp run ./config.json --file
 
 ### ☁️ Run from S3 URL
 
-`fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3`
-
-
-
+Run configuration directly from S3:
 
 ```bash
 fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
@@ -119,20 +167,10 @@ fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
 - `--secure` – Enable secure token mode
 - `--token <token>` – Custom bearer token
 
----
-### 📄 Run as an individual package
-
+### Run All Installed Packages
 
 ```bash
-fluidmcp run author/package@version --start-server  
-```
-
-
-### 4. Run All Installed Packages
-
-
-```bash
-fluidmcp run all
+fluidmcp run all --start-server
 ```
 
 
