@@ -167,20 +167,10 @@ fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
 - `--secure` – Enable secure token mode
 - `--token <token>` – Custom bearer token
 
----
-### 📄 Run as an individual package
-
+### Run All Installed Packages
 
 ```bash
-fluidmcp run author/package@version --start-server  
-```
-
-
-### 4. Run All Installed Packages
-
-
-```bash
-fluidmcp run all
+fluidmcp run all --start-server
 ```
 
 
