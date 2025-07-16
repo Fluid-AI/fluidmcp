@@ -687,7 +687,6 @@ def start_uvicorn_with_logging(app, port, secure_mode=False, token=None):
 
 
 def run_from_source(source,source_path, secure_mode=False, token=None):
-    print(f"🐛 DEBUG: Entering run_from_source function")
 
     try:
         if source == "file":
@@ -707,7 +706,6 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
             print(f"Error processing ports from s3_metadata_all.json: {e}")
             return
         
-        print(f"🐛 DEBUG: Set up secure mode env")
         # Set up secure mode environment variables
         if secure_mode and token:
             os.environ["FMCP_BEARER_TOKEN"] = token
@@ -715,7 +713,6 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
             print(f"🔒 Secure mode enabled with bearer token")
         
 
-        print(f"🐛 DEBUG: Fetching all fmcp packages")
         #Fetch all fmcp_packages from the file
         try:
             fmcp_packages = []
@@ -724,19 +721,16 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
         except:
             print(f"Error processing fmcp_packages from s3_metadata_all.json: {e}")
             return
-        
-        print(f"🐛 DEBUG: Installing packages using env variables")
+    
         # Install packages and use env variables from the config file
         for package in fmcp_packages:
             # Get the package metadata 
             pkg = parse_package_string(package)
 
-            print(f"🐛 DEBUG: Skipping asking user for envs")
             # Install the package and skip asking user for env variables
             try:
                 dest_dir = install_package_from_file(package, INSTALLATION_DIR, pkg)
                 
-                print(f"🐛 DEBUG: Updating install_path in configuration")
                 # Update the install_path in the configuration with the actual path
                 for server_name, server_config in config["mcpServers"].items():
                     if server_config.get("fmcp_package") == package:
@@ -747,7 +741,6 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
                 print(f"Error installing package {package}: {str(e)}")
                 continue
 
-            print(f"🐛 DEBUG: Updating env variables from config file")
             # After installation, update env variables from the config file            
             metadata_path = dest_dir / "metadata.json"
             if not metadata_path.exists():
@@ -758,14 +751,12 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
             except Exception as e:
                 print(f"Error updating environment variables for {package}: {str(e)}")
 
-        print(f"🐛 DEBUG: Launching MCP Server based on installation path in metadata")
         # Launch each MCP server based on installation paths in the metadata
         print("Starting MCP servers based on installation paths in config file")
         
         # Track successful servers
         launched_servers = 0
         
-        print(f"🐛 DEBUG: Creating FastAPI Router")
         app = FastAPI(
             title="FluidMCP Gateway",
             description="Gateway for MCP servers from configuration file using STDIO",
@@ -778,7 +769,6 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
                 print(f"No installation path found for server '{server_name}', skipping")
                 continue
                 
-            print(f"🐛 DEBUG: Getting installation path ")
             # Get the installation path and check if it exists
             install_path = Path(server_config["install_path"])
             if not install_path.exists():
