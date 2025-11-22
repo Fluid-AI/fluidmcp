@@ -71,6 +71,34 @@ fluidmcp list
 fluidmcp run ./config.json --file
 ```
 
+### 3b. Clone & Run Directly from GitHub
+
+```bash
+fluidmcp github owner/repo --github-token <token> --branch main --start-server
+```
+
+You can also declare GitHub-hosted MCP servers inside your local or S3 configuration files using the same fields that the CLI
+expects:
+
+```json
+{
+  "mcpServers": {
+    "my-github-mcp": {
+      "github_repo": "owner/repo",
+      "github_token": "<token>",
+      "branch": "main",
+      "env": {
+        "OPENAI_API_KEY": "sk-..."
+      },
+      "port": 8085
+    }
+  }
+}
+```
+
+The CLI will clone the repository into the standard `.fmcp-packages` layout before launching it. If you omit `github_token` per
+server, set a default via the JSON top-level `github_token` field or environment variables `FMCP_GITHUB_TOKEN`/`GITHUB_TOKEN`.
+
 
 ---
 
