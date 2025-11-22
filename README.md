@@ -71,6 +71,12 @@ fluidmcp list
 fluidmcp run ./config.json --file
 ```
 
+### 3b. Clone & Run Directly from GitHub
+
+```bash
+fluidmcp github owner/repo --github-token <token> --branch main --start-server
+```
+
 
 ---
 
