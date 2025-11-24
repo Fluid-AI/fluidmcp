@@ -49,14 +49,343 @@ ALL_CLIENT_SERVER_DIR = os.environ.get('MCP_FASTAPI_ALL_DIR',Path.cwd() /"client
 THREAD_START_PORT = os.environ.get('MCP_THREAD_START_PORT', 8100)
 THREAD_END_PORT = os.environ.get('MCP_THREAD_END_PORT', 8900)
 
+DEFAULT_GITHUB_BRANCH = "main"
+
+def normalize_github_repo(repo_input: str) -> str:
+    """
+    Convert GitHub repo URL or path to owner/repo format.
+
+    Supported formats:
+    - owner/repo -> owner/repo
+    - https://github.com/owner/repo -> owner/repo
+    - https://github.com/owner/repo.git -> owner/repo
+    - git@github.com:owner/repo.git -> owner/repo
+
+    args:
+        repo_input (str): GitHub repo path or URL
+    returns:
+        str: Normalized owner/repo format
+    """
+    # Remove .git suffix if present
+    repo = repo_input.rstrip('/').replace('.git', '')
+
+    # Handle different URL formats
+    if 'github.com' in repo:
+        # Extract owner/repo from URL
+        if '://' in repo:
+            # HTTPS URL
+            parts = repo.split('github.com/')[-1]
+        elif '@github.com:' in repo:
+            # SSH URL
+            parts = repo.split('@github.com:')[-1]
+        else:
+            parts = repo
+        return parts.strip('/')
+
+    # Already in owner/repo format
+    return repo
+
+def find_readme_file(directory: Path) -> Path:
+    """
+    Find a README file in the given directory.
+    Searches for common README file names.
+
+    args:
+        directory (Path): Directory to search in
+    returns:
+        Path: Path to the README file
+    raises:
+        FileNotFoundError: If no README file is found
+    """
+    readme_patterns = [
+        "README.md", "readme.md", "Readme.md",
+        "README.MD", "README", "readme",
+        "README.txt", "readme.txt"
+    ]
+
+    for pattern in readme_patterns:
+        readme_path = directory / pattern
+        if readme_path.exists() and readme_path.is_file():
+            return readme_path
+
+    raise FileNotFoundError(f"No README file found in {directory}")
+
+def extract_json_from_readme(readme_content: str) -> dict:
+    """
+    Extract JSON content from README file.
+    Looks for JSON in markdown code blocks or raw JSON.
+    Prioritizes JSON blocks that contain 'mcpServers' key.
+
+    args:
+        readme_content (str): Content of the README file
+    returns:
+        dict: Extracted JSON data
+    raises:
+        ValueError: If no valid JSON is found
+    """
+    import re
+
+    all_candidates = []
+
+    # Try to find JSON in markdown code blocks first
+    # Pattern 1: ```json ... ```
+    json_block_pattern = r'```json\s*\n(.*?)\n```'
+    matches = re.findall(json_block_pattern, readme_content, re.DOTALL | re.IGNORECASE)
+
+    for match in matches:
+        try:
+            data = json.loads(match.strip())
+            if isinstance(data, dict):
+                all_candidates.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Pattern 2: ``` ... ``` (code block without language specifier)
+    code_block_pattern = r'```\s*\n(.*?)\n```'
+    matches = re.findall(code_block_pattern, readme_content, re.DOTALL)
+
+    for match in matches:
+        try:
+            data = json.loads(match.strip())
+            if isinstance(data, dict):
+                all_candidates.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Pattern 3: Try to find raw JSON (looking for { ... } blocks with proper nesting)
+    # More sophisticated pattern that handles nested braces better
+    json_pattern = r'\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\}'
+    matches = re.findall(json_pattern, readme_content, re.DOTALL)
+
+    # Try the largest JSON-like blocks first
+    sorted_matches = sorted(matches, key=len, reverse=True)
+    for match in sorted_matches[:10]:  # Limit to top 10 largest to avoid processing too many
+        try:
+            data = json.loads(match.strip())
+            if isinstance(data, dict):
+                all_candidates.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Now prioritize candidates with 'mcpServers' key
+    for candidate in all_candidates:
+        if "mcpServers" in candidate:
+            return candidate
+
+    # If no candidate has mcpServers, return the first valid one
+    if all_candidates:
+        return all_candidates[0]
+
+    raise ValueError("No valid JSON found in README file")
+
+def validate_mcp_metadata(metadata: dict) -> bool:
+    """
+    Validate that the extracted JSON has the correct MCP metadata structure.
+
+    args:
+        metadata (dict): JSON data to validate
+    returns:
+        bool: True if valid, raises exception otherwise
+    raises:
+        ValueError: If metadata structure is invalid
+    """
+    if not isinstance(metadata, dict):
+        raise ValueError("Metadata must be a dictionary")
+
+    if "mcpServers" not in metadata:
+        raise ValueError("Metadata must contain 'mcpServers' key")
+
+    mcp_servers = metadata["mcpServers"]
+    if not isinstance(mcp_servers, dict):
+        raise ValueError("'mcpServers' must be a dictionary")
+
+    if len(mcp_servers) == 0:
+        raise ValueError("'mcpServers' must contain at least one server configuration")
+
+    # Validate each server configuration
+    for server_name, server_config in mcp_servers.items():
+        if not isinstance(server_config, dict):
+            raise ValueError(f"Server '{server_name}' configuration must be a dictionary")
+
+        if "command" not in server_config:
+            raise ValueError(f"Server '{server_name}' must have a 'command' field")
+
+        if "args" not in server_config:
+            raise ValueError(f"Server '{server_name}' must have an 'args' field")
+
+        if not isinstance(server_config["args"], list):
+            raise ValueError(f"Server '{server_name}' 'args' must be a list")
+
+    return True
+
+def clone_github_repo(repo: str, branch: str, github_token: str, dest_dir: Path) -> bool:
+    """
+    Clone a GitHub repository with authentication.
+
+    args:
+        repo (str): Repository in owner/repo format
+        branch (str): Branch to clone
+        github_token (str): GitHub personal access token
+        dest_dir (Path): Destination directory for cloning
+    returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Construct authenticated clone URL
+        clone_url = f"https://{github_token}@github.com/{repo}.git"
+
+        # Create parent directory if it doesn't exist
+        dest_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        print(f"Cloning {repo} (branch: {branch}) to {dest_dir}...")
+
+        # Clone the repository
+        result = subprocess.run(
+            ["git", "clone", "-b", branch, "--depth", "1", clone_url, str(dest_dir)],
+            capture_output=True,
+            text=True
+        )
+
+        if result.returncode == 0:
+            print(f"✅ Successfully cloned {repo}")
+            return True
+        else:
+            print(f"❌ Failed to clone repository: {result.stderr}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error cloning repository: {str(e)}")
+        return False
+
+def run_github_server(args):
+    """
+    Clone a GitHub repository and run it as an MCP server.
+
+    args:
+        args (argparse.Namespace): Command line arguments including:
+            - repo: GitHub repository (owner/repo format or URL)
+            - github_token: GitHub personal access token
+            - branch: Branch to clone (optional, defaults to main)
+            - start_server: Whether to start the FastAPI server
+    """
+    try:
+        # Normalize the repo format
+        repo = normalize_github_repo(args.repo)
+        branch = getattr(args, 'branch', DEFAULT_GITHUB_BRANCH) or DEFAULT_GITHUB_BRANCH
+        github_token = args.github_token
+
+        # Create destination directory in .fmcp-packages/github/owner/repo
+        install_dir = Path(INSTALLATION_DIR) / "github" / repo.replace('/', '_')
+
+        # Clone the repository if it doesn't exist
+        if install_dir.exists():
+            print(f"Repository already exists at {install_dir}")
+            choice = input("Do you want to re-clone? (y/n): ").strip().lower()
+            if choice == 'y':
+                import shutil
+                shutil.rmtree(install_dir)
+            elif choice != 'n':
+                print("Invalid choice. Exiting.")
+                return
+
+        if not install_dir.exists():
+            if not clone_github_repo(repo, branch, github_token, install_dir):
+                print("Failed to clone repository. Exiting.")
+                return
+
+        # Look for metadata.json first, if not found, extract from README
+        metadata_path = install_dir / "metadata.json"
+
+        if not metadata_path.exists():
+            print(f"📄 No metadata.json found, searching for configuration in README...")
+
+            try:
+                # Find README file
+                readme_path = find_readme_file(install_dir)
+                print(f"✅ Found README at: {readme_path.name}")
+
+                # Read README content
+                with open(readme_path, 'r', encoding='utf-8') as f:
+                    readme_content = f.read()
+
+                # Extract JSON from README
+                print(f"🔍 Extracting JSON from README...")
+                metadata = extract_json_from_readme(readme_content)
+                print(f"✅ JSON extracted successfully")
+
+                # Validate the metadata structure
+                print(f"✔️  Validating metadata structure...")
+                validate_mcp_metadata(metadata)
+                print(f"✅ Metadata validation passed")
+
+                # Create metadata.json file
+                with open(metadata_path, 'w', encoding='utf-8') as f:
+                    json.dump(metadata, f, indent=2)
+                print(f"✅ Created metadata.json from README")
+
+                # Extract package name from metadata
+                package_name = list(metadata["mcpServers"].keys())[0]
+                pkg_info = {"package_name": package_name}
+
+                # Process environment variables if they exist
+                from fluidai_mcp.services.env_manager import write_keys_during_install
+
+                # Prompt for environment variables (skip_env=False to prompt user)
+                print(f"\n🔑 Checking for environment variables...")
+                write_keys_during_install(install_dir, pkg_info, skip_env=False)
+
+            except FileNotFoundError as e:
+                print(f"❌ {str(e)}")
+                print(f"Please ensure the repository contains either metadata.json or a README with MCP configuration")
+                return
+            except ValueError as e:
+                print(f"❌ Error extracting/validating JSON: {str(e)}")
+                print(f"Please ensure the README contains valid MCP server configuration in JSON format")
+                return
+            except Exception as e:
+                print(f"❌ Unexpected error processing README: {str(e)}")
+                return
+
+        print(f"🚀 Starting MCP server from GitHub repository: {repo}")
+
+        # Now reuse the existing run_server function which we know works
+        # Create a mock args object that mimics command line arguments
+        class MockArgs:
+            def __init__(self, package_path, start_server, force_reload=False):
+                self.package = str(package_path)
+                self.start_server = start_server
+                self.force_reload = force_reload
+
+        mock_args = MockArgs(
+            install_dir,
+            getattr(args, 'start_server', False),
+            getattr(args, 'force_reload', False)
+        )
+
+        # Call the existing run_server function that we know works
+        run_server(mock_args, secure_mode=False, token=None)
+
+    except Exception as e:
+        print(f"❌ Error running GitHub server: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
 def resolve_package_dest_dir(package_str: str) -> Path:
     """
-    Resolve the destination directory for a package string.
-    Handles formats: author/package@version, author/package, package@version, package
+    Resolve the destination directory for a package string or path.
+    Handles formats:
+    - Full path: /path/to/package
+    - author/package@version, author/package, package@version, package
     Returns the Path to the resolved directory or raises FileNotFoundError.
     """
+    # If it's already a full path and exists, return it
+    potential_path = Path(package_str)
+    if potential_path.is_absolute() and potential_path.exists():
+        return potential_path
+
     install_dir = Path(INSTALLATION_DIR)
-    if '/' in package_str:
+    if '/' in package_str and not package_str.startswith('/'):
         author, package_with_version = package_str.split('/', 1)
         if '@' in package_with_version:
             package_name, version = package_with_version.split('@', 1)
@@ -1077,7 +1406,14 @@ def main():
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
     edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
 
-    # Parse the command line arguments and run the appropriate command to the subparsers 
+    # github command
+    github_parser = subparsers.add_parser("github", help="Clone and run an MCP server from GitHub")
+    github_parser.add_argument("repo", type=str, help="GitHub repo path or URL (e.g., owner/repo)")
+    github_parser.add_argument("--github-token", required=True, help="GitHub access token with repo read permissions")
+    github_parser.add_argument("--branch", type=str, help="Branch to clone (default: main)")
+    github_parser.add_argument("--start-server", action="store_true", help="Start FastAPI client server")
+
+    # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
     # Secure mode logic
@@ -1095,7 +1431,7 @@ def main():
         os.environ["FMCP_SECURE_MODE"] = "true"
         print(f"Secure mode enabled. Bearer token: {token}")
 
-    # Main Command dispatch Logic 
+    # Main Command dispatch Logic
     if args.command == "install":
         install_command(args)
     elif args.command == "run":
@@ -1115,5 +1451,7 @@ def main():
         edit_env(args)
     elif args.command == "list":
         list_installed_packages()
+    elif args.command == "github":
+        run_github_server(args)
     else:
         parser.print_help()
