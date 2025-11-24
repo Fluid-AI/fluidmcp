@@ -12,12 +12,14 @@ from loguru import logger
 import secrets
 import subprocess
 import threading
+import time
 from fluidai_mcp.services.network_utils import is_port_in_use,kill_process_on_port,find_free_port
 from fluidai_mcp.services.s3_utils import s3_upload_file, s3_download_file, load_json_file, write_json_file,validate_metadata_config
 from fluidai_mcp.services.package_list import get_latest_version_dir
 from fluidai_mcp.services.package_installer import package_exists,install_package_from_file,replace_package_metadata_from_package_name
 from fluidai_mcp.services.env_manager import update_env_from_config
 from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
+from fluidai_mcp.services.thread_manager import MCPThreadManager
 import requests
 from fastapi import FastAPI, Request, APIRouter
 import uvicorn
@@ -206,8 +208,8 @@ def start_fastapi_client_server(script_path, port, env_vars, cwd=None, log_outpu
 
 def run_all(secure_mode=False, token=None):
     """
-    Run all installed MCP servers by scanning their metadata,
-    dynamically assigning unique ports that aren't already assigned, and launching each from its own directory.
+    Run all installed MCP servers using multi-threading architecture.
+    Each server runs in its own thread with its own FastAPI instance.
     """
     # Check if the installation directory exists
     install_dir = Path(INSTALLATION_DIR)
@@ -239,45 +241,55 @@ def run_all(secure_mode=False, token=None):
     except Exception as e:
         print(f"❌ Failed to write metadata_all.json: {e}")
         return
-    
+
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
         print(f"🔒 Secure mode enabled with bearer token")
-        
-    # Create main FastAPI app
-    app = FastAPI(
-        title="FluidMCP Multi-Server Gateway",
-        description="Unified gateway for multiple MCP servers",
-        version="2.0.0"
-    )
-    
+
+    # Initialize thread manager
+    thread_manager = MCPThreadManager(port_start=8100, port_end=8200)
+
     launched_servers = 0
 
-    # Launch each server and add its router to the main app
+    # Launch each server in its own thread
     for pkg, server in merged["mcpServers"].items():
         dest_dir = Path(server["install_path"])
         try:
-            
-            package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
-            
-            if router:
-                # Add this package's router to main app
-                app.include_router(router, tags=[package_name])
-                print(f"✅ Added {package_name} endpoints")
+            # Start MCP server in a separate thread
+            if thread_manager.start_mcp_thread(pkg, dest_dir):
+                print(f"✅ Launched {pkg} in separate thread")
                 launched_servers += 1
-                
+            else:
+                print(f"❌ Failed to launch {pkg}")
+
         except Exception as e:
             print(f"❌ Error launching {pkg}: {e}")
 
     if launched_servers == 0:
         print("❌ No servers were successfully launched")
         return
-    
 
-    pid_killed = kill_process_on_port(client_server_all_port)
-    logger.info(f"Starting FastAPI client server on port {client_server_all_port}")
-    uvicorn.run(app, host="0.0.0.0", port=client_server_all_port)
+    # Give threads time to start
+    print("⏳ Waiting for all servers to start...")
+    time.sleep(3)
+
+    # Display all running services
+    print("\n📋 Running Services:")
+    for pkg, url in thread_manager.get_all_services().items():
+        print(f"   {pkg}: {url}")
+
+    print(f"\n✅ Successfully launched {launched_servers} MCP servers in separate threads")
+    print("Press Ctrl+C to stop all servers")
+
+    # Keep main thread alive
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping all servers...")
+        thread_manager.stop_all_threads()
+        print("✅ All servers stopped")
 
 def run_server(args, secure_mode=False, token=None):
     '''
@@ -302,10 +314,10 @@ def run_server(args, secure_mode=False, token=None):
             print(f"🔒 Secure mode enabled with bearer token")
         
         print(f"Running MCP server from {dest_dir}")
-        
+
         # REPLACE: Use new STDIO method instead of SuperGateway
-        package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
-        
+        package_name, router, process = launch_mcp_using_fastapi_proxy(dest_dir)
+
         if not router:
             print(f"❌ Failed to launch MCP server")
             sys.exit(1)
@@ -461,70 +473,76 @@ def run_all_master(args, secure_mode=False, token=None):
             continue
         update_env_from_common_env(dest_dir, pkg)
 
-    # Create fresh FastAPI app
-    app = FastAPI(
-        title="FluidMCP Multi-Server Gateway - Master Mode",
-        description="Gateway for MCP servers from S3 configuration using STDIO",
-        version="2.0.0"
-    )
-    
     # Set up environment variables for secure mode
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
         print(f"🔒 Secure mode enabled with bearer token")
-    
-    print("Starting MCP servers based on installation paths in s3_metadata_all.json")
-    
+
+    print("Starting MCP servers based on installation paths in s3_metadata_all.json using multi-threading")
+
+    # Initialize thread manager
+    thread_manager = MCPThreadManager(port_start=8100, port_end=8200)
+
     # Track successful servers
     launched_servers = 0
-    
+
     for server_name, server_config in s3_metadata_all["mcpServers"].items():
         # Check if install_path exists in the config
         if "install_path" not in server_config:
             print(f"No installation path found for server '{server_name}', skipping")
             continue
-            
+
         # Get the installation path and check if it exists
         install_path = Path(server_config["install_path"])
         if not install_path.exists():
             print(f"Installation path '{install_path}' for server '{server_name}' does not exist, skipping")
             continue
-            
+
         # Check if the path has a metadata.json file
         metadata_path = install_path / "metadata.json"
         if not metadata_path.exists():
             print(f"No metadata.json found in '{install_path}' for server '{server_name}' skipping")
             continue
-            
+
         try:
             print(f"🚀 Launching server '{server_name}' from path: {install_path}")
-            
-            # Use existing STDIO function instead of SuperGateway
-            package_name, router = launch_mcp_using_fastapi_proxy(install_path)
-            
-            if router:
-                # Add this package's router to main app
-                app.include_router(router, tags=[server_name])
-                print(f"✅ Added {package_name} endpoints to unified app")
+
+            # Start MCP server in a separate thread
+            if thread_manager.start_mcp_thread(server_name, install_path):
+                print(f"✅ Launched {server_name} in separate thread")
                 launched_servers += 1
             else:
-                print(f"❌ Failed to create router for {server_name}")
-                
+                print(f"❌ Failed to launch {server_name}")
+
         except Exception as e:
             print(f"❌ Error launching server '{server_name}': {e}")
-    
+
     # Report on launches
     if launched_servers > 0:
-        print(f"Successfully launched {launched_servers} MCP servers")
+        # Give threads time to start
+        print("⏳ Waiting for all servers to start...")
+        time.sleep(3)
+
+        # Display all running services
+        print("\n📋 Running Services:")
+        for pkg, url in thread_manager.get_all_services().items():
+            print(f"   {pkg}: {url}")
+
+        print(f"\n✅ Successfully launched {launched_servers} MCP servers in separate threads")
+        print("Press Ctrl+C to stop all servers")
+
+        # Keep main thread alive
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n🛑 Stopping all servers...")
+            thread_manager.stop_all_threads()
+            print("✅ All servers stopped")
     else:
         print("No servers were launched. Check if installation paths exist.")
         return
-    
-    # Kill existing process and start unified app
-    pid_killed = kill_process_on_port(client_server_all_port)
-    logger.info(f"Starting unified FastAPI server on port {client_server_all_port}")
-    uvicorn.run(app, host="0.0.0.0", port=client_server_all_port)
 
 
 
@@ -679,52 +697,71 @@ def run_from_source(source,source_path, secure_mode=False, token=None):
             except Exception as e:
                 print(f"Error updating environment variables for {package}: {str(e)}")
 
-        # Launch each MCP server based on installation paths in the metadata
-        print("Starting MCP servers based on installation paths in config file")
-        
+        # Launch each MCP server based on installation paths in the metadata using multi-threading
+        print("Starting MCP servers based on installation paths in config file using multi-threading")
+
+        # Initialize thread manager
+        thread_manager = MCPThreadManager(port_start=8100, port_end=8200)
+
         # Track successful servers
         launched_servers = 0
-        
-        app=FastAPI()
+
         for server_name, server_config in config["mcpServers"].items():
             # Check if install_path exists in the config
             if "install_path" not in server_config:
                 print(f"No installation path found for server '{server_name}', skipping")
                 continue
-                
+
             # Get the installation path and check if it exists
             install_path = Path(server_config["install_path"])
             if not install_path.exists():
                 print(f"Installation path '{install_path}' for server '{server_name}' does not exist, skipping")
                 continue
-                
+
             # Check if the path has a metadata.json file
             metadata_path = install_path / "metadata.json"
             if not metadata_path.exists():
                 print(f"No metadata.json found in '{install_path}' for server '{server_name}' skipping")
                 continue
-                
-            print(f"✅ Launching server '{server_name}' from path: {install_path}")
-            
-            # Launch the MCP server from this path
-            pkg_name,router=launch_mcp_using_fastapi_proxy(install_path)
-            app.include_router(router)
-            launched_servers += 1
-            
+
+            try:
+                print(f"🚀 Launching server '{server_name}' from path: {install_path}")
+
+                # Start MCP server in a separate thread
+                if thread_manager.start_mcp_thread(server_name, install_path):
+                    print(f"✅ Launched {server_name} in separate thread")
+                    launched_servers += 1
+                else:
+                    print(f"❌ Failed to launch {server_name}")
+
+            except Exception as e:
+                print(f"❌ Error launching server '{server_name}': {e}")
+
         # Report on launches
         if launched_servers > 0:
-            print(f"✅ Successfully launched {launched_servers} MCP servers")
+            # Give threads time to start
+            print("⏳ Waiting for all servers to start...")
+            time.sleep(3)
+
+            # Display all running services
+            print("\n📋 Running Services:")
+            for pkg, url in thread_manager.get_all_services().items():
+                print(f"   {pkg}: {url}")
+
+            print(f"\n✅ Successfully launched {launched_servers} MCP servers in separate threads")
+            print("Press Ctrl+C to stop all servers")
+
+            # Keep main thread alive
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\n🛑 Stopping all servers...")
+                thread_manager.stop_all_threads()
+                print("✅ All servers stopped")
         else:
             print("No servers were launched. Check if installation paths exist.")
-
-        # Launch the FastAPI client server after all MCP servers are up
-        # Check if the port is already in use, if yes, restart the port
-
-        pid_killed = kill_process_on_port(client_server_all_port)
-
-        # Start the FastAPI client server with the specified environment variables
-        uvicorn.run(app, host="0.0.0.0",port=int(client_server_all_port))
-        logger.info(f"FastAPI client server has started successfully")
+            return
                 
     except FileNotFoundError:
         print(f"Error: Configuration file not found: {source_path}")
