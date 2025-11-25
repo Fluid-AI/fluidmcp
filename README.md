@@ -1,21 +1,306 @@
+
 # FluidMCP
+
+## 🎥 MCP Server Output Demo
+
+Below is the recorded output of running the Airbnb MCP server inside the FluidMCP environment:
+
+📌 **Recording:**  
+[Click here to watch the output video](Recording%202025.mp4)
+
+> The file is located in the repository at:  
+> `/workspaces/fluidmcp/Recording 2025.mp4`
 
 ## 1. Overview
 
+FluidMCP is a modular, extensible, and lightweight framework that allows developers to install, run, and interact with **Model Context Protocol (MCP)** servers. It standardizes how tools, AI models, and external services communicate through a unified API.
+
+With FluidMCP, you can:
+
+* Install MCP packages from the Fluid registry
+* Run MCP servers locally
+* Connect them via a FastAPI proxy
+* Call tools programmatically using HTTP
+* Build and host your own MCP servers
+
+---
+
 ## 2. Why FluidMCP?
+
+FluidMCP solves major challenges in AI tool integration:
+
+### ✅ **Decouples tools from applications**
+
+Tools (like search, Airbnb, Maps) can run anywhere — locally, cloud, or as separate containers.
+
+### ✅ **Unified API layer**
+
+Everything communicates via standardized JSON-RPC calls.
+
+### ✅ **Extensible package ecosystem**
+
+Developers can publish, share, install MCP packages from the registry.
+
+### ✅ **Supports multiple runtimes**
+
+Python, Node.js, Rust, or any language capable of supporting MCP.
+
+---
 
 ## 3. Quick Start (5 Minutes)
 
+### **Step 1 — Clone the repo**
+
+```bash
+git clone https://github.com/fluidmcp/fluidmcp.git
+cd fluidmcp
+```
+
+### **Step 2 — Create a virtual environment**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### **Step 3 — Install dependencies**
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+### **Step 4 — Install any MCP package**
+
+Example: Airbnb MCP
+
+```bash
+fmcp install Airbnb/airbnb@0.1.0
+```
+
+### **Step 5 — Run the MCP server**
+
+```bash
+fmcp run Airbnb/airbnb@0.1.0 --start-server
+```
+
+FastAPI Proxy will start at:
+
+```
+http://localhost:8090
+```
+
+Swagger docs will be available at:
+
+```
+http://localhost:8090/docs
+```
+
+---
+
 ## 4. Running MCP Servers
+
+FluidMCP provides 2 ways to run an MCP server:
+
+### ### **Option A — Start directly via CLI**
+
+```bash
+fmcp run author/package@version
+```
+
+### ### **Option B — Start with FastAPI Proxy**
+
+This is required for interacting using HTTP.
+
+```bash
+fmcp run Airbnb/airbnb@0.1.0 --start-server
+```
+
+This launches:
+
+* MCP backend (Node server)
+* FastAPI proxy (Python server)
+
+### **Testing Available Tools**
+
+```bash
+curl -s http://localhost:8090/airbnb/mcp/tools/list | jq .
+```
+
+### **Calling a Tool**
+
+Example: Search Airbnb listings
+
+```bash
+curl -s -X POST http://localhost:8090/airbnb/mcp/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "airbnb_search",
+    "arguments": {
+      "location": "Mumbai",
+      "adults": 1
+    }
+  }' | jq .
+```
+
+The response includes real-time Airbnb results:
+
+* Listing ID
+* Location
+* Prices
+* Ratings
+* Pagination cursors
+
+---
 
 ## 5. Hosting MCP Servers
 
+FluidMCP servers can be hosted on:
+
+* Docker
+* AWS EC2 / Lightsail
+* GCP / Azure
+* Vercel (serverless functions)
+* Self-hosted Linux VM
+
+### Example Dockerfile
+
+```dockerfile
+FROM python:3.10
+COPY . /app
+WORKDIR /app
+RUN pip install -r requirements.txt
+CMD ["fmcp", "run", "Airbnb/airbnb@0.1.0", "--start-server"]
+```
+
+Host via:
+
+```bash
+docker build -t fluidmcp .
+docker run -p 8090:8090 fluidmcp
+```
+
+---
+
 ## 6. Creating Custom MCP Servers
+
+FluidMCP supports custom MCP server creation.
+
+### **Python MCP Server Template**
+
+```bash
+fmcp init my-custom-server
+```
+
+This scaffolds:
+
+```
+/my-custom-server
+  ├── server.py
+  ├── tools/
+  ├── metadata.json
+```
+
+### Register a new tool
+
+```json
+{
+  "name": "hello_world",
+  "description": "Returns a hello message",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" }
+    }
+  }
+}
+```
+
+---
 
 ## 7. Repository Structure
 
+```
+fluidmcp/
+│── fluidai_mcp/         # Core FastAPI proxy
+│── .fmcp-packages/      # Installed MCP packages
+│── cli/                 # fmcp CLI source code
+│── examples/             # Sample MCP servers
+│── requirements.txt
+│── pyproject.toml
+│── README.md
+```
+
+---
+
 ## 8. Deployment Guide
+
+### **Deploy on Codespace (Used for Day-2 Assessment)**
+
+1. Create Codespace
+2. Setup Python venv
+3. Install FluidMCP
+4. Install MCP packages
+5. Start MCP server
+6. Test via curl
+
+### **Production Deployment Steps**
+
+* Containerize MCP server
+* Add environment variables in metadata.json
+* Validate with health endpoints
+* Configure domain + SSL
+
+---
 
 ## 9. Contributing Guidelines
 
+### 🔹 How to Contribute
+
+* Fork the repo
+* Create feature branch
+* Follow naming convention:
+  `feature/mcp-airbnb-support`
+* Add documentation + tests
+* Submit PR
+
+### 🔹 Code Style
+
+* Use Black formatter for Python
+* Keep MCP schema JSON-RPC compliant
+* Avoid hardcoding secrets
+
+---
+
 ## 10. FAQ & Troubleshooting
+
+### ❓ **Package Not Found (`detail: Package not found`)**
+
+**Cause:** Wrong registry path or package name
+**Fix:** Use correct structure
+
+```
+author/package@version
+```
+
+### ❓ `Method Not Allowed` when using POST
+
+You used wrong endpoint. Use:
+
+```
+GET  /<pkg>/mcp/tools/list
+POST /<pkg>/mcp/tools/call
+```
+
+### ❓ Port already in use
+
+```bash
+lsof -i:8090
+kill -9 <PID>
+```
+
+### ❓ Node not installed
+
+Some MCP packages (like Airbnb) require Node 18+.
+Codespaces already includes Node by default.
+
