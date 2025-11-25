@@ -116,6 +116,12 @@ fluidmcp list
 fluidmcp run author/package@version --start-server
 ```
 
+### 3b. Clone & Run Directly from GitHub
+
+```bash
+fluidmcp github owner/repo --github-token <token> --branch main --start-server
+```
+
 
 ---
 
