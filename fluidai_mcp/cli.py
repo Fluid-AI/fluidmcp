@@ -371,6 +371,56 @@ def run_github_server(args):
         traceback.print_exc()
         sys.exit(1)
 
+def parse_github_package_string(fmcp_package: str) -> dict:
+    """
+    Parse GitHub package string from S3 config format.
+
+    Format: "owner/repo --github-token TOKEN [--branch BRANCH] [--start-server]"
+
+    args:
+        fmcp_package (str): Package string containing GitHub repo and token
+    returns:
+        dict: Parsed components with keys: repo, token, branch
+    raises:
+        ValueError: If format is invalid
+    """
+    import shlex
+
+    # Split the string respecting quotes
+    parts = shlex.split(fmcp_package)
+
+    if not parts:
+        raise ValueError("Empty fmcp_package string")
+
+    # First part is the repository
+    repo = parts[0]
+
+    # Parse flags
+    token = None
+    branch = DEFAULT_GITHUB_BRANCH
+
+    i = 1
+    while i < len(parts):
+        if parts[i] == '--github-token' and i + 1 < len(parts):
+            token = parts[i + 1]
+            i += 2
+        elif parts[i] == '--branch' and i + 1 < len(parts):
+            branch = parts[i + 1]
+            i += 2
+        elif parts[i] == '--start-server':
+            i += 1
+        else:
+            i += 1
+
+    if not token:
+        raise ValueError("GitHub token not found in fmcp_package string. Expected '--github-token TOKEN'")
+
+    return {
+        'repo': normalize_github_repo(repo),
+        'token': token,
+        'branch': branch
+    }
+
 def resolve_package_dest_dir(package_str: str) -> Path:
     """
     Resolve the destination directory for a package string or path.
@@ -1118,35 +1168,141 @@ def run_from_source(source, source_path, secure_mode=False, token=None):
         print(f"🐛 DEBUG: Installing packages using env variables")
         # Install packages and use env variables from the config file
         for package in fmcp_packages:
-            # Get the package metadata 
-            pkg = parse_package_string(package)
+            # Check if this is a GitHub package
+            is_github_package = '--github-token' in package
 
-            print(f"🐛 DEBUG: Skipping asking user for envs")
-            # Install the package and skip asking user for env variables
-            try:
-                dest_dir = install_package_from_file(package, INSTALLATION_DIR, pkg)
-                
-                print(f"🐛 DEBUG: Updating install_path in configuration")
-                # Update the install_path in the configuration with the actual path
-                for server_name, server_config in config["mcpServers"].items():
-                    if server_config.get("fmcp_package") == package:
-                        server_config["install_path"] = str(dest_dir)
-                        print(f"Updated installation path for {package} to {dest_dir}")
-                        
-            except Exception as e:
-                print(f"❌ Error installing package {package}: {str(e)}")
-                continue
+            if is_github_package:
+                print(f"🔍 Detected GitHub package: {package}")
 
-            print(f"🐛 DEBUG: Updating env variables from config file")
-            # After installation, update env variables from the config file            
-            metadata_path = dest_dir / "metadata.json"
-            if not metadata_path.exists():
-                print(f"❌ No metadata.json found in '{dest_dir}', skipping env variable update")
-                continue
-            try:
-                update_env_from_config(metadata_path, package, config, pkg)  
-            except Exception as e:
-                print(f"❌ Error updating environment variables for {package}: {str(e)}")
+                try:
+                    # Parse GitHub package string
+                    github_info = parse_github_package_string(package)
+                    repo = github_info['repo']
+                    token = github_info['token']
+                    branch = github_info['branch']
+
+                    print(f"📦 Repository: {repo}")
+                    print(f"🌿 Branch: {branch}")
+
+                    # Create destination directory in .fmcp-packages/github/
+                    dest_dir = Path(INSTALLATION_DIR) / "github" / repo.replace('/', '_')
+
+                    # Clone the repository if it doesn't exist
+                    if dest_dir.exists():
+                        print(f"ℹ️  Repository already exists at {dest_dir}, using existing clone")
+                    else:
+                        if not clone_github_repo(repo, branch, token, dest_dir):
+                            print(f"❌ Failed to clone GitHub repository: {repo}")
+                            continue
+
+                    # Look for metadata.json, if not found extract from README
+                    metadata_path = dest_dir / "metadata.json"
+
+                    if not metadata_path.exists():
+                        print(f"📄 No metadata.json found, extracting from README...")
+
+                        try:
+                            # Find and read README
+                            readme_path = find_readme_file(dest_dir)
+                            print(f"✅ Found README at: {readme_path.name}")
+
+                            with open(readme_path, 'r', encoding='utf-8') as f:
+                                readme_content = f.read()
+
+                            # Extract JSON from README
+                            metadata = extract_json_from_readme(readme_content)
+                            print(f"✅ JSON extracted successfully")
+
+                            # Validate metadata structure
+                            validate_mcp_metadata(metadata)
+                            print(f"✅ Metadata validation passed")
+
+                        except (FileNotFoundError, ValueError) as e:
+                            print(f"❌ Error processing README: {str(e)}")
+                            continue
+                    else:
+                        # Load existing metadata.json
+                        with open(metadata_path, 'r', encoding='utf-8') as f:
+                            metadata = json.load(f)
+
+                    # Get the server name from metadata (first server in mcpServers)
+                    server_name_in_metadata = list(metadata["mcpServers"].keys())[0]
+
+                    # Find the corresponding server config in S3 config to get env, port, and server name
+                    server_config_from_s3 = None
+                    config_server_name = None
+                    for server_name, server_config in config["mcpServers"].items():
+                        if server_config.get("fmcp_package") == package:
+                            server_config_from_s3 = server_config
+                            config_server_name = server_name
+                            break
+
+                    if server_config_from_s3:
+                        # IMPORTANT: Rename the package in metadata to match the config server name
+                        # This ensures the router URLs match what the unified gateway expects
+                        if config_server_name and config_server_name != server_name_in_metadata:
+                            print(f"🔧 Renaming package in metadata from '{server_name_in_metadata}' to '{config_server_name}'")
+                            metadata["mcpServers"][config_server_name] = metadata["mcpServers"].pop(server_name_in_metadata)
+                            server_name_in_metadata = config_server_name
+
+                        # Override env variables from S3 config
+                        if "env" in server_config_from_s3:
+                            print(f"🔧 Overriding environment variables from S3 config")
+                            metadata["mcpServers"][server_name_in_metadata]["env"] = server_config_from_s3["env"]
+
+                        # Override port from S3 config
+                        if "port" in server_config_from_s3:
+                            print(f"🔧 Setting port to {server_config_from_s3['port']}")
+                            metadata["mcpServers"][server_name_in_metadata]["port"] = server_config_from_s3["port"]
+
+                    # Save the updated metadata.json
+                    with open(metadata_path, 'w', encoding='utf-8') as f:
+                        json.dump(metadata, f, indent=2)
+                    print(f"✅ Saved metadata.json with updated configuration")
+
+                    # Update install_path in config
+                    for server_name, server_config in config["mcpServers"].items():
+                        if server_config.get("fmcp_package") == package:
+                            server_config["install_path"] = str(dest_dir)
+                            print(f"✅ Updated installation path for {package} to {dest_dir}")
+
+                except Exception as e:
+                    print(f"❌ Error processing GitHub package {package}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+
+            else:
+                # Regular registry package - existing flow
+                # Get the package metadata
+                pkg = parse_package_string(package)
+
+                print(f"🐛 DEBUG: Skipping asking user for envs")
+                # Install the package and skip asking user for env variables
+                try:
+                    dest_dir = install_package_from_file(package, INSTALLATION_DIR, pkg)
+
+                    print(f"🐛 DEBUG: Updating install_path in configuration")
+                    # Update the install_path in the configuration with the actual path
+                    for server_name, server_config in config["mcpServers"].items():
+                        if server_config.get("fmcp_package") == package:
+                            server_config["install_path"] = str(dest_dir)
+                            print(f"Updated installation path for {package} to {dest_dir}")
+
+                except Exception as e:
+                    print(f"❌ Error installing package {package}: {str(e)}")
+                    continue
+
+                print(f"🐛 DEBUG: Updating env variables from config file")
+                # After installation, update env variables from the config file
+                metadata_path = dest_dir / "metadata.json"
+                if not metadata_path.exists():
+                    print(f"❌ No metadata.json found in '{dest_dir}', skipping env variable update")
+                    continue
+                try:
+                    update_env_from_config(metadata_path, package, config, pkg)
+                except Exception as e:
+                    print(f"❌ Error updating environment variables for {package}: {str(e)}")
 
         print(f"🐛 DEBUG: Starting threaded MCP servers")
         
@@ -1262,11 +1418,11 @@ def extract_config_from_file(file_path):
         # Load the JSON configuration file
         with open(file_path, 'r') as file:
             config = json.load(file)
-        
+
         # Validate the configuration
         if not validate_metadata_config(config, file_path):
             return
-            
+
         print(f"Loading server configurations from file: {file_path}")
         return config
     except FileNotFoundError:
@@ -1309,9 +1465,10 @@ def extract_config_from_s3(presigned_url):
         # Load the JSON configuration file
         with open(temp_file_path, 'r') as file:
             config = json.load(file)
+
         # Validate the configuration
         if not validate_metadata_config(config, temp_file_path):
-            return        
+            return
         print(f"Loading server configurations from file: {temp_file_path}")
         return config
     except Exception as e:
@@ -1333,7 +1490,7 @@ def preprocess_metadata_file(metadata_path):
     except FileNotFoundError:
         print(f"Error: Configuration file not found: {metadata_path}")
         return
-    
+
     # Update the metadata file with the actual metadata from the package name if package name is present in the metadata.json file
     taken_ports = set()
     # Loop through the mcpServers in the metadata and check if the package name is a dictionary
@@ -1363,8 +1520,8 @@ def preprocess_metadata_file(metadata_path):
             raw_metadata['mcpServers'][package_name]['port'] = find_free_port(taken_ports=taken_ports)
             # Add the port to the taken_ports set for later use
             taken_ports.add(raw_metadata['mcpServers'][package_name]['port'])
-    
-    # Write the updated metadata back to the file after collecting all the metadata 
+
+    # Write the updated metadata back to the file after collecting all the metadata
     try:
         updated_metadata = raw_metadata
         # Write the updated metadata to the file
