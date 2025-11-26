@@ -237,68 +237,158 @@ class TestE2EGitHubServerFlow:
         not os.environ.get("GITHUB_TOKEN") and not os.environ.get("FMCP_GITHUB_TOKEN"),
         reason="GITHUB_TOKEN or FMCP_GITHUB_TOKEN not set - GitHub tests require authentication"
     )
-    def test_github_clone_and_metadata_creation(self, tmp_path):
+    def test_github_clone_launch_and_jsonrpc_request(self, tmp_path):
         """
-        Test the complete GitHub flow end-to-end:
-        1. Use the clone_github_repo function directly
+        Complete end-to-end test of GitHub MCP server flow:
+        1. Clone a real GitHub repository
         2. Create metadata.json with explicit command
-        3. Verify all components work correctly
+        3. Launch the MCP server using fluidmcp
+        4. Send a JSON-RPC request to the server
+        5. Verify we get a valid response
+        6. Clean up the server
 
-        This test requires a GitHub token and tests the GitHub utility functions
-        directly without going through the full CLI flow.
+        This is a true E2E test that verifies the entire flow works.
         """
-        from fluidai_mcp.services.github_utils import clone_github_repo
-
         install_dir = tmp_path / ".fmcp-packages"
         install_dir.mkdir(parents=True)
 
         github_token = os.environ.get("FMCP_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
 
-        try:
-            # Clone a real GitHub repository
-            repo_dir = clone_github_repo(
-                repo_path="modelcontextprotocol/python-sdk",
-                github_token=github_token,
-                branch="main",
-                install_dir=install_dir
-            )
-
-            # Verify repository was cloned
-            assert repo_dir.exists(), f"Repository not cloned: {repo_dir}"
-
-            # Verify .git directory exists
-            git_dir = repo_dir / ".git"
-            assert git_dir.exists(), f"No .git directory found: {repo_dir}"
-
-            # Verify expected Python file exists in the cloned repo
-            expected_file = repo_dir / "examples" / "snippets" / "servers" / "fastmcp_quickstart.py"
-            assert expected_file.exists(), \
-                f"Expected Python file not found in cloned repo: {expected_file}"
-
-            # Create metadata.json manually (simulating what _handle_github_server does)
-            metadata = {
-                "mcpServers": {
-                    "python-quickstart": {
-                        "command": "uv",
-                        "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
-                        "env": {}
-                    }
+        # Create config file with GitHub server using explicit command
+        config_file = tmp_path / "github_test_config.json"
+        config_data = {
+            "github_token": github_token,
+            "mcpServers": {
+                "python-quickstart": {
+                    "github_repo": "modelcontextprotocol/python-sdk",
+                    "branch": "main",
+                    "command": "uv",
+                    "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
+                    "env": {}
                 }
             }
-            metadata_path = repo_dir / "metadata.json"
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+        }
+        config_file.write_text(json.dumps(config_data, indent=2))
 
-            # Verify metadata was created correctly
-            assert metadata_path.exists(), f"metadata.json not created at {metadata_path}"
-            loaded_metadata = json.loads(metadata_path.read_text())
-            assert "mcpServers" in loaded_metadata
-            assert "python-quickstart" in loaded_metadata["mcpServers"]
-            assert loaded_metadata["mcpServers"]["python-quickstart"]["command"] == "uv"
+        # Use a unique port to avoid conflicts with other tests
+        test_port = 28099
 
-            print(f"✅ GitHub E2E test passed: Repository cloned, metadata created, verified")
+        # Start fluidmcp in background
+        env = {
+            **os.environ,
+            "MCP_INSTALLATION_DIR": str(install_dir),
+            "FMCP_GITHUB_TOKEN": github_token,
+            "MCP_CLIENT_SERVER_ALL_PORT": str(test_port)
+        }
+
+        process = None
+        try:
+            process = subprocess.Popen(
+                [
+                    sys.executable, "-m", "fluidai_mcp.cli",
+                    "run", str(config_file),
+                    "--file", "--start-server"
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env
+            )
+
+            # Wait for server to be ready
+            server_ready = False
+            start_time = time.time()
+            timeout = 120  # 2 minutes for clone + install + start
+
+            while time.time() - start_time < timeout:
+                try:
+                    response = requests.get(f"http://127.0.0.1:{test_port}/docs", timeout=2)
+                    if response.status_code == 200:
+                        server_ready = True
+                        break
+                except requests.exceptions.ConnectionError:
+                    time.sleep(2)
+
+            if not server_ready:
+                # Capture output for debugging
+                process.terminate()
+                stdout, _ = process.communicate(timeout=5)
+
+                # Check for common errors in output
+                if "authentication" in stdout.lower() or "401" in stdout:
+                    pytest.skip("GitHub authentication failed - check token")
+                if "rate limit" in stdout.lower() or "403" in stdout:
+                    pytest.skip("GitHub rate limit exceeded")
+                if "connection" in stdout.lower() or "timeout" in stdout.lower():
+                    pytest.skip("GitHub connection failed")
+
+                pytest.fail(f"Server failed to start within {timeout}s. Output: {stdout[:1000]}")
+
+            # Server is ready! Now send a JSON-RPC request
+            print(f"✅ Server started successfully on port {test_port}")
+
+            # Test 1: Send tools/list request
+            response = requests.post(
+                f"http://127.0.0.1:{test_port}/python-quickstart/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list"
+                },
+                timeout=10
+            )
+
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+            data = response.json()
+
+            # Validate JSON-RPC response
+            assert data.get("jsonrpc") == "2.0", f"Invalid jsonrpc version: {data.get('jsonrpc')}"
+            assert data.get("id") == 1, f"Response id should match request id: {data.get('id')}"
+            assert "result" in data, f"Missing 'result' in response: {data}"
+            assert "tools" in data["result"], f"Missing 'tools' in result: {data['result']}"
+
+            tools = data["result"]["tools"]
+            assert isinstance(tools, list), f"Tools should be a list: {tools}"
+            assert len(tools) > 0, "Tools list should not be empty"
+
+            # Verify we got the expected calculator tool from fastmcp_quickstart.py
+            tool_names = [t.get("name") for t in tools]
+            assert "add" in tool_names, f"Expected 'add' tool in: {tool_names}"
+
+            print(f"✅ JSON-RPC request successful, received {len(tools)} tools: {tool_names}")
+
+            # Test 2: Call the add tool
+            response = requests.post(
+                f"http://127.0.0.1:{test_port}/python-quickstart/mcp/tools/call",
+                json={
+                    "name": "add",
+                    "arguments": {
+                        "a": 5,
+                        "b": 3
+                    }
+                },
+                timeout=10
+            )
+
+            assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+            data = response.json()
+
+            assert "result" in data, f"Missing 'result' in response: {data}"
+            result = data["result"]
+            assert "content" in result, f"Missing 'content' in result: {result}"
+
+            content = result["content"]
+            assert isinstance(content, list), f"Content should be a list: {content}"
+            assert len(content) > 0, "Content should not be empty"
+
+            # The result should contain "8" (5 + 3)
+            content_text = str(content[0].get("text", ""))
+            assert "8" in content_text, f"Expected '8' in response, got: {content_text}"
+
+            print(f"✅ Tool call successful, add(5, 3) = 8")
+            print(f"✅ GitHub E2E test PASSED: Clone -> Launch -> JSON-RPC -> Response verified")
 
         except subprocess.CalledProcessError as e:
-            # Check if it's an authentication or rate limit error
             error_output = e.stderr if hasattr(e, 'stderr') else str(e)
             if "authentication" in error_output.lower() or "401" in error_output:
                 pytest.skip("GitHub authentication failed - check token")
@@ -308,7 +398,6 @@ class TestE2EGitHubServerFlow:
                 pytest.skip("GitHub connection failed")
             raise
         except Exception as e:
-            # Handle any other errors by checking the error message
             error_msg = str(e).lower()
             if "authentication" in error_msg or "401" in error_msg:
                 pytest.skip("GitHub authentication failed - check token")
@@ -317,6 +406,14 @@ class TestE2EGitHubServerFlow:
             if "connection" in error_msg or "timeout" in error_msg:
                 pytest.skip("GitHub connection failed")
             raise
+        finally:
+            # Clean up: terminate the server
+            if process:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
 
 
 @pytest.mark.skipif(
