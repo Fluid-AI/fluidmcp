@@ -233,14 +233,10 @@ def _check_registry_access(output):
 class TestE2EGitHubServerFlow:
     """End-to-end test for GitHub MCP server cloning and execution"""
 
-    @pytest.mark.skipif(
-        not os.environ.get("GITHUB_TOKEN") and not os.environ.get("FMCP_GITHUB_TOKEN"),
-        reason="GITHUB_TOKEN or FMCP_GITHUB_TOKEN not set - GitHub tests require authentication"
-    )
     def test_github_clone_launch_and_jsonrpc_request(self, tmp_path):
         """
         Complete end-to-end test of GitHub MCP server flow:
-        1. Clone a real GitHub repository
+        1. Clone a real GitHub repository (public repo, no auth needed)
         2. Create metadata.json with explicit command
         3. Launch the MCP server using fluidmcp
         4. Send a JSON-RPC request to the server
@@ -249,21 +245,25 @@ class TestE2EGitHubServerFlow:
 
         This is a true E2E test that verifies the entire flow works.
         """
+        # Check if uv is available
+        import shutil
+        if not shutil.which("uv"):
+            pytest.skip("uv not installed - required to run Python MCP servers")
+
         install_dir = tmp_path / ".fmcp-packages"
         install_dir.mkdir(parents=True)
 
-        github_token = os.environ.get("FMCP_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
-
         # Create config file with GitHub server using explicit command
+        # No GitHub token needed - this is a public repository
+        # Using basic lowlevel server which uses stdio transport (compatible with FluidMCP)
         config_file = tmp_path / "github_test_config.json"
         config_data = {
-            "github_token": github_token,
             "mcpServers": {
-                "python-quickstart": {
+                "python-basic": {
                     "github_repo": "modelcontextprotocol/python-sdk",
                     "branch": "main",
                     "command": "uv",
-                    "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
+                    "args": ["run", "examples/snippets/servers/lowlevel/basic.py"],
                     "env": {}
                 }
             }
@@ -274,11 +274,16 @@ class TestE2EGitHubServerFlow:
         test_port = 28099
 
         # Start fluidmcp in background
+        # Ensure uv is in PATH (may be installed in ~/.local/bin)
+        env_path = os.environ.get("PATH", "")
+        if "/home/codespace/.local/bin" not in env_path:
+            env_path = f"/home/codespace/.local/bin:{env_path}"
+
         env = {
             **os.environ,
             "MCP_INSTALLATION_DIR": str(install_dir),
-            "FMCP_GITHUB_TOKEN": github_token,
-            "MCP_CLIENT_SERVER_ALL_PORT": str(test_port)
+            "MCP_CLIENT_SERVER_ALL_PORT": str(test_port),
+            "PATH": env_path
         }
 
         process = None
@@ -315,25 +320,25 @@ class TestE2EGitHubServerFlow:
                 stdout, _ = process.communicate(timeout=5)
 
                 # Check for common errors in output
-                if "authentication" in stdout.lower() or "401" in stdout:
-                    pytest.skip("GitHub authentication failed - check token")
                 if "rate limit" in stdout.lower() or "403" in stdout:
                     pytest.skip("GitHub rate limit exceeded")
                 if "connection" in stdout.lower() or "timeout" in stdout.lower():
                     pytest.skip("GitHub connection failed")
+                if "command not found" in stdout.lower() and "uv" in stdout.lower():
+                    pytest.skip("uv command not found in subprocess environment")
 
                 pytest.fail(f"Server failed to start within {timeout}s. Output: {stdout[:1000]}")
 
             # Server is ready! Now send a JSON-RPC request
             print(f"✅ Server started successfully on port {test_port}")
 
-            # Test 1: Send tools/list request
+            # Test 1: Send prompts/list request (basic lowlevel server has prompts)
             response = requests.post(
-                f"http://127.0.0.1:{test_port}/python-quickstart/mcp",
+                f"http://127.0.0.1:{test_port}/python-basic/mcp",
                 json={
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "method": "tools/list"
+                    "method": "prompts/list"
                 },
                 timeout=10
             )
@@ -345,26 +350,25 @@ class TestE2EGitHubServerFlow:
             assert data.get("jsonrpc") == "2.0", f"Invalid jsonrpc version: {data.get('jsonrpc')}"
             assert data.get("id") == 1, f"Response id should match request id: {data.get('id')}"
             assert "result" in data, f"Missing 'result' in response: {data}"
-            assert "tools" in data["result"], f"Missing 'tools' in result: {data['result']}"
+            assert "prompts" in data["result"], f"Missing 'prompts' in result: {data['result']}"
 
-            tools = data["result"]["tools"]
-            assert isinstance(tools, list), f"Tools should be a list: {tools}"
-            assert len(tools) > 0, "Tools list should not be empty"
+            prompts = data["result"]["prompts"]
+            assert isinstance(prompts, list), f"Prompts should be a list: {prompts}"
+            assert len(prompts) > 0, "Prompts list should not be empty"
 
-            # Verify we got the expected calculator tool from fastmcp_quickstart.py
-            tool_names = [t.get("name") for t in tools]
-            assert "add" in tool_names, f"Expected 'add' tool in: {tool_names}"
+            # Verify we got the expected prompt from basic lowlevel server
+            prompt_names = [p.get("name") for p in prompts]
+            assert "example-prompt" in prompt_names, f"Expected 'example-prompt' in: {prompt_names}"
 
-            print(f"✅ JSON-RPC request successful, received {len(tools)} tools: {tool_names}")
+            print(f"✅ JSON-RPC prompts/list successful, received {len(prompts)} prompts: {prompt_names}")
 
-            # Test 2: Call the add tool
+            # Test 2: Get the example prompt
             response = requests.post(
-                f"http://127.0.0.1:{test_port}/python-quickstart/mcp/tools/call",
+                f"http://127.0.0.1:{test_port}/python-basic/mcp/prompts/get",
                 json={
-                    "name": "add",
+                    "name": "example-prompt",
                     "arguments": {
-                        "a": 5,
-                        "b": 3
+                        "arg1": "test-value"
                     }
                 },
                 timeout=10
@@ -375,23 +379,21 @@ class TestE2EGitHubServerFlow:
 
             assert "result" in data, f"Missing 'result' in response: {data}"
             result = data["result"]
-            assert "content" in result, f"Missing 'content' in result: {result}"
+            assert "messages" in result, f"Missing 'messages' in result: {result}"
 
-            content = result["content"]
-            assert isinstance(content, list), f"Content should be a list: {content}"
-            assert len(content) > 0, "Content should not be empty"
+            messages = result["messages"]
+            assert isinstance(messages, list), f"Messages should be a list: {messages}"
+            assert len(messages) > 0, "Messages should not be empty"
 
-            # The result should contain "8" (5 + 3)
-            content_text = str(content[0].get("text", ""))
-            assert "8" in content_text, f"Expected '8' in response, got: {content_text}"
+            # The result should contain our test argument value
+            message_content = str(messages[0].get("content", {}))
+            assert "test-value" in message_content, f"Expected 'test-value' in response, got: {message_content}"
 
-            print(f"✅ Tool call successful, add(5, 3) = 8")
+            print(f"✅ Prompt get successful, received prompt with argument")
             print(f"✅ GitHub E2E test PASSED: Clone -> Launch -> JSON-RPC -> Response verified")
 
         except subprocess.CalledProcessError as e:
             error_output = e.stderr if hasattr(e, 'stderr') else str(e)
-            if "authentication" in error_output.lower() or "401" in error_output:
-                pytest.skip("GitHub authentication failed - check token")
             if "rate limit" in error_output.lower() or "403" in error_output:
                 pytest.skip("GitHub rate limit exceeded")
             if "connection" in error_output.lower() or "timeout" in error_output.lower():
@@ -399,8 +401,6 @@ class TestE2EGitHubServerFlow:
             raise
         except Exception as e:
             error_msg = str(e).lower()
-            if "authentication" in error_msg or "401" in error_msg:
-                pytest.skip("GitHub authentication failed - check token")
             if "rate limit" in error_msg or "403" in error_msg:
                 pytest.skip("GitHub rate limit exceeded")
             if "connection" in error_msg or "timeout" in error_msg:
