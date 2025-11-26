@@ -305,7 +305,6 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             secure_mode=secure_mode,
             token=token,
             single_package=single_package,
-            start_server=True,
             force_reload=args.force_reload
         )
 
