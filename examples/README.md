@@ -39,7 +39,37 @@ curl -X POST http://localhost:8099/filesystem/mcp \
 
 **Note**: These servers are run directly from the configuration without installation. FluidMCP creates temporary metadata files automatically.
 
-### 3. `sample-config-with-api-keys.json`
+### 3. `sample-github-config.json`
+A configuration file for running MCP servers directly from GitHub repositories.
+
+**Use case**: Testing GitHub repository cloning and running.
+
+**Usage**:
+```bash
+# Replace the GitHub token in the file first
+# Edit sample-github-config.json and add your GitHub personal access token
+
+# Run with FluidMCP
+fluidmcp run examples/sample-github-config.json --file --start-server
+```
+
+**Servers included**:
+- `mcp-server-time`: MCP server cloned from GitHub
+
+**Note**: GitHub repositories are automatically cloned to `.fmcp-packages/owner/repo/branch/`. If no metadata.json exists, FluidMCP extracts it from the README.
+
+### 4. `sample-mixed-config.json`
+A configuration demonstrating all three server types in one file.
+
+**Use case**: Running registry packages, direct commands, and GitHub repos together.
+
+**Servers included**:
+- `filesystem`: Direct command configuration
+- `github-mcp`: GitHub repository
+
+**Note**: You can set a default `github_token` at the top level of the config, which will be used for all GitHub servers that don't specify their own token.
+
+### 5. `sample-config-with-api-keys.json`
 A more complex configuration with servers that require API keys.
 
 **Use case**: Testing environment variable management and servers with authentication.
@@ -79,6 +109,19 @@ curl http://localhost:8099/filesystem/mcp \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
 
+### Testing GitHub Repositories
+
+```bash
+# Run a GitHub MCP server directly from the command line
+fluidmcp github modelcontextprotocol/servers \
+  --github-token YOUR_GITHUB_TOKEN \
+  --branch main \
+  --start-server
+
+# Or use a config file
+fluidmcp run examples/sample-github-config.json --file --start-server
+```
+
 ### Testing Secure Mode
 
 ```bash
@@ -93,7 +136,7 @@ curl http://localhost:8099/filesystem/mcp \
 
 ## Creating Your Own Test Configurations
 
-FluidMCP supports two configuration formats:
+FluidMCP supports three configuration formats:
 
 ### Format 1: Direct Server Configuration (Recommended for Testing)
 
@@ -113,7 +156,33 @@ Specify the command, args, and env directly. No installation required!
 }
 ```
 
-### Format 2: Package String (Requires FluidMCP Registry)
+### Format 2: GitHub Repository
+
+Clone and run MCP servers directly from GitHub repositories.
+
+```json
+{
+  "github_token": "your-default-token",
+  "mcpServers": {
+    "your-github-server": {
+      "github_repo": "owner/repo",
+      "github_token": "optional-specific-token",
+      "branch": "main",
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Features**:
+- Automatically clones repos to `.fmcp-packages/owner/repo/branch/`
+- Extracts metadata from README if metadata.json doesn't exist
+- Supports per-server or default GitHub tokens
+- Can mix with other configuration formats
+
+### Format 3: Package String (Requires FluidMCP Registry)
 
 Reference a package from the FluidMCP registry. The package will be installed first.
 

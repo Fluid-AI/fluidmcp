@@ -29,12 +29,19 @@ There are no automated tests in this repository currently. Manual testing can be
 - `fluidai_mcp/cli.py` - Main CLI implementation with argument parsing and command handlers
 
 ### Services Layer (`fluidai_mcp/services/`)
-- `config_resolver.py` - Unified config resolution from multiple sources (packages, files, S3)
-  - `resolve_from_file()` - Handles both direct configs and package strings
+- `config_resolver.py` - Unified config resolution from multiple sources (packages, files, S3, GitHub)
+  - `resolve_from_file()` - Handles direct configs, package strings, and GitHub repos
+  - `_handle_github_server()` - Clones and prepares GitHub repositories
   - `_create_temp_server_dir()` - Creates temp metadata for direct configs
+- `github_utils.py` - GitHub repository operations
+  - `clone_github_repo()` - Clone repos with authentication
+  - `extract_or_create_metadata()` - Extract metadata from README or use existing
+  - `normalize_github_repo()` - Parse GitHub URLs/paths
+  - `validate_mcp_metadata()` - Validate metadata structure
 - `run_servers.py` - Unified server launcher for all run modes
 - `package_installer.py` - Downloads and installs MCP packages from registry
-- `package_launcher.py` - Launches MCP servers via FastAPI proxy (`launch_mcp_using_fastapi_proxy`)
+- `package_launcher.py` - Launches MCP servers via FastAPI proxy
+  - Detects GitHub repos and sets appropriate working directory
 - `env_manager.py` - Manages environment variables for packages
 - `s3_utils.py` - S3 upload/download for master mode configuration
 - `network_utils.py` - Port management utilities
@@ -42,7 +49,7 @@ There are no automated tests in this repository currently. Manual testing can be
 
 ### Key Data Structures
 
-MCP server configurations support two formats:
+MCP server configurations support three formats:
 
 **Format 1: Direct Server Configuration (Recommended for Testing)**
 ```json
@@ -62,7 +69,29 @@ MCP server configurations support two formats:
 - FluidMCP creates temporary metadata in `.fmcp-packages/.temp_servers/`
 - Ideal for testing and development
 
-**Format 2: Package String (Requires FluidMCP Registry)**
+**Format 2: GitHub Repository**
+```json
+{
+  "github_token": "default-token",
+  "mcpServers": {
+    "server-name": {
+      "github_repo": "owner/repo",
+      "github_token": "optional-specific-token",
+      "branch": "main",
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+- Clones repositories to `.fmcp-packages/owner/repo/branch/`
+- Automatically extracts metadata from README if metadata.json doesn't exist
+- Supports default and per-server GitHub tokens
+- Working directory intelligently set based on command type (npx -y vs source code)
+- Can be mixed with other configuration formats
+
+**Format 3: Package String (Requires FluidMCP Registry)**
 ```json
 {
   "mcpServers": {
@@ -89,6 +118,10 @@ fluidmcp run <package> --start-server        # Single package
 fluidmcp run all --start-server              # All installed packages
 fluidmcp run config.json --file --start-server  # From local config file
 fluidmcp run <s3-url> --s3 --start-server    # From S3 config
+
+# Clone and run from GitHub
+fluidmcp github owner/repo --github-token TOKEN --start-server
+fluidmcp github owner/repo --github-token TOKEN --branch develop --start-server
 
 # List installed packages
 fluidmcp list
@@ -132,6 +165,10 @@ S3_BUCKET_NAME, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION
 # Registry access
 MCP_FETCH_URL="https://registry.fluidmcp.com/fetch-mcp-package"
 MCP_TOKEN
+
+# GitHub access (for cloning repositories)
+FMCP_GITHUB_TOKEN  # Default GitHub token
+GITHUB_TOKEN       # Alternative environment variable
 
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090

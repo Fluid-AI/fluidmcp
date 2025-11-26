@@ -145,9 +145,10 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     """
     Resolve config from a local JSON configuration file.
 
-    Supports two formats:
-    1. Package strings: "author/package@version" (needs installation)
+    Supports three formats:
+    1. Package strings: "author/package@version" (needs installation from registry)
     2. Direct configurations: {"command": "...", "args": [...], "env": {...}}
+    3. GitHub repositories: {"github_repo": "owner/repo", "github_token": "...", ...}
 
     Args:
         file_path: Path to the JSON config file
@@ -168,18 +169,33 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     servers = config.get("mcpServers", {})
     needs_install = False
 
-    # Check each server to determine if it needs installation or temp directory
+    # Get default GitHub token from config or environment
+    default_github_token = (
+        config.get("github_token")
+        or os.environ.get("FMCP_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+
+    # Check each server to determine type and prepare it
     for server_name, server_cfg in servers.items():
         if isinstance(server_cfg, str):
-            # Package string - needs installation
+            # Package string - needs installation from registry
             needs_install = True
-        elif isinstance(server_cfg, dict) and server_cfg.get("command"):
-            # Direct configuration - create temp directory with metadata.json
-            temp_dir = _create_temp_server_dir(server_name, server_cfg)
-            servers[server_name]["install_path"] = str(temp_dir)
+
+        elif isinstance(server_cfg, dict):
+            if server_cfg.get("github_repo"):
+                # GitHub repository - clone it
+                _handle_github_server(server_name, server_cfg, default_github_token)
+
+            elif server_cfg.get("command"):
+                # Direct configuration - create temp directory with metadata.json
+                temp_dir = _create_temp_server_dir(server_name, server_cfg)
+                servers[server_name]["install_path"] = str(temp_dir)
+            else:
+                # Unknown format
+                print(f"Warning: Unknown format for server '{server_name}'")
         else:
-            # Unknown format
-            print(f"Warning: Unknown format for server '{server_name}'")
+            print(f"Warning: Invalid server configuration for '{server_name}'")
 
     # Preprocess only if we have package strings
     if needs_install:
@@ -347,6 +363,52 @@ def _resolve_package_dest_dir(package_str: str, install_dir: Path) -> Path:
             if dest_dir is None:
                 raise FileNotFoundError(f"Package not found: {package_str}")
     return dest_dir
+
+
+def _handle_github_server(server_name: str, server_cfg: dict, default_github_token: str) -> None:
+    """
+    Handle GitHub server configuration by cloning the repo and setting up metadata.
+
+    Args:
+        server_name: Name of the server
+        server_cfg: Server configuration dict with github_repo, github_token, branch, env
+        default_github_token: Default GitHub token from config or environment
+
+    Raises:
+        ValueError: If github_token is missing
+        RuntimeError: If cloning or metadata extraction fails
+    """
+    from .github_utils import clone_github_repo, extract_or_create_metadata, apply_env_to_metadata
+
+    github_repo = server_cfg.get("github_repo")
+    github_token = server_cfg.get("github_token") or default_github_token
+    branch = server_cfg.get("branch") or server_cfg.get("github_branch")
+
+    if not github_token:
+        raise ValueError(
+            f"GitHub token missing for server '{server_name}'. "
+            "Set it in the config, FMCP_GITHUB_TOKEN, or GITHUB_TOKEN environment variable."
+        )
+
+    try:
+        # Clone the repository
+        dest_dir = clone_github_repo(github_repo, github_token, branch)
+
+        # Extract or create metadata.json
+        metadata_path = extract_or_create_metadata(dest_dir)
+
+        # Apply environment variables if provided
+        if server_cfg.get("env"):
+            apply_env_to_metadata(metadata_path, server_name, server_cfg["env"])
+
+        # Set install_path for the launcher
+        server_cfg["install_path"] = str(dest_dir)
+
+        print(f"✅ GitHub server '{server_name}' prepared from {github_repo}")
+
+    except Exception as e:
+        print(f"Error preparing GitHub server '{server_name}': {e}")
+        raise
 
 
 def _create_temp_server_dir(server_name: str, server_cfg: dict) -> Path:

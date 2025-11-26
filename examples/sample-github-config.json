@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mcp-server-time": {
+      "github_repo": "modelcontextprotocol/servers",
+      "github_token": "your-github-token-here",
+      "branch": "main",
+      "env": {}
+    }
+  }
+}
