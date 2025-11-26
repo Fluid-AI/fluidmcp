@@ -4,26 +4,57 @@ This document describes the execution flow for each CLI command in FluidMCP.
 
 ---
 
+## Architecture Overview
+
+The run command uses a clean separation of concerns:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Config Resolvers                         │
+│                (services/config_resolver.py)                 │
+├─────────────────────────────────────────────────────────────┤
+│  resolve_from_package(pkg)     → ServerConfig               │
+│  resolve_from_installed()      → ServerConfig               │
+│  resolve_from_file(path)       → ServerConfig               │
+│  resolve_from_s3_url(url)      → ServerConfig               │
+│  resolve_from_s3_master()      → ServerConfig               │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Unified Runner                             │
+│                 (services/run_servers.py)                    │
+├─────────────────────────────────────────────────────────────┤
+│  run_servers(config: ServerConfig, ...)                     │
+│    - Install packages if needed                              │
+│    - Launch MCP servers via STDIO                            │
+│    - Create FastAPI app with routers                         │
+│    - Start uvicorn server                                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Entry Point
 
-All commands start in `fluidai_mcp/cli.py:main()` (line 856):
+All commands start in `fluidai_mcp/cli.py:main()` (line 223):
 
 ```
 main()
-├── ArgumentParser setup (lines 861-888)
-├── Secure mode token handling (lines 894-905)
-└── Command dispatch (lines 908-928)
+├── ArgumentParser setup (lines 228-254)
+├── Secure mode token handling (lines 261-272)
+└── Command dispatch (lines 274-284)
     ├── "install" → install_command()
-    ├── "run" → run_server() / run_all() / run_all_master() / run_from_source()
+    ├── "run"     → run_command()
     ├── "edit-env" → edit_env()
-    └── "list" → list_installed_packages()
+    └── "list"    → list_installed_packages()
 ```
 
 ---
 
 ## Command: `fluidmcp install <package>`
 
-**Entry:** `install_command()` (line 601)
+**Entry:** `install_command()` (line 205)
 
 ```
 install_command(args)
@@ -32,220 +63,88 @@ install_command(args)
 │   └── Returns {author, package_name, version}
 │
 ├── install_package(package_str, skip_env)      [package_installer.py:63]
-│   ├── make_registry_request()                 [package_installer.py:164]
-│   │   └── Build headers/payload for API call
-│   │
-│   ├── POST to MCP_FETCH_URL (registry API)
-│   │   └── Returns pre_signed_url for S3
-│   │
-│   ├── GET from S3 pre_signed_url
-│   │   └── Download package content
-│   │
-│   ├── Detect file type (tar.gz or JSON)
-│   │   ├── tar.gz → Extract to dest_dir
-│   │   └── JSON → Save as metadata.json
-│   │
-│   └── write_keys_during_install()             [env_manager.py]
-│       └── Prompt user for env variables (unless skip_env=True)
+│   ├── POST to registry API → get pre_signed_url
+│   ├── GET from S3 → download package
+│   ├── Extract tar.gz or save JSON
+│   └── write_keys_during_install() - prompt for env vars
 │
-├── resolve_package_dest_dir()                  [cli.py:41]
-│   └── Find installed package path
+├── resolve_package_dest_dir()                  [cli.py:22]
 │
-└── [if --master] update_env_from_common_env()  [cli.py:531]
+└── [if --master] update_env_from_common_env()  [cli.py:131]
     └── Read .env from install dir, update metadata.json
 ```
 
-**Package destination:** `.fmcp-packages/{author}/{package_name}/{version}/`
-
 ---
 
-## Command: `fluidmcp run <package> --start-server`
+## Command: `fluidmcp run ...`
 
-**Entry:** `run_server()` (line 282)
+**Entry:** `run_command()` (line 287)
+
+All run variations flow through the same unified path:
 
 ```
-run_server(args, secure_mode, token)
+run_command(args, secure_mode, token)
 │
-├── resolve_package_dest_dir(args.package)      [cli.py:41]
-│   └── Find package install path
+├── resolve_config(args)                        [config_resolver.py:47]
+│   │
+│   └── Routes to appropriate resolver based on args:
+│       ├── --s3           → resolve_from_s3_url()
+│       ├── --file         → resolve_from_file()
+│       ├── "all" --master → resolve_from_s3_master()
+│       ├── "all"          → resolve_from_installed()
+│       └── <package>      → resolve_from_package()
 │
-├── package_exists(dest_dir)                    [package_installer.py:129]
-│
-├── [if secure_mode] Set FMCP_BEARER_TOKEN env var
-│
-├── launch_mcp_using_fastapi_proxy(dest_dir)    [package_launcher.py:35]
-│   │
-│   ├── Read metadata.json from dest_dir
-│   │   └── Extract command, args, env from mcpServers
-│   │
-│   ├── Resolve command path (npm/npx)
-│   │
-│   ├── subprocess.Popen(stdio_command)
-│   │   └── Start MCP server as child process with STDIO
-│   │
-│   ├── initialize_mcp_server(process)          [package_launcher.py:116]
-│   │   ├── Send JSON-RPC "initialize" request
-│   │   ├── Wait for response
-│   │   └── Send "notifications/initialized"
-│   │
-│   └── create_mcp_router(pkg, process)         [package_launcher.py:157]
-│       └── Create FastAPI router with endpoints:
-│           ├── POST /{pkg}/mcp        (JSON-RPC proxy)
-│           ├── POST /{pkg}/sse        (SSE streaming)
-│           ├── GET  /{pkg}/mcp/tools/list
-│           └── POST /{pkg}/mcp/tools/call
-│
-├── [if --start-server]
-│   ├── Check port availability (is_port_in_use)
-│   ├── [if busy] Kill existing or prompt user
-│   │
-│   ├── Create FastAPI app
-│   ├── app.include_router(router)
-│   └── uvicorn.run(app, port=8090)
+└── run_servers(config, ...)                    [run_servers.py:32]
+    │
+    ├── [if config.needs_install]
+    │   └── _install_packages_from_config()
+    │       ├── install_package() for each
+    │       └── update_env_from_config()
+    │
+    ├── Create FastAPI app
+    │
+    ├── For each server in config.servers:
+    │   └── launch_mcp_using_fastapi_proxy()    [package_launcher.py:35]
+    │       ├── Read metadata.json
+    │       ├── subprocess.Popen(command) via STDIO
+    │       ├── initialize_mcp_server() - handshake
+    │       └── create_mcp_router() - FastAPI endpoints
+    │
+    └── _start_server(app, port)
+        └── uvicorn.run()
 ```
 
 ---
 
-## Command: `fluidmcp run all --start-server`
+## Config Resolvers
 
-**Entry:** `run_all()` (line 207)
+Each resolver returns a `ServerConfig` dataclass:
 
-```
-run_all(secure_mode, token)
-│
-├── Check INSTALLATION_DIR exists
-│
-├── Load existing metadata_all.json (if exists)
-│   └── Collect already-assigned ports
-│
-├── collect_installed_servers_metadata()        [cli.py:151]
-│   │
-│   └── For each installed package:
-│       ├── get_latest_version_dir()
-│       ├── Read metadata.json
-│       ├── find_free_port(taken_ports)
-│       ├── Assign port to server config
-│       └── Add to merged metadata
-│
-├── Write merged metadata to metadata_all.json
-│
-├── Create FastAPI app (Multi-Server Gateway)
-│
-├── For each server in merged metadata:
-│   ├── launch_mcp_using_fastapi_proxy(dest_dir)
-│   └── app.include_router(router)
-│
-├── kill_process_on_port(8099)
-└── uvicorn.run(app, port=8099)
+```python
+@dataclass
+class ServerConfig:
+    servers: Dict[str, dict]      # mcpServers config
+    needs_install: bool           # Install packages first?
+    sync_to_s3: bool              # Sync metadata to S3?
+    source_type: str              # For logging
+    metadata_path: Optional[Path] # Config file path
 ```
 
----
+### Resolver Summary
 
-## Command: `fluidmcp run <file.json> --file --start-server`
-
-**Entry:** `run_from_source("file", ...)` (line 619)
-
-```
-run_from_source("file", source_path, secure_mode, token)
-│
-├── extract_config_from_file(source_path)       [cli.py:736]
-│   │
-│   ├── preprocess_metadata_file(file_path)     [cli.py:800]
-│   │   │
-│   │   └── For each server in mcpServers:
-│   │       ├── [if dict] Skip (already expanded)
-│   │       └── [if string] Replace with actual metadata
-│   │           ├── replace_package_metadata_from_package_name()
-│   │           │   └── GET from registry to fetch full metadata
-│   │           ├── Delete string entry
-│   │           ├── Add expanded metadata with package_name key
-│   │           └── Assign free port
-│   │
-│   ├── Load JSON from file
-│   ├── validate_metadata_config()
-│   └── Return config dict
-│
-├── For each package in config:
-│   ├── parse_package_string()
-│   ├── install_package_from_file()             [package_installer.py:138]
-│   │   └── install_package(skip_env=True)
-│   │
-│   └── update_env_from_config()                [env_manager.py]
-│       └── Copy env values from config to metadata.json
-│
-├── Create FastAPI app
-│
-├── For each server with install_path:
-│   ├── launch_mcp_using_fastapi_proxy()
-│   └── app.include_router(router)
-│
-├── kill_process_on_port(8099)
-└── uvicorn.run(app, port=8099)
-```
-
----
-
-## Command: `fluidmcp run <s3-url> --s3 --start-server`
-
-**Entry:** `run_from_source("s3", ...)` (line 619)
-
-```
-run_from_source("s3", presigned_url, secure_mode, token)
-│
-├── extract_config_from_s3(presigned_url)       [cli.py:756]
-│   │
-│   ├── Create temp file path in INSTALLATION_DIR
-│   ├── requests.get(presigned_url)
-│   ├── Save response to s3_metadata_all.json
-│   ├── preprocess_metadata_file()              [same as --file]
-│   ├── Load and validate JSON
-│   └── Return config dict
-│
-└── [Rest is identical to --file flow]
-```
-
----
-
-## Command: `fluidmcp run all --master`
-
-**Entry:** `run_all_master()` (line 361)
-
-```
-run_all_master(args, secure_mode, token)
-│
-├── Create S3 client (boto3)
-│
-├── Check if s3_metadata_all.json exists in S3
-│   ├── [if exists] s3_download_file() to local
-│   └── [if not] collect_installed_servers_metadata()
-│       ├── write_json_file() locally
-│       └── s3_upload_file() to S3
-│
-├── Load s3_metadata_all.json
-│
-├── Kill processes on assigned ports
-│
-├── For each fmcp_package:
-│   ├── parse_package_string()
-│   ├── install_package(skip_env=True)
-│   └── update_env_from_common_env()
-│       └── Read from shared .env file
-│
-├── Create FastAPI app (Master Mode)
-│
-├── For each server with install_path:
-│   ├── launch_mcp_using_fastapi_proxy()
-│   └── app.include_router(router)
-│
-├── kill_process_on_port(8099)
-└── uvicorn.run(app, port=8099)
-```
+| Resolver | Source | needs_install | sync_to_s3 |
+|----------|--------|---------------|------------|
+| `resolve_from_package()` | Single installed package | No | No |
+| `resolve_from_installed()` | All installed packages | No | No |
+| `resolve_from_file()` | Local JSON file | Yes | No |
+| `resolve_from_s3_url()` | S3 presigned URL | Yes | No |
+| `resolve_from_s3_master()` | S3 master mode | Yes | Yes |
 
 ---
 
 ## Command: `fluidmcp list`
 
-**Entry:** `list_installed_packages()` (line 88)
+**Entry:** `list_installed_packages()` (line 69)
 
 ```
 list_installed_packages()
@@ -260,7 +159,7 @@ list_installed_packages()
 
 ## Command: `fluidmcp edit-env <package>`
 
-**Entry:** `edit_env()` (line 131)
+**Entry:** `edit_env()` (line 112)
 
 ```
 edit_env(args)
@@ -307,12 +206,26 @@ HTTP Request → FastAPI Endpoint
 
 ---
 
-## Key File Locations
+## Key Files
 
-| Purpose | Location |
-|---------|----------|
-| Installed packages | `.fmcp-packages/{author}/{package}/{version}/` |
-| Package metadata | `.fmcp-packages/{author}/{package}/{version}/metadata.json` |
-| Merged metadata (run all) | `.fmcp-packages/metadata_all.json` |
-| S3 metadata (master mode) | `.fmcp-packages/s3_metadata_all.json` |
-| Shared env file (master) | `.fmcp-packages/.env` |
+| File | Purpose |
+|------|---------|
+| `cli.py` | Entry point, argument parsing, command dispatch |
+| `services/config_resolver.py` | Config resolution from various sources |
+| `services/run_servers.py` | Unified server launching |
+| `services/package_installer.py` | Package download and installation |
+| `services/package_launcher.py` | MCP server process and FastAPI router creation |
+| `services/env_manager.py` | Environment variable management |
+
+---
+
+## Key Directories
+
+| Location | Purpose |
+|----------|---------|
+| `.fmcp-packages/` | Installed packages root |
+| `.fmcp-packages/{author}/{package}/{version}/` | Single package |
+| `.fmcp-packages/{...}/metadata.json` | Package config |
+| `.fmcp-packages/metadata_all.json` | Merged config (run all) |
+| `.fmcp-packages/s3_metadata_all.json` | S3 master config |
+| `.fmcp-packages/.env` | Shared env file (master mode) |
