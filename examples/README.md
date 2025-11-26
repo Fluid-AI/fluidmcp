@@ -194,6 +194,164 @@ Reference a package from the FluidMCP registry. The package will be installed fi
 }
 ```
 
+## Environment Variable Handling
+
+FluidMCP provides flexible environment variable management with automatic inheritance and override capabilities.
+
+### How Environment Variables Work
+
+When FluidMCP launches an MCP server, it merges environment variables from two sources:
+
+1. **System/Docker Environment Variables** - All environment variables from your shell, Docker container, or system
+2. **Configuration File Variables** - Variables specified in the `env` object of your configuration
+
+```python
+# Internal behavior (package_launcher.py:68-69)
+env_vars = servers.get("env", {})
+env = {**dict(os.environ), **env_vars}  # Config overrides system
+```
+
+**Key behavior**: Configuration variables **override** system variables when there's a conflict.
+
+### Example Scenarios
+
+#### Scenario 1: Using Docker ENV as Defaults
+
+Set common defaults in your Dockerfile:
+
+```dockerfile
+ENV NODE_ENV=production
+ENV LOG_LEVEL=info
+ENV OPENAI_API_KEY=default_key
+```
+
+Use minimal config - environment variables are automatically inherited:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "env": {
+        "ALLOWED_DIRECTORY": "/tmp"
+      }
+    }
+  }
+}
+```
+
+**MCP server receives:**
+- `NODE_ENV=production` ✓ (from Docker)
+- `LOG_LEVEL=info` ✓ (from Docker)
+- `OPENAI_API_KEY=default_key` ✓ (from Docker)
+- `ALLOWED_DIRECTORY=/tmp` ✓ (from config)
+
+#### Scenario 2: Overriding Docker/System Variables
+
+Docker provides default, but config overrides for production:
+
+```dockerfile
+ENV OPENAI_API_KEY=dev_key_12345
+```
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "OPENAI_API_KEY": "prod_key_67890"
+      }
+    }
+  }
+}
+```
+
+**MCP server receives:**
+- `OPENAI_API_KEY=prod_key_67890` ✓ (config overrides Docker)
+
+#### Scenario 3: No env Section Needed
+
+If all required environment variables are set in Docker/system:
+
+```bash
+export GOOGLE_MAPS_API_KEY=your_key
+export ALLOWED_DIR=/tmp/test
+```
+
+```json
+{
+  "mcpServers": {
+    "google-maps": {
+      "command": "npx",
+      "args": ["-y", "@google-maps/mcp-server"]
+    }
+  }
+}
+```
+
+**MCP server receives all environment variables from the system automatically.**
+
+### Best Practices
+
+✅ **Set common/default values in Docker ENV or system environment**
+```dockerfile
+ENV NODE_ENV=production
+ENV LOG_LEVEL=info
+ENV DEFAULT_TIMEOUT=30000
+```
+
+✅ **Use config for server-specific or override values**
+```json
+{
+  "env": {
+    "API_KEY": "server_specific_key",
+    "CUSTOM_SETTING": "special_value"
+  }
+}
+```
+
+✅ **Omit the env section entirely if system variables are sufficient**
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+    }
+  }
+}
+```
+
+❌ **Don't duplicate environment variables unnecessarily**
+```json
+// If already set in Docker/system, no need to repeat:
+{
+  "env": {
+    "NODE_ENV": "production"  // Not needed if in Docker
+  }
+}
+```
+
+### Docker-Specific Patterns
+
+When using FluidMCP in Docker with the entrypoint script:
+
+```dockerfile
+# Set defaults in Dockerfile
+ENV NODE_ENV=production
+ENV LOG_LEVEL=info
+
+# Or pass at runtime
+docker run -e OPENAI_API_KEY=your_key \
+           -e CUSTOM_VAR=value \
+           fluidmcp
+```
+
+The `entrypoint.sh` script automatically passes all Docker environment variables to FluidMCP, which then merges them with config variables before launching MCP servers.
+
 ## Available MCP Servers for Testing
 
 Here are some MCP servers you can use for testing (no API keys required):

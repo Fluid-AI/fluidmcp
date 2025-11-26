@@ -158,6 +158,8 @@ Available sample files:
 
 ## Environment Variables
 
+### FluidMCP System Variables
+
 ```bash
 # S3 credentials (for --master mode)
 S3_BUCKET_NAME, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION
@@ -174,3 +176,43 @@ GITHUB_TOKEN       # Alternative environment variable
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
 ```
+
+### Environment Variable Inheritance for MCP Servers
+
+When FluidMCP launches MCP servers, environment variables are handled as follows:
+
+**Merge Behavior** (`package_launcher.py:68-69`):
+```python
+env_vars = servers.get("env", {})
+env = {**dict(os.environ), **env_vars}  # Config overrides system
+```
+
+1. **System/Docker environment variables** are automatically inherited by all MCP servers
+2. **Configuration file `env` variables** override system variables when there's a conflict
+3. **No duplication needed** - if a variable is set in Docker/system, you don't need to specify it in config unless you want to override it
+
+**Example**:
+```dockerfile
+# Dockerfile
+ENV OPENAI_API_KEY=default_key
+ENV LOG_LEVEL=info
+```
+
+```json
+// config.json - no need to repeat system vars
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "npx",
+      "args": ["-y", "@package/server"],
+      "env": {
+        "CUSTOM_VAR": "value"  // Only specify additional or override vars
+      }
+    }
+  }
+}
+```
+
+**Result**: MCP server receives `OPENAI_API_KEY`, `LOG_LEVEL` (from system), and `CUSTOM_VAR` (from config).
+
+See `examples/README.md` for detailed examples and best practices.
