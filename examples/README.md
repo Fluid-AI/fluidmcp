@@ -42,26 +42,28 @@ curl -X POST http://localhost:8099/filesystem/mcp \
 ### 3. `sample-github-config.json`
 A configuration file for running MCP servers directly from GitHub repositories.
 
-**Use case**: Testing GitHub repository cloning and automatic metadata extraction.
+**Use case**: Testing GitHub repository cloning, running Python source code from the repo.
 
 **Usage**:
 ```bash
 # Replace the GitHub token in the file first
 # Edit sample-github-config.json and add your GitHub personal access token
 
-# Run with FluidMCP
+# Run with FluidMCP (requires 'uv' to be installed for Python servers)
 fluidmcp run examples/sample-github-config.json --file --start-server
 ```
 
 **Servers included**:
-- `mcp-server-time`: MCP server cloned from GitHub (auto-extracts command from README)
+- `fastmcp-quickstart`: Python MCP server from modelcontextprotocol/python-sdk
+  - Clones the repository and runs `uv run examples/snippets/servers/fastmcp_quickstart.py`
+  - Demonstrates a calculator tool, greeting resource, and prompt
 
 **Note**: GitHub repositories are automatically cloned to `.fmcp-packages/owner/repo/branch/`. FluidMCP automatically extracts metadata from the README if no metadata.json exists.
 
 ### 4. `sample-github-with-command.json`
-A configuration demonstrating GitHub servers with explicit command specification.
+A configuration demonstrating GitHub servers with explicit command specification for Python source code.
 
-**Use case**: Running GitHub MCP servers when you already know the command (skips README extraction).
+**Use case**: Running GitHub MCP servers from source when you already know the command (skips README extraction).
 
 **Features**:
 - **Mode 1 (Explicit Command)**: When `command` and `args` are provided, FluidMCP uses them directly without parsing README
@@ -70,27 +72,32 @@ A configuration demonstrating GitHub servers with explicit command specification
 **Usage**:
 ```bash
 # Replace the GitHub token in the file first
+# Requires 'uv' to be installed for Python servers
 fluidmcp run examples/sample-github-with-command.json --file --start-server
 ```
 
 **Servers included**:
-- `github-with-command`: Uses explicit command `npx -y @modelcontextprotocol/server-time`
-- `github-auto-extract`: Auto-extracts command from README
+- `python-quickstart-explicit`: Uses explicit command `uv run examples/snippets/servers/fastmcp_quickstart.py`
+  - Runs Python source code directly from the cloned repository
+  - Faster startup (no README parsing required)
+- `python-quickstart-auto`: Auto-extracts command from README
+  - Same repository, but uses automatic command detection
 
 **When to use explicit commands**:
-- You know the exact command to run the MCP server
+- You know the exact command to run the MCP server from source
 - The README format is non-standard or missing
 - You want faster startup (skips README parsing)
 - You want to override the default command from the repository
+- Running Python scripts with `uv run`, `python -m`, or Node.js with `node` or `tsx`
 
 ### 5. `sample-mixed-config.json`
-A configuration demonstrating all three server types in one file.
+A configuration demonstrating multiple server types in one file.
 
-**Use case**: Running registry packages, direct commands, and GitHub repos together.
+**Use case**: Running direct commands and GitHub repos together.
 
 **Servers included**:
-- `filesystem`: Direct command configuration
-- `github-mcp`: GitHub repository (auto-extracts from README)
+- `filesystem`: Direct command configuration (npx package)
+- `python-quickstart`: GitHub repository with Python source code (auto-extracts from README)
 
 **Note**: You can set a default `github_token` at the top level of the config, which will be used for all GitHub servers that don't specify their own token.
 
@@ -137,13 +144,13 @@ curl http://localhost:8099/filesystem/mcp \
 ### Testing GitHub Repositories
 
 ```bash
-# Run a GitHub MCP server directly from the command line
-fluidmcp github modelcontextprotocol/servers \
+# Run a Python MCP server directly from a GitHub repository
+fluidmcp github modelcontextprotocol/python-sdk \
   --github-token YOUR_GITHUB_TOKEN \
   --branch main \
   --start-server
 
-# Or use a config file
+# Or use a config file (requires 'uv' for Python servers)
 fluidmcp run examples/sample-github-config.json --file --start-server
 ```
 
@@ -183,21 +190,24 @@ Specify the command, args, and env directly. No installation required!
 
 ### Format 2: GitHub Repository
 
-Clone and run MCP servers directly from GitHub repositories.
+Clone and run MCP servers directly from GitHub repositories, running the source code.
 
 ```json
 {
   "github_token": "your-default-token",
   "mcpServers": {
-    "your-github-server": {
-      "github_repo": "owner/repo",
+    "python-server": {
+      "github_repo": "modelcontextprotocol/python-sdk",
       "github_token": "optional-specific-token",
       "branch": "main",
-      "command": "npx",
-      "args": ["-y", "@scope/package-name"],
-      "env": {
-        "API_KEY": "value"
-      }
+      "command": "uv",
+      "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
+      "env": {}
+    },
+    "auto-detect-server": {
+      "github_repo": "owner/repo",
+      "branch": "main",
+      "env": {}
     }
   }
 }
@@ -207,6 +217,9 @@ Clone and run MCP servers directly from GitHub repositories.
 - Automatically clones repos to `.fmcp-packages/owner/repo/branch/`
 - **Two modes of operation**:
   - **Explicit command**: If `command` and `args` are provided, uses them directly (faster, no README parsing)
+    - Example: `"command": "uv", "args": ["run", "path/to/script.py"]`
+    - Example: `"command": "python", "args": ["-m", "module_name"]`
+    - Example: `"command": "node", "args": ["path/to/server.js"]`
   - **Auto-extraction**: If no command specified, extracts metadata from README or existing metadata.json
 - Supports per-server or default GitHub tokens
 - Can mix with other configuration formats

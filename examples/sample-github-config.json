@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "mcp-server-time": {
-      "github_repo": "modelcontextprotocol/servers",
+    "fastmcp-quickstart": {
+      "github_repo": "modelcontextprotocol/python-sdk",
       "github_token": "your-github-token-here",
       "branch": "main",
       "env": {}

@@ -6,8 +6,8 @@
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/test-directory"],
       "env": {}
     },
-    "github-mcp": {
-      "github_repo": "modelcontextprotocol/servers",
+    "python-quickstart": {
+      "github_repo": "modelcontextprotocol/python-sdk",
       "branch": "main",
       "env": {}
     }
