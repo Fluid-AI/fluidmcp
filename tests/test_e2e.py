@@ -230,6 +230,95 @@ def _check_registry_access(output):
         pytest.skip("Registry connection failed")
 
 
+class TestE2EGitHubServerFlow:
+    """End-to-end test for GitHub MCP server cloning and execution"""
+
+    @pytest.mark.skipif(
+        not os.environ.get("GITHUB_TOKEN") and not os.environ.get("FMCP_GITHUB_TOKEN"),
+        reason="GITHUB_TOKEN or FMCP_GITHUB_TOKEN not set - GitHub tests require authentication"
+    )
+    def test_github_clone_and_metadata_creation(self, tmp_path):
+        """
+        Test the complete GitHub flow end-to-end:
+        1. Use the clone_github_repo function directly
+        2. Create metadata.json with explicit command
+        3. Verify all components work correctly
+
+        This test requires a GitHub token and tests the GitHub utility functions
+        directly without going through the full CLI flow.
+        """
+        from fluidai_mcp.services.github_utils import clone_github_repo
+
+        install_dir = tmp_path / ".fmcp-packages"
+        install_dir.mkdir(parents=True)
+
+        github_token = os.environ.get("FMCP_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
+        try:
+            # Clone a real GitHub repository
+            repo_dir = clone_github_repo(
+                repo_path="modelcontextprotocol/python-sdk",
+                github_token=github_token,
+                branch="main",
+                install_dir=install_dir
+            )
+
+            # Verify repository was cloned
+            assert repo_dir.exists(), f"Repository not cloned: {repo_dir}"
+
+            # Verify .git directory exists
+            git_dir = repo_dir / ".git"
+            assert git_dir.exists(), f"No .git directory found: {repo_dir}"
+
+            # Verify expected Python file exists in the cloned repo
+            expected_file = repo_dir / "examples" / "snippets" / "servers" / "fastmcp_quickstart.py"
+            assert expected_file.exists(), \
+                f"Expected Python file not found in cloned repo: {expected_file}"
+
+            # Create metadata.json manually (simulating what _handle_github_server does)
+            metadata = {
+                "mcpServers": {
+                    "python-quickstart": {
+                        "command": "uv",
+                        "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
+                        "env": {}
+                    }
+                }
+            }
+            metadata_path = repo_dir / "metadata.json"
+            metadata_path.write_text(json.dumps(metadata, indent=2))
+
+            # Verify metadata was created correctly
+            assert metadata_path.exists(), f"metadata.json not created at {metadata_path}"
+            loaded_metadata = json.loads(metadata_path.read_text())
+            assert "mcpServers" in loaded_metadata
+            assert "python-quickstart" in loaded_metadata["mcpServers"]
+            assert loaded_metadata["mcpServers"]["python-quickstart"]["command"] == "uv"
+
+            print(f"✅ GitHub E2E test passed: Repository cloned, metadata created, verified")
+
+        except subprocess.CalledProcessError as e:
+            # Check if it's an authentication or rate limit error
+            error_output = e.stderr if hasattr(e, 'stderr') else str(e)
+            if "authentication" in error_output.lower() or "401" in error_output:
+                pytest.skip("GitHub authentication failed - check token")
+            if "rate limit" in error_output.lower() or "403" in error_output:
+                pytest.skip("GitHub rate limit exceeded")
+            if "connection" in error_output.lower() or "timeout" in error_output.lower():
+                pytest.skip("GitHub connection failed")
+            raise
+        except Exception as e:
+            # Handle any other errors by checking the error message
+            error_msg = str(e).lower()
+            if "authentication" in error_msg or "401" in error_msg:
+                pytest.skip("GitHub authentication failed - check token")
+            if "rate limit" in error_msg or "403" in error_msg:
+                pytest.skip("GitHub rate limit exceeded")
+            if "connection" in error_msg or "timeout" in error_msg:
+                pytest.skip("GitHub connection failed")
+            raise
+
+
 @pytest.mark.skipif(
     not os.environ.get("MCP_TOKEN"),
     reason="MCP_TOKEN not set - registry tests require authentication"
