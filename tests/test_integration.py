@@ -36,7 +36,6 @@ class TestRunCommandIntegration:
             file=False,
             master=False,
             package="Author/TestPkg@1.0.0",
-            start_server=False,
             force_reload=False
         )
 
@@ -68,7 +67,6 @@ class TestRunCommandIntegration:
             file=True,
             master=False,
             package=str(config_file),
-            start_server=False,
             force_reload=False
         )
 
@@ -99,7 +97,6 @@ class TestRunCommandIntegration:
             file=False,
             master=False,
             package="all",
-            start_server=False,
             force_reload=False
         )
 
@@ -118,7 +115,6 @@ class TestRunCommandIntegration:
             file=False,
             master=False,
             package="nonexistent/package@1.0.0",
-            start_server=False,
             force_reload=False
         )
 
@@ -159,7 +155,7 @@ class TestEndToEndServerLaunch:
 
         with patch('fluidai_mcp.services.run_servers.launch_mcp_using_fastapi_proxy', side_effect=capture_launch):
             with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+                run_servers(config)
 
         assert str(pkg_dir) in launched_packages
 
@@ -178,7 +174,7 @@ class TestEndToEndServerLaunch:
         with patch.dict(os.environ, {}, clear=False):
             with patch('fluidai_mcp.services.run_servers.launch_mcp_using_fastapi_proxy', return_value=("pkg", Mock())):
                 with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                    run_servers(config, secure_mode=True, token="secret123", start_server=False)
+                    run_servers(config, secure_mode=True, token="secret123")
 
             assert os.environ.get("FMCP_BEARER_TOKEN") == "secret123"
             assert os.environ.get("FMCP_SECURE_MODE") == "true"
