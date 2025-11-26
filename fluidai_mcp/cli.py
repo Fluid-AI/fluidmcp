@@ -337,55 +337,6 @@ def run_github_server(args, secure_mode=False, token=None):
         traceback.print_exc()
         sys.exit(1)
 
-def parse_github_package_string(fmcp_package: str) -> dict:
-    """
-    Parse GitHub package string from S3 config format.
-
-    Format: "owner/repo --github-token TOKEN [--branch BRANCH] [--start-server]"
-
-    args:
-        fmcp_package (str): Package string containing GitHub repo and token
-    returns:
-        dict: Parsed components with keys: repo, token, branch
-    raises:
-        ValueError: If format is invalid
-    """
-
-    # Split the string respecting quotes
-    parts = shlex.split(fmcp_package)
-
-    if not parts:
-        raise ValueError("Empty fmcp_package string")
-
-    # First part is the repository
-    repo = parts[0]
-
-    # Parse flags
-    token = None
-    branch = DEFAULT_GITHUB_BRANCH
-
-    i = 1
-    while i < len(parts):
-        if parts[i] == '--github-token' and i + 1 < len(parts):
-            token = parts[i + 1]
-            i += 2
-        elif parts[i] == '--branch' and i + 1 < len(parts):
-            branch = parts[i + 1]
-            i += 2
-        elif parts[i] == '--start-server':
-            i += 1
-        else:
-            i += 1
-
-    if not token:
-        raise ValueError("GitHub token not found in fmcp_package string. Expected '--github-token TOKEN'")
-
-    return {
-        'repo': normalize_github_repo(repo)[0] + '/' + normalize_github_repo(repo)[1],
-        'token': token,
-        'branch': branch
-    }
-
 
 def resolve_package_dest_dir(package_str: str) -> Path:
     """

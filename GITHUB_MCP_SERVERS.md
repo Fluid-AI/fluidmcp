@@ -24,11 +24,6 @@ Adds native support for launching MCP servers directly from GitHub repositories.
 - Validates JSON structure: must have mcpServers, command, args
 - Raises ValueError with specific errors if invalid
 
-#### `parse_github_package_string(fmcp_package: str) -> dict`
-
-- Parses legacy format: "owner/repo --github-token TOKEN --branch BRANCH"
-- Returns dict with repo, token, branch
-
 ### Modified Functions
 
 #### `run_github_server(args, secure_mode, token)`
