@@ -341,7 +341,11 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 ## 🤝 Contribute
 
 
-FluidMCP is open for collaboration. Feel free to open issues or submit PRs.
+FluidMCP is open for collaboration. We welcome contributions from the community!
+
+- **Contributing Guide**: See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines
+- **Report Issues**: Open an issue on [GitHub](https://github.com/Fluid-AI/fluidmcp/issues)
+- **Submit PRs**: Follow our contribution guidelines to submit pull requests
 
 
 ---
