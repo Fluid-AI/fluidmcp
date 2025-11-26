@@ -350,7 +350,7 @@ FluidMCP is open for collaboration. Feel free to open issues or submit PRs.
 ## 📌 License
 
 
-[MIT License](LICENSE)
+[GNU General Public License v3.0](LICENSE)
 
 
 ---
