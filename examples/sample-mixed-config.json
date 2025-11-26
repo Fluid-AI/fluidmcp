@@ -1,0 +1,15 @@
+{
+  "github_token": "your-default-github-token-here",
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/test-directory"],
+      "env": {}
+    },
+    "github-mcp": {
+      "github_repo": "modelcontextprotocol/servers",
+      "branch": "main",
+      "env": {}
+    }
+  }
+}

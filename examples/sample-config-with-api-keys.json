@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "google-maps": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@google-maps/mcp-server"
+      ],
+      "env": {
+        "GOOGLE_MAPS_API_KEY": "your-api-key-here"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/tmp/test-directory"
+      ],
+      "env": {}
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "your-brave-api-key-here"
+      }
+    }
+  }
+}
