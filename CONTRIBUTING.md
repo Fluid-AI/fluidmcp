@@ -46,7 +46,7 @@ fluidai-mcp --help
 
 5. **Test with Sample Configurations**
 
-We provide sample configuration files in the `examples/` directory for testing:
+We provide sample configuration files in the `examples/` directory for testing. These configs use direct server specifications (no installation required):
 
 ```bash
 # Create a test directory
@@ -55,11 +55,15 @@ mkdir -p /tmp/test-directory
 # Run with sample config
 fluidmcp run examples/sample-config.json --file --start-server
 
+# Server will start on port 8099 with Swagger UI at http://localhost:8099/docs
+
 # In another terminal, test the endpoint
-curl http://localhost:8099/filesystem/mcp \
+curl -X POST http://localhost:8099/filesystem/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
+
+The sample configs work immediately without any package installation. FluidMCP automatically creates temporary metadata files for direct server configurations.
 
 See [examples/README.md](examples/README.md) for more testing scenarios and available sample configurations.
 

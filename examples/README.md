@@ -16,7 +16,7 @@ A basic metadata.json file with two MCP servers (filesystem and memory) that don
 ### 2. `sample-config.json`
 A simple configuration file for running multiple MCP servers without API keys.
 
-**Use case**: Testing the `fluidmcp run --file` command.
+**Use case**: Testing the `fluidmcp run --file` command with direct server configurations.
 
 **Usage**:
 ```bash
@@ -25,11 +25,19 @@ mkdir -p /tmp/test-directory
 
 # Run with FluidMCP
 fluidmcp run examples/sample-config.json --file --start-server
+
+# Access the Swagger UI at http://localhost:8099/docs
+# Test an endpoint:
+curl -X POST http://localhost:8099/filesystem/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
 
 **Servers included**:
 - `filesystem`: File system operations server
 - `memory`: In-memory storage server
+
+**Note**: These servers are run directly from the configuration without installation. FluidMCP creates temporary metadata files automatically.
 
 ### 3. `sample-config-with-api-keys.json`
 A more complex configuration with servers that require API keys.
@@ -85,7 +93,11 @@ curl http://localhost:8099/filesystem/mcp \
 
 ## Creating Your Own Test Configurations
 
-You can create custom configurations based on these examples:
+FluidMCP supports two configuration formats:
+
+### Format 1: Direct Server Configuration (Recommended for Testing)
+
+Specify the command, args, and env directly. No installation required!
 
 ```json
 {
@@ -97,6 +109,18 @@ You can create custom configurations based on these examples:
         "API_KEY": "value"
       }
     }
+  }
+}
+```
+
+### Format 2: Package String (Requires FluidMCP Registry)
+
+Reference a package from the FluidMCP registry. The package will be installed first.
+
+```json
+{
+  "mcpServers": {
+    "your-server-name": "Author/Package@version"
   }
 }
 ```
