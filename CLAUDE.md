@@ -52,10 +52,10 @@ There are no tests in this repository currently.
 fluidmcp install author/package@version [--master]
 
 # Run servers
-fluidmcp run <package> --start-server        # Single package
-fluidmcp run all --start-server              # All installed packages
-fluidmcp run config.json --file --start-server  # From local config file
-fluidmcp run <s3-url> --s3 --start-server    # From S3 config
+fluidmcp run <package>                       # Single package
+fluidmcp run all                             # All installed packages
+fluidmcp run config.json --file              # From local config file
+fluidmcp run <s3-url> --s3                   # From S3 config
 
 # List installed packages
 fluidmcp list

@@ -52,7 +52,7 @@ class TestE2ERealMCPServers:
             [
                 sys.executable, "-m", "fluidai_mcp.cli",
                 "run", str(test_config_file),
-                "--file", "--start-server"
+                "--file"
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

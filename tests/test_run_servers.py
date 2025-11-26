@@ -23,7 +23,7 @@ class TestRunServers:
 
         with patch.dict(os.environ, {}, clear=False):
             with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                run_servers(config, secure_mode=True, token="test-token", start_server=False)
+                run_servers(config, secure_mode=True, token="test-token")
 
             assert os.environ.get("FMCP_BEARER_TOKEN") == "test-token"
             assert os.environ.get("FMCP_SECURE_MODE") == "true"
@@ -33,7 +33,7 @@ class TestRunServers:
 
         with patch('fluidai_mcp.services.run_servers._install_packages_from_config') as mock_install:
             with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+                run_servers(config)
 
             mock_install.assert_called_once_with(config)
 
@@ -42,7 +42,7 @@ class TestRunServers:
 
         with patch('fluidai_mcp.services.run_servers._install_packages_from_config') as mock_install:
             with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+                run_servers(config)
 
             mock_install.assert_not_called()
 
@@ -65,7 +65,7 @@ class TestRunServers:
                 with patch('fluidai_mcp.services.run_servers.FastAPI') as mock_fastapi:
                     mock_app = Mock()
                     mock_fastapi.return_value = mock_app
-                    run_servers(config, start_server=False)
+                    run_servers(config)
 
                     mock_launch.assert_called_once()
                     mock_app.include_router.assert_called_once()
@@ -77,7 +77,7 @@ class TestRunServers:
 
         with patch('fluidai_mcp.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
             with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+                run_servers(config)
 
             mock_launch.assert_not_called()
 
@@ -88,7 +88,7 @@ class TestRunServers:
 
         with patch('fluidai_mcp.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
             with patch('fluidai_mcp.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+                run_servers(config)
 
             mock_launch.assert_not_called()
 

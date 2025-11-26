@@ -32,7 +32,6 @@ def run_servers(
     secure_mode: bool = False,
     token: Optional[str] = None,
     single_package: bool = False,
-    start_server: bool = True,
     force_reload: bool = False
 ) -> None:
     """
@@ -43,7 +42,6 @@ def run_servers(
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
         single_package: True if running a single package (uses port 8090)
-        start_server: Whether to start the FastAPI server
         force_reload: Force kill existing process on port without prompting
     """
     # Set up secure mode environment
@@ -104,9 +102,8 @@ def run_servers(
 
     print(f"Successfully launched {launched_servers} MCP server(s)")
 
-    # Start FastAPI server if requested
-    if start_server:
-        _start_server(app, port, force_reload)
+    # Start FastAPI server
+    _start_server(app, port, force_reload)
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:

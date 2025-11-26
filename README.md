@@ -33,7 +33,7 @@ Create a `config.json` file with your MCP servers:
 ### 2. Launch All Servers
 
 ```bash
-fluidmcp run config.json --file --start-server
+fluidmcp run config.json --file
 ```
 
 This will:
@@ -113,7 +113,7 @@ fluidmcp list
 
 
 ```bash
-fluidmcp run author/package@version --start-server
+fluidmcp run author/package@version
 ```
 
 
@@ -128,7 +128,7 @@ fluidmcp run author/package@version --start-server
 Run with bearer token authentication:
 
 ```bash
-fluidmcp run config.json --file --secure --token your_token --start-server
+fluidmcp run config.json --file --secure --token your_token
 ```
 
 
@@ -160,7 +160,6 @@ fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
 **Common Options:**
 
 
-- `--start-server` – Starts FastAPI server
 - `--master` – Use S3-driven config
 - `--file` – Run from local config.json
 - `--s3` – Run from S3 URL
@@ -170,7 +169,7 @@ fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
 ### Run All Installed Packages
 
 ```bash
-fluidmcp run all --start-server
+fluidmcp run all
 ```
 
 
