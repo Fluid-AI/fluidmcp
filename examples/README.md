@@ -42,7 +42,7 @@ curl -X POST http://localhost:8099/filesystem/mcp \
 ### 3. `sample-github-config.json`
 A configuration file for running MCP servers directly from GitHub repositories.
 
-**Use case**: Testing GitHub repository cloning and running.
+**Use case**: Testing GitHub repository cloning and automatic metadata extraction.
 
 **Usage**:
 ```bash
@@ -54,22 +54,47 @@ fluidmcp run examples/sample-github-config.json --file --start-server
 ```
 
 **Servers included**:
-- `mcp-server-time`: MCP server cloned from GitHub
+- `mcp-server-time`: MCP server cloned from GitHub (auto-extracts command from README)
 
-**Note**: GitHub repositories are automatically cloned to `.fmcp-packages/owner/repo/branch/`. If no metadata.json exists, FluidMCP extracts it from the README.
+**Note**: GitHub repositories are automatically cloned to `.fmcp-packages/owner/repo/branch/`. FluidMCP automatically extracts metadata from the README if no metadata.json exists.
 
-### 4. `sample-mixed-config.json`
+### 4. `sample-github-with-command.json`
+A configuration demonstrating GitHub servers with explicit command specification.
+
+**Use case**: Running GitHub MCP servers when you already know the command (skips README extraction).
+
+**Features**:
+- **Mode 1 (Explicit Command)**: When `command` and `args` are provided, FluidMCP uses them directly without parsing README
+- **Mode 2 (Auto-extraction)**: When no command specified, FluidMCP extracts from README (same as sample-github-config.json)
+
+**Usage**:
+```bash
+# Replace the GitHub token in the file first
+fluidmcp run examples/sample-github-with-command.json --file --start-server
+```
+
+**Servers included**:
+- `github-with-command`: Uses explicit command `npx -y @modelcontextprotocol/server-time`
+- `github-auto-extract`: Auto-extracts command from README
+
+**When to use explicit commands**:
+- You know the exact command to run the MCP server
+- The README format is non-standard or missing
+- You want faster startup (skips README parsing)
+- You want to override the default command from the repository
+
+### 5. `sample-mixed-config.json`
 A configuration demonstrating all three server types in one file.
 
 **Use case**: Running registry packages, direct commands, and GitHub repos together.
 
 **Servers included**:
 - `filesystem`: Direct command configuration
-- `github-mcp`: GitHub repository
+- `github-mcp`: GitHub repository (auto-extracts from README)
 
 **Note**: You can set a default `github_token` at the top level of the config, which will be used for all GitHub servers that don't specify their own token.
 
-### 5. `sample-config-with-api-keys.json`
+### 6. `sample-config-with-api-keys.json`
 A more complex configuration with servers that require API keys.
 
 **Use case**: Testing environment variable management and servers with authentication.
@@ -168,6 +193,8 @@ Clone and run MCP servers directly from GitHub repositories.
       "github_repo": "owner/repo",
       "github_token": "optional-specific-token",
       "branch": "main",
+      "command": "npx",
+      "args": ["-y", "@scope/package-name"],
       "env": {
         "API_KEY": "value"
       }
@@ -178,7 +205,9 @@ Clone and run MCP servers directly from GitHub repositories.
 
 **Features**:
 - Automatically clones repos to `.fmcp-packages/owner/repo/branch/`
-- Extracts metadata from README if metadata.json doesn't exist
+- **Two modes of operation**:
+  - **Explicit command**: If `command` and `args` are provided, uses them directly (faster, no README parsing)
+  - **Auto-extraction**: If no command specified, extracts metadata from README or existing metadata.json
 - Supports per-server or default GitHub tokens
 - Can mix with other configuration formats
 

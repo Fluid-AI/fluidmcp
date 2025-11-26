@@ -1,0 +1,17 @@
+{
+  "github_token": "your-github-token-here",
+  "mcpServers": {
+    "github-with-command": {
+      "github_repo": "modelcontextprotocol/servers",
+      "branch": "main",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-time"],
+      "env": {}
+    },
+    "github-auto-extract": {
+      "github_repo": "modelcontextprotocol/servers",
+      "branch": "main",
+      "env": {}
+    }
+  }
+}

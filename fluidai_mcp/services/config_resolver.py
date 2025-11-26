@@ -369,9 +369,13 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
     """
     Handle GitHub server configuration by cloning the repo and setting up metadata.
 
+    Supports two modes:
+    1. Command specified: Use provided command/args directly
+    2. Command not specified: Extract from README or existing metadata.json
+
     Args:
         server_name: Name of the server
-        server_cfg: Server configuration dict with github_repo, github_token, branch, env
+        server_cfg: Server configuration dict with github_repo, github_token, branch, command, args, env
         default_github_token: Default GitHub token from config or environment
 
     Raises:
@@ -393,13 +397,38 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
     try:
         # Clone the repository
         dest_dir = clone_github_repo(github_repo, github_token, branch)
+        metadata_path = dest_dir / "metadata.json"
 
-        # Extract or create metadata.json
-        metadata_path = extract_or_create_metadata(dest_dir)
+        # Check if command is provided directly in config
+        has_command = server_cfg.get("command") and server_cfg.get("args") is not None
 
-        # Apply environment variables if provided
-        if server_cfg.get("env"):
-            apply_env_to_metadata(metadata_path, server_name, server_cfg["env"])
+        if has_command:
+            # Mode 1: Use provided command directly
+            print(f"📝 Using provided command for '{server_name}'")
+
+            # Create metadata.json with provided command
+            metadata = {
+                "mcpServers": {
+                    server_name: {
+                        "command": server_cfg.get("command"),
+                        "args": server_cfg.get("args"),
+                        "env": server_cfg.get("env", {})
+                    }
+                }
+            }
+
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+
+            print(f"✅ Created metadata.json with provided command")
+        else:
+            # Mode 2: Extract from README or use existing metadata.json
+            print(f"📄 Extracting metadata from repository")
+            metadata_path = extract_or_create_metadata(dest_dir)
+
+            # Apply environment variables if provided
+            if server_cfg.get("env"):
+                apply_env_to_metadata(metadata_path, server_name, server_cfg["env"])
 
         # Set install_path for the launcher
         server_cfg["install_path"] = str(dest_dir)
