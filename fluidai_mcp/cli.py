@@ -305,7 +305,7 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             secure_mode=secure_mode,
             token=token,
             single_package=single_package,
-            force_reload=args.force_reload
+            force_reload=getattr(args, 'force_reload', False)
         )
 
     except FileNotFoundError as e:
