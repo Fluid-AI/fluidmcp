@@ -145,18 +145,19 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     """
     Resolve config from a local JSON configuration file.
 
+    Supports two formats:
+    1. Package strings: "author/package@version" (needs installation)
+    2. Direct configurations: {"command": "...", "args": [...], "env": {...}}
+
     Args:
         file_path: Path to the JSON config file
 
     Returns:
-        ServerConfig with servers from file (needs installation)
+        ServerConfig with servers from file
     """
     file_path = Path(file_path)
     if not file_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {file_path}")
-
-    # Preprocess to expand package strings to full metadata
-    _preprocess_metadata_file(file_path)
 
     with open(file_path, 'r') as f:
         config = json.load(f)
@@ -165,10 +166,32 @@ def resolve_from_file(file_path: str) -> ServerConfig:
         raise ValueError(f"Invalid configuration in {file_path}")
 
     servers = config.get("mcpServers", {})
+    needs_install = False
+
+    # Check each server to determine if it needs installation or temp directory
+    for server_name, server_cfg in servers.items():
+        if isinstance(server_cfg, str):
+            # Package string - needs installation
+            needs_install = True
+        elif isinstance(server_cfg, dict) and server_cfg.get("command"):
+            # Direct configuration - create temp directory with metadata.json
+            temp_dir = _create_temp_server_dir(server_name, server_cfg)
+            servers[server_name]["install_path"] = str(temp_dir)
+        else:
+            # Unknown format
+            print(f"Warning: Unknown format for server '{server_name}'")
+
+    # Preprocess only if we have package strings
+    if needs_install:
+        _preprocess_metadata_file(file_path)
+        # Re-read the preprocessed file
+        with open(file_path, 'r') as f:
+            config = json.load(f)
+        servers = config.get("mcpServers", {})
 
     return ServerConfig(
         servers=servers,
-        needs_install=True,
+        needs_install=needs_install,
         sync_to_s3=False,
         source_type="file",
         metadata_path=file_path
@@ -324,6 +347,46 @@ def _resolve_package_dest_dir(package_str: str, install_dir: Path) -> Path:
             if dest_dir is None:
                 raise FileNotFoundError(f"Package not found: {package_str}")
     return dest_dir
+
+
+def _create_temp_server_dir(server_name: str, server_cfg: dict) -> Path:
+    """
+    Create a temporary directory with metadata.json for a direct server configuration.
+
+    Args:
+        server_name: Name of the server
+        server_cfg: Server configuration dict with command, args, env
+
+    Returns:
+        Path to the created temporary directory
+    """
+    import tempfile
+
+    # Create temp directory in a persistent location
+    install_dir = Path(INSTALLATION_DIR)
+    temp_base = install_dir / ".temp_servers"
+    temp_base.mkdir(parents=True, exist_ok=True)
+
+    # Create server-specific directory
+    server_dir = temp_base / server_name
+    server_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create metadata.json
+    metadata = {
+        "mcpServers": {
+            server_name: {
+                "command": server_cfg.get("command"),
+                "args": server_cfg.get("args", []),
+                "env": server_cfg.get("env", {})
+            }
+        }
+    }
+
+    metadata_path = server_dir / "metadata.json"
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+    return server_dir
 
 
 def _collect_installed_servers(install_dir: Path, taken_ports: set) -> Dict[str, dict]:
