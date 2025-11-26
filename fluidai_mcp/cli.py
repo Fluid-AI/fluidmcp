@@ -216,6 +216,97 @@ def install_command(args):
     if getattr(args, "master", False):
         update_env_from_common_env(dest_dir, pkg)
 
+
+def github_command(args, secure_mode: bool = False, token: str = None) -> None:
+    """
+    Clone and run an MCP server directly from a GitHub repository.
+
+    Args:
+        args: Parsed command line arguments with repo, github_token, branch
+        secure_mode: Enable bearer token authentication
+        token: Bearer token for secure mode
+    """
+    from fluidai_mcp.services import (
+        clone_github_repo,
+        extract_or_create_metadata,
+    )
+    from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
+    from fluidai_mcp.services.network_utils import is_port_in_use, kill_process_on_port
+    from fastapi import FastAPI
+    import uvicorn
+
+    # Get port configuration
+    client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
+
+    try:
+        # Set up secure mode
+        if secure_mode and token:
+            os.environ["FMCP_BEARER_TOKEN"] = token
+            os.environ["FMCP_SECURE_MODE"] = "true"
+            print(f"🔒 Secure mode enabled with bearer token")
+
+        # Clone the repository
+        print(f"📥 Cloning GitHub repository: {args.repo}")
+        dest_dir = clone_github_repo(args.repo, args.github_token, args.branch)
+
+        # Extract or create metadata.json
+        print(f"📄 Processing metadata...")
+        metadata_path = extract_or_create_metadata(dest_dir)
+
+        # Launch the MCP server
+        print(f"🚀 Launching MCP server...")
+        package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
+
+        if not router:
+            print("❌ Failed to launch MCP server")
+            sys.exit(1)
+
+        print(f"✅ MCP server '{package_name}' launched successfully from GitHub")
+
+        # Start FastAPI server if requested
+        if args.start_server:
+            # Check if port is in use
+            if is_port_in_use(client_server_port):
+                print(f"Port {client_server_port} is already in use.")
+                if args.force_reload:
+                    print(f"Force reloading server on port {client_server_port}")
+                    kill_process_on_port(client_server_port)
+                else:
+                    choice = input("Kill existing process and reload? (y/n): ").strip().lower()
+                    if choice == 'y':
+                        kill_process_on_port(client_server_port)
+                    elif choice == 'n':
+                        print(f"Keeping existing process on port {client_server_port}")
+                        return
+                    else:
+                        print("Invalid choice. Aborting.")
+                        return
+
+            # Create FastAPI app
+            app = FastAPI(
+                title=f"FluidMCP Server - {package_name}",
+                description=f"Gateway for {package_name} MCP server from GitHub",
+                version="2.0.0"
+            )
+
+            app.include_router(router, tags=[package_name])
+
+            print(f"🚀 Starting FastAPI server for {package_name}")
+            print(f"📖 Swagger UI available at: http://localhost:{client_server_port}/docs")
+
+            uvicorn.run(app, host="0.0.0.0", port=client_server_port)
+
+    except ValueError as e:
+        print(f"❌ Configuration error: {e}")
+        sys.exit(1)
+    except RuntimeError as e:
+        print(f"❌ Runtime error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error running GitHub MCP server: {e}")
+        sys.exit(1)
+
+
 def main():
     '''
     Main function to handle command line arguments and execute the appropriate action.
@@ -249,7 +340,17 @@ def main():
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
     edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
 
-    # Parse the command line arguments and run the appropriate command to the subparsers 
+    # github command
+    github_parser = subparsers.add_parser("github", help="Clone and run an MCP server from GitHub")
+    github_parser.add_argument("repo", type=str, help="GitHub repo path or URL (e.g., owner/repo)")
+    github_parser.add_argument("--github-token", required=True, help="GitHub access token with repo read permissions")
+    github_parser.add_argument("--branch", type=str, help="Branch to clone (default: main)")
+    github_parser.add_argument("--start-server", action="store_true", help="Start FastAPI client server")
+    github_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
+    github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
+    github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+
+    # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
     # Secure mode logic
@@ -274,6 +375,8 @@ def main():
         run_command(args, secure_mode=secure_mode, token=token)
     elif args.command == "edit-env":
         edit_env(args)
+    elif args.command == "github":
+        github_command(args, secure_mode=secure_mode, token=token)
     elif args.command == "list":
         list_installed_packages()
     else:

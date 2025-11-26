@@ -35,6 +35,7 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     dest_dir = Path(dest_dir)
     metadata_path = dest_dir / "metadata.json"
+
     try:
         if not metadata_path.exists():
             logger.info(f":warning: No metadata.json found at {metadata_path}")
@@ -48,9 +49,12 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     except Exception as e:
         print(f":x: Error reading metadata.json: {e}")
         return None, None
+
     try:
         base_command = servers["command"]
         raw_args = servers["args"]
+
+        # Resolve npm/npx paths
         if base_command == "npx" or base_command == "npm":
             npm_path = shutil.which("npm")
             npx_path = shutil.which("npx")
@@ -58,27 +62,47 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
                 base_command = npm_path
             elif npx_path and base_command == "npx":
                 base_command = npx_path
+
         args = [arg.replace("<path to mcp-servers>", str(dest_dir)) for arg in raw_args]
         stdio_command = [base_command] + args
         env_vars = servers.get("env", {})
         env = {**dict(os.environ), **env_vars}
+
+        # Determine working directory based on package type
+        is_github_repo = (dest_dir / ".git").exists()
+
+        if is_github_repo:
+            # GitHub repository
+            if base_command in ["npx", str(shutil.which("npx"))] and "-y" in args:
+                # npx -y: run from parent to avoid package.json conflicts
+                working_dir = dest_dir.parent
+                logger.info(f"GitHub repo with npx -y: using parent directory {working_dir}")
+            else:
+                # Source code or local installation: use repo directory
+                working_dir = dest_dir
+                logger.info(f"GitHub repo with source: using repo directory {working_dir}")
+        else:
+            # Registry package or direct config: use package directory
+            working_dir = dest_dir
+
         process = subprocess.Popen(
-                stdio_command,
-                cwd=dest_dir,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                text=True,  # ensure stdin/stdout is in text mode
-                bufsize=1
-            )
-        
-        # NEW: Initialize MCP server
+            stdio_command,
+            cwd=working_dir,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            text=True,  # ensure stdin/stdout is in text mode
+            bufsize=1
+        )
+
+        # Initialize MCP server
         if not initialize_mcp_server(process):
             print(f"Warning: Failed to initialize MCP server for {pkg}")
-               
+
         router = create_mcp_router(pkg, process)
         return pkg, router
+
     except FileNotFoundError as e:
         print(f":x: Command not found: {e}")
         return None, None

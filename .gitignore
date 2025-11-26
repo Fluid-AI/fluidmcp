@@ -49,3 +49,16 @@ test.tar.gz
 
 # FastAPI temporary files
 /tmp/
+
+# Developer test configs (may contain API keys)
+my-config.json
+*-local.json
+*-test.json
+local-*.json
+test-*.json
+
+# FluidMCP packages directory
+.fmcp-packages/
+
+# Temporary server directories (created when running from config files)
+.temp_servers/

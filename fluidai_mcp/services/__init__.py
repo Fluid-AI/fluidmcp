@@ -3,6 +3,13 @@ from .package_installer import parse_package_string
 from .env_manager import edit_env_variables
 from .config_resolver import ServerConfig, resolve_config
 from .run_servers import run_servers
+from .github_utils import (
+    normalize_github_repo,
+    clone_github_repo,
+    extract_or_create_metadata,
+    is_github_repo,
+    apply_env_to_metadata,
+)
 
 __all__ = [
     "install_package",
@@ -11,4 +18,9 @@ __all__ = [
     "ServerConfig",
     "resolve_config",
     "run_servers",
+    "normalize_github_repo",
+    "clone_github_repo",
+    "extract_or_create_metadata",
+    "is_github_repo",
+    "apply_env_to_metadata",
 ]
