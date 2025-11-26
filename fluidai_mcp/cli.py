@@ -234,7 +234,7 @@ def main():
     run_parser = subparsers.add_parser("run", help="Run a package")
     run_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
     run_parser.add_argument("--port", type=int, help="Port for SuperGateway (default: 8111)")
-    run_parser.add_argument("--start-server", action="store_true", help="Start FastAPI client server")
+    run_parser.add_argument("--no-start-server", action="store_false", dest="start_server", help="Don't start FastAPI client server")
     run_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
     run_parser.add_argument("--master", action="store_true", help="Use master metadata file from S3")
     run_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
@@ -306,8 +306,8 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             secure_mode=secure_mode,
             token=token,
             single_package=single_package,
-            start_server=getattr(args, 'start_server', False),
-            force_reload=getattr(args, 'force_reload', False)
+            start_server=args.start_server,
+            force_reload=args.force_reload
         )
 
     except FileNotFoundError as e:
