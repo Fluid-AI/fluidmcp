@@ -1,0 +1,8 @@
+mcp
+pymupdf4llm
+mammoth
+markdown
+weasyprint
+pypandoc
+fastapi
+uvicorn

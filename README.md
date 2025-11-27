@@ -1,363 +1,306 @@
-<h1  style="font-size: 4.2em;">🌀 FluidMCP CLI</h1>
-<p ><strong>Orchestrate multiple MCP servers with a single configuration file</strong></p>
+
+# FluidMCP
+
+## 🎥 MCP Server Output Demo
+
+Below is the recorded output of running the Airbnb MCP server inside the FluidMCP environment:
+
+📌 **Recording:**  
+[Click here to watch the output video](Recording%202025.mp4)
+
+> The file is located in the repository at:  
+> `/workspaces/fluidmcp/Recording 2025.mp4`
+
+## 1. Overview
+
+FluidMCP is a modular, extensible, and lightweight framework that allows developers to install, run, and interact with **Model Context Protocol (MCP)** servers. It standardizes how tools, AI models, and external services communicate through a unified API.
+
+With FluidMCP, you can:
+
+* Install MCP packages from the Fluid registry
+* Run MCP servers locally
+* Connect them via a FastAPI proxy
+* Call tools programmatically using HTTP
+* Build and host your own MCP servers
 
 ---
 
-## ⚡ Quick Start - Run Multiple MCP Servers
+## 2. Why FluidMCP?
 
-The main power of FluidMCP is running multiple MCP servers from a single configuration file over a unified FastAPI endpoint.
+FluidMCP solves major challenges in AI tool integration:
 
-### 1. Create a Configuration File
+### ✅ **Decouples tools from applications**
 
-Create a `config.json` file with your MCP servers:
+Tools (like search, Airbnb, Maps) can run anywhere — locally, cloud, or as separate containers.
 
-```json
-{
-  "mcpServers": {
-    "google-maps": {
-      "command": "npx",
-      "args": ["-y", "@google-maps/mcp-server"],
-      "env": {
-        "GOOGLE_MAPS_API_KEY": "your-api-key"
-      }
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/files"],
-      "env": {}
-    }
-  }
-}
-```
+### ✅ **Unified API layer**
 
-### 2. Launch All Servers
+Everything communicates via standardized JSON-RPC calls.
 
-```bash
-fluidmcp run config.json --file --start-server
-```
+### ✅ **Extensible package ecosystem**
 
-This will:
-- Install and configure all MCP servers listed in your config
-- Launch them through a unified FastAPI gateway
-- Make them available at `http://localhost:8099`
-- Provide automatic API documentation at `http://localhost:8099/docs`
+Developers can publish, share, install MCP packages from the registry.
 
+### ✅ **Supports multiple runtimes**
 
-![fluidmcp_file_](https://github.com/user-attachments/assets/56bac081-0027-48c5-9462-f06e83cabcf7)
-
-
-
-
----
-## 🚀 Features
-
-
-- **📁 Multi-Server Orchestration**
-  - Define multiple MCP servers in a single JSON configuration file
-  - Launch all servers with one command: `fluidmcp run --file <config.json>`
-  - Unified FastAPI gateway serving all your MCP tools
-
-
-- **📦 Package Management**
-  - Install MCP packages with `fluidmcp install author/package@version`
-  - Automatic dependency resolution and environment setup
-  - Support for npm, Python, and custom MCP servers
-
-
-- **🚀 FastAPI Gateway**
-  - Unified HTTP endpoints for all MCP tools
-  - Server-Sent Events (SSE) streaming support
-  - Swagger documentation at `/docs`
-
-
-- **🔐 Security & Authentication**
-  - Bearer token authentication
-  - Secure mode with encrypted communications
-  - Environment variable encryption for API keys
-
+Python, Node.js, Rust, or any language capable of supporting MCP.
 
 ---
 
+## 3. Quick Start (5 Minutes)
 
-## 📥 Installation
-
+### **Step 1 — Clone the repo**
 
 ```bash
-pip install fluidmcp
+git clone https://github.com/fluidmcp/fluidmcp.git
+cd fluidmcp
 ```
 
+### **Step 2 — Create a virtual environment**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### **Step 3 — Install dependencies**
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+### **Step 4 — Install any MCP package**
+
+Example: Airbnb MCP
+
+```bash
+fmcp install Airbnb/airbnb@0.1.0
+```
+
+### **Step 5 — Run the MCP server**
+
+```bash
+fmcp run Airbnb/airbnb@0.1.0 --start-server
+```
+
+FastAPI Proxy will start at:
+
+```
+http://localhost:8090
+```
+
+Swagger docs will be available at:
+
+```
+http://localhost:8090/docs
+```
 
 ---
 
+## 4. Running MCP Servers
 
-## 🔧 Alternative Usage Patterns
+FluidMCP provides 2 ways to run an MCP server:
 
-
-### Install Individual Packages
-
-
-```bash
-fluidmcp install author/package@version
-```
-
-
-### List Installed Packages
-
+### ### **Option A — Start directly via CLI**
 
 ```bash
-fluidmcp list
+fmcp run author/package@version
 ```
 
+### ### **Option B — Start with FastAPI Proxy**
 
-### Run Individual Package
-
+This is required for interacting using HTTP.
 
 ```bash
-fluidmcp run author/package@version --start-server
+fmcp run Airbnb/airbnb@0.1.0 --start-server
 ```
 
+This launches:
 
----
+* MCP backend (Node server)
+* FastAPI proxy (Python server)
 
-
-## 🔐 Advanced Usage
-
-
-### Secure Mode with Authentication
-
-Run with bearer token authentication:
+### **Testing Available Tools**
 
 ```bash
-fluidmcp run config.json --file --secure --token your_token --start-server
+curl -s http://localhost:8090/airbnb/mcp/tools/list | jq .
 ```
 
+### **Calling a Tool**
 
-![fluidmcp_secure_1](https://github.com/user-attachments/assets/6d5d38c5-c912-476a-af85-f7da44b15358)
-
-
----
-
-### after authorisation
-
-![fluidmcp_secure_2](https://github.com/user-attachments/assets/5bc9e34c-99fc-46c3-ba75-025de9077811)
-
-
-
----
-
-
-
-
-### ☁️ Run from S3 URL
-
-Run configuration directly from S3:
+Example: Search Airbnb listings
 
 ```bash
-fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
-```
-
-
-**Common Options:**
-
-
-- `--start-server` – Starts FastAPI server
-- `--master` – Use S3-driven config
-- `--file` – Run from local config.json
-- `--s3` – Run from S3 URL
-- `--secure` – Enable secure token mode
-- `--token <token>` – Custom bearer token
-
-### Run All Installed Packages
-
-```bash
-fluidmcp run all --start-server
-```
-
-
----
-
-
-## 📂 Run Modes
-
-
-### 🧠 Master Mode (S3 Centralized)
-
-
-```bash
-fluidmcp install author/package@version --master
-fluidmcp run all --master
-```
-
-
----
-
-
-## 🧩 Environment Variables
-
-
-```bash
-# S3 Credentials (used in --master mode)
-export S3_BUCKET_NAME="..."
-export S3_ACCESS_KEY="..."
-export S3_SECRET_KEY="..."
-export S3_REGION="..."
-
-
-# Registry access
-export MCP_FETCH_URL="https://registry.fluidmcp.com/fetch-mcp-package"
-export MCP_TOKEN="..."
-```
-
-
-### Edit Environment
-
-
-```bash
-fluidmcp edit-env <author/package@version>
-```
-
-
----
-
-
-## 📁 Directory Layout
-
-
-```
-.fmcp-packages/
-└── Author/
-    └── Package/
-        └── Version/
-            ├── metadata.json
-            └── [tool files]
-```
-
-
----
-
-
-## 📑 metadata.json Example
-
-
-```json
-{
-  "mcpServers": {
-    "maps": {
-      "command": "npx",
-      "args": ["-y", "@package/server"],
-      "env": {
-        "API_KEY": "xxx"
-      }
-    }
-  }
-}
-```
-
-
----
-
-
-## 🧪 Try an MCP Server
-
-
-```bash
-fluidmcp install Google_Maps/google-maps@0.6.2
-fluidmcp run all
-```
-
-
-Then call it using:
-
-
-```python
-import requests, json
-
-
-url = "http://localhost:8099/google-maps/mcp"
-payload = {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "maps_search_places",
-    "arguments": {
-      "query": "coffee shops in San Francisco"
-    }
-  }
-}
-response = requests.post(url, json=payload)
-print(json.dumps(response.json(), indent=2))
-```
-
-
----
-
-
-## 📡 Streaming with SSE
-
-
-```bash
-curl -N -X POST http://localhost:8099/package/sse \
+curl -s -X POST http://localhost:8090/airbnb/mcp/tools/call \
   -H "Content-Type: application/json" \
-  -d @payload.json
+  -d '{
+    "name": "airbnb_search",
+    "arguments": {
+      "location": "Mumbai",
+      "adults": 1
+    }
+  }' | jq .
 ```
 
+The response includes real-time Airbnb results:
 
-- `sse/start`
-- `sse/stream`
-- `sse/message`
-- `sse/tools_call`
-
-
-Useful for LLMs, web scraping, or AI workflows that stream data.
-
+* Listing ID
+* Location
+* Prices
+* Ratings
+* Pagination cursors
 
 ---
 
+## 5. Hosting MCP Servers
 
-## 📸 Demo 
+FluidMCP servers can be hosted on:
 
-### Installing an individual package
+* Docker
+* AWS EC2 / Lightsail
+* GCP / Azure
+* Vercel (serverless functions)
+* Self-hosted Linux VM
 
+### Example Dockerfile
 
-![fluidmcp_install](https://github.com/user-attachments/assets/39b6fc64-6b46-4045-84df-63af298fe6bf)
+```dockerfile
+FROM python:3.10
+COPY . /app
+WORKDIR /app
+RUN pip install -r requirements.txt
+CMD ["fmcp", "run", "Airbnb/airbnb@0.1.0", "--start-server"]
+```
 
----
+Host via:
 
-### Running an individual package
-
-![fluidmcp_run_individual (2)](https://github.com/user-attachments/assets/4073c072-3210-4e88-a84a-162e13af168b)
-
-
----
-
-### Edit environment of a package
-
-![fluidmcp_edit-env (2)](https://github.com/user-attachments/assets/b8cf8a0c-3434-4730-8d0e-1e74b6357edd)
-
----
-
-
-## 🤝 Contribute
-
-
-FluidMCP is open for collaboration. Feel free to open issues or submit PRs.
-
+```bash
+docker build -t fluidmcp .
+docker run -p 8090:8090 fluidmcp
+```
 
 ---
 
+## 6. Creating Custom MCP Servers
 
-## 📌 License
+FluidMCP supports custom MCP server creation.
 
+### **Python MCP Server Template**
 
-[MIT License](LICENSE)
+```bash
+fmcp init my-custom-server
+```
 
+This scaffolds:
+
+```
+/my-custom-server
+  ├── server.py
+  ├── tools/
+  ├── metadata.json
+```
+
+### Register a new tool
+
+```json
+{
+  "name": "hello_world",
+  "description": "Returns a hello message",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" }
+    }
+  }
+}
+```
 
 ---
 
+## 7. Repository Structure
 
+```
+fluidmcp/
+│── fluidai_mcp/         # Core FastAPI proxy
+│── .fmcp-packages/      # Installed MCP packages
+│── cli/                 # fmcp CLI source code
+│── examples/             # Sample MCP servers
+│── requirements.txt
+│── pyproject.toml
+│── README.md
+```
 
+---
 
+## 8. Deployment Guide
 
+### **Deploy on Codespace (Used for Day-2 Assessment)**
 
+1. Create Codespace
+2. Setup Python venv
+3. Install FluidMCP
+4. Install MCP packages
+5. Start MCP server
+6. Test via curl
+
+### **Production Deployment Steps**
+
+* Containerize MCP server
+* Add environment variables in metadata.json
+* Validate with health endpoints
+* Configure domain + SSL
+
+---
+
+## 9. Contributing Guidelines
+
+### 🔹 How to Contribute
+
+* Fork the repo
+* Create feature branch
+* Follow naming convention:
+  `feature/mcp-airbnb-support`
+* Add documentation + tests
+* Submit PR
+
+### 🔹 Code Style
+
+* Use Black formatter for Python
+* Keep MCP schema JSON-RPC compliant
+* Avoid hardcoding secrets
+
+---
+
+## 10. FAQ & Troubleshooting
+
+### ❓ **Package Not Found (`detail: Package not found`)**
+
+**Cause:** Wrong registry path or package name
+**Fix:** Use correct structure
+
+```
+author/package@version
+```
+
+### ❓ `Method Not Allowed` when using POST
+
+You used wrong endpoint. Use:
+
+```
+GET  /<pkg>/mcp/tools/list
+POST /<pkg>/mcp/tools/call
+```
+
+### ❓ Port already in use
+
+```bash
+lsof -i:8090
+kill -9 <PID>
+```
+
+### ❓ Node not installed
+
+Some MCP packages (like Airbnb) require Node 18+.
+Codespaces already includes Node by default.
 
