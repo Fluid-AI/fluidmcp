@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "doc-converter": {
+      "command": "python",
+      "args": [
+        "server.py"
+      ],
+      "env": {},
+      "install_path": "/workspaces/fluidmcp/custom_servers/doc-converter"
+    }
+  }
+}
