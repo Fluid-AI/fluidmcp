@@ -4,3 +4,5 @@ mammoth
 markdown
 weasyprint
 pypandoc
+fastapi
+uvicorn
