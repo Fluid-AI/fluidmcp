@@ -172,42 +172,58 @@ def extract_json_from_readme(readme_content: str) -> Dict:
     Raises:
         ValueError: If no valid JSON found
     """
-    # Try to find JSON in code blocks
-    code_block_pattern = r'```(?:json)?\s*\n([\s\S]*?)\n```'
-    code_blocks = re.findall(code_block_pattern, readme_content)
+    all_candidates = []
 
-    # First, look for blocks containing mcpServers
-    for block in code_blocks:
-        if 'mcpServers' in block or '"mcpServers"' in block:
-            try:
-                data = json.loads(block.strip())
-                if validate_mcp_metadata(data, raise_error=False):
-                    return data
-            except json.JSONDecodeError:
-                continue
+    # Try to find JSON in markdown code blocks first
+    # Pattern 1: ```json ... ```
+    json_block_pattern = r'```json\s*\n(.*?)\n```'
+    matches = re.findall(json_block_pattern, readme_content, re.DOTALL | re.IGNORECASE)
 
-    # Then try any JSON block
-    for block in code_blocks:
+    for match in matches:
         try:
-            data = json.loads(block.strip())
-            if 'mcpServers' in data or 'command' in data:
-                return data
+            data = json.loads(match.strip())
+            if isinstance(data, dict):
+                all_candidates.append(data)
         except json.JSONDecodeError:
             continue
 
-    # Try to find raw JSON with nested braces
-    json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-    json_matches = re.findall(json_pattern, readme_content, re.DOTALL)
+    # Pattern 2: ``` ... ``` (code block without language specifier)
+    code_block_pattern = r'```\s*\n(.*?)\n```'
+    matches = re.findall(code_block_pattern, readme_content, re.DOTALL)
 
-    for match in json_matches:
-        if 'mcpServers' in match:
-            try:
-                data = json.loads(match)
-                return data
-            except json.JSONDecodeError:
-                continue
+    for match in matches:
+        try:
+            data = json.loads(match.strip())
+            if isinstance(data, dict):
+                all_candidates.append(data)
+        except json.JSONDecodeError:
+            continue
 
-    raise ValueError("No valid JSON configuration found in README")
+    # Pattern 3: Try to find raw JSON (looking for { ... } blocks with proper nesting)
+    # More sophisticated pattern that handles nested braces better
+    json_pattern = r'\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\}'
+    matches = re.findall(json_pattern, readme_content, re.DOTALL)
+
+    # Try the largest JSON-like blocks first (sort by size)
+    sorted_matches = sorted(matches, key=len, reverse=True)
+    for match in sorted_matches[:10]:  # Limit to top 10 largest to avoid processing too many
+        try:
+            data = json.loads(match.strip())
+            if isinstance(data, dict):
+                all_candidates.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    # Now prioritize candidates with 'mcpServers' key
+    for candidate in all_candidates:
+        if "mcpServers" in candidate:
+            return candidate
+
+    # If no candidate has mcpServers, return the first valid one
+    if all_candidates:
+        return all_candidates[0]
+
+    raise ValueError("No valid JSON found in README file")
 
 
 def validate_mcp_metadata(metadata: Dict, raise_error: bool = True) -> bool:
