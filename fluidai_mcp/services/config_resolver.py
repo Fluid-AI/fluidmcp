@@ -236,9 +236,6 @@ def resolve_from_s3_url(presigned_url: str) -> ServerConfig:
     with open(temp_file_path, 'wb') as f:
         f.write(response.content)
 
-    # Preprocess to expand package strings
-    _preprocess_metadata_file(temp_file_path)
-
     with open(temp_file_path, 'r') as f:
         config = json.load(f)
 
@@ -246,10 +243,45 @@ def resolve_from_s3_url(presigned_url: str) -> ServerConfig:
         raise ValueError("Invalid configuration from S3")
 
     servers = config.get("mcpServers", {})
+    needs_install = False
+
+    # Get default GitHub token from config or environment
+    default_github_token = (
+        config.get("github_token")
+        or os.environ.get("FMCP_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+    )
+
+    # Check each server to determine type and prepare it
+    for server_name, server_cfg in servers.items():
+        if isinstance(server_cfg, str):
+            # Package string - needs installation from registry
+            needs_install = True
+
+        elif isinstance(server_cfg, dict):
+            if server_cfg.get("github_repo"):
+                # GitHub repository - clone it
+                _handle_github_server(server_name, server_cfg, default_github_token)
+
+            elif server_cfg.get("command"):
+                # Direct configuration - create temp directory with metadata.json
+                temp_dir = _create_temp_server_dir(server_name, server_cfg)
+                servers[server_name]["install_path"] = str(temp_dir)
+            # If server has fmcp_package, it needs installation (handled by needs_install)
+        else:
+            print(f"Warning: Invalid server configuration for '{server_name}'")
+
+    # Preprocess only if we have package strings
+    if needs_install:
+        _preprocess_metadata_file(temp_file_path)
+        # Re-read the preprocessed file
+        with open(temp_file_path, 'r') as f:
+            config = json.load(f)
+        servers = config.get("mcpServers", {})
 
     return ServerConfig(
         servers=servers,
-        needs_install=True,
+        needs_install=needs_install,
         sync_to_s3=False,
         source_type="s3_url",
         metadata_path=temp_file_path

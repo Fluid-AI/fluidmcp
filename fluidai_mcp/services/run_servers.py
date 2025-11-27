@@ -89,7 +89,7 @@ def run_servers(
             package_name, router = launch_mcp_using_fastapi_proxy(install_path)
 
             if router:
-                app.include_router(router, tags=[server_name])
+                app.include_router(router)
                 print(f"Added {package_name} endpoints")
                 launched_servers += 1
             else:
