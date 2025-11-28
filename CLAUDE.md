@@ -31,10 +31,14 @@ There are no tests in this repository currently.
 ### Services Layer (`fluidai_mcp/services/`)
 - `package_installer.py` - Downloads and installs MCP packages from registry
 - `package_launcher.py` - Launches MCP servers via FastAPI proxy (`launch_mcp_using_fastapi_proxy`)
+- `run_servers.py` - Unified server runner with OAuth token injection
 - `env_manager.py` - Manages environment variables for packages
 - `s3_utils.py` - S3 upload/download for master mode configuration
 - `network_utils.py` - Port management utilities
 - `package_list.py` - Package version resolution
+- `oauth_service.py` - Package-specific OAuth2 PKCE authentication
+- `token_storage.py` - Secure token storage with keyring/file fallback
+- `oauth2_pkce.py` - System-wide OAuth2 PKCE for API gateway
 
 ### Key Data Structures
 - MCP server configs use the format: `{"mcpServers": {"name": {"command": "...", "args": [...], "env": {...}}}}`
@@ -57,6 +61,17 @@ fluidmcp run all --start-server              # All installed packages
 fluidmcp run config.json --file --start-server  # From local config file
 fluidmcp run <s3-url> --s3 --start-server    # From S3 config
 
+# Run with authentication
+fluidmcp run <package> --start-server --secure [--token <token>]  # Simple bearer token
+fluidmcp run <package> --start-server --oauth                      # OAuth2 PKCE
+
+# System-wide OAuth2 authentication (for API gateway)
+fluidmcp login      # Login with OAuth2 (opens browser)
+fluidmcp logout     # Logout and remove stored tokens
+
+# Package-specific OAuth2 authentication (for MCP packages)
+fluidmcp auth <package> [--force]  # Authenticate package with OAuth provider
+
 # List installed packages
 fluidmcp list
 
@@ -77,4 +92,17 @@ MCP_TOKEN
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
+
+# Simple bearer token authentication
+FMCP_SECURE_MODE=true
+FMCP_BEARER_TOKEN=your_token_here
+
+# OAuth2 PKCE configuration
+FMCP_OAUTH_MODE=true
+FMCP_OAUTH_AUTH_ENDPOINT=https://your-oauth-provider.com/oauth/authorize
+FMCP_OAUTH_TOKEN_ENDPOINT=https://your-oauth-provider.com/oauth/token
+FMCP_OAUTH_CLIENT_ID=your_client_id
+FMCP_OAUTH_REDIRECT_URI=http://localhost:8088/callback  # Optional, default shown
+FMCP_OAUTH_SCOPE="openid profile email"                  # Optional, default shown
+FMCP_OAUTH_ACCESS_TOKEN=manual_token_here               # Optional, for manual token input
 ```

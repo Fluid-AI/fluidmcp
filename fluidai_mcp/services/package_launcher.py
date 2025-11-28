@@ -19,18 +19,42 @@ import uvicorn
 import threading
 import time
 
+from fluidai_mcp.services.oauth2_pkce import OAuth2TokenManager, verify_oauth_token
+
 security = HTTPBearer(auto_error=False)
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+    """
+    Validate bearer token if secure mode is enabled.
+    Supports both simple bearer tokens and OAuth2 tokens.
+    """
     secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-    
-    if not secure_mode:
+    oauth_mode = os.environ.get("FMCP_OAUTH_MODE") == "true"
+
+    # If neither mode is enabled, allow all requests
+    if not secure_mode and not oauth_mode:
         return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+
+    # Check for credentials
+    if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
+
+    token = credentials.credentials
+
+    # OAuth2 mode - validate OAuth token
+    if oauth_mode:
+        if verify_oauth_token(token):
+            return token
+        raise HTTPException(status_code=401, detail="Invalid OAuth2 token")
+
+    # Simple bearer token mode
+    if secure_mode:
+        bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+        if token == bearer_token:
+            return token
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
+
+    return None
 
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     dest_dir = Path(dest_dir)

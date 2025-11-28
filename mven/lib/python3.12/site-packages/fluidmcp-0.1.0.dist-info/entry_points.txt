@@ -1,0 +1,4 @@
+[console_scripts]
+fluidai-mcp = fluidai_mcp.cli:main
+fluidmcp = fluidai_mcp.cli:main
+fmcp = fluidai_mcp.cli:main
