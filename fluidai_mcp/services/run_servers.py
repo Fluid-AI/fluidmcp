@@ -20,6 +20,7 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
+from .oauth_service import get_valid_token
 
 
 # Default ports
@@ -83,6 +84,50 @@ def run_servers(
         if not metadata_path.exists():
             print(f"No metadata.json in '{install_path}', skipping")
             continue
+
+        # Check for OAuth authentication requirements
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+
+            # Get the first server config
+            if metadata.get("mcpServers"):
+                first_server = list(metadata["mcpServers"].keys())[0]
+                server_metadata = metadata["mcpServers"][first_server]
+
+                # Check if auth is required
+                if "auth" in server_metadata:
+                    auth_config = server_metadata["auth"]
+                    logger.info(f"OAuth authentication required for {server_name}")
+
+                    # Generate package identifier for token storage
+                    package_identifier = server_name.replace("/", "_").replace("@", "_")
+
+                    # Get valid access token (will refresh if needed)
+                    access_token = get_valid_token(package_identifier, auth_config)
+
+                    if not access_token:
+                        print(f"⚠ Warning: No valid OAuth token for '{server_name}'")
+                        print(f"Please authenticate first using: fluidmcp auth {server_name}")
+                        print(f"Skipping server '{server_name}'")
+                        continue
+
+                    # Inject token into metadata env section
+                    token_env_key = auth_config.get("token_env_key", "ACCESS_TOKEN")
+                    if "env" not in server_metadata:
+                        server_metadata["env"] = {}
+
+                    server_metadata["env"][token_env_key] = access_token
+                    logger.info(f"Injected OAuth token into {token_env_key}")
+
+                    # Write updated metadata back to file
+                    with open(metadata_path, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+
+                    print(f"✓ Using OAuth token for {server_name}")
+
+        except Exception as e:
+            logger.warning(f"Error processing OAuth for {server_name}: {e}")
 
         try:
             print(f"Launching server '{server_name}' from: {install_path}")

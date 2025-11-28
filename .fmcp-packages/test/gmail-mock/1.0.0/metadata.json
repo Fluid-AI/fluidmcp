@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "gmail-mock": {
+      "command": "echo",
+      "args": ["Gmail MCP Started with Token: "],
+      "auth": {
+        "type": "oauth2",
+        "flow": "pkce",
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+        "client_id_env": "GOOGLE_CLIENT_ID",
+        "env_var_name": "GMAIL_ACCESS_TOKEN"
+      }
+    }
+  }
+}
