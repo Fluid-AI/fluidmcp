@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "gmail-gateway": {
+      "command": "echo",
+      "args": ["Gmail Gateway Server Running"],
+      "auth": {
+        "type": "oauth2",
+        "flow": "pkce",
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+        "client_id_env": "GOOGLE_CLIENT_ID"
+      }
+    }
+  }
+}

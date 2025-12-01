@@ -2,26 +2,31 @@ import os
 import json
 import subprocess
 import shutil
-from typing import Union, Dict, Any, Iterator
+import secrets
+from typing import Union, Dict, Any, Iterator, Optional
 from pathlib import Path
 from loguru import logger
 import time
-import sys
-import threading
-import json
-import subprocess
-from pathlib import Path
-from typing import Dict
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import threading
-import time
 
 from fluidai_mcp.services.oauth2_pkce import OAuth2TokenManager, verify_oauth_token
+from fluidai_mcp.services.oauth_service import (
+    generate_pkce_pair,
+    build_authorization_url,
+    exchange_code_for_token,
+    get_env_var
+)
+
+# Global in-memory storage for pending OAuth states
+# Format: {state: {"verifier": str, "package_name": str, "auth_config": Dict}}
+pending_auth_states: Dict[str, Dict[str, Any]] = {}
 
 security = HTTPBearer(auto_error=False)
+
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
@@ -56,25 +61,41 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
     return None
 
+
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
+    """
+    Launch an MCP server and create a FastAPI router for it.
+
+    Args:
+        dest_dir: Path to the package directory containing metadata.json
+
+    Returns:
+        Tuple of (package_name, router, server_config) or (None, None, None) on error
+    """
     dest_dir = Path(dest_dir)
     metadata_path = dest_dir / "metadata.json"
+
     try:
         if not metadata_path.exists():
-            logger.info(f":warning: No metadata.json found at {metadata_path}")
-            return None, None
-        print(f":blue_book: Reading metadata.json from {metadata_path}")
+            logger.info(f"No metadata.json found at {metadata_path}")
+            return None, None, None
+
+        logger.info(f"Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+
         pkg = list(metadata["mcpServers"].keys())[0]
-        servers = metadata['mcpServers'][pkg]
-        print(pkg, servers)
+        server_config = metadata['mcpServers'][pkg]
+        logger.info(f"Package: {pkg}, Config: {server_config}")
+
     except Exception as e:
-        print(f":x: Error reading metadata.json: {e}")
-        return None, None
+        logger.error(f"Error reading metadata.json: {e}")
+        return None, None, None
+
     try:
-        base_command = servers["command"]
-        raw_args = servers["args"]
+        base_command = server_config["command"]
+        raw_args = server_config["args"]
+
         if base_command == "npx" or base_command == "npm":
             npm_path = shutil.which("npm")
             npx_path = shutil.which("npx")
@@ -82,66 +103,43 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
                 base_command = npm_path
             elif npx_path and base_command == "npx":
                 base_command = npx_path
+
         args = [arg.replace("<path to mcp-servers>", str(dest_dir)) for arg in raw_args]
         stdio_command = [base_command] + args
-        env_vars = servers.get("env", {})
+
+        env_vars = server_config.get("env", {})
         env = {**dict(os.environ), **env_vars}
+
         process = subprocess.Popen(
-                stdio_command,
-                cwd=dest_dir,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                text=True,  # ensure stdin/stdout is in text mode
-                bufsize=1
-            )
-        
-        # NEW: Initialize MCP server
+            stdio_command,
+            cwd=dest_dir,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            text=True,
+            bufsize=1
+        )
+
+        # Initialize MCP server
         if not initialize_mcp_server(process):
-            print(f"Warning: Failed to initialize MCP server for {pkg}")
-               
-        router = create_mcp_router(pkg, process)
-        return pkg, router
+            logger.warning(f"Failed to initialize MCP server for {pkg}")
+
+        # Pass server_config to create_mcp_router so it can check for auth
+        router = create_mcp_router(pkg, process, server_config)
+        return pkg, router, server_config
+
     except FileNotFoundError as e:
-        print(f":x: Command not found: {e}")
-        return None, None
+        logger.error(f"Command not found: {e}")
+        return None, None, None
     except Exception as e:
-        print(f":x: Error launching MCP server: {e}")
-        return None, None
-    
-
-
-def create_fastapi_jsonrpc_proxy(package_name: str, process: subprocess.Popen) -> FastAPI:
-    app = FastAPI()
-    @app.post(f"/{package_name}/mcp")
-    async def proxy_jsonrpc(request: Request):
-        try:
-            jsonrpc_request = await request.body()
-            jsonrpc_str = jsonrpc_request.decode() if isinstance(jsonrpc_request, bytes) else jsonrpc_request
-            # Send to MCP server via stdin
-            process.stdin.write(jsonrpc_str + "\n")
-            process.stdin.flush()
-            # Read from MCP server stdout
-            response_line = process.stdout.readline()
-            return JSONResponse(content=json.loads(response_line))
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
-    return app
-
-
-def start_fastapi_in_thread(app: FastAPI, port: int):
-    def run():
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
+        logger.error(f"Error launching MCP server: {e}")
+        return None, None, None
 
 
 def initialize_mcp_server(process: subprocess.Popen) -> bool:
     """Initialize MCP server with proper handshake"""
     try:
-        
-        
         # Send initialize request
         init_request = {
             "jsonrpc": "2.0",
@@ -153,10 +151,10 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
                 "clientInfo": {"name": "fluidmcp-client", "version": "1.0.0"}
             }
         }
-        
+
         process.stdin.write(json.dumps(init_request) + "\n")
         process.stdin.flush()
-        
+
         # Wait for response
         start_time = time.time()
         while time.time() - start_time < 10:
@@ -174,16 +172,133 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
             time.sleep(0.1)
         return False
     except Exception as e:
-        print(f"Initialization error: {e}")
+        logger.error(f"Initialization error: {e}")
         return False
-    
 
-def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter:
+
+def create_mcp_router(
+    package_name: str,
+    process: subprocess.Popen,
+    server_config: Optional[Dict] = None
+) -> APIRouter:
+    """
+    Create FastAPI router for MCP package with optional OAuth routes.
+
+    Args:
+        package_name: Name of the MCP package
+        process: Subprocess running the MCP server
+        server_config: Server configuration from metadata.json (optional)
+
+    Returns:
+        APIRouter with MCP endpoints and OAuth endpoints if configured
+    """
     router = APIRouter()
+
+    # Check if auth is configured in metadata
+    if server_config and "auth" in server_config:
+        auth_config = server_config["auth"]
+        logger.info(f"Package {package_name} has OAuth configuration, adding auth endpoints")
+
+        @router.get(f"/{package_name}/auth/login", tags=[package_name, "auth"])
+        async def auth_login():
+            """
+            Initiate OAuth 2.0 login flow with PKCE.
+
+            Returns:
+                Redirect to OAuth provider's authorization page
+            """
+            try:
+                # Generate PKCE pair
+                verifier, challenge = generate_pkce_pair()
+
+                # Generate random state for CSRF protection
+                state = secrets.token_urlsafe(16)
+
+                # Store verifier and config for callback
+                pending_auth_states[state] = {
+                    "verifier": verifier,
+                    "package_name": package_name,
+                    "auth_config": auth_config
+                }
+
+                # Build redirect URI
+                redirect_uri = f"http://localhost:8099/{package_name}/auth/callback"
+
+                # Build authorization URL
+                auth_url = build_authorization_url(
+                    auth_config=auth_config,
+                    redirect_uri=redirect_uri,
+                    state=state,
+                    code_challenge=challenge
+                )
+
+                logger.info(f"Redirecting to OAuth provider for {package_name}")
+                return RedirectResponse(url=auth_url)
+
+            except Exception as e:
+                logger.error(f"Error initiating auth flow: {e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to initiate authentication: {str(e)}"}
+                )
+
+        @router.get(f"/{package_name}/auth/callback", tags=[package_name, "auth"])
+        async def auth_callback(code: str, state: str):
+            """
+            Handle OAuth callback and exchange code for token.
+
+            Args:
+                code: Authorization code from OAuth provider
+                state: State parameter for CSRF protection
+
+            Returns:
+                JSON response with access token and metadata
+            """
+            try:
+                # Retrieve stored verifier and config
+                auth_state = pending_auth_states.pop(state, None)
+                if not auth_state:
+                    logger.error(f"Invalid or expired state: {state}")
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Invalid or expired state parameter"}
+                    )
+
+                verifier = auth_state["verifier"]
+                stored_auth_config = auth_state["auth_config"]
+
+                # Build redirect URI (must match the one used in login)
+                redirect_uri = f"http://localhost:8099/{package_name}/auth/callback"
+
+                # Exchange code for token
+                token_data = exchange_code_for_token(
+                    code=code,
+                    verifier=verifier,
+                    redirect_uri=redirect_uri,
+                    auth_config=stored_auth_config
+                )
+
+                logger.info(f"Successfully obtained access token for {package_name}")
+
+                # Return token to client
+                return JSONResponse(content={
+                    "success": True,
+                    "package": package_name,
+                    "token_data": token_data,
+                    "message": "Authentication successful! Use the access_token in Authorization header."
+                })
+
+            except Exception as e:
+                logger.error(f"Error in OAuth callback: {e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to exchange code for token: {str(e)}"}
+                )
 
     @router.post(f"/{package_name}/mcp", tags=[package_name])
     async def proxy_jsonrpc(
-        request: Dict[str, Any] = Body(
+        request_obj: Request,
+        json_body: Dict[str, Any] = Body(
             ...,
             example={
                 "jsonrpc": "2.0",
@@ -191,19 +306,47 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ),
+        token: str = Depends(get_token)
     ):
+        """
+        Proxy JSON-RPC requests to MCP server.
+
+        Supports Authorization header for package-specific OAuth tokens.
+        """
         try:
+            # Check for Authorization header
+            auth_header = request_obj.headers.get("authorization")
+            if auth_header:
+                # Extract token from "Bearer <token>"
+                if auth_header.startswith("Bearer "):
+                    bearer_token = auth_header[7:]
+                    logger.info(f"Received authenticated request for {package_name} with token")
+
+                    # If package has auth config with env_var_name, we could inject it here
+                    if server_config and "auth" in server_config:
+                        env_var_name = server_config["auth"].get("env_var_name")
+                        if env_var_name:
+                            logger.info(f"Token should be set in {env_var_name} environment variable")
+                            # Note: For subprocess, env is set at launch time
+                            # For real implementation, might need to restart process with token
+                else:
+                    logger.warning(f"Invalid Authorization header format")
+
             # Convert dict to JSON string
-            msg = json.dumps(request)
+            msg = json.dumps(json_body)
             process.stdin.write(msg + "\n")
             process.stdin.flush()
+
+            # Read response
             response_line = process.stdout.readline()
             return JSONResponse(content=json.loads(response_line))
+
         except Exception as e:
+            logger.error(f"Error proxying request: {e}")
             return JSONResponse(status_code=500, content={"error": str(e)})
-    
-    # New SSE endpoint
+
+    # SSE endpoint
     @router.post(f"/{package_name}/sse", tags=[package_name])
     async def sse_stream(
         request: Dict[str, Any] = Body(
@@ -214,120 +357,109 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ),
+        token: str = Depends(get_token)
     ):
+        """Server-Sent Events streaming endpoint for long-running operations."""
         async def event_generator() -> Iterator[str]:
             try:
-                # Convert dict to JSON string and send to MCP server
                 msg = json.dumps(request)
                 process.stdin.write(msg + "\n")
                 process.stdin.flush()
-                
-                # Read from stdout and stream as SSE events
+
                 while True:
                     response_line = process.stdout.readline()
                     if not response_line:
                         break
-                    
-                    # Add logging
+
                     logger.debug(f"Received from MCP: {response_line.strip()}")
-                    
-                    # Format as SSE event
                     yield f"data: {response_line.strip()}\n\n"
-                    
-                    # Check if response contains "result" which indicates completion
+
                     try:
                         response_data = json.loads(response_line)
                         if "result" in response_data:
-                            # If it's a final result, we can stop the stream
                             break
                     except json.JSONDecodeError:
-                        # If it's not valid JSON, just stream it as-is
                         pass
-                    
+
             except Exception as e:
-                # Send error as SSE event
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        
+
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream"
         )
-        
+
     @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
     async def list_tools(token: str = Depends(get_token)):
+        """List all available tools from the MCP server."""
         try:
-            # Pre-filled JSON-RPC request for tools/list
             request_payload = {
                 "id": 1,
                 "jsonrpc": "2.0",
                 "method": "tools/list"
             }
-            
-            # Convert to JSON string and send to MCP server
+
             msg = json.dumps(request_payload)
             process.stdin.write(msg + "\n")
             process.stdin.flush()
-            
-            # Read response from MCP server
+
             response_line = process.stdout.readline()
             response_data = json.loads(response_line)
-            
+
             return JSONResponse(content=response_data)
-            
+
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
-        
-    
+
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
-    async def call_tool(request_body: Dict[str, Any] = Body(
-        ...,
-        alias="params",
-        example={
-            "name": "", 
-        }
-    ), token: str = Depends(get_token)
-):      
+    async def call_tool(
+        request_body: Dict[str, Any] = Body(
+            ...,
+            alias="params",
+            example={"name": ""}
+        ),
+        token: str = Depends(get_token)
+    ):
+        """Call a specific tool on the MCP server."""
         params = request_body
 
         try:
-            # Validate required fields
             if "name" not in params:
                 return JSONResponse(
-                    status_code=400, 
+                    status_code=400,
                     content={"error": "Tool name is required"}
                 )
-            
-            # Construct complete JSON-RPC request
+
             request_payload = {
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
                 "params": params
             }
-            
-            # Send to MCP server
+
             msg = json.dumps(request_payload)
             process.stdin.write(msg + "\n")
             process.stdin.flush()
-            
-            # Read response
+
             response_line = process.stdout.readline()
             response_data = json.loads(response_line)
-            
+
             return JSONResponse(content=response_data)
-            
+
         except json.JSONDecodeError:
             return JSONResponse(
-                status_code=400, 
+                status_code=400,
                 content={"error": "Invalid JSON in request body"}
             )
         except Exception as e:
             return JSONResponse(
-                status_code=500, 
+                status_code=500,
                 content={"error": str(e)}
             )
+
     return router
+
 
 if __name__ == '__main__':
     app = FastAPI()
@@ -337,7 +469,7 @@ if __name__ == '__main__':
     ]
     for install_path in install_paths:
         print(f"Launching MCP server for {install_path}")
-        package_name, router = launch_mcp_using_fastapi_proxy(install_path)
+        package_name, router, _ = launch_mcp_using_fastapi_proxy(install_path)
         if package_name is not None and router is not None:
             app.include_router(router)
         else:

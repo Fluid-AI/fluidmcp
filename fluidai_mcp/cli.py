@@ -17,7 +17,7 @@ from fluidai_mcp.services.package_installer import package_exists
 from fluidai_mcp.services.package_list import get_latest_version_dir
 from fluidai_mcp.services.config_resolver import INSTALLATION_DIR
 from fluidai_mcp.services.oauth2_pkce import OAuth2TokenManager, DEFAULT_OAUTH_CONFIG
-from fluidai_mcp.services.oauth_service import authenticate_package, is_authenticated
+# OAuth service no longer used for CLI-based auth
 
 
 
@@ -260,73 +260,6 @@ def logout_command(_args):
         sys.exit(1)
 
 
-def auth_command(args):
-    """
-    Handle package-specific OAuth authentication.
-    Reads auth configuration from package metadata and initiates OAuth flow.
-    """
-    try:
-        # Resolve package directory
-        dest_dir = resolve_package_dest_dir(args.package)
-        if not package_exists(dest_dir):
-            print(f"Package not found at {dest_dir}. Have you installed it?")
-            sys.exit(1)
-
-        # Load package metadata
-        metadata_path = dest_dir / "metadata.json"
-        if not metadata_path.exists():
-            print(f"Error: metadata.json not found in {dest_dir}")
-            sys.exit(1)
-
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-
-        # Extract package name
-        if "mcpServers" not in metadata or len(metadata["mcpServers"]) == 0:
-            print("Error: No MCP servers defined in metadata.json")
-            sys.exit(1)
-
-        # Get the first (and typically only) server config
-        server_name = list(metadata["mcpServers"].keys())[0]
-        server_config = metadata["mcpServers"][server_name]
-
-        # Check for auth configuration
-        if "auth" not in server_config:
-            print(f"Error: Package '{args.package}' does not require OAuth authentication.")
-            print("No 'auth' configuration found in metadata.json")
-            sys.exit(1)
-
-        auth_config = server_config["auth"]
-
-        # Validate required auth fields
-        required_fields = ["authorization_url", "token_url", "scopes"]
-        missing_fields = [f for f in required_fields if f not in auth_config]
-        if missing_fields:
-            print(f"Error: Invalid auth configuration. Missing fields: {', '.join(missing_fields)}")
-            sys.exit(1)
-
-        # Check if already authenticated
-        package_name = args.package.replace("/", "_").replace("@", "_")
-        if is_authenticated(package_name):
-            print(f"Package '{args.package}' is already authenticated.")
-            if not args.force:
-                response = input("Re-authenticate? (y/N): ")
-                if response.lower() != 'y':
-                    print("Authentication cancelled.")
-                    return
-
-        # Perform authentication
-        authenticate_package(package_name, auth_config)
-
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Authentication failed: {e}")
-        logger.exception("Full error details:")
-        sys.exit(1)
-
-
 def main():
     '''
     Main function to handle command line arguments and execute the appropriate action.
@@ -366,11 +299,6 @@ def main():
 
     # logout command (OAuth2)
     subparsers.add_parser("logout", help="Logout and remove OAuth2 tokens")
-
-    # auth command (Package-specific OAuth)
-    auth_parser = subparsers.add_parser("auth", help="Authenticate a package with OAuth2")
-    auth_parser.add_argument("package", type=str, help="<package[@version]> to authenticate")
-    auth_parser.add_argument("--force", action="store_true", help="Force re-authentication even if already authenticated")
 
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
@@ -417,8 +345,6 @@ def main():
         login_command(args)
     elif args.command == "logout":
         logout_command(args)
-    elif args.command == "auth":
-        auth_command(args)
     else:
         parser.print_help()
 
