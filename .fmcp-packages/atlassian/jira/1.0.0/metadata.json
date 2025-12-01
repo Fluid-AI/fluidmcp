@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "jira": {
+      "command": "echo",
+      "args": ["Jira Server Active"],
+      "auth": {
+        "type": "oauth2",
+        "flow": "pkce",
+        "authorization_url": "https://auth.atlassian.com/authorize",
+        "token_url": "https://auth.atlassian.com/oauth/token",
+        "scopes": ["read:jira-work", "write:jira-work", "offline_access"],
+        "client_id_env": "ATLASSIAN_CLIENT_ID",
+        "client_secret_env": "ATLASSIAN_CLIENT_SECRET",
+        "env_var_name": "JIRA_ACCESS_TOKEN"
+      }
+    }
+  }
+}

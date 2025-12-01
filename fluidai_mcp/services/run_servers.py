@@ -84,13 +84,24 @@ def run_servers(
             print(f"No metadata.json in '{install_path}', skipping")
             continue
 
+        # Note: OAuth authentication is now handled at the gateway level
+        # Clients should use the /{package}/auth/login endpoint to obtain tokens
+        # and pass them via Authorization header in requests
+
         try:
             print(f"Launching server '{server_name}' from: {install_path}")
-            package_name, router = launch_mcp_using_fastapi_proxy(install_path)
+            package_name, router, server_config = launch_mcp_using_fastapi_proxy(install_path)
 
             if router:
                 app.include_router(router, tags=[server_name])
-                print(f"Added {package_name} endpoints")
+
+                # Log if package has OAuth configuration
+                if server_config and "auth" in server_config:
+                    print(f"Added {package_name} endpoints with OAuth support")
+                    print(f"  Login: http://localhost:{port}/{package_name}/auth/login")
+                else:
+                    print(f"Added {package_name} endpoints")
+
                 launched_servers += 1
             else:
                 print(f"Failed to create router for {server_name}")

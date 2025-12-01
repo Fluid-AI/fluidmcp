@@ -71,7 +71,9 @@ This will:
 
 
 - **🔐 Security & Authentication**
-  - Bearer token authentication
+  - OAuth2 PKCE authentication with automatic token refresh
+  - Package-specific OAuth for third-party service integration
+  - Simple bearer token authentication
   - Secure mode with encrypted communications
   - Environment variable encryption for API keys
 
@@ -125,6 +127,44 @@ fluidmcp run author/package@version --start-server
 
 ### Secure Mode with Authentication
 
+#### OAuth2 PKCE Authentication (Recommended)
+
+Login with OAuth2 (browser-based):
+
+```bash
+# Configure OAuth2 provider (one-time setup)
+export FMCP_OAUTH_AUTH_ENDPOINT="https://your-provider.com/oauth/authorize"
+export FMCP_OAUTH_TOKEN_ENDPOINT="https://your-provider.com/oauth/token"
+export FMCP_OAUTH_CLIENT_ID="your_client_id"
+
+# Login (opens browser)
+fluidmcp login
+
+# Run with OAuth2 authentication
+fluidmcp run config.json --file --oauth --start-server
+
+# Logout
+fluidmcp logout
+```
+
+See [OAuth2_SETUP.md](OAuth2_SETUP.md) for detailed OAuth2 configuration.
+
+#### Package-Specific OAuth Authentication
+
+FluidMCP also supports package-specific OAuth for MCP packages that need to authenticate with third-party services (Gmail, GitHub, Jira, etc.):
+
+```bash
+# Authenticate a package with its OAuth provider
+fluidmcp auth author/package@version
+
+# Run the authenticated package
+fluidmcp run author/package@version --start-server
+```
+
+See [PACKAGE_OAUTH.md](PACKAGE_OAUTH.md) for detailed package-specific OAuth setup and usage.
+
+#### Simple Bearer Token Authentication
+
 Run with bearer token authentication:
 
 ```bash
@@ -164,8 +204,9 @@ fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
 - `--master` – Use S3-driven config
 - `--file` – Run from local config.json
 - `--s3` – Run from S3 URL
-- `--secure` – Enable secure token mode
-- `--token <token>` – Custom bearer token
+- `--secure` – Enable simple bearer token authentication
+- `--token <token>` – Custom bearer token (used with --secure)
+- `--oauth` – Enable OAuth2 PKCE authentication (requires login)
 
 ### Run All Installed Packages
 
