@@ -1,12 +1,6 @@
-Based on the code and documentation provided in your context, here is the comprehensive **On-Demand Gateway OAuth2 (PKCE) Authentication** documentation file.
-
-This file consolidates the implementation details, usage instructions, and configuration steps into a single, user-friendly guide.
-
------
-
 # FluidMCP — Gateway OAuth (PKCE) Authentication
 
-**FluidMCP** now supports a completely stateless, on-demand authentication flow hosted directly by the API Gateway. This architecture removes the need for CLI-based pre-authentication and allows clients (users, scripts, or LLMs) to authenticate with specific MCP packages dynamically.
+**FluidMCP** now supports a completely stateless, authentication flow hosted directly by the API Gateway. This architecture removes the need for CLI-based pre-authentication and allows clients (users, scripts, or LLMs) to authenticate with specific MCP packages dynamically.
 
 -----
 
