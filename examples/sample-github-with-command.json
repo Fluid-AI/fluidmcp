@@ -1,0 +1,17 @@
+{
+  "github_token": "your-github-token-here",
+  "mcpServers": {
+    "python-quickstart-explicit": {
+      "github_repo": "modelcontextprotocol/python-sdk",
+      "branch": "main",
+      "command": "uv",
+      "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
+      "env": {}
+    },
+    "python-quickstart-auto": {
+      "github_repo": "modelcontextprotocol/python-sdk",
+      "branch": "main",
+      "env": {}
+    }
+  }
+}
