@@ -189,15 +189,15 @@ When a package is configured with OAuth, the following endpoints are dynamically
 <div align="center">
   <h4>Demo 1: Gateway Authentication Flow</h4>
   <video width="100%" autoplay loop muted playsinline>
-    <source src="./Images/20251201-0840-16.8228187.mp4" type="video/mp4">
+    <source src="/workspaces/fluidmcp/Images/20251201-0840-16.8228187.mp4" type="video/mp4">
     Your browser does not support the video tag.
   </video>
   
   <br/><br/>
 
-  <h4>Demo 2: MCP Server Management</h4>
+  <h4>Demo 2: gateway Authentication</h4>
   <video width="100%" autoplay loop muted playsinline>
-    <source src="./Images/20251128-1604-47.7338821.mp4" type="video/mp4">
+    <source src="/workspaces/fluidmcp/Images/20251128-1604-47.7338821.mp4" type="video/mp4">
     Your browser does not support the video tag.
   </video>
 </div>
