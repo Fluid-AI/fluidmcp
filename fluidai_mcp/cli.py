@@ -16,6 +16,8 @@ from fluidai_mcp.services import (
 from fluidai_mcp.services.package_installer import package_exists
 from fluidai_mcp.services.package_list import get_latest_version_dir
 from fluidai_mcp.services.config_resolver import INSTALLATION_DIR
+from fluidai_mcp.services.oauth2_pkce import OAuth2TokenManager, DEFAULT_OAUTH_CONFIG
+# OAuth service no longer used for CLI-based auth
 
 
 
@@ -167,7 +169,6 @@ def update_env_from_common_env(dest_dir, pkg):
     except Exception:
         return
 
-    updated = False
     for key in env_section:
         # Determine if structured or simple env
         if isinstance(env_section[key], dict):
@@ -178,7 +179,6 @@ def update_env_from_common_env(dest_dir, pkg):
                 else:
                     env_vars[key] = "dummy-key"
                     metadata["mcpServers"][pkg["package_name"]]["env"][key]["value"] = "dummy-key"
-                    updated = True
         else:
             # Simple format
             if key in env_vars:
@@ -186,7 +186,6 @@ def update_env_from_common_env(dest_dir, pkg):
             else:
                 env_vars[key] = "dummy-key"
                 metadata["mcpServers"][pkg["package_name"]]["env"][key] = "dummy-key"
-                updated = True
 
     # Always write .env (create if missing, update if exists)
     with open(env_path, "w") as f:
@@ -216,6 +215,51 @@ def install_command(args):
     if getattr(args, "master", False):
         update_env_from_common_env(dest_dir, pkg)
 
+
+def login_command(_args):
+    """
+    Handle OAuth2 login command.
+    Initiates browser-based OAuth flow and stores tokens.
+    """
+    try:
+        # Check if OAuth configuration is complete
+        if not DEFAULT_OAUTH_CONFIG.get('authorization_endpoint'):
+            print("Error: OAuth2 is not configured.")
+            print("\nTo configure OAuth2, set the following environment variables:")
+            print("  - FMCP_OAUTH_AUTH_ENDPOINT: Authorization endpoint URL")
+            print("  - FMCP_OAUTH_TOKEN_ENDPOINT: Token endpoint URL")
+            print("  - FMCP_OAUTH_CLIENT_ID: OAuth2 client ID")
+            print("  - FMCP_OAUTH_REDIRECT_URI (optional): Redirect URI (default: http://localhost:8088/callback)")
+            print("  - FMCP_OAUTH_SCOPE (optional): OAuth scopes (default: openid profile email)")
+            sys.exit(1)
+
+        token_manager = OAuth2TokenManager()
+        access_token = token_manager.login()
+
+        print("\n✓ Login successful!")
+        print(f"Access token: {access_token[:20]}...")
+        print("\nYou can now run servers with OAuth2 authentication using the --oauth flag.")
+        print("The token will be automatically refreshed when needed.")
+
+    except Exception as e:
+        print(f"Login failed: {e}")
+        sys.exit(1)
+
+
+def logout_command(_args):
+    """
+    Handle OAuth2 logout command.
+    Deletes stored tokens.
+    """
+    try:
+        token_manager = OAuth2TokenManager()
+        token_manager.logout()
+        print("✓ Logged out successfully. Tokens have been removed.")
+    except Exception as e:
+        print(f"Logout failed: {e}")
+        sys.exit(1)
+
+
 def main():
     '''
     Main function to handle command line arguments and execute the appropriate action.
@@ -239,20 +283,41 @@ def main():
     run_parser.add_argument("--master", action="store_true", help="Use master metadata file from S3")
     run_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     run_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    run_parser.add_argument("--oauth", action="store_true", help="Enable OAuth2 authentication (requires prior login via 'fluidmcp login')")
     run_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     run_parser.add_argument("--s3", action="store_true", help="Treat package argument as path to S3 URL to a JSON file containing server configurations (format: s3://bucket-name/key)")
 
     # list command
     subparsers.add_parser("list", help="List installed packages")
 
-    # edit-env commannd
+    # edit-env command
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
     edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
 
-    # Parse the command line arguments and run the appropriate command to the subparsers 
+    # login command (OAuth2)
+    subparsers.add_parser("login", help="Login with OAuth2 authentication")
+
+    # logout command (OAuth2)
+    subparsers.add_parser("logout", help="Logout and remove OAuth2 tokens")
+
+    # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
-    # Secure mode logic
+    # OAuth mode logic
+    oauth_mode = getattr(args, "oauth", False)
+    if oauth_mode:
+        # Check if user is logged in
+        token_manager = OAuth2TokenManager()
+        access_token = token_manager.get_valid_access_token()
+        if not access_token:
+            print("Error: Not logged in. Please run 'fluidmcp login' first.")
+            print("\nAlternatively, you can provide an access token manually via:")
+            print("  export FMCP_OAUTH_ACCESS_TOKEN=your_token_here")
+            sys.exit(1)
+        os.environ["FMCP_OAUTH_MODE"] = "true"
+        print(f"OAuth2 mode enabled. Using stored access token.")
+
+    # Secure mode logic (simple bearer token)
     # Check if secure mode is enabled and if a token is provided
     secure_mode = getattr(args, "secure", False)
     token = getattr(args, "token", None)
@@ -276,6 +341,10 @@ def main():
         edit_env(args)
     elif args.command == "list":
         list_installed_packages()
+    elif args.command == "login":
+        login_command(args)
+    elif args.command == "logout":
+        logout_command(args)
     else:
         parser.print_help()
 
