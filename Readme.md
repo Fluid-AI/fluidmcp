@@ -9,13 +9,16 @@
 Instead of authenticating via the CLI before running a server, the Gateway (running on port `8099`) automatically generates authentication endpoints for any package that requires them.
 
 ### The Flow
-
-1.  **Start Server**: You run `fluidmcp run <package> --start-server`.
-2.  **Endpoint Creation**: The Gateway detects the `auth` configuration in the package's `metadata.json` and creates `/auth/login` and `/auth/callback` endpoints.
-3.  **Login**: The client visits `http://localhost:8099/<package>/auth/login`.
-4.  **OAuth Flow**: The user authenticates with the provider (Google, Jira) via the browser.
-5.  **Token Delivery**: The Gateway exchanges the code for an access token and returns it to the client as JSON.
-6.  **Authenticated Requests**: The client includes the token in the `Authorization` header for subsequent requests.
+1.  **Install Requirements**: You can run `pip install -r requirements.txt` **NEXT**: `pip install -e .`
+2.  **Start Server**: You run `fluidmcp run <package> --start-server`.
+3.  **Export Credentials (Use real ones if you want to log in, or dummy to test redirect)** Same for Jira also
+      ``export GOOGLE_CLIENT_ID="YOUR_GOOGLE_CLIENT_ID"``
+      ``export GOOGLE_CLIENT_SECRET="YOUR_GOOGLE_SECRET"``
+4.  **Endpoint Creation**: The Gateway detects the `auth` configuration in the package's `metadata.json` and creates `/auth/login` and `/auth/callback` endpoints.
+5.  **Login**: The client visits `http://localhost:8099/<package>/auth/login`.
+6.  **OAuth Flow**: The user authenticates with the provider (Google, Jira) via the browser.
+7.  **Token Delivery**: The Gateway exchanges the code for an access token and returns it to the client as JSON.
+8.  **Authenticated Requests**: The client includes the token in the `Authorization` header for subsequent requests.
 
 -----
 
