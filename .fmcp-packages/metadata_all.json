@@ -1,0 +1,44 @@
+{
+  "mcpServers": {
+    "gmail-gateway": {
+      "command": "echo",
+      "args": [
+        "Gmail Gateway Server Running"
+      ],
+      "auth": {
+        "type": "oauth2",
+        "flow": "pkce",
+        "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "scopes": [
+          "https://www.googleapis.com/auth/gmail.readonly"
+        ],
+        "client_id_env": "GOOGLE_CLIENT_ID"
+      },
+      "port": "8100",
+      "install_path": "/workspaces/fluidmcp/.fmcp-packages/test/gmail-gateway/1.0.0"
+    },
+    "jira": {
+      "command": "echo",
+      "args": [
+        "Jira Server Active"
+      ],
+      "auth": {
+        "type": "oauth2",
+        "flow": "pkce",
+        "authorization_url": "https://auth.atlassian.com/authorize",
+        "token_url": "https://auth.atlassian.com/oauth/token",
+        "scopes": [
+          "read:jira-work",
+          "write:jira-work",
+          "offline_access"
+        ],
+        "client_id_env": "ATLASSIAN_CLIENT_ID",
+        "client_secret_env": "ATLASSIAN_CLIENT_SECRET",
+        "env_var_name": "JIRA_ACCESS_TOKEN"
+      },
+      "port": "8101",
+      "install_path": "/workspaces/fluidmcp/.fmcp-packages/atlassian/jira/1.0.0"
+    }
+  }
+}
