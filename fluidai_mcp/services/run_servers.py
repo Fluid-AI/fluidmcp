@@ -1,12 +1,7 @@
-"""
-Unified server runner for FluidMCP CLI.
-
-This module provides a single entry point for launching MCP servers
-regardless of the configuration source.
-"""
-
 import os
 import json
+import time
+import atexit
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -17,14 +12,17 @@ import uvicorn
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
-from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
+from .thread_manager import MCPThreadManager
+from .package_launcher import create_proxy_mcp_router, set_global_thread_manager
 
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
 client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"))
+thread_start_port = int(os.environ.get("MCP_THREAD_START_PORT", "8100"))
+thread_end_port = int(os.environ.get("MCP_THREAD_END_PORT", "8900"))
 
 
 def run_servers(
@@ -59,14 +57,11 @@ def run_servers(
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
 
-    # Create FastAPI app
-    app = FastAPI(
-        title=f"FluidMCP Gateway ({config.source_type})",
-        description=f"Unified gateway for MCP servers from {config.source_type}",
-        version="2.0.0"
-    )
+    # Initialize thread manager
+    thread_manager = MCPThreadManager(port_start=thread_start_port, port_end=thread_end_port)
+    set_global_thread_manager(thread_manager)
 
-    # Launch each server and add its router
+    # Launch each server in its own thread
     launched_servers = 0
     for server_name, server_cfg in config.servers.items():
         install_path = server_cfg.get("install_path")
@@ -86,14 +81,11 @@ def run_servers(
 
         try:
             print(f"Launching server '{server_name}' from: {install_path}")
-            package_name, router = launch_mcp_using_fastapi_proxy(install_path)
-
-            if router:
-                app.include_router(router, tags=[server_name])
-                print(f"Added {package_name} endpoints")
+            
+            if thread_manager.start_mcp_thread(server_name, install_path):
                 launched_servers += 1
             else:
-                print(f"Failed to create router for {server_name}")
+                print(f"Failed to start thread for {server_name}")
 
         except Exception as e:
             print(f"Error launching server '{server_name}': {e}")
@@ -104,9 +96,35 @@ def run_servers(
 
     print(f"Successfully launched {launched_servers} MCP server(s)")
 
+    # Wait for threads to initialize
+    time.sleep(2)
+
+    # Create FastAPI app
+    app = FastAPI(
+        title=f"FluidMCP Gateway ({config.source_type})",
+        description=f"Unified gateway for MCP servers from {config.source_type}",
+        version="2.0.0"
+    )
+
+    # Add proxy routers for each service
+    services = thread_manager.get_all_services()
+    for package_name, service_url in services.items():
+        try:
+            router = create_proxy_mcp_router(package_name, service_url, secure_mode)
+            app.include_router(router, tags=[package_name])
+            print(f"Added {package_name} endpoints")
+        except Exception as e:
+            print(f"Error adding router for {package_name}: {e}")
+
+    # Setup cleanup on shutdown
+    atexit.register(thread_manager.stop_all_threads)
+
     # Start FastAPI server if requested
     if start_server:
-        _start_server(app, port, force_reload)
+        try:
+            _start_server(app, port, force_reload)
+        finally:
+            thread_manager.stop_all_threads()
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:

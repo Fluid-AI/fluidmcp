@@ -2,27 +2,37 @@ import os
 import json
 import subprocess
 import shutil
+import time
 from typing import Union, Dict, Any, Iterator
 from pathlib import Path
+
 from loguru import logger
-import time
-import sys
-import threading
-import json
-import subprocess
-from pathlib import Path
-from typing import Dict
-from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import uvicorn
-import threading
-import time
+import requests
+
 
 security = HTTPBearer(auto_error=False)
 
+# Global reference to thread manager (set by CLI)
+_global_thread_manager = None
+
+
+def set_global_thread_manager(manager):
+    """
+    Store thread manager reference globally for health checks.
+    Required because health check functions need access to restart threads.
+    """
+    global _global_thread_manager
+    _global_thread_manager = manager
+
+
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
+    """
+    Validate bearer token when secure mode is enabled.
+    Returns None if secure mode is off, raises 401 if token is invalid.
+    """
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
     secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
     
@@ -32,23 +42,30 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
     return credentials.credentials
 
+
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
+    """
+    Launch MCP server subprocess and create router for direct STDIO communication.
+    Returns (package_name, router, process) for use in thread's mini-FastAPI.
+    """
     dest_dir = Path(dest_dir)
     metadata_path = dest_dir / "metadata.json"
 
     try:
         if not metadata_path.exists():
-            logger.info(f":warning: No metadata.json found at {metadata_path}")
-            return None, None
-        print(f":blue_book: Reading metadata.json from {metadata_path}")
+            logger.warning(f"No metadata.json found at {metadata_path}")
+            return None, None, None
+        
+        logger.info(f"Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
-        print(pkg, servers)
+        
     except Exception as e:
-        print(f":x: Error reading metadata.json: {e}")
-        return None, None
+        logger.error(f"Error reading metadata.json: {e}")
+        return None, None, None
 
     try:
         base_command = servers["command"]
@@ -92,93 +109,111 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
-            text=True,  # ensure stdin/stdout is in text mode
+            text=True,
             bufsize=1
         )
 
         # Initialize MCP server
-        if not initialize_mcp_server(process):
-            print(f"Warning: Failed to initialize MCP server for {pkg}")
+        if not initialize_mcp_server(process, pkg):
+            logger.warning(f"Failed to initialize MCP server for {pkg}")
 
         router = create_mcp_router(pkg, process)
-        return pkg, router
+        return pkg, router, process
 
     except FileNotFoundError as e:
-        print(f":x: Command not found: {e}")
-        return None, None
+        logger.error(f"Command not found: {e}")
+        return None, None, None
     except Exception as e:
-        print(f":x: Error launching MCP server: {e}")
-        return None, None
-    
+        logger.error(f"Error launching MCP server: {e}")
+        return None, None, None
 
 
-def create_fastapi_jsonrpc_proxy(package_name: str, process: subprocess.Popen) -> FastAPI:
-    app = FastAPI()
-    @app.post(f"/{package_name}/mcp")
-    async def proxy_jsonrpc(request: Request):
-        try:
-            jsonrpc_request = await request.body()
-            jsonrpc_str = jsonrpc_request.decode() if isinstance(jsonrpc_request, bytes) else jsonrpc_request
-            # Send to MCP server via stdin
-            process.stdin.write(jsonrpc_str + "\n")
-            process.stdin.flush()
-            # Read from MCP server stdout
-            response_line = process.stdout.readline()
-            return JSONResponse(content=json.loads(response_line))
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
-    return app
-
-
-def start_fastapi_in_thread(app: FastAPI, port: int):
-    def run():
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-
-
-def initialize_mcp_server(process: subprocess.Popen) -> bool:
-    """Initialize MCP server with proper handshake"""
+def initialize_mcp_server(process: subprocess.Popen, pkg_name: str = "server", timeout=300) -> bool:
+    """
+    Initialize MCP server with proper handshake.
+    Uses non-blocking I/O for reliable timeout handling.
+    """
+    # Check select availability once
     try:
-        
-        
-        # Send initialize request
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": 0,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"roots": {"listChanged": True}, "sampling": {}},
-                "clientInfo": {"name": "fluidmcp-client", "version": "1.0.0"}
-            }
+        import select
+        has_select = hasattr(select, 'select')
+    except ImportError:
+        has_select = False
+    
+    # Send initialization request
+    init_request = {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"roots": {"listChanged": True}, "sampling": {}},
+            "clientInfo": {"name": "fluidmcp-client", "version": "1.0.0"}
         }
-        
+    }
+    
+    try:
         process.stdin.write(json.dumps(init_request) + "\n")
         process.stdin.flush()
         
-        # Wait for response
         start_time = time.time()
-        while time.time() - start_time < 10:
+        while time.time() - start_time < timeout:
+            # Check if process died
             if process.poll() is not None:
+                logger.error(f"MCP server '{pkg_name}' died during initialization")
                 return False
-            response_line = process.stdout.readline().strip()
-            if response_line:
-                response = json.loads(response_line)
-                if response.get("id") == 0 and "result" in response:
-                    # Send initialized notification
-                    notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-                    process.stdin.write(json.dumps(notif) + "\n")
-                    process.stdin.flush()
-                    return True
+            
+            if has_select:
+                # Non-blocking I/O with select
+                ready_read, _, _ = select.select(
+                    [process.stdout, process.stderr], [], [], 0.1
+                )
+                
+                # Log errors from stderr
+                if process.stderr in ready_read:
+                    stderr_line = process.stderr.readline()
+                    if stderr_line:
+                        logger.error(f"MCP server '{pkg_name}': {stderr_line.strip()}")
+                
+                # Check for initialization response
+                if process.stdout in ready_read:
+                    response_line = process.stdout.readline()
+                    if response_line:
+                        response = json.loads(response_line)
+                        if response.get("id") == 0 and "result" in response:
+                            # Send initialized notification
+                            notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                            process.stdin.write(json.dumps(notif) + "\n")
+                            process.stdin.flush()
+                            logger.info(f"MCP server '{pkg_name}' initialized successfully")
+                            return True
+            else:
+                # Fallback for systems without select
+                response_line = process.stdout.readline().strip()
+                if response_line:
+                    response = json.loads(response_line)
+                    if response.get("id") == 0 and "result" in response:
+                        notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                        process.stdin.write(json.dumps(notif) + "\n")
+                        process.stdin.flush()
+                        logger.info(f"MCP server '{pkg_name}' initialized successfully")
+                        return True
+            
             time.sleep(0.1)
+        
+        logger.error(f"MCP server '{pkg_name}' initialization timed out after {timeout}s")
         return False
+        
     except Exception as e:
-        print(f"Initialization error: {e}")
+        logger.error(f"Failed to initialize MCP server '{pkg_name}': {e}")
         return False
-    
+
 
 def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter:
+    """
+    Create router with direct STDIO access to MCP subprocess.
+    Used in thread's mini-FastAPI (ports 8100-8900) for actual MCP communication.
+    """
     router = APIRouter()
 
     @router.post(f"/{package_name}/mcp", tags=[package_name])
@@ -191,7 +226,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ), 
+        token: str = Depends(get_token)
     ):
         try:
             # Convert dict to JSON string
@@ -214,7 +250,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ), 
+        token: str = Depends(get_token)
     ):
         async def event_generator() -> Iterator[str]:
             try:
@@ -222,19 +259,17 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 msg = json.dumps(request)
                 process.stdin.write(msg + "\n")
                 process.stdin.flush()
-                
+
                 # Read from stdout and stream as SSE events
                 while True:
                     response_line = process.stdout.readline()
                     if not response_line:
                         break
-                    
+
                     # Add logging
                     logger.debug(f"Received from MCP: {response_line.strip()}")
-                    
                     # Format as SSE event
                     yield f"data: {response_line.strip()}\n\n"
-                    
                     # Check if response contains "result" which indicates completion
                     try:
                         response_data = json.loads(response_line)
@@ -277,7 +312,6 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
             
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
-        
     
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
     async def call_tool(request_body: Dict[str, Any] = Body(
@@ -305,12 +339,10 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "tools/call",
                 "params": params
             }
-            
             # Send to MCP server
             msg = json.dumps(request_payload)
             process.stdin.write(msg + "\n")
             process.stdin.flush()
-            
             # Read response
             response_line = process.stdout.readline()
             response_data = json.loads(response_line)
@@ -327,19 +359,150 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 status_code=500, 
                 content={"error": str(e)}
             )
+    
     return router
 
-if __name__ == '__main__':
-    app = FastAPI()
-    install_paths = [
-        "/workspaces/fluid-ai-gpt-mcp/fluidmcp/.fmcp-packages/Perplexity/perplexity-ask/0.1.0",
-        "/workspaces/fluid-ai-gpt-mcp/fluidmcp/.fmcp-packages/Airbnb/airbnb/0.1.0"
-    ]
-    for install_path in install_paths:
-        print(f"Launching MCP server for {install_path}")
-        package_name, router = launch_mcp_using_fastapi_proxy(install_path)
-        if package_name is not None and router is not None:
-            app.include_router(router)
-        else:
-            print(f"Skipping {install_path} due to missing metadata or launch error.")
-    uvicorn.run(app, host="0.0.0.0", port=8099)
+
+def check_service_health(package_name: str, service_url: str) -> bool:
+    """
+    Check if MCP service is healthy, restart thread if dead.
+    Raises HTTPException if restart fails.
+    """
+    global _global_thread_manager
+    
+    if _global_thread_manager is None:
+        logger.error("No global thread manager available")
+        raise HTTPException(status_code=503, detail="Thread manager not initialized")
+    
+    try:
+        response = requests.get(f"{service_url}/health", timeout=20)
+        
+        if response.status_code != 200:
+            logger.error(f"Health check failed for {package_name} - HTTP {response.status_code}")
+            
+            old_thread = _global_thread_manager.threads.get(package_name)
+            if old_thread:
+                dest_dir = old_thread.dest_dir
+                logger.info(f"Attempting to restart {package_name}")
+                
+                success = _global_thread_manager.restart_mcp_thread(package_name, dest_dir)
+                
+                if success:
+                    logger.info(f"Successfully restarted {package_name}")
+                    return True
+                else:
+                    logger.error(f"Restart failed for {package_name}")
+            
+            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+        
+        logger.info(f"Health check passed for {package_name}")
+        return True
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Cannot reach {package_name} health endpoint: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"Cannot reach {package_name} service")
+
+
+def create_proxy_mcp_router(package_name: str, service_url: str, secure_mode: bool = False):
+    """
+    Create proxy router that forwards requests to mini-FastAPI with health checks.
+    Used in main proxy (port 8099) to route requests to thread-specific services.
+    """
+    router = APIRouter()
+    
+    @router.get(f"/{package_name}/health", tags=[package_name])
+    def proxy_health_check(token: str = Depends(get_token)):
+        """Proxy the health check to the mini-FastAPI"""
+        service_url = _global_thread_manager.service_registry.get(package_name)
+        logger.info(f"Proxying health check to: {service_url}")
+        
+        try:
+            response = requests.get(f"{service_url}/health", timeout=20)
+            response.raise_for_status()
+            return JSONResponse(content=response.json())
+        except Exception as e:
+            logger.error(f"Health proxy error for {package_name}: {e}")
+            raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
+    
+    @router.post(f"/{package_name}/mcp", tags=[package_name])
+    def proxy_jsonrpc(request: Dict[str, Any] = Body(...), token: str = Depends(get_token)):
+        """Main proxy endpoint with health check and auto-retry"""
+        logger.info(f"Request received for /{package_name}/mcp")
+        
+        service_url = _global_thread_manager.service_registry.get(package_name)
+        logger.info(f"Using service URL: {service_url}")
+        
+        check_service_health(package_name, service_url)
+        
+        try:
+            response = requests.post(f"{service_url}/{package_name}/mcp", json=request, timeout=180)
+            response.raise_for_status()
+            return JSONResponse(content=response.json())
+            
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
+            logger.error(f"Service error for {package_name}: {str(e)}")
+            
+            old_thread = _global_thread_manager.threads.get(package_name)
+            if old_thread:
+                success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
+                if success:
+                    new_service_url = _global_thread_manager.service_registry.get(package_name)
+                    logger.info(f"Retrying with new URL: {new_service_url}")
+                    response = requests.post(f"{new_service_url}/{package_name}/mcp", json=request, timeout=180)
+                    return JSONResponse(content=response.json())
+            
+            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+    
+    @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
+    def list_tools(token: str = Depends(get_token)):
+        """Proxy tools/list with health check"""
+        logger.info(f"Request received for /{package_name}/mcp/tools/list")
+        
+        service_url = _global_thread_manager.service_registry.get(package_name)
+        check_service_health(package_name, service_url)
+        
+        try:
+            response = requests.get(f"{service_url}/{package_name}/mcp/tools/list", timeout=180)
+            response.raise_for_status()
+            return JSONResponse(content=response.json())
+            
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
+            logger.error(f"Service error for {package_name}: {str(e)}")
+            
+            old_thread = _global_thread_manager.threads.get(package_name)
+            if old_thread:
+                success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
+                if success:
+                    new_service_url = _global_thread_manager.service_registry.get(package_name)
+                    response = requests.get(f"{new_service_url}/{package_name}/mcp/tools/list", timeout=180)
+                    return JSONResponse(content=response.json())
+            
+            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+    
+    @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
+    def call_tool(request_body: Dict[str, Any] = Body(...), token: str = Depends(get_token)):
+        """Proxy tools/call with health check"""
+        logger.info(f"Request received for /{package_name}/mcp/tools/call")
+        
+        service_url = _global_thread_manager.service_registry.get(package_name)
+        check_service_health(package_name, service_url)
+        
+        try:
+            response = requests.post(f"{service_url}/{package_name}/mcp/tools/call", json=request_body, timeout=180)
+            response.raise_for_status()
+            return JSONResponse(content=response.json())
+            
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
+            logger.error(f"Service error for {package_name}: {str(e)}")
+            
+            old_thread = _global_thread_manager.threads.get(package_name)
+            if old_thread:
+                success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
+                if success:
+                    new_service_url = _global_thread_manager.service_registry.get(package_name)
+                    response = requests.post(f"{new_service_url}/{package_name}/mcp/tools/call", json=request_body, timeout=180)
+                    return JSONResponse(content=response.json())
+            
+            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+    
+    return router
