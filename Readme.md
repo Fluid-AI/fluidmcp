@@ -10,7 +10,7 @@ Instead of authenticating via the CLI before running a server, the Gateway (runn
 
 ### The Flow
 1.  **Install Requirements**: You can run `pip install -r requirements.txt` **NEXT**: `pip install -e .`
-2.  **Start Server**: You run `fluidmcp run <package> --start-server`.
+2.  **Start Server**: You run `fmcp run <package> --start-server`.
 3.  **Export Credentials (Use real ones if you want to log in, or dummy to test redirect)** Same for Jira also
       ``export GOOGLE_CLIENT_ID="YOUR_GOOGLE_CLIENT_ID"``
       ``export GOOGLE_CLIENT_SECRET="YOUR_GOOGLE_SECRET"``
@@ -69,7 +69,7 @@ export GOOGLE_CLIENT_SECRET="your-client-secret" # If required
 Run the package normally. No pre-authentication command (`fluidmcp auth`) is required.
 
 ```bash
-fluidmcp run test/gmail-mock@1.0.0 --start-server
+fmcp run test/gmail-mock@1.0.0 --start-server
 ```
 
 *Output:*
