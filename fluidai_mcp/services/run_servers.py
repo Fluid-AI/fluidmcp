@@ -20,7 +20,7 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
-
+from fastapi.middleware.cors import CORSMiddleware
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -65,7 +65,15 @@ def run_servers(
         description=f"Unified gateway for MCP servers from {config.source_type}",
         version="2.0.0"
     )
-
+    #CORS setup to allow React dev server access
+    # "http://localhost:5173"
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     # Launch each server and add its router
     launched_servers = 0
     for server_name, server_cfg in config.servers.items():
