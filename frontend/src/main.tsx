@@ -5,6 +5,9 @@ import './index.css'
 import './App.css'
 import App from './App.tsx'
 
+
+// Entry point of the React application.
+// BrowserRouter enables client-side routing across pages (Home, Airbnb, etc.)
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
