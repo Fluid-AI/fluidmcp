@@ -1,73 +1,103 @@
-# React + TypeScript + Vite
+# FluidMCP – Airbnb Search UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This project adds a user-friendly React-based frontend on top of the
+FluidMCP Airbnb MCP tool.
 
-Currently, two official plugins are available:
+The goal is to replace developer-only interactions (Swagger / JSON)
+with a simple customer-facing interface for searching Airbnb listings.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
 
-## React Compiler
+## Architecture
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The frontend is added as a separate UI layer and does not modify
+any existing FluidMCP or MCP server logic.
 
-## Expanding the ESLint configuration
+- Backend: FluidMCP + FastAPI (unchanged)
+- Frontend: React + TypeScript (new)
+- Communication: HTTP calls to existing MCP endpoints
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+Swagger UI remains available for developers.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Folder Structure
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+fluidmcp/
+├── frontend/              # React + TypeScript UI
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Home.tsx
+│   │   │   └── Airbnb.tsx
+│   │   ├── components/
+│   │   │   └── ListingCard.tsx
+│   │   ├── services/
+│   │   │   └── api.ts
+│   │   └── main.tsx
+│   └── package.json
+├── fluidai_mcp/           # Existing backend (unchanged)
+└── .fmcp-packages/
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Features Implemented
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+- Home page listing available MCP tools (currently Airbnb – hardcoded)
+- Airbnb search form (Location, Guests, Check-in / Check-out dates)
+- Server-side MCP tool invocation
+- Results displayed as cards
+- Cursor-based pagination (Load More)
+- Duplicate listing handling during pagination
+- Price sorting (Low → High, High → Low)
+- Client-side rating filter (e.g. 4★+, 5★)
+- Direct link to Airbnb full search results
+- Clean separation between backend (MCP) and frontend (UI)
+
+
+## User Flow
+
+1. User opens the home page and selects the Airbnb tool
+2. User fills the search form and submits
+3. React UI converts input into MCP-compatible payload
+4. Backend calls Airbnb MCP tool
+5. Results are parsed and displayed as cards
+6. User can:
+   - Load more results (cursor-based pagination)
+   - Sort results by price
+   - Filter results by rating
+   - Open the full Airbnb search in a new tab
+
+
+## Running Locally
+
+### Backend
+
+fmcp run Airbnb/airbnb@0.1.0 --start-server
+http://localhost:8090
+
+### Frontend
+cd frontend
+npm install
+npm run dev
+http://localhost:5173
+
+
+### Environment Variables
+
+Create a `.env` file in `frontend/`:
+VITE_API_BASE_URL=http://localhost:8090
+
+If running inside GitHub Codespaces, use the public backend URL instead:
+VITE_API_BASE_URL=https://<your-codespace-name>-8090.app.github.dev
+Note - Replace <your-codespace-name> with the actual Codespaces URL shown in the browser when the backend is running.
+
+## Notes & Limitations
+
+- The home page currently lists tools statically
+- Layout uses a simple vertical list (grid layout intentionally avoided)
+- Sorting and filtering are performed client-side
+- Filters apply only to currently loaded results (not across all pages)
+
+## Future Improvements
+
+- Dynamic MCP tool discovery for the home page
+- Price range filtering
+- Shared UI components for multiple MCP tools
+- Enhanced error handling

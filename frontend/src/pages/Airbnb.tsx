@@ -43,10 +43,15 @@ export default function Airbnb(){
     /* ---------------------- Results state ------------------- */
     const [results, setResults] = useState<AirbnbListing[]>([]);
     const [searchUrl, setSearchUrl] = useState<string | null>(null);
+    const [searchedLocation, setSearchedLocation] = useState<string | null>(null);
 
     /* ---------------------- Pagination state ---------------- */
     const [nextCursor, setNextCursor] = useState<string | null>(null);
     const [loadingMore, setLoadingMore] = useState(false);
+
+    /* ---------------------- Sorting & Filtering state ---------------- */
+    const [sortOrder, setSortOrder] = useState<"none" | "low" | "high">("none");
+    const [ratingFilter, setRatingFilter] = useState<"all" | "4plus" | "5">("all");
 
     /*Handles the initial Airbnb search.
     Builds the MCP payload and sends it to the backend.
@@ -56,6 +61,15 @@ export default function Airbnb(){
             alert("Please fill all fields");
             return;
         }
+
+        setSearchedLocation(location);
+        setSortOrder("none");
+        setRatingFilter("all");
+        setResults([]);
+        setNextCursor(null);
+        setSearchUrl(null)
+        setError(null);
+
         const payload = {
             name : "airbnb_search",
             arguments : {
@@ -67,11 +81,13 @@ export default function Airbnb(){
         };
         try{
             setLoading(true);
-            setError(null);
+
             // console.log("Load payload:", payload); for debugging
             const data = await callAirbnbSearch(payload);
+
             // Parse MCP response into usable UI data
             const { listings, searchUrl } = parseAirbnbResults(data);
+
             setResults(listings);
             setSearchUrl(searchUrl)
         }catch (err){
@@ -140,7 +156,43 @@ export default function Airbnb(){
         }
     }
 
+    /* Function to extract numeric price from accessibility label */
+    function extractPrice(label?: string): number{
+        if(!label) return Infinity;
 
+        const match = label.replace(/,/g, "").match(/(\d+)/); //takes first number
+        return match ? Number(match[1]) : Infinity ;
+    }
+
+    /* Function to extract numeric rating from accessibility label */
+    function extractRating(label?: string): number{
+        if(!label) return 0;
+
+        const match = label.match(/([\d.]+)\s+out of 5/);
+        return match ? Number(match[1]) : 0;
+    }
+
+    /* Apply filtering based on rating */
+    const filteredResults = results.filter((item)=>{
+        if(ratingFilter === "all") return true;
+
+        const rating = extractRating(item.avgRatingA11yLabel);
+
+        if(ratingFilter === "4plus") return rating >= 4.0;
+        if(ratingFilter === "5") return rating >= 4.8;
+
+        return true;
+    })
+    
+    /* Apply sorting based on Price */
+    const desplayedResults = [...filteredResults].sort((a,b) => {
+        if (sortOrder === "none") return 0;
+
+        const priceA = extractPrice( a.structuredDisplayPrice?.primaryLine?.accessibilityLabel);
+        const priceB = extractPrice( b.structuredDisplayPrice?.primaryLine?.accessibilityLabel);
+
+        return sortOrder === "low" ? priceA- priceB : priceB- priceA;
+    });
     return (
         <div className="airbnb-container" >
             <h2> Airbnb Search</h2>
@@ -154,7 +206,7 @@ export default function Airbnb(){
                         placeholder ="India, Mumbai"
                     />
                 </label>
-                <br />
+                
                 <label>
                     Guests
                     <input type="number" min={1}
@@ -162,21 +214,21 @@ export default function Airbnb(){
                         onChange={(e) => setAdults(Number(e.target.value))}
                     />
                 </label>
-                <br />
+                
                 <label>
                     Check-in
                     <input type="date" value={checkin}
                     onChange={(e) => setCheckin(e.target.value)}
                     />
                 </label>
-                <br />
+                
                 <label>
                     Check-out
                     <input type="date" value={checkout}
                     onChange={(e) => setCheckout(e.target.value)}
                     />
                 </label>
-                <br />
+                
                 <button onClick={handleSearch}>Search Stays</button>
             </div>
 
@@ -196,15 +248,43 @@ export default function Airbnb(){
                     </a>
                 </div>
             )}
-
-            {/* Results listing */}
-            {results.length > 0 && (
+            {/* Filtering controls */}
+            {desplayedResults.length > 0 && (
+                <div>
+                    <label style={{marginRight: 8}}>Rating:</label>
+                    <select value={ratingFilter} onChange={(e)=>
+                        setRatingFilter(e.target.value as "all" | "4plus" | "5")
+                        }
+                    >
+                        <option value="all">All</option>
+                        <option value="4plus">4★ & above</option>
+                        <option value="5">Top rated (≈5★)</option>
+                    </select>
+                </div>
+            )}
+            {/* Sorting controls */}
+            {desplayedResults.length > 0 && (
+                <div style={{marginBottom: "1rem"}}>
+                    <label style={{marginRight: 8}}>Sort by price:</label>
+                    <select value={sortOrder} onChange={(e)=>
+                        setSortOrder(e.target.value as "none" | "low" | "high")
+                        }
+                    >
+                        <option value="none">Default</option>
+                        <option value="low">Low → High</option>
+                        <option value="high">High → Low</option>
+                    </select>
+                </div>
+            )}
+            {/* Results listing with searched location */}
+            {desplayedResults.length > 0 && (
                 <div className="results">
-                    <h3>Available stays</h3>
+                    {searchedLocation && (
+                        <h3>Available stays in <span>{searchedLocation}</span></h3>
+                    )}
 
-                    {results.map((item, idx) => (
+                    {desplayedResults.map((item, idx) => (
                         <ListingCard key={item.id ?? idx} item={item} />
-
                     ))}
                 </div>
             )}
