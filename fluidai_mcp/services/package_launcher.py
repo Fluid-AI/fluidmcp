@@ -2,21 +2,16 @@ import os
 import json
 import subprocess
 import shutil
-from typing import Union, Dict, Any, Iterator
+from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
 import time
 import sys
 import threading
-import json
-import subprocess
-from pathlib import Path
-from typing import Dict
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
-import threading
 import time
 
 security = HTTPBearer(auto_error=False)
@@ -140,8 +135,6 @@ def start_fastapi_in_thread(app: FastAPI, port: int):
 def initialize_mcp_server(process: subprocess.Popen) -> bool:
     """Initialize MCP server with proper handshake"""
     try:
-        
-        
         # Send initialize request
         init_request = {
             "jsonrpc": "2.0",
@@ -216,7 +209,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
             }
         ), token: str = Depends(get_token)
     ):
-        async def event_generator() -> Iterator[str]:
+        async def event_generator() -> AsyncIterator[str]:
             try:
                 # Convert dict to JSON string and send to MCP server
                 msg = json.dumps(request)

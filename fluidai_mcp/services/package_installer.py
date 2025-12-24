@@ -17,16 +17,34 @@ AUTH_TOKEN = os.getenv("MCP_TOKEN")
 INSTALL_BASE = os.environ.get("MCP_INSTALLATION_DIR", Path.cwd() / ".fmcp-packages")
 proxy_port = int(os.environ.get("MCP_FASTAPI_PORT", "8080"))
 
-def parse_package_string(package_str) -> dict:
-    '''
-    Parses a package string in the format "author/name@version" or "name@version".
-    
+def parse_package_string(package_str: str) -> dict:
+    """Parse a package string into its component parts.
+
+    Supported formats:
+        "author/name@version" → Full specification
+        "author/name" → Defaults version to 'latest'
+        "name@version" → Defaults author to 'default'
+        "name" → Defaults both to 'default' and 'latest'
+
+    Regex Pattern:
+        (?:(?P<author>[^/]+)/)?(?P<name>[^@]+)(?:@(?P<version>.+))?
+        - (?:(?P<author>[^/]+)/)? : Optional author followed by '/'
+        - (?P<name>[^@]+)         : Required package name (no '@')
+        - (?:@(?P<version>.+))?   : Optional '@version'
+
     Args:
-        package_str (str): The package string to parse.
-    
+        package_str (str): Package string to parse.
+
     Returns:
-        dict: A dictionary containing the author, name, and version.
-    '''
+        dict: Dictionary with keys 'author', 'package_name', 'version'.
+
+    Raises:
+        ValueError: If package_str doesn't match the expected format.
+
+    Example:
+        >>> parse_package_string("fluidai/filesystem@1.0.0")
+        {'author': 'fluidai', 'package_name': 'filesystem', 'version': '1.0.0'}
+    """
     # Regular expression to match the package string format
     pattern = r'(?:(?P<author>[^/]+)/)?(?P<name>[^@]+)(?:@(?P<version>.+))?'
     match = re.match(pattern, package_str)
@@ -60,18 +78,32 @@ def is_json(data: bytes) -> bool:
         bool: True if the data is a JSON file, False otherwise.'''
     return data.lstrip().startswith(b'{')  # JSON starts with {
 
-def install_package(package_str, skip_env=False):
-    '''
-    Installs a package from the MCP registry.
-    
+def install_package(package_str: str, skip_env: bool = False):
+    """Install an MCP package from the Fluid MCP registry.
+
+    Installation Flow:
+        1. Parse package string via make_registry_request().
+        2. POST to MCP_FETCH_URL to get pre-signed S3 URL.
+        3. Download package from S3 (tar.gz or JSON).
+        4. Detect file type by magic number.
+        5. Extract tar.gz or save metadata.json.
+        6. Write environment config unless skip_env=True.
+
     Args:
-        package_str (str): The package string to install.
-        skip_env (bool): Whether to skip writing environment keys during installation.
-    
+        package_str (str): Package identifier (e.g., "author/name@version").
+        skip_env (bool): Skip writing environment keys. Defaults to False.
+
     Returns:
         None
-    '''
-    
+
+    Raises:
+        ValueError: Invalid package_str format.
+        requests.RequestException: If registry or S3 download fails.
+        Exception: For unknown file type or key writing failure.
+
+    Example:
+        >>> install_package("fluidai/filesystem@1.0.0")
+    """
     # Form the headers and payload for the API request
     headers,payload ,pkg =make_registry_request(package_str,auth=False)
     
@@ -161,7 +193,28 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
     return dest_dir
     
 
-def make_registry_request(package_str: str,auth: bool) -> Dict[str, Any]:
+def make_registry_request(package_str: str, auth: bool) -> tuple[dict, dict, dict]:
+    """Prepare headers and payload for MCP registry API request.
+
+    Registry Interaction:
+        1. Parse package_str via parse_package_string().
+        2. Build JSON payload: {'author', 'package_name', 'version'}.
+        3. Build headers: {'Content-Type': 'application/json'}.
+        4. Add Authorization header if auth=True (MCP_TOKEN).
+
+    Args:
+        package_str (str): Package string to install.
+        auth (bool): If True, include Authorization header.
+
+    Returns:
+        tuple: (headers dict, payload dict, parsed package dict)
+
+    Raises:
+        ValueError: Invalid package_str format.
+
+    Example:
+        >>> headers, payload, pkg = make_registry_request("filesystem@1.0.0", auth=False)
+    """
     # Parse the package string to extract author, name, and version
     pkg = parse_package_string(package_str)
     print(f":wrench: Installing {pkg['author']}/{pkg['package_name']}@{pkg['version']}")

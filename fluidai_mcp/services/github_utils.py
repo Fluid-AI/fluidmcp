@@ -22,31 +22,13 @@ DEFAULT_GITHUB_BRANCH = "main"
 def normalize_github_repo(repo_path: str) -> Tuple[str, str]:
     """
     Normalize a GitHub repo path or URL to (owner, repo).
-
-    Supports:
-    - owner/repo
-    - https://github.com/owner/repo
-    - https://github.com/owner/repo.git
-
-    Args:
-        repo_path: GitHub repository path or URL
-
-    Returns:
-        Tuple of (owner, repo)
-
-    Raises:
-        ValueError: If the repo path format is invalid
     """
     cleaned = repo_path.strip()
-
-    # Remove GitHub URL prefixes
     cleaned = cleaned.replace("https://github.com/", "").replace("http://github.com/", "")
 
-    # Remove .git suffix
     if cleaned.endswith(".git"):
         cleaned = cleaned[:-4]
 
-    # Validate format
     if cleaned.count("/") != 1:
         raise ValueError("GitHub repo path must be in the form 'owner/repo'")
 
@@ -62,27 +44,14 @@ def clone_github_repo(
 ) -> Path:
     """
     Clone a GitHub repository into the standard FMCP package layout.
-
-    Args:
-        repo_path: GitHub repository path (owner/repo)
-        github_token: GitHub personal access token
-        branch: Branch to clone (defaults to 'main')
-        install_dir: Base installation directory (defaults to .fmcp-packages)
-
-    Returns:
-        Path to the cloned repository
-
-    Raises:
-        ValueError: If github_token is missing
-        RuntimeError: If git clone fails
     """
     if not github_token:
         raise ValueError("GitHub token is required to clone the repository")
 
     owner, repo = normalize_github_repo(repo_path)
     target_branch = branch or DEFAULT_GITHUB_BRANCH
+    repo_url = f"https://github.com/{owner}/{repo}"
 
-    # Use provided install_dir or default
     if install_dir is None:
         from .config_resolver import INSTALLATION_DIR
         install_dir = Path(INSTALLATION_DIR)
@@ -90,16 +59,14 @@ def clone_github_repo(
     dest_dir = install_dir / owner / repo / target_branch
     dest_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    # Check if already cloned
     if dest_dir.exists() and any(dest_dir.iterdir()):
         logger.info(f"Repository already cloned at {dest_dir}, reusing existing files")
         return dest_dir
 
-    # Clone with depth=1 for faster cloning
     clone_url = f"https://{github_token}@github.com/{owner}/{repo}.git"
 
     try:
-        result = subprocess.run(
+        subprocess.run(
             [
                 "git",
                 "clone",
@@ -118,8 +85,86 @@ def clone_github_repo(
         return dest_dir
 
     except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.strip() if e.stderr else str(e)
-        raise RuntimeError(f"Failed to clone repository {owner}/{repo}: {error_msg}")
+        stderr_raw = e.stderr or ""
+        stderr = stderr_raw.lower()
+
+        # Redact token if present
+        stderr_safe = stderr_raw.replace(github_token, "***REDACTED***")
+
+        # Branch not found
+        if (
+            "couldn't find remote ref" in stderr
+            or f"branch '{target_branch}' not found" in stderr
+        ):
+            raise RuntimeError(
+                f"Branch '{target_branch}' not found in repository:\n"
+                f"  {repo_url}\n\n"
+                f"Suggestions:\n"
+                f"- Check if the branch name is correct\n"
+                f"- Try 'main' or 'master'\n"
+                f"- View available branches at {repo_url}/branches"
+            )
+
+        # Authentication failures
+        if "authentication failed" in stderr or "401" in stderr or "403" in stderr:
+            raise RuntimeError(
+                f"GitHub authentication failed while cloning:\n"
+                f"  {repo_url}\n\n"
+                f"Suggestions:\n"
+                f"- Check your GitHub token\n"
+                f"- Ensure the token has repo access permissions\n"
+                f"- Verify the token is not expired"
+            )
+
+        # Repository not found
+        if "repository not found" in stderr or "404" in stderr:
+            raise RuntimeError(
+                f"GitHub repository not found:\n"
+                f"  {repo_url}\n\n"
+                f"Suggestions:\n"
+                f"- Verify the repository name\n"
+                f"- Check if the repository exists\n"
+                f"- Ensure the URL is correct"
+            )
+
+        # Permission denied
+        if "permission denied" in stderr or "access denied" in stderr:
+            raise RuntimeError(
+                f"Permission denied while accessing:\n"
+                f"  {repo_url}\n\n"
+                f"Suggestions:\n"
+                f"- Check if you have access to this repository\n"
+                f"- Verify your GitHub account permissions"
+            )
+
+        # Rate limit exceeded
+        if "rate limit" in stderr or "429" in stderr:
+            raise RuntimeError(
+                f"GitHub rate limit exceeded while cloning:\n"
+                f"  {repo_url}\n\n"
+                f"Suggestions:\n"
+                f"- Wait a few minutes and try again\n"
+                f"- Check your GitHub API rate limit status\n"
+                f"- Use a personal access token for higher limits"
+            )
+
+        # Network issues
+        if "could not resolve host" in stderr or "failed to connect" in stderr:
+            raise RuntimeError(
+                f"Network error while cloning:\n"
+                f"  {repo_url}\n\n"
+                f"Suggestions:\n"
+                f"- Check your internet connection\n"
+                f"- Verify GitHub is reachable\n"
+                f"- Try again later"
+            )
+
+        # Fallback
+        raise RuntimeError(
+            f"Failed to clone GitHub repository:\n"
+            f"  {repo_url}\n\n"
+            f"Git error output:\n{stderr_safe}"
+        )
 
 
 def find_readme_file(directory: Path) -> Path:
@@ -312,7 +357,7 @@ def extract_or_create_metadata(repo_dir: Path) -> Path:
             json.dump(metadata, f, indent=2)
 
         logger.info(f"Created metadata.json from README in {repo_dir}")
-        print(f"✅ Extracted metadata from README and created metadata.json")
+        print(f" Extracted metadata from README and created metadata.json")
 
         return metadata_path
 
