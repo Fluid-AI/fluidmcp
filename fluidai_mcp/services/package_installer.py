@@ -105,7 +105,7 @@ def install_package(package_str: str, skip_env: bool = False):
         >>> install_package("fluidai/filesystem@1.0.0")
     """
     # Form the headers and payload for the API request
-    headers,payload ,pkg =make_registry_request(package_str,auth=False)
+    headers, payload, pkg = make_registry_request(package_str, auth=False)
     
     try:
         print(f":cloud: Installing package from Fluid MCP registry...")

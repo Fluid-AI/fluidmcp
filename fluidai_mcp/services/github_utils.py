@@ -357,7 +357,7 @@ def extract_or_create_metadata(repo_dir: Path) -> Path:
             json.dump(metadata, f, indent=2)
 
         logger.info(f"Created metadata.json from README in {repo_dir}")
-        print(f" Extracted metadata from README and created metadata.json")
+        print(f"✅ Extracted metadata from README and created metadata.json")
 
         return metadata_path
 
