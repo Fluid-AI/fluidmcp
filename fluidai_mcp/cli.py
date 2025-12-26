@@ -5,6 +5,9 @@ from pathlib import Path
 import json
 from loguru import logger
 import secrets
+import importlib.metadata
+import platform
+import shutil
 
 from fluidai_mcp.services import (
     install_package,
@@ -65,7 +68,29 @@ def resolve_package_dest_dir(package_str: str) -> Path:
                 raise FileNotFoundError(f"Package not found: {package_str}")
     return dest_dir
 
-
+def print_version_info() -> None:
+    '''
+    Print version details about FluidMCP.
+    args: 
+        none
+    returns:
+        none
+    '''
+    try: 
+        package_name = "fluidmcp"
+        
+        version = importlib.metadata.version(package_name)
+        dist = importlib.metadata.distribution(package_name)
+        install_path = dist.locate_file("")
+        
+        print(f"FluidMCP version: {version}")
+        print(f"Python version: {platform.python_version()}")
+        print(f"Installation path: {install_path}")
+    
+    except importlib.metadata.PackageNotFoundError:
+        print("FluidMCP is not installed as a package")
+        sys.exit(1)
+    
 def list_installed_packages() -> None:
     '''
     Print all installed packages in the installation directory.
@@ -107,6 +132,81 @@ def list_installed_packages() -> None:
     except Exception as e:
         # Handle any errors that occur while listing packages
         print(f"Error listing installed packages: {str(e)}")
+
+def validate_command(args) -> None:
+    """
+    Validate MCP configuration without running servers.
+
+    Args:
+        args (argparse.Namespace): Parsed CLI arguments
+
+    Returns:
+        None
+    Stores all errors during validating and prints them just before exit.
+    """
+    errors = []
+    
+    try:
+        # 1. Resolve configuration from the appropriate source
+        config = resolve_config(args)
+
+    except FileNotFoundError as e:
+        errors.append(str(e))
+        
+    except ValueError as e:
+        errors.append(f"Configuration error: {e}")
+
+    except Exception as e:
+        errors.append(f"Unexpected error while resolving config: {e}")
+        
+    if errors:
+        print("Validation failed with the following errors:")
+        
+        for err in errors:
+            print(f"- {err}")
+        sys.exit(1)
+    
+    #  2. validate command availability
+    for server_name, server_cfg in config.servers.items():
+        command = server_cfg.get("command")
+
+        if not command:
+            errors.append(f"Missing command for server '{server_name}'")
+            continue
+
+        if shutil.which(command) is None:
+            errors.append(
+                f"Command '{command}' not found in PATH (server: {server_name})"
+            )
+
+    
+    # 3. checks environment variables & token validation
+    for server_name, server_cfg in config.servers.items():
+        env_cfg = server_cfg.get("env", {})     
+        
+        for key, val in env_cfg.items():
+            if isinstance(val, dict):
+                required = val.get("required", False)
+                value = val.get("value")
+                
+                if(required):
+                    if value or os.environ.get(key):
+                        continue
+                    errors.append( f"missing required env var '{key}' (server: {server_name})")
+                
+            else:
+                if val or os.environ.get(key):
+                    continue
+                if key.upper().endswith("TOKEN"):
+                    errors.append( f"Missing required env var '{key}' (server: {server_name})" )
+                    
+    if errors:
+        print("❌ Configuration validation failed:")
+        for err in errors:
+            print(f"- {err}")
+        sys.exit(1)
+                
+    print("✔ Configuration is valid.")
 
 
 def edit_env(args):
@@ -313,6 +413,10 @@ def main():
     '''
     # Parse command line arguments with the commands given in setup.py 
     parser = argparse.ArgumentParser(description="FluidAI MCP CLI")
+
+    # Global --version command
+    parser.add_argument("--version", action="store_true", help="Show FluidMCP version information and exit")
+
     subparsers = parser.add_subparsers(dest="command")
 
     # Add subparsers for different commands
@@ -350,6 +454,11 @@ def main():
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
 
+    # validate comand
+    validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
+    validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
+    validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file") 
+
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
@@ -368,9 +477,16 @@ def main():
         os.environ["FMCP_SECURE_MODE"] = "true"
         print(f"Secure mode enabled. Bearer token: {token}")
 
+    # version flag
+    if args.version:
+        print_version_info()
+        sys.exit(0)
+
     # Main Command dispatch Logic
     if args.command == "install":
         install_command(args)
+    elif args.command == "validate":
+        validate_command(args)
     elif args.command == "run":
         run_command(args, secure_mode=secure_mode, token=token)
     elif args.command == "edit-env":
