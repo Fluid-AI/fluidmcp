@@ -1,6 +1,8 @@
 # fluidai_mcp/services/thread_manager.py
 import threading
 import socket
+import subprocess
+import atexit
 from typing import Dict, Set
 from pathlib import Path
 from loguru import logger
@@ -108,13 +110,13 @@ class MCPServerThread(threading.Thread):
         self.port = port
         
         # Per-thread logging context - adds package name and port to all log messages
+        # Note: thread_id will be added in run() method to get correct thread ID
         self.logger = logger.bind(
             thread_name=self.name,           # Thread identifier
             package_name=package_name,       # MCP package name
-            port=port,                       # Port number
-            thread_id=threading.get_ident() # System thread ID
+            port=port                        # Port number
         )
-        
+
         # Placeholders for resources we'll create
         self.mcp_process = None      # Will hold subprocess.Popen object
         self.mini_fastapi = None     # Will hold FastAPI instance
@@ -128,6 +130,9 @@ class MCPServerThread(threading.Thread):
         Main thread execution method. This runs in the separate thread.
         Contains the complete lifecycle of the MCP server.
         """
+        # Bind the correct thread ID now that we're running in the actual thread
+        self.logger = self.logger.bind(thread_id=threading.get_ident())
+
         try:
             self.logger.info("Starting MCP server thread execution")
             
@@ -269,18 +274,32 @@ class MCPServerThread(threading.Thread):
     def _cleanup(self):
         """
         Clean up resources when thread is shutting down.
+        Attempts graceful termination first, then force kills if necessary.
         """
         self.logger.info("Cleaning up thread resources...")
-        
+
         # Terminate MCP subprocess if it exists
         if self.mcp_process:
             try:
+                # Step 1: Send SIGTERM (polite request to terminate)
                 self.mcp_process.terminate()
-                self.mcp_process.wait(timeout=5)  # Wait up to 5 seconds
-                self.logger.info("MCP subprocess terminated")
+
+                try:
+                    # Step 2: Wait up to 5 seconds for graceful shutdown
+                    self.mcp_process.wait(timeout=5)
+                    self.logger.info("MCP subprocess terminated gracefully")
+                except subprocess.TimeoutExpired:
+                    # Step 3: Process didn't exit, force kill with SIGKILL
+                    self.logger.warning(
+                        f"Process {self.mcp_process.pid} did not terminate within 5s, force killing..."
+                    )
+                    self.mcp_process.kill()
+                    self.mcp_process.wait(timeout=2)  # Wait for kill to complete
+                    self.logger.warning("MCP subprocess force killed")
+
             except Exception as e:
                 self.logger.error(f"Error terminating MCP subprocess: {e}")
-        
+
         self.logger.info("Thread cleanup completed")
     
     def shutdown(self):
@@ -325,6 +344,9 @@ class MCPThreadManager:
 
         # Set up logging for the manager
         self.logger = logger.bind(component="ThreadManager")
+
+        # Register cleanup handler for program exit to prevent orphaned processes
+        atexit.register(self.stop_all_threads)
 
         self.logger.info(f"Thread manager initialized with port range {port_start}-{port_end-1}")
     
@@ -378,20 +400,20 @@ class MCPThreadManager:
         Returns:
             bool: True if stopped successfully, False otherwise
         """
+        # Step 1: Get thread reference under lock
         with self.lock:
             if package_name not in self.threads:
                 self.logger.warning(f"No thread found for {package_name}")
                 return False
+            thread = self.threads[package_name]
 
-            try:
-                thread = self.threads[package_name]
+        # Step 2: Request shutdown and wait WITHOUT holding lock (allows other operations)
+        try:
+            thread.shutdown()
+            thread.join(timeout=10)
 
-                # Request graceful shutdown
-                thread.shutdown()
-
-                # Wait for thread to finish (with timeout)
-                thread.join(timeout=10)
-
+            # Step 3: Check if thread stopped and clean up under lock
+            with self.lock:
                 # Check if thread actually stopped
                 if thread.is_alive():
                     self.logger.error(
@@ -412,9 +434,9 @@ class MCPThreadManager:
                 self.logger.info(f"Stopped thread for {package_name}")
                 return True
 
-            except Exception as e:
-                self.logger.error(f"Error stopping thread for {package_name}: {e}")
-                return False
+        except Exception as e:
+            self.logger.error(f"Error stopping thread for {package_name}: {e}")
+            return False
     
     def stop_all_threads(self):
         """
@@ -498,12 +520,12 @@ class MCPThreadManager:
             old_thread = self.threads.get(package_name)
             old_port = old_thread.port if old_thread else None
 
-            logger.info(f"🔄 RAILWAY DEBUG: Restarting {package_name} (old port: {old_port})")
+            self.logger.info(f"🔄 RAILWAY DEBUG: Restarting {package_name} (old port: {old_port})")
 
             # Clean up old thread and service registry
             if package_name in self.threads:
                 del self.threads[package_name]
-                logger.info(f"🗑️ RAILWAY DEBUG: Removed dead thread for {package_name}")
+                self.logger.info(f"🗑️ RAILWAY DEBUG: Removed dead thread for {package_name}")
 
             if package_name in self.service_registry:
                 del self.service_registry[package_name]
@@ -511,7 +533,7 @@ class MCPThreadManager:
         # Step 2: Release old port (port_allocator has its own lock)
         if old_port:
             self.port_allocator.release_port(old_port)
-            logger.info(f"🔄 RAILWAY DEBUG: Released old port {old_port}")
+            self.logger.info(f"🔄 RAILWAY DEBUG: Released old port {old_port}")
 
         # Step 3: Start new thread (start_mcp_thread acquires its own lock)
         launch_new_thread = self.start_mcp_thread(package_name, dest_dir)
@@ -523,12 +545,12 @@ class MCPThreadManager:
                     new_port = self.threads[package_name].port
                     new_service_url = self.service_registry.get(package_name)
                 else:
-                    logger.error(f"❌ RAILWAY DEBUG: Thread disappeared after restart for {package_name}")
+                    self.logger.error(f"❌ RAILWAY DEBUG: Thread disappeared after restart for {package_name}")
                     return False
 
-            logger.info(f"✅ RAILWAY DEBUG: {package_name} restarted on new port {new_port}")
-            logger.info(f"🔗 RAILWAY DEBUG: Service URL updated to {new_service_url}")
+            self.logger.info(f"✅ RAILWAY DEBUG: {package_name} restarted on new port {new_port}")
+            self.logger.info(f"🔗 RAILWAY DEBUG: Service URL updated to {new_service_url}")
             return True
         else:
-            logger.error(f"❌ RAILWAY DEBUG: Failed to restart {package_name}")
+            self.logger.error(f"❌ RAILWAY DEBUG: Failed to restart {package_name}")
             return False
