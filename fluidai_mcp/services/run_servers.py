@@ -46,18 +46,25 @@ def run_servers(
         start_server: Whether to start the FastAPI server
         force_reload: Force kill existing process on port without prompting
     """
+    logger.debug(f"Starting run_servers with config source: {config.source_type}")
+    logger.debug(f"Single package mode: {single_package}, Start server: {start_server}")
+    logger.debug(f"Secure mode: {secure_mode}, Force reload: {force_reload}")
+
     # Set up secure mode environment
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        print(f"Secure mode enabled with bearer token")
+        logger.success(f"Secure mode enabled with bearer token")
+        logger.debug(f"Bearer token set in environment")
 
     # Install packages if needed
     if config.needs_install:
+        logger.debug(f"Configuration requires package installation")
         _install_packages_from_config(config)
 
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
+    logger.debug(f"Using port {port} for {'single package' if single_package else 'unified'} mode")
 
     # Create FastAPI app
     app = FastAPI(
@@ -76,41 +83,50 @@ def run_servers(
     )
     # Launch each server and add its router
     launched_servers = 0
+    logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
+
     for server_name, server_cfg in config.servers.items():
+        logger.debug(f"Processing server: {server_name}")
         install_path = server_cfg.get("install_path")
         if not install_path:
-            print(f"No installation path for server '{server_name}', skipping")
+            logger.warning(f"No installation path for server '{server_name}', skipping")
             continue
 
         install_path = Path(install_path)
+        logger.debug(f"Installation path for {server_name}: {install_path}")
+
         if not install_path.exists():
-            print(f"Installation path '{install_path}' does not exist, skipping")
+            logger.warning(f"Installation path '{install_path}' does not exist, skipping")
             continue
 
         metadata_path = install_path / "metadata.json"
         if not metadata_path.exists():
-            print(f"No metadata.json in '{install_path}', skipping")
+            logger.warning(f"No metadata.json in '{install_path}', skipping")
             continue
 
         try:
-            print(f"Launching server '{server_name}' from: {install_path}")
+            logger.info(f"Launching server '{server_name}' from: {install_path}")
+            logger.debug(f"Calling launch_mcp_using_fastapi_proxy for {server_name}")
             package_name, router = launch_mcp_using_fastapi_proxy(install_path)
 
             if router:
                 app.include_router(router, tags=[server_name])
-                print(f"Added {package_name} endpoints")
+                logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
+                logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
             else:
-                print(f"Failed to create router for {server_name}")
+                logger.error(f"Failed to create router for {server_name}")
 
         except Exception as e:
-            print(f"Error launching server '{server_name}': {e}")
+            logger.error(f"Error launching server '{server_name}': {e}")
+            logger.debug(f"Exception details: {type(e).__name__}: {e}")
 
+    logger.debug(f"Total servers launched: {launched_servers}")
     if launched_servers == 0:
-        print("No servers were successfully launched")
+        logger.error("No servers were successfully launched")
         return
 
-    print(f"Successfully launched {launched_servers} MCP server(s)")
+    logger.success(f"Successfully launched {launched_servers} MCP server(s)")
 
     # Start FastAPI server if requested
     if start_server:
@@ -130,10 +146,12 @@ def _install_packages_from_config(config: ServerConfig) -> None:
         fmcp_package = server_cfg.get("fmcp_package")
         if not fmcp_package:
             # Already installed or no package reference
+            logger.debug(f"Server '{server_name}' has no fmcp_package reference, skipping installation")
             continue
 
-        print(f"Installing package: {fmcp_package}")
+        logger.info(f"Installing package: {fmcp_package}")
         pkg = parse_package_string(fmcp_package)
+        logger.debug(f"Parsed package: {pkg}")
 
         try:
             # Install package (skip env prompts, we'll update from config)
@@ -150,13 +168,14 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 try:
                     dest_dir = get_latest_version_dir(package_dir)
                 except FileNotFoundError:
-                    print(f"Package not found after install: {author}/{package_name}")
+                    logger.error(f"Package not found after install: {author}/{package_name}")
                     continue
 
             if not dest_dir.exists():
-                print(f"Package directory not found: {dest_dir}")
+                logger.error(f"Package directory not found: {dest_dir}")
                 continue
 
+            logger.debug(f"Package installed at: {dest_dir}")
             # Update install_path in config
             server_cfg["install_path"] = str(dest_dir)
 
@@ -168,15 +187,18 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                     with open(config.metadata_path, 'r') as f:
                         source_config = json.load(f)
                     update_env_from_config(metadata_path, fmcp_package, source_config, pkg)
+                    logger.debug(f"Updated env variables for {fmcp_package}")
                 except Exception as e:
-                    print(f"Error updating env for {fmcp_package}: {e}")
+                    logger.error(f"Error updating env for {fmcp_package}: {e}")
 
             # For master mode, update from shared .env
             if config.source_type == "s3_master":
+                logger.debug(f"Updating from common .env for master mode")
                 _update_env_from_common_env(dest_dir, pkg)
 
         except Exception as e:
-            print(f"Error installing {fmcp_package}: {e}")
+            logger.error(f"Error installing {fmcp_package}: {e}")
+            logger.debug(f"Exception details: {type(e).__name__}: {e}")
 
 
 def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
@@ -249,23 +271,25 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         port: Port to listen on
         force_reload: Force kill existing process without prompting
     """
+    logger.debug(f"_start_server called with port {port}, force_reload={force_reload}")
+
     if is_port_in_use(port):
-        print(f"Port {port} is already in use.")
+        logger.warning(f"Port {port} is already in use.")
         if force_reload:
-            print(f"Force reloading server on port {port}")
+            logger.info(f"Force reloading server on port {port}")
             kill_process_on_port(port)
         else:
             choice = input("Kill existing process and reload? (y/n): ").strip().lower()
             if choice == 'y':
+                logger.debug("User chose to kill existing process")
                 kill_process_on_port(port)
             elif choice == 'n':
-                print(f"Keeping existing process on port {port}")
+                logger.info(f"Keeping existing process on port {port}")
                 return
             else:
-                print("Invalid choice. Aborting.")
+                logger.error("Invalid choice. Aborting.")
                 return
 
-    logger.info(f"Starting FastAPI server on port {port}")
-    print(f"Starting FastAPI server on port {port}")
-    print(f"Swagger UI available at: http://localhost:{port}/docs")
+    logger.success(f"Starting FastAPI server on port {port}")
+    logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
     uvicorn.run(app, host="0.0.0.0", port=port)

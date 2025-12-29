@@ -166,6 +166,7 @@ fluidmcp run "https://bucket.s3.amazonaws.com/config.json" --s3
 - `--s3` – Run from S3 URL
 - `--secure` – Enable secure token mode
 - `--token <token>` – Custom bearer token
+- `--verbose` – Enable verbose logging (DEBUG level)
 
 ### Run All Installed Packages
 

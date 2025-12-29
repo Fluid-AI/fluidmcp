@@ -22,36 +22,37 @@ def edit_env_variables(dest_dir: Union[str, Path]):
     '''
 
     dest_dir = Path(dest_dir)
-    print(f"Editing environment variables for package in {dest_dir}")
+    logger.info(f"Editing environment variables for package in {dest_dir}")
+    logger.debug(f"Destination directory: {dest_dir}")
     metadata_path = dest_dir / "metadata.json"
-    
+
     # Check if metadata.json exists
     if not metadata_path.exists():
-        print(f":warning: No metadata.json found at {metadata_path}")
+        logger.warning(f"No metadata.json found at {metadata_path}")
         return
-    
+
     try:
         # Read metadata.json
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
-        
+
         try:
             pkg = list(metadata["mcpServers"].keys())[0]
         except:
-            print(f":warning: No package found in metadata.json")
+            logger.warning(f"No package found in metadata.json")
             return
-        
+
         # Check if env variables exist
         if "env" not in metadata['mcpServers'][pkg]:
-            print(f":information_source: No environment variables found for this package.")
+            logger.info(f"No environment variables found for this package.")
             return
         
         env_vars = metadata['mcpServers'][pkg]["env"]
         
         # Display package information
+        logger.info(f"\nEditing environment variables for {pkg}\n")
+        logger.debug(f"Found {len(env_vars)} env variables in metadata")
 
-        print(f"\nEditing environment variables for {pkg}\n")
-        
         # Create a list of environment variables with their information
         env_list = []
         for key, value in env_vars.items():
@@ -76,19 +77,19 @@ def edit_env_variables(dest_dir: Union[str, Path]):
                     "current_value": value,
                     "structured": False
                 })
-        
+
         # Initialize variables for tracking changes
         modified_vars = set()
-        
+
         # Start interactive loop
         while True:
             # Display available environment variables
-            print(f"Found {len(env_list)} environment variables:")
+            logger.info(f"Found {len(env_list)} environment variables:")
             for i, env_var in enumerate(env_list, 1):
                 # Prepare display string
                 required_tag = " [Required]" if env_var["required"] else ""
                 modified_tag = " [Modified]" if env_var["key"] in modified_vars else ""
-                print(f"{i}. {env_var['key']}: {env_var['description']}{required_tag}{modified_tag}")
+                logger.info(f"{i}. {env_var['key']}: {env_var['description']}{required_tag}{modified_tag}")
             
             # Prompt user for selection
             print("\nEnter number to edit (or 'q' to quit): ", end="")
@@ -102,38 +103,39 @@ def edit_env_variables(dest_dir: Union[str, Path]):
             try:
                 index = int(choice) - 1
                 if not (0 <= index < len(env_list)):
-                    print(f":x: Invalid selection. Please enter a number between 1 and {len(env_list)}.")
+                    logger.error(f"Invalid selection. Please enter a number between 1 and {len(env_list)}.")
                     continue
             except ValueError:
-                logger.info(":x: Invalid input. Please enter a number or 'q' to quit.")
+                logger.error("Invalid input. Please enter a number or 'q' to quit.")
                 continue
             
             # Get selected environment variable
             selected_var = env_list[index]
-            print(f"\nSelected: {selected_var['key']} ({selected_var['description']})")
-            
+            logger.info(f"\nSelected: {selected_var['key']} ({selected_var['description']})")
+
             # Display current value (mask sensitive data)
             masked_value = "******" if "api" in selected_var["key"].lower() or "key" in selected_var["key"].lower() or "token" in selected_var["key"].lower() else selected_var["current_value"]
-            print(f"Current value: {masked_value}")
-            
+            logger.info(f"Current value: {masked_value}")
+
             # Prompt for new value
             print("Enter new value (or press Enter to keep current value): ", end="")
             new_value = input().strip()
-            
+
             # Update value if changed
             if new_value:
                 # Update in env_list
                 env_list[index]["current_value"] = new_value
                 # Mark as modified
                 modified_vars.add(selected_var["key"])
-                print(f"{selected_var['key']} updated successfully.")
+                logger.success(f"{selected_var['key']} updated successfully.")
             else:
-                print(f"No changes made to {selected_var['key']}.")
-        
+                logger.info(f"No changes made to {selected_var['key']}.")
+
         # If changes were made, update metadata.json
         if modified_vars:
-            print(f"\nSaving changes to metadata.json...")
-            
+            logger.info(f"\nSaving changes to metadata.json...")
+            logger.debug(f"Updating {len(modified_vars)} variables")
+
             # Update metadata with new values
             for env_var in env_list:
                 key = env_var["key"]
@@ -144,17 +146,18 @@ def edit_env_variables(dest_dir: Union[str, Path]):
                     else:
                         # Update directly for simple format
                         metadata['mcpServers'][pkg]["env"][key] = env_var["current_value"]
-            
+
             # Write updated metadata back to file
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2)
-            
-            print(f"Successfully updated {len(modified_vars)} environment variable(s).")
+
+            logger.success(f"Successfully updated {len(modified_vars)} environment variable(s).")
         else:
             logger.info("No changes were made.")
-    
+
     except Exception as e:
-        logger.info(f":x: Error editing environment variables: {e}")
+        logger.error(f"Error editing environment variables: {e}")
+        logger.debug(f"Exception details: {type(e).__name__}: {e}")
 
 
 def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], skip_env: bool = False):
@@ -173,7 +176,7 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
     # Check if metadata.json exists
     if metadata_path.exists():
         
-        print(f":information_source: Reading metadata.json for API key configuration ")
+        logger.info(f"Reading metadata.json for API key configuration")
         try:
             with open(metadata_path, "r") as f:
                 metadata = json.load(f)
@@ -185,7 +188,7 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
                     return
                 env_vars = process_env_variables(metadata['mcpServers'][pkg["package_name"]]["env"])                
                 if env_vars:
-                    print(":key: Saving API key(s) to metadata.json")
+                    logger.info("🔑 Saving API key(s) to metadata.json")
                     
                     # Update the metadata.json with the provided API keys
                     for key, value in env_vars.items():
@@ -201,9 +204,9 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
                         json.dump(metadata, f, indent=2)
                     
             
-                    print(f":information_source: API key(s) saved to metadata.json.")
+                    logger.success(f"API key(s) saved to metadata.json.")
             else:
-                print(f":information_source: No environment variables found for this package.")
+                logger.info(f"No environment variables found for this package.")
         except Exception as e:
             logger.info(f":x: Error processing metadata.json: {e}")
 
@@ -231,14 +234,14 @@ def process_env_variables(env_config: Dict[str, Any]) -> Dict[str, str]:
                 # Get description if available
                 description = value.get("description", f"API key for {key}")
                 # Prompt the user for the API key
-                print(f":key: This server requires authentication.")
+                logger.info(f"🔑 This server requires authentication.")
                 api_key = input(f"Enter {description}: ")
                 
                 # Only add non-empty values to the environment
                 if api_key.strip():
                     processed_env[key] = api_key
                 else:
-                    print(f":warning: No value provided for required API key: {key}")
+                    logger.warning(f"No value provided for required API key: {key}")
             # For non-required keys, use the default value if available
             elif "value" in value and value["value"]:
                 processed_env[key] = value["value"]
@@ -277,7 +280,7 @@ def update_env_from_config(metadata_path: Path, package: str, config: Dict[str, 
         if server_config.get("fmcp_package") == package:
             # If the config contains env variables, update them in the installed package
             if "env" in server_config:
-                print(f"Updating environment variables for {package}")
+                logger.info(f"Updating environment variables for {package}")
                 if pkg["package_name"] in metadata.get("mcpServers", {}):
                     # Ensure env section exists
                     if "env" not in metadata["mcpServers"][pkg["package_name"]]:
@@ -300,5 +303,5 @@ def update_env_from_config(metadata_path: Path, package: str, config: Dict[str, 
                     with open(metadata_path, 'w') as mdf_out:
                         json.dump(metadata, mdf_out, indent=2)
                         
-                    print(f"Updated environment variables for {package}")
+                    logger.success(f"Updated environment variables for {package}")
             break

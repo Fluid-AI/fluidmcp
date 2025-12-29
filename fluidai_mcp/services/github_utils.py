@@ -113,8 +113,7 @@ def clone_github_repo(
             stderr=subprocess.PIPE,
             text=True,
         )
-        logger.info(f"Cloned {owner}/{repo}@{target_branch} to {dest_dir}")
-        print(f"✅ Cloned {owner}/{repo} to {dest_dir}")
+        logger.success(f"✅ Cloned {owner}/{repo}@{target_branch} to {dest_dir}")
         return dest_dir
 
     except subprocess.CalledProcessError as e:
@@ -311,8 +310,7 @@ def extract_or_create_metadata(repo_dir: Path) -> Path:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
 
-        logger.info(f"Created metadata.json from README in {repo_dir}")
-        print(f"✅ Extracted metadata from README and created metadata.json")
+        logger.success(f"✅ Extracted metadata from README and created metadata.json in {repo_dir}")
 
         return metadata_path
 
