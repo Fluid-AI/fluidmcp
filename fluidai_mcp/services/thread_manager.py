@@ -503,7 +503,20 @@ class MCPThreadManager:
         """
         with self.lock:
             return len(self.threads)
-    
+
+    def get_thread(self, package_name: str):
+        """
+        Get thread object for a specific package (thread-safe).
+
+        Args:
+            package_name (str): Name of the package
+
+        Returns:
+            MCPServerThread: Thread object, or None if not found
+        """
+        with self.lock:
+            return self.threads.get(package_name)
+
     def restart_mcp_thread(self, package_name: str, dest_dir: Path) -> bool:
         """
         Restart the thread for a given package with a new port and update routing.
@@ -515,14 +528,26 @@ class MCPThreadManager:
         Returns:
             bool: True if the thread was successfully restarted, False otherwise
         """
-        # Step 1: Safely remove old thread under lock
+        # Step 1: Get old thread reference under lock
         with self.lock:
             old_thread = self.threads.get(package_name)
             old_port = old_thread.port if old_thread else None
 
-            self.logger.info(f"🔄 RAILWAY DEBUG: Restarting {package_name} (old port: {old_port})")
+        self.logger.info(f"🔄 RAILWAY DEBUG: Restarting {package_name} (old port: {old_port})")
 
-            # Clean up old thread and service registry
+        # Step 2: Shutdown old thread (outside lock to avoid blocking)
+        if old_thread:
+            self.logger.info(f"Shutting down old thread for {package_name}")
+            old_thread.shutdown()
+            old_thread.join(timeout=10)
+
+            if old_thread.is_alive():
+                self.logger.warning(f"Old thread for {package_name} did not stop within 10s")
+            else:
+                self.logger.info(f"Old thread for {package_name} stopped successfully")
+
+        # Step 3: Clean up old thread and service registry under lock
+        with self.lock:
             if package_name in self.threads:
                 del self.threads[package_name]
                 self.logger.info(f"🗑️ RAILWAY DEBUG: Removed dead thread for {package_name}")
@@ -530,12 +555,12 @@ class MCPThreadManager:
             if package_name in self.service_registry:
                 del self.service_registry[package_name]
 
-        # Step 2: Release old port (port_allocator has its own lock)
+        # Step 4: Release old port (port_allocator has its own lock)
         if old_port:
             self.port_allocator.release_port(old_port)
             self.logger.info(f"🔄 RAILWAY DEBUG: Released old port {old_port}")
 
-        # Step 3: Start new thread (start_mcp_thread acquires its own lock)
+        # Step 5: Start new thread (start_mcp_thread acquires its own lock)
         launch_new_thread = self.start_mcp_thread(package_name, dest_dir)
 
         if launch_new_thread:
