@@ -3,7 +3,7 @@ import json
 import subprocess
 import shutil
 import time
-from typing import Union, Dict, Any, Iterator
+from typing import Union, Dict, Any, Iterator, Optional
 from pathlib import Path
 
 from loguru import logger
@@ -21,7 +21,7 @@ _global_thread_manager = None
 
 def set_global_thread_manager(manager):
     """
-    Store thread manager reference globally for health checks.
+    Stores thread manager reference globally for health checks.
     Required because health check functions need access to restart threads.
     """
     global _global_thread_manager
@@ -128,10 +128,22 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         return None, None, None
 
 
-def initialize_mcp_server(process: subprocess.Popen, pkg_name: str = "server", timeout=300) -> bool:
+def initialize_mcp_server(process: subprocess.Popen, pkg_name: str = "server", timeout=90) -> bool:
     """
     Initialize MCP server with proper handshake.
-    Uses non-blocking I/O for reliable timeout handling.
+
+    Uses non-blocking I/O with select() to ensure timeout enforcement works reliably
+    across all platforms. This prevents indefinite hangs during initialization and
+    provides fast feedback when servers fail to start properly. Falls back to
+    blocking I/O on systems without select support (e.g., Windows with pipes).
+
+    Args:
+        process: The MCP server subprocess to initialize
+        pkg_name: Package name for logging context (default: "server")
+        timeout: Maximum seconds to wait for initialization (default: 90)
+
+    Returns:
+        bool: True if server initialized successfully, False on timeout or failure
     """
     # Check select availability once
     try:
@@ -379,8 +391,8 @@ def check_service_health(package_name: str, service_url: str) -> bool:
         
         if response.status_code != 200:
             logger.error(f"Health check failed for {package_name} - HTTP {response.status_code}")
-            
-            old_thread = _global_thread_manager.threads.get(package_name)
+
+            old_thread = _global_thread_manager.get_thread(package_name)
             if old_thread:
                 dest_dir = old_thread.dest_dir
                 logger.info(f"Attempting to restart {package_name}")
@@ -403,6 +415,76 @@ def check_service_health(package_name: str, service_url: str) -> bool:
         raise HTTPException(status_code=503, detail=f"Cannot reach {package_name} service")
 
 
+def _proxy_request_with_retry(
+    package_name: str,
+    endpoint: str,
+    method: str,
+    request_body: Optional[Dict[str, Any]] = None,
+    timeout: int = 180
+) -> JSONResponse:
+    """
+    Helper function to proxy requests with health check and auto-retry on failure.
+
+    Args:
+        package_name: Name of the MCP package
+        endpoint: Full endpoint path (e.g., "package/mcp" or "package/mcp/tools/list")
+        method: HTTP method ("GET" or "POST")
+        request_body: Optional request body for POST requests
+        timeout: Request timeout in seconds
+
+    Returns:
+        JSONResponse with the proxied response
+
+    Raises:
+        HTTPException: If service restart fails or request cannot be completed
+    """
+    logger.info(f"Request received for /{endpoint}")
+
+    service_url = _global_thread_manager.get_service_url(package_name)
+    logger.info(f"Using service URL: {service_url}")
+
+    check_service_health(package_name, service_url)
+
+    # Build full URL
+    full_url = f"{service_url}/{endpoint}"
+
+    try:
+        # Initial request
+        if method == "GET":
+            response = requests.get(full_url, timeout=timeout)
+        elif method == "POST":
+            response = requests.post(full_url, json=request_body, timeout=timeout)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        response.raise_for_status()
+        return JSONResponse(content=response.json())
+
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
+        logger.error(f"Service error for {package_name}: {str(e)}")
+
+        # Attempt restart and retry
+        old_thread = _global_thread_manager.get_thread(package_name)
+        if old_thread:
+            success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
+            if success:
+                new_service_url = _global_thread_manager.get_service_url(package_name)
+                logger.info(f"Service restarted, waiting for initialization...")
+                time.sleep(1)  # Allow new service to fully initialize
+                logger.info(f"Retrying with new URL: {new_service_url}")
+
+                # Retry with new URL
+                new_full_url = f"{new_service_url}/{endpoint}"
+                if method == "GET":
+                    response = requests.get(new_full_url, timeout=timeout)
+                elif method == "POST":
+                    response = requests.post(new_full_url, json=request_body, timeout=timeout)
+
+                return JSONResponse(content=response.json())
+
+        raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+
+
 def create_proxy_mcp_router(package_name: str, service_url: str, secure_mode: bool = False):
     """
     Create proxy router that forwards requests to mini-FastAPI with health checks.
@@ -413,7 +495,7 @@ def create_proxy_mcp_router(package_name: str, service_url: str, secure_mode: bo
     @router.get(f"/{package_name}/health", tags=[package_name])
     def proxy_health_check(token: str = Depends(get_token)):
         """Proxy the health check to the mini-FastAPI"""
-        service_url = _global_thread_manager.service_registry.get(package_name)
+        service_url = _global_thread_manager.get_service_url(package_name)
         logger.info(f"Proxying health check to: {service_url}")
         
         try:
@@ -427,82 +509,30 @@ def create_proxy_mcp_router(package_name: str, service_url: str, secure_mode: bo
     @router.post(f"/{package_name}/mcp", tags=[package_name])
     def proxy_jsonrpc(request: Dict[str, Any] = Body(...), token: str = Depends(get_token)):
         """Main proxy endpoint with health check and auto-retry"""
-        logger.info(f"Request received for /{package_name}/mcp")
-        
-        service_url = _global_thread_manager.service_registry.get(package_name)
-        logger.info(f"Using service URL: {service_url}")
-        
-        check_service_health(package_name, service_url)
-        
-        try:
-            response = requests.post(f"{service_url}/{package_name}/mcp", json=request, timeout=180)
-            response.raise_for_status()
-            return JSONResponse(content=response.json())
-            
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
-            logger.error(f"Service error for {package_name}: {str(e)}")
-            
-            old_thread = _global_thread_manager.threads.get(package_name)
-            if old_thread:
-                success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
-                if success:
-                    new_service_url = _global_thread_manager.service_registry.get(package_name)
-                    logger.info(f"Retrying with new URL: {new_service_url}")
-                    response = requests.post(f"{new_service_url}/{package_name}/mcp", json=request, timeout=180)
-                    return JSONResponse(content=response.json())
-            
-            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+        return _proxy_request_with_retry(
+            package_name=package_name,
+            endpoint=f"{package_name}/mcp",
+            method="POST",
+            request_body=request
+        )
     
     @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
     def list_tools(token: str = Depends(get_token)):
         """Proxy tools/list with health check"""
-        logger.info(f"Request received for /{package_name}/mcp/tools/list")
-        
-        service_url = _global_thread_manager.service_registry.get(package_name)
-        check_service_health(package_name, service_url)
-        
-        try:
-            response = requests.get(f"{service_url}/{package_name}/mcp/tools/list", timeout=180)
-            response.raise_for_status()
-            return JSONResponse(content=response.json())
-            
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
-            logger.error(f"Service error for {package_name}: {str(e)}")
-            
-            old_thread = _global_thread_manager.threads.get(package_name)
-            if old_thread:
-                success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
-                if success:
-                    new_service_url = _global_thread_manager.service_registry.get(package_name)
-                    response = requests.get(f"{new_service_url}/{package_name}/mcp/tools/list", timeout=180)
-                    return JSONResponse(content=response.json())
-            
-            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+        return _proxy_request_with_retry(
+            package_name=package_name,
+            endpoint=f"{package_name}/mcp/tools/list",
+            method="GET"
+        )
     
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
     def call_tool(request_body: Dict[str, Any] = Body(...), token: str = Depends(get_token)):
         """Proxy tools/call with health check"""
-        logger.info(f"Request received for /{package_name}/mcp/tools/call")
-        
-        service_url = _global_thread_manager.service_registry.get(package_name)
-        check_service_health(package_name, service_url)
-        
-        try:
-            response = requests.post(f"{service_url}/{package_name}/mcp/tools/call", json=request_body, timeout=180)
-            response.raise_for_status()
-            return JSONResponse(content=response.json())
-            
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.HTTPError) as e:
-            logger.error(f"Service error for {package_name}: {str(e)}")
-            
-            old_thread = _global_thread_manager.threads.get(package_name)
-            if old_thread:
-                success = _global_thread_manager.restart_mcp_thread(package_name, old_thread.dest_dir)
-                if success:
-                    new_service_url = _global_thread_manager.service_registry.get(package_name)
-                    response = requests.post(f"{new_service_url}/{package_name}/mcp/tools/call", json=request_body, timeout=180)
-                    return JSONResponse(content=response.json())
-            
-            raise HTTPException(status_code=503, detail=f"Service restart failed for {package_name}")
+        return _proxy_request_with_retry(
+            package_name=package_name,
+            endpoint=f"{package_name}/mcp/tools/call",
+            method="POST",
+            request_body=request_body
+        )
     
     return router

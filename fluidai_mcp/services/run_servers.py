@@ -96,8 +96,21 @@ def run_servers(
 
     print(f"Successfully launched {launched_servers} MCP server(s)")
 
-    # Wait for threads to initialize
-    time.sleep(2)
+    # Wait for threads to initialize (poll for readiness)
+    max_wait = 10  # seconds
+    poll_interval = 0.1  # seconds
+    waited = 0
+    print("Waiting for services to be ready...")
+    while waited < max_wait:
+        services = thread_manager.get_all_services()
+        if len(services) >= launched_servers:
+            print(f"All {launched_servers} services ready after {waited:.1f} seconds")
+            break
+        time.sleep(poll_interval)
+        waited += poll_interval
+    else:
+        print(f"Warning: Not all servers reported ready after {max_wait} seconds. Proceeding anyway.")
+        print(f"Expected {launched_servers} services, found {len(services)}")
 
     # Create FastAPI app
     app = FastAPI(
