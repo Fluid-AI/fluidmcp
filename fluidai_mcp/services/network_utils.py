@@ -46,7 +46,7 @@ def kill_process(pid):
         os.kill(pid, signal.SIGTERM)
         logger.info(f"Killed process {pid} running on port")
     except Exception as e:
-        logger.error(f"Failed to kill process {pid}: {e}", exc_info=True)
+        logger.exception(f"Failed to kill process {pid}: {e}")
 
 
 

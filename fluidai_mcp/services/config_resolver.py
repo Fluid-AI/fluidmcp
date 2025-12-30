@@ -436,7 +436,7 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
         logger.info(f"GitHub server '{server_name}' prepared from {github_repo}")
 
     except Exception as e:
-        logger.error(f"Error preparing GitHub server '{server_name}': {e}", exc_info=True)
+        logger.exception(f"Error preparing GitHub server '{server_name}': {e}")
         raise
 
 

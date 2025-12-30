@@ -37,7 +37,7 @@ def edit_env_variables(dest_dir: Union[str, Path]):
         
         try:
             pkg = list(metadata["mcpServers"].keys())[0]
-        except:
+        except (KeyError, IndexError, TypeError):
             logger.warning("No package found in metadata.json")
             return
 
@@ -83,16 +83,15 @@ def edit_env_variables(dest_dir: Union[str, Path]):
         # Start interactive loop
         while True:
             # Display available environment variables
-            logger.info(f"Found {len(env_list)} environment variables")
+            print(f"\nFound {len(env_list)} environment variables:")
             for i, env_var in enumerate(env_list, 1):
                 # Prepare display string
                 required_tag = " [Required]" if env_var["required"] else ""
                 modified_tag = " [Modified]" if env_var["key"] in modified_vars else ""
-                logger.info(f"{i}. {env_var['key']}: {env_var['description']}{required_tag}{modified_tag}")
+                print(f"{i}. {env_var['key']}: {env_var['description']}{required_tag}{modified_tag}")
 
             # Prompt user for selection
-            logger.info("Enter number to edit (or 'q' to quit)")
-            choice = input().strip().lower()
+            choice = input("\nEnter number to edit (or 'q' to quit): ").strip().lower()
             
             # Check if user wants to quit
             if choice == 'q':
@@ -110,15 +109,14 @@ def edit_env_variables(dest_dir: Union[str, Path]):
             
             # Get selected environment variable
             selected_var = env_list[index]
-            logger.info(f"Selected: {selected_var['key']} ({selected_var['description']})")
+            print(f"\nSelected: {selected_var['key']} ({selected_var['description']})")
 
             # Display current value (mask sensitive data)
             masked_value = "******" if "api" in selected_var["key"].lower() or "key" in selected_var["key"].lower() or "token" in selected_var["key"].lower() else selected_var["current_value"]
-            logger.info(f"Current value: {masked_value}")
+            print(f"Current value: {masked_value}")
 
             # Prompt for new value
-            logger.info("Enter new value (or press Enter to keep current value)")
-            new_value = input().strip()
+            new_value = input("Enter new value (or press Enter to keep current value): ").strip()
             
             # Update value if changed
             if new_value:
@@ -154,7 +152,7 @@ def edit_env_variables(dest_dir: Union[str, Path]):
             logger.info("No changes were made")
 
     except Exception as e:
-        logger.error("Error editing environment variables", exc_info=True)
+        logger.exception("Error editing environment variables")
 
 
 def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], skip_env: bool = False):
@@ -205,7 +203,7 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
             else:
                 logger.info("No environment variables found for this package")
         except Exception as e:
-            logger.error("Error processing metadata.json", exc_info=True)
+            logger.exception("Error processing metadata.json")
 
 def process_env_variables(env_config: Dict[str, Any]) -> Dict[str, str]:
     """
@@ -231,7 +229,7 @@ def process_env_variables(env_config: Dict[str, Any]) -> Dict[str, str]:
                 # Get description if available
                 description = value.get("description", f"API key for {key}")
                 # Prompt the user for the API key
-                logger.info("This server requires authentication")
+                print("This server requires authentication")
                 api_key = input(f"Enter {description}: ")
 
                 # Only add non-empty values to the environment

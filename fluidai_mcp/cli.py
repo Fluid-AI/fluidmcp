@@ -106,7 +106,7 @@ def list_installed_packages() -> None:
             logger.info("No packages found in the installation directory structure")
     except Exception as e:
         # Handle any errors that occur while listing packages
-        logger.error(f"Error listing installed packages: {str(e)}", exc_info=True)
+        logger.exception(f"Error listing installed packages: {str(e)}")
 
 
 def edit_env(args):
@@ -124,7 +124,7 @@ def edit_env(args):
             sys.exit(1)
         edit_env_variables(dest_dir)
     except Exception as e:
-        logger.error(f"Error editing environment variables: {str(e)}", exc_info=True)
+        logger.exception(f"Error editing environment variables: {str(e)}")
         sys.exit(1)
 
 
@@ -208,7 +208,7 @@ def install_command(args):
     try:
         dest_dir = resolve_package_dest_dir(args.package)
     except Exception as e:
-        logger.error(str(e))
+        logger.exception(str(e))
         sys.exit(1)
     if not package_exists(dest_dir):
         logger.error(f"Package not found at {dest_dir}. Have you installed it?")
@@ -297,13 +297,13 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             uvicorn.run(app, host="0.0.0.0", port=client_server_port)
 
     except ValueError as e:
-        logger.error(f"Configuration error: {e}", exc_info=True)
+        logger.exception(f"Configuration error: {e}")
         sys.exit(1)
     except RuntimeError as e:
-        logger.error(f"Runtime error: {e}", exc_info=True)
+        logger.exception(f"Runtime error: {e}")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Error running GitHub MCP server: {e}", exc_info=True)
+        logger.exception(f"Error running GitHub MCP server: {e}")
         sys.exit(1)
 
 
@@ -414,11 +414,11 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
         )
 
     except FileNotFoundError as e:
-        logger.error(f"Error: {e}", exc_info=True)
+        logger.exception(f"Error: {e}")
         sys.exit(1)
     except ValueError as e:
-        logger.error(f"Configuration error: {e}", exc_info=True)
+        logger.exception(f"Configuration error: {e}")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"Error running servers: {e}", exc_info=True)
+        logger.exception(f"Error running servers: {e}")
         sys.exit(1)

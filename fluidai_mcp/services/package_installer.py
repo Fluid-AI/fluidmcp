@@ -82,7 +82,7 @@ def install_package(package_str, skip_env=False):
             response = requests.post(API_URL, headers=headers, json=payload)
             response.raise_for_status()
         except requests.RequestException as e:
-            logger.error("Error fetching package from MCP registry", exc_info=True)
+            logger.exception("Error fetching package from MCP registry")
             return
 
         logger.info("Downloading packages")
@@ -95,7 +95,7 @@ def install_package(package_str, skip_env=False):
             s3_response.raise_for_status()
             s3_content = s3_response.content
         except requests.RequestException as e:
-            logger.error("Error downloading package from S3", exc_info=True)
+            logger.exception("Error downloading package from S3")
             return
      
         # Form the destination directory path
@@ -118,13 +118,13 @@ def install_package(package_str, skip_env=False):
         try:
             write_keys_during_install(dest_dir, pkg, skip_env=skip_env)
         except Exception as e:
-            logger.error("Error writing keys during installation", exc_info=True)
+            logger.exception("Error writing keys during installation")
             return
 
         logger.info("Installation completed successfully")
     except Exception as e:
         # Handle any errors that occur during the installation process
-        logger.error("Installation failed", exc_info=True)
+        logger.exception("Installation failed")
 
 def package_exists(dest_dir: Path) -> bool:
     """Check if the destination directory exists.
@@ -157,7 +157,7 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         try:
             dest_dir = get_latest_version_dir(package_dir)
         except FileNotFoundError:
-            logger.error(f"Package not found: {author}/{package_name}")
+            logger.exception(f"Package not found: {author}/{package_name}")
     return dest_dir
     
 
@@ -200,5 +200,5 @@ def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, A
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        logger.error(f"Error fetching package metadata: {e}")
+        logger.exception(f"Error fetching package metadata: {e}")
         return {}
