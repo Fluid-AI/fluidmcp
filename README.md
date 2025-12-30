@@ -217,6 +217,46 @@ fluidmcp edit-env <author/package@version>
 ```
 
 
+### Show Version
+
+
+```bash
+fluidmcp --version
+```
+
+Displays FluidMCP version, Python version, and installation path.
+
+
+### Validate Configuration
+
+
+```bash
+# Validate a local configuration file
+fluidmcp validate config.json --file
+
+# Validate an installed package
+fluidmcp validate author/package@version
+```
+
+The `validate` command checks:
+- Configuration file structure and resolution
+- Command availability in system PATH
+- Required environment variables and API tokens
+- Metadata.json existence for installed packages
+
+Example output:
+```
+✔ Configuration is valid.
+```
+
+Or if errors are found:
+```
+❌ Configuration validation failed:
+- Command 'nonexistent-command' not found in PATH (server: test-server)
+- Missing required env var 'TEST_API_TOKEN' (server: test-server)
+```
+
+
 ---
 
 

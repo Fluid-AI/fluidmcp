@@ -128,6 +128,13 @@ fluidmcp list
 
 # Edit package environment variables
 fluidmcp edit-env author/package@version
+
+# Show version information
+fluidmcp --version
+
+# Validate configuration without running servers
+fluidmcp validate config.json --file              # Validate local config file
+fluidmcp validate author/package@version          # Validate installed package
 ```
 
 ## Testing with Sample Configurations
