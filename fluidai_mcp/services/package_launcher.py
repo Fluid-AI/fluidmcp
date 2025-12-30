@@ -46,8 +46,8 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
         logger.debug(f"Package: {pkg}, Servers: {servers}")
-    except Exception as e:
-        logger.exception(f"Error reading metadata.json: {e}")
+    except Exception:
+        logger.exception("Error reading metadata.json")
         return None, None
 
     try:
@@ -103,11 +103,11 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         router = create_mcp_router(pkg, process)
         return pkg, router
 
-    except FileNotFoundError as e:
-        logger.exception(f"Command not found: {e}")
+    except FileNotFoundError:
+        logger.exception("Command not found")
         return None, None
-    except Exception as e:
-        logger.exception(f"Error launching MCP server: {e}")
+    except Exception:
+        logger.exception("Error launching MCP server")
         return None, None
     
 
@@ -173,8 +173,8 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
                     return True
             time.sleep(0.1)
         return False
-    except Exception as e:
-        logger.exception(f"Initialization error: {e}")
+    except Exception:
+        logger.exception("Initialization error")
         return False
     
 

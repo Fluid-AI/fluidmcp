@@ -103,8 +103,8 @@ def run_servers(
             else:
                 logger.error(f"Failed to create router for {server_name}")
 
-        except Exception as e:
-            logger.exception(f"Error launching server '{server_name}': {e}")
+        except Exception:
+            logger.exception(f"Error launching server '{server_name}'")
 
     if launched_servers == 0:
         logger.warning("No servers were successfully launched")
@@ -168,15 +168,15 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                     with open(config.metadata_path, 'r') as f:
                         source_config = json.load(f)
                     update_env_from_config(metadata_path, fmcp_package, source_config, pkg)
-                except Exception as e:
-                    logger.exception(f"Error updating env for {fmcp_package}: {e}")
+                except Exception:
+                    logger.exception(f"Error updating env for {fmcp_package}")
 
             # For master mode, update from shared .env
             if config.source_type == "s3_master":
                 _update_env_from_common_env(dest_dir, pkg)
 
-        except Exception as e:
-            logger.exception(f"Error installing {fmcp_package}: {e}")
+        except Exception:
+            logger.exception(f"Error installing {fmcp_package}")
 
 
 def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:

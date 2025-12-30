@@ -104,9 +104,9 @@ def list_installed_packages() -> None:
                                 logger.info(f"{author.name}/{pkg.name}@{version.name}")
         if not found_packages:
             logger.info("No packages found in the installation directory structure")
-    except Exception as e:
+    except Exception:
         # Handle any errors that occur while listing packages
-        logger.exception(f"Error listing installed packages: {str(e)}")
+        logger.exception("Error listing installed packages")
 
 
 def edit_env(args):
@@ -123,8 +123,8 @@ def edit_env(args):
             logger.error(f"Package not found at {dest_dir}. Have you installed it?")
             sys.exit(1)
         edit_env_variables(dest_dir)
-    except Exception as e:
-        logger.exception(f"Error editing environment variables: {str(e)}")
+    except Exception:
+        logger.exception("Error editing environment variables")
         sys.exit(1)
 
 
@@ -207,8 +207,8 @@ def install_command(args):
     install_package(args.package, skip_env=getattr(args, "master", False))
     try:
         dest_dir = resolve_package_dest_dir(args.package)
-    except Exception as e:
-        logger.exception(str(e))
+    except Exception:
+        logger.exception("Package resolution failed")
         sys.exit(1)
     if not package_exists(dest_dir):
         logger.error(f"Package not found at {dest_dir}. Have you installed it?")
@@ -296,14 +296,14 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
 
             uvicorn.run(app, host="0.0.0.0", port=client_server_port)
 
-    except ValueError as e:
-        logger.exception(f"Configuration error: {e}")
+    except ValueError:
+        logger.exception("Configuration error")
         sys.exit(1)
-    except RuntimeError as e:
-        logger.exception(f"Runtime error: {e}")
+    except RuntimeError:
+        logger.exception("Runtime error")
         sys.exit(1)
-    except Exception as e:
-        logger.exception(f"Error running GitHub MCP server: {e}")
+    except Exception:
+        logger.exception("Error running GitHub MCP server")
         sys.exit(1)
 
 
@@ -413,12 +413,12 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             force_reload=getattr(args, 'force_reload', False)
         )
 
-    except FileNotFoundError as e:
-        logger.exception(f"Error: {e}")
+    except FileNotFoundError:
+        logger.exception("File not found error")
         sys.exit(1)
-    except ValueError as e:
-        logger.exception(f"Configuration error: {e}")
+    except ValueError:
+        logger.exception("Configuration error")
         sys.exit(1)
-    except Exception as e:
-        logger.exception(f"Error running servers: {e}")
+    except Exception:
+        logger.exception("Error running servers")
         sys.exit(1)

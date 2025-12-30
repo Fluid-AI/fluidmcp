@@ -16,8 +16,8 @@ def s3_download_file(s3_client, bucket, key, dest_path):
         s3_client.download_file(bucket, key, str(dest_path))
         logger.info(f"Successfully downloaded {key} to {dest_path}")
         return True
-    except Exception as e:
-        logger.exception(f"Error downloading file from S3: {e}")
+    except Exception:
+        logger.exception("Error downloading file from S3")
         return False
 
 def s3_upload_file(s3_client, src_path, bucket, key):
@@ -34,8 +34,8 @@ def s3_upload_file(s3_client, src_path, bucket, key):
         s3_client.upload_file(str(src_path), bucket, key)
         logger.info(f"Successfully uploaded {key} to S3 bucket {bucket}")
         return True
-    except Exception as e:
-        logger.exception(f"Error uploading file to S3: {e}")
+    except Exception:
+        logger.exception("Error uploading file to S3")
         return False
 
 def load_json_file(path):
@@ -48,8 +48,8 @@ def load_json_file(path):
     try:
         with open(path, "r") as f:
             return json.load(f)
-    except Exception as e:
-        logger.exception(f"Error reading {path}: {e}")
+    except Exception:
+        logger.exception(f"Error reading {path}")
         return None
 
 def write_json_file(path, data):
@@ -65,8 +65,8 @@ def write_json_file(path, data):
             json.dump(data, f, indent=2)
         logger.info(f"Wrote merged metadata to {path}")
         return True
-    except Exception as e:
-        logger.exception(f"Failed to write {path}: {e}")
+    except Exception:
+        logger.exception(f"Failed to write {path}")
         return False
 
 

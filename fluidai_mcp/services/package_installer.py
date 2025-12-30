@@ -81,7 +81,7 @@ def install_package(package_str, skip_env=False):
             # Make the API request to fetch the package
             response = requests.post(API_URL, headers=headers, json=payload)
             response.raise_for_status()
-        except requests.RequestException as e:
+        except requests.RequestException:
             logger.exception("Error fetching package from MCP registry")
             return
 
@@ -94,7 +94,7 @@ def install_package(package_str, skip_env=False):
             s3_response = requests.get(s3_url)
             s3_response.raise_for_status()
             s3_content = s3_response.content
-        except requests.RequestException as e:
+        except requests.RequestException:
             logger.exception("Error downloading package from S3")
             return
      
@@ -117,12 +117,12 @@ def install_package(package_str, skip_env=False):
 
         try:
             write_keys_during_install(dest_dir, pkg, skip_env=skip_env)
-        except Exception as e:
+        except Exception:
             logger.exception("Error writing keys during installation")
             return
 
         logger.info("Installation completed successfully")
-    except Exception as e:
+    except Exception:
         # Handle any errors that occur during the installation process
         logger.exception("Installation failed")
 
@@ -199,6 +199,6 @@ def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, A
         response = requests.get("https://registry-dev.fluidmcp.com/fetch-metadata", headers=headers, params=payload)
         response.raise_for_status()
         return response.json()
-    except requests.RequestException as e:
-        logger.exception(f"Error fetching package metadata: {e}")
+    except requests.RequestException:
+        logger.exception("Error fetching package metadata")
         return {}

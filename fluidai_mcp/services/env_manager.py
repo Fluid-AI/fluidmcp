@@ -151,7 +151,7 @@ def edit_env_variables(dest_dir: Union[str, Path]):
         else:
             logger.info("No changes were made")
 
-    except Exception as e:
+    except Exception:
         logger.exception("Error editing environment variables")
 
 
@@ -202,7 +202,7 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
                     logger.info("API key(s) saved to metadata.json")
             else:
                 logger.info("No environment variables found for this package")
-        except Exception as e:
+        except Exception:
             logger.exception("Error processing metadata.json")
 
 def process_env_variables(env_config: Dict[str, Any]) -> Dict[str, str]:
