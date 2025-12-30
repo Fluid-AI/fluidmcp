@@ -101,10 +101,10 @@ def edit_env_variables(dest_dir: Union[str, Path]):
             try:
                 index = int(choice) - 1
                 if not (0 <= index < len(env_list)):
-                    logger.warning(f"Invalid selection. Please enter a number between 1 and {len(env_list)}")
+                    print(f"Invalid selection. Please enter a number between 1 and {len(env_list)}")
                     continue
             except ValueError:
-                logger.warning("Invalid input. Please enter a number or 'q' to quit")
+                print("Invalid input. Please enter a number or 'q' to quit")
                 continue
             
             # Get selected environment variable
@@ -124,9 +124,9 @@ def edit_env_variables(dest_dir: Union[str, Path]):
                 env_list[index]["current_value"] = new_value
                 # Mark as modified
                 modified_vars.add(selected_var["key"])
-                logger.info(f"{selected_var['key']} updated successfully")
+                print(f"{selected_var['key']} updated successfully")
             else:
-                logger.info(f"No changes made to {selected_var['key']}")
+                print(f"No changes made to {selected_var['key']}")
         
         # If changes were made, update metadata.json
         if modified_vars:

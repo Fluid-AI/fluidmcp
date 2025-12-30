@@ -276,10 +276,10 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
                     if choice == 'y':
                         kill_process_on_port(client_server_port)
                     elif choice == 'n':
-                        logger.info(f"Keeping existing process on port {client_server_port}")
+                        print(f"Keeping existing process on port {client_server_port}")
                         return
                     else:
-                        logger.warning("Invalid choice. Aborting")
+                        print("Invalid choice. Aborting")
                         return
 
             # Create FastAPI app

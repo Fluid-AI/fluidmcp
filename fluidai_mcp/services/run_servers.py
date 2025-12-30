@@ -150,7 +150,7 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 try:
                     dest_dir = get_latest_version_dir(package_dir)
                 except FileNotFoundError:
-                    logger.error(f"Package not found after install: {author}/{package_name}")
+                    logger.exception(f"Package not found after install: {author}/{package_name}")
                     continue
 
             if not dest_dir.exists():
@@ -259,10 +259,10 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
             if choice == 'y':
                 kill_process_on_port(port)
             elif choice == 'n':
-                logger.info(f"Keeping existing process on port {port}")
+                print(f"Keeping existing process on port {port}")
                 return
             else:
-                logger.warning("Invalid choice. Aborting")
+                print("Invalid choice. Aborting")
                 return
 
     logger.info(f"Starting FastAPI server on port {port}")

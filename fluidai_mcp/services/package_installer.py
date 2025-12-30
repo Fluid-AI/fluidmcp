@@ -157,7 +157,7 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         try:
             dest_dir = get_latest_version_dir(package_dir)
         except FileNotFoundError:
-            logger.exception(f"Package not found: {author}/{package_name}")
+            logger.error(f"Package not found: {author}/{package_name}")
     return dest_dir
     
 
