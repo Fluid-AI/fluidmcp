@@ -12,6 +12,8 @@ from typing import Optional
 from loguru import logger
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse
 import uvicorn
 
 from .config_resolver import ServerConfig, INSTALLATION_DIR
@@ -59,21 +61,98 @@ def run_servers(
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
 
+    # Check authentication modes
+    auth0_mode = os.environ.get("FMCP_AUTH0_MODE") == "true"
+    jwt_mode = os.environ.get("FMCP_JWT_MODE") == "true"  # Legacy mode
+
     # Create FastAPI app
     app = FastAPI(
         title=f"FluidMCP Gateway ({config.source_type})",
         description=f"Unified gateway for MCP servers from {config.source_type}",
         version="2.0.0"
     )
-    #CORS setup to allow React dev server access
-    # "http://localhost:5173"
+
+    # CORS setup
+    if auth0_mode or jwt_mode:
+        # Restrict origins in auth modes (can be customized via env var)
+        allowed_origins = os.environ.get("FMCP_ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*").split(",")
+    else:
+        # Allow all origins in non-auth mode
+        allowed_origins = ["*"]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Auth0 mode setup
+    if auth0_mode:
+        try:
+            from fluidai_mcp.auth import Auth0Config, auth_router, init_auth_routes
+
+            # Load Auth0 configuration
+            auth_config = Auth0Config.from_env()
+            auth_config.validate_required()
+
+            # Initialize auth routes with config
+            init_auth_routes(auth_config)
+
+            # Mount auth static files
+            auth_static_path = Path(__file__).parent.parent / "auth" / "static"
+            if auth_static_path.exists():
+                app.mount("/auth/static", StaticFiles(directory=str(auth_static_path)), name="auth_static")
+
+            # Include auth router
+            app.include_router(auth_router)
+
+            # Root route - serve login page
+            @app.get("/")
+            async def root():
+                return FileResponse(str(auth_static_path / "login.html"))
+
+        except ValueError as e:
+            print(f"❌ Auth0 configuration error: {e}")
+            print("\nPlease set required environment variables:")
+            print("  - AUTH0_DOMAIN")
+            print("  - AUTH0_CLIENT_ID")
+            print("  - AUTH0_CLIENT_SECRET")
+            print("  - FMCP_JWT_SECRET")
+            print("\nSee fluidai_mcp/auth/AUTH0_SETUP.md for setup instructions.")
+            import sys
+            sys.exit(1)
+
+    # Legacy JWT mode setup (from old implementation)
+    elif jwt_mode:
+        static_path = Path(__file__).parent.parent / "static"
+        if static_path.exists():
+            app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+            # Include authentication routes (old implementation)
+            try:
+                from .auth_routes import router as auth_router
+                app.include_router(auth_router)
+            except ImportError:
+                pass
+
+            # Root route - serve login page
+            @app.get("/")
+            async def root():
+                return FileResponse(str(static_path / "index.html"))
+        else:
+            # No static files, redirect to docs
+            @app.get("/")
+            async def root():
+                return RedirectResponse(url="/docs")
+
+    # No auth mode
+    else:
+        # In non-auth mode, redirect root to docs
+        @app.get("/")
+        async def root():
+            return RedirectResponse(url="/docs")
     # Launch each server and add its router
     launched_servers = 0
     for server_name, server_cfg in config.servers.items():
@@ -249,6 +328,20 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         port: Port to listen on
         force_reload: Force kill existing process without prompting
     """
+    # Check for JWT mode and display security warning
+    jwt_mode = os.environ.get("FMCP_JWT_MODE") == "true"
+    if jwt_mode and not os.environ.get("FMCP_ALLOW_HTTP"):
+        print("\n" + "=" * 70)
+        print("⚠️  SECURITY WARNING: JWT authentication without HTTPS!")
+        print("=" * 70)
+        print("JWT tokens can be intercepted over HTTP.")
+        print("For production use, consider:")
+        print("  1. Using a reverse proxy with SSL (nginx, caddy, etc.)")
+        print("  2. Deploying behind a secure gateway")
+        print("  3. Using SSH tunneling for remote access")
+        print("\nSet FMCP_ALLOW_HTTP=true to suppress this warning.")
+        print("=" * 70 + "\n")
+
     if is_port_in_use(port):
         print(f"Port {port} is already in use.")
         if force_reload:
@@ -266,6 +359,13 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
                 return
 
     logger.info(f"Starting FastAPI server on port {port}")
-    print(f"Starting FastAPI server on port {port}")
-    print(f"Swagger UI available at: http://localhost:{port}/docs")
+    print(f"\nStarting FastAPI server on port {port}")
+
+    if jwt_mode:
+        print(f"🔐 JWT Authentication: ENABLED")
+        print(f"   Login at: http://localhost:{port}/")
+
+    print(f"   Swagger UI: http://localhost:{port}/docs")
+    print(f"\nServer running...\n")
+
     uvicorn.run(app, host="0.0.0.0", port=port)
