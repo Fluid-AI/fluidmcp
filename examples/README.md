@@ -2,6 +2,30 @@
 
 This directory contains sample configuration files for testing and development.
 
+## Important Security Notice
+
+**All tokens, API keys, and credentials in these example files are placeholders and should never be real secrets.** Never commit files containing real API keys, tokens, or credentials to any repository. When using these examples:
+
+- Replace placeholder values with your actual credentials only in local copies
+- Use environment variables for sensitive data in production
+- Add your local configuration files to `.gitignore`
+- Rotate any credentials that are accidentally exposed
+
+## Prerequisites
+
+Before running these examples, ensure you have the following installed:
+
+- **Node.js** (v18 or higher) - Required for npx-based MCP servers
+- **TSX** - Required for TypeScript-based MCP servers: `npm install -g tsx`
+- **UV** - Required for Python-based MCP servers: Install from [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+To verify your installation:
+```bash
+node --version    # Should show v18 or higher
+npx tsx --version # Should show tsx version
+uv --version      # Should show uv version
+```
+
 ## Sample Files
 
 ### 1. `sample-metadata.json`
