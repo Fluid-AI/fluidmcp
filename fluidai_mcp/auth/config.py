@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel, Field
+from .url_utils import get_callback_url
 
 
 class Auth0Config(BaseModel):
@@ -17,7 +18,7 @@ class Auth0Config(BaseModel):
     domain: Optional[str] = Field(default=None)
     client_id: Optional[str] = Field(default=None)
     client_secret: Optional[str] = Field(default=None)
-    callback_url: str = Field(default='http://localhost:8099/auth/callback')
+    callback_url: Optional[str] = Field(default=None)  # Will be dynamically set if None
     audience: Optional[str] = Field(default=None)
 
     # JWT settings
@@ -25,20 +26,34 @@ class Auth0Config(BaseModel):
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 30
 
+    # Port for URL generation
+    port: int = Field(default=8099)
+
     class Config:
         # Allow extra fields for pydantic v2 compatibility
         extra = 'allow'
 
     @classmethod
-    def from_env(cls) -> 'Auth0Config':
-        """Load configuration from environment variables"""
+    def from_env(cls, port: int = 8099) -> 'Auth0Config':
+        """
+        Load configuration from environment variables.
+
+        Args:
+            port: Port number for dynamic URL generation
+        """
+        # Get callback URL - use env var if set, otherwise will be dynamically generated
+        callback_url = os.getenv('AUTH0_CALLBACK_URL')
+        if not callback_url:
+            callback_url = get_callback_url(port)
+
         return cls(
             domain=os.getenv('AUTH0_DOMAIN'),
             client_id=os.getenv('AUTH0_CLIENT_ID'),
             client_secret=os.getenv('AUTH0_CLIENT_SECRET'),
-            callback_url=os.getenv('AUTH0_CALLBACK_URL', 'http://localhost:8099/auth/callback'),
+            callback_url=callback_url,
             audience=os.getenv('AUTH0_AUDIENCE'),
-            jwt_secret=os.getenv('FMCP_JWT_SECRET')
+            jwt_secret=os.getenv('FMCP_JWT_SECRET'),
+            port=port
         )
 
     @classmethod
@@ -70,7 +85,7 @@ class Auth0Config(BaseModel):
         return cls(**config_data)
 
     @classmethod
-    def from_env_or_file(cls, file_path: Optional[str] = None) -> 'Auth0Config':
+    def from_env_or_file(cls, file_path: Optional[str] = None, port: int = 8099) -> 'Auth0Config':
         """
         Load configuration with priority: env vars > file > defaults.
 
@@ -78,20 +93,22 @@ class Auth0Config(BaseModel):
         1. Environment variables (highest priority)
         2. Specified file path (--auth0-config flag)
         3. Default file path (./auth0-config.json)
-        4. Default values (fallback)
+        4. Dynamic URL detection (for remote environments)
+        5. Default values (fallback)
 
         Args:
             file_path: Optional path to config file. If not provided, looks for
                       './auth0-config.json' in current directory.
+            port: Port number for dynamic URL generation
 
         Returns:
             Auth0Config instance with merged configuration
         """
         # Start with defaults
         config_data = {
-            'callback_url': 'http://localhost:8099/auth/callback',
             'jwt_algorithm': 'HS256',
-            'jwt_expiration_minutes': 30
+            'jwt_expiration_minutes': 30,
+            'port': port
         }
 
         # Try to load from file
@@ -123,6 +140,10 @@ class Auth0Config(BaseModel):
             env_overrides['jwt_secret'] = os.getenv('FMCP_JWT_SECRET')
 
         config_data.update(env_overrides)
+
+        # If callback_url is still not set, generate it dynamically
+        if 'callback_url' not in config_data or not config_data['callback_url']:
+            config_data['callback_url'] = get_callback_url(port)
 
         return cls(**config_data)
 

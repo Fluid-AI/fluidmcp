@@ -71,6 +71,8 @@ This will:
 
 
 - **🔐 Security & Authentication**
+  - OAuth 2.0 authentication with Auth0 (GitHub, Google, SSO)
+  - Automatic environment detection (Codespaces, Gitpod, local, production)
   - Bearer token authentication
   - Secure mode with encrypted communications
   - Environment variable encryption for API keys
@@ -111,9 +113,12 @@ fluidmcp list
 
 ### Run Individual Package
 
-
 ```bash
+# Without authentication
 fluidmcp run author/package@version --start-server
+
+# With OAuth authentication (recommended for registry packages)
+fluidmcp run author/package@version --start-server --auth0
 ```
 
 
@@ -122,8 +127,30 @@ fluidmcp run author/package@version --start-server
 
 ## 🔐 Advanced Usage
 
+### OAuth 2.0 Authentication (Recommended)
 
-### Secure Mode with Authentication
+Run with enterprise-grade OAuth authentication:
+
+```bash
+# Set up Auth0 credentials
+export AUTH0_DOMAIN="your-tenant.us.auth0.com"
+export AUTH0_CLIENT_ID="your_client_id"
+export AUTH0_CLIENT_SECRET="your_client_secret"
+export FMCP_JWT_SECRET=$(openssl rand -base64 32)
+
+# Run with OAuth
+fluidmcp run config.json --file --start-server --auth0
+```
+
+**Features:**
+- ✅ Multiple identity providers (GitHub, Google, Microsoft, SSO)
+- ✅ Automatic environment detection (works in Codespaces, Gitpod, local)
+- ✅ Zero configuration - URLs auto-detected
+- ✅ Production-ready with Docker/Kubernetes support
+
+**Quick Setup:** See [docs/OAUTH_SETUP_QUICK_START.md](docs/OAUTH_SETUP_QUICK_START.md)
+
+### Secure Mode with Bearer Token
 
 Run with bearer token authentication:
 
@@ -131,9 +158,7 @@ Run with bearer token authentication:
 fluidmcp run config.json --file --secure --token your_token --start-server
 ```
 
-
 ![fluidmcp_secure_1](https://github.com/user-attachments/assets/6d5d38c5-c912-476a-af85-f7da44b15358)
-
 
 ---
 
@@ -338,15 +363,27 @@ Useful for LLMs, web scraping, or AI workflows that stream data.
 ---
 
 
-## 🤝 Contribute
+## 📚 Documentation
 
+Comprehensive documentation is available in the [docs/](docs/) directory:
+
+- **[docs/INDEX.md](docs/INDEX.md)** - Complete documentation index
+- **[docs/HOW_TO_RUN.md](docs/HOW_TO_RUN.md)** - Detailed running guide
+- **[docs/OAUTH_SETUP_QUICK_START.md](docs/OAUTH_SETUP_QUICK_START.md)** - OAuth setup (5 minutes)
+- **[docs/AUTH0_WILDCARD_SETUP.md](docs/AUTH0_WILDCARD_SETUP.md)** - Wildcard configuration for Codespaces
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+- **[CLAUDE.md](CLAUDE.md)** - Project architecture and development guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution guidelines
+
+---
+
+## 🤝 Contribute
 
 FluidMCP is open for collaboration. We welcome contributions from the community!
 
 - **Contributing Guide**: See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines
 - **Report Issues**: Open an issue on [GitHub](https://github.com/Fluid-AI/fluidmcp/issues)
 - **Submit PRs**: Follow our contribution guidelines to submit pull requests
-
 
 ---
 
