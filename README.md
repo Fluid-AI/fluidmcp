@@ -241,19 +241,47 @@ fluidmcp validate author/package@version
 The `validate` command checks:
 - Configuration file structure and resolution
 - Command availability in system PATH
-- Required environment variables and API tokens
+- Required environment variables (marked with `required: true`)
+- Optional environment variables and tokens
 - Metadata.json existence for installed packages
 
-Example output:
+**Note:** Environment variable lookup is case-insensitive. For example, if your config specifies `github_token`, the validator will check both `github_token` and `GITHUB_TOKEN` in your environment.
+
+The command distinguishes between **errors** (fatal issues) and **warnings** (non-fatal issues):
+
+**Errors (exit code 1):**
+- Missing commands in PATH
+- Missing required environment variables
+- Configuration resolution failures
+
+**Warnings (exit code 0):**
+- Missing optional environment variables
+- Missing TOKEN variables not explicitly marked as required
+
+Example outputs:
+
+**Success:**
 ```
-✔ Configuration is valid.
+✔ Configuration is valid with no issues found.
 ```
 
-Or if errors are found:
+**With warnings only:**
 ```
-❌ Configuration validation failed:
-- Command 'nonexistent-command' not found in PATH (server: test-server)
-- Missing required env var 'TEST_API_TOKEN' (server: test-server)
+⚠️  Configuration is valid with warnings:
+  - Optional env var 'DEBUG_MODE' is not set (server: test-server)
+  - Token env var 'GITHUB_TOKEN' is not set (server: github-server)
+
+✔ No fatal errors found. You may proceed, but consider addressing the warnings above.
+```
+
+**With errors:**
+```
+❌ Configuration validation failed with errors:
+  - Command 'nonexistent-command' not found in PATH (server: test-server)
+  - Missing required env var 'API_KEY' (server: test-server)
+
+⚠️  Warnings:
+  - Optional env var 'DEBUG_MODE' is not set (server: test-server)
 ```
 
 

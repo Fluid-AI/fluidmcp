@@ -142,31 +142,34 @@ def validate_command(args) -> None:
 
     Returns:
         None
-    Stores all errors during validating and prints them just before exit.
+
+    Separates validation issues into errors (fatal) and warnings (non-fatal).
+    Exits with code 1 if errors are found, code 0 if only warnings or success.
     """
     errors = []
-    
+    warnings = []
+
     try:
         # 1. Resolve configuration from the appropriate source
         config = resolve_config(args)
 
     except FileNotFoundError as e:
         errors.append(str(e))
-        
+
     except ValueError as e:
         errors.append(f"Configuration error: {e}")
 
     except Exception as e:
         errors.append(f"Unexpected error while resolving config: {e}")
-        
+
     if errors:
-        print("Validation failed with the following errors:")
-        
+        print("❌ Validation failed with the following errors:")
+
         for err in errors:
-            print(f"- {err}")
+            print(f"  - {err}")
         sys.exit(1)
-    
-    #  2. validate command availability
+
+    # 2. Validate command availability
     for server_name, server_cfg in config.servers.items():
         command = server_cfg.get("command")
 
@@ -179,34 +182,63 @@ def validate_command(args) -> None:
                 f"Command '{command}' not found in PATH (server: {server_name})"
             )
 
-    
-    # 3. checks environment variables & token validation
+
+    # 3. Check environment variables & token validation
     for server_name, server_cfg in config.servers.items():
-        env_cfg = server_cfg.get("env", {})     
-        
+        env_cfg = server_cfg.get("env", {})
+
         for key, val in env_cfg.items():
+            # Structured format: {required: true/false, value: "..."}
             if isinstance(val, dict):
                 required = val.get("required", False)
                 value = val.get("value")
-                
-                if(required):
-                    if value or os.environ.get(key):
-                        continue
-                    errors.append( f"missing required env var '{key}' (server: {server_name})")
-                
+
+                # Check if value is provided or available in environment
+                # Try both original case and uppercase (common env var convention)
+                env_value = os.environ.get(key) or os.environ.get(key.upper())
+                has_value = value or env_value
+
+                if required and not has_value:
+                    # Missing required env var is an ERROR
+                    errors.append(f"Missing required env var '{key}' (server: {server_name})")
+                elif not required and not has_value:
+                    # Missing optional env var is a WARNING
+                    warnings.append(f"Optional env var '{key}' is not set (server: {server_name})")
+
+            # Simple format: "KEY": "value" or "KEY": ""
             else:
-                if val or os.environ.get(key):
-                    continue
-                if key.upper().endswith("TOKEN"):
-                    errors.append( f"Missing required env var '{key}' (server: {server_name})" )
-                    
+                # Try both original case and uppercase (common env var convention)
+                env_value = os.environ.get(key) or os.environ.get(key.upper())
+                has_value = val or env_value
+
+                if not has_value:
+                    # Check if it's a TOKEN variable (case-insensitive check)
+                    if key.upper().endswith("TOKEN"):
+                        # Missing TOKEN is a WARNING (not explicitly marked as required)
+                        warnings.append(f"Token env var '{key}' is not set (server: {server_name})")
+                    else:
+                        # Missing non-token env var is a WARNING
+                        warnings.append(f"Env var '{key}' is not set (server: {server_name})")
+
+    # Print results
     if errors:
-        print("❌ Configuration validation failed:")
+        print("❌ Configuration validation failed with errors:")
         for err in errors:
-            print(f"- {err}")
+            print(f"  - {err}")
+        if warnings:
+            print("\n⚠️  Warnings:")
+            for warn in warnings:
+                print(f"  - {warn}")
         sys.exit(1)
-                
-    print("✔ Configuration is valid.")
+    elif warnings:
+        print("⚠️  Configuration is valid with warnings:")
+        for warn in warnings:
+            print(f"  - {warn}")
+        print("\n✔ No fatal errors found. You may proceed, but consider addressing the warnings above.")
+        sys.exit(0)
+    else:
+        print("✔ Configuration is valid with no issues found.")
+        sys.exit(0)
 
 
 def edit_env(args):

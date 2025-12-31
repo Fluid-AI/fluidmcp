@@ -123,14 +123,15 @@ validate_command(args)
 │
 ├── Validate environment variables
 │   └── For each server's env section:
-│       ├── Check required env vars (structured format)
-│       └── Check TOKEN env vars (simple format)
+│       ├── Check required env vars (structured format) → ERRORS
+│       ├── Check optional env vars (structured format) → WARNINGS
+│       ├── Check TOKEN env vars (simple format) → WARNINGS
+│       └── Note: Lookup is case-insensitive (checks both key and key.upper())
 │
 └── Print validation results
-    ├── Success: ✔ Configuration is valid.
-    └── Failure: ❌ Configuration validation failed:
-        ├── Missing commands
-        └── Missing environment variables
+    ├── Exit 1 if ERRORS found → ❌ Configuration validation failed with errors
+    ├── Exit 0 if only WARNINGS → ⚠️ Configuration is valid with warnings
+    └── Exit 0 if no issues → ✔ Configuration is valid with no issues found
 ```
 
 **Use Cases:**
@@ -140,9 +141,10 @@ validate_command(args)
 **Validation Checks:**
 1. Configuration file structure and resolution
 2. Command availability in system PATH
-3. Required environment variables (structured `{required: true}`)
-4. Token environment variables (keys ending with "TOKEN")
-5. Metadata.json existence for installed packages
+3. Required environment variables (structured `{required: true}`) → Errors
+4. Optional environment variables and tokens → Warnings
+5. Environment variable lookup is case-insensitive (checks both `key` and `KEY`)
+6. Metadata.json existence for installed packages
 
 ---
 
