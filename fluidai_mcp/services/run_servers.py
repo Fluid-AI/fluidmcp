@@ -93,8 +93,8 @@ def run_servers(
         try:
             from fluidai_mcp.auth import Auth0Config, auth_router, init_auth_routes
 
-            # Load Auth0 configuration
-            auth_config = Auth0Config.from_env()
+            # Load Auth0 configuration (from file or environment variables)
+            auth_config = Auth0Config.from_env_or_file()
             auth_config.validate_required()
 
             # Initialize auth routes with config
