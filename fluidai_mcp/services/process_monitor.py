@@ -53,6 +53,8 @@ class ProcessMonitor:
                  - If env is None, the subprocess will inherit the parent environment (default behavior).
                  - If env is an empty dict {}, the subprocess will have no environment variables and may fail.
                  - Callers should pass a merged dict (os.environ | custom vars) for explicit control.
+                 - Always merge with os.environ rather than replace entirely to preserve system variables
+                   like PATH, HOME, etc. Example: env = {**os.environ, **custom_vars}
             working_dir: Working directory for the process
             port: Server port for health checks
             host: Server host for health checks
@@ -164,11 +166,11 @@ class ProcessMonitor:
             return True
 
         try:
-            # Safely get PID before attempting to access it
-            pid = getattr(self.process, "pid", None)
-            if pid is not None:
+            # Log PID if available; fall back to "unknown" if attribute is missing
+            try:
+                pid = self.process.pid
                 logger.info(f"Stopping server {self.server_name} (PID {pid})")
-            else:
+            except AttributeError:
                 logger.info(f"Stopping server {self.server_name} (PID unknown)")
 
             self.process.terminate()
