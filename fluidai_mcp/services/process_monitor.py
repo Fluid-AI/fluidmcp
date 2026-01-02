@@ -49,10 +49,10 @@ class ProcessMonitor:
             command: Command to execute
             args: Command arguments
             env: Environment variables dict to use for the subprocess.
-                 IMPORTANT: Callers MUST pass a merged environment dict (os.environ + custom vars)
-                 to ensure proper inheritance. Passing None or an empty dict will result in
-                 no environment variables being available to the subprocess, which will likely
-                 cause failures. The implementation does not automatically merge with os.environ.
+                 IMPORTANT:
+                 - If env is None, the subprocess will inherit the parent environment (default behavior).
+                 - If env is an empty dict {}, the subprocess will have no environment variables and may fail.
+                 - Callers should pass a merged dict (os.environ | custom vars) for explicit control.
             working_dir: Working directory for the process
             port: Server port for health checks
             host: Server host for health checks
@@ -65,11 +65,11 @@ class ProcessMonitor:
         self.args = args
 
         # Validate and warn about environment variable handling
-        if env is None or (isinstance(env, dict) and len(env) == 0):
+        if isinstance(env, dict) and len(env) == 0:
             logger.warning(
-                f"ProcessMonitor for {server_name}: env is None or empty. "
-                f"Subprocess will have no environment variables, which may cause failures. "
-                f"Callers should pass a merged dict of os.environ + custom vars."
+                f"ProcessMonitor for {server_name}: empty env dict passed. "
+                f"Subprocess will have no environment variables. "
+                f"Pass os.environ merged with custom vars instead."
             )
         self.env = env
         self.working_dir = working_dir

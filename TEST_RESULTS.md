@@ -138,7 +138,7 @@ INFO: Finished server process [133302]
 
 ---
 
-## Test 6: Copilot Code Review Compliance
+## Test 6: Code Review Compliance
 
 ### All 14 Issues Fixed
 
@@ -156,7 +156,7 @@ INFO: Finished server process [133302]
 3. ✅ attach_existing_process() method for encapsulation
 4. ✅ Full environment (env) instead of env_vars
 5. ✅ get_uptime_seconds() property method
-6. ✅ Non-blocking readlines() with process.poll() check
+6. ✅ get_logs() documentation updated to match current implementation (no readline usage)
 7. ✅ Restart counter incremented after success only
 8. ✅ Daemon thread shutdown documented
 
