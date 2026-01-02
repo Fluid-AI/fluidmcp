@@ -1,4 +1,16 @@
-"""Process monitoring for individual MCP servers."""
+"""Process monitoring for individual MCP servers.
+
+Threading Model:
+    ProcessMonitor instances are designed to be accessed from multiple threads:
+    - WatchdogManager's monitoring thread calls check_health() and get_status()
+    - Main thread or other threads may call start(), stop(), or restart operations
+    - Individual ProcessMonitor methods are NOT internally synchronized
+    - Thread safety is managed at the WatchdogManager level via _monitors_lock
+    - Once a monitor is created and added to WatchdogManager, concurrent read
+      operations (check_health, get_status) are safe
+    - Write operations (start, stop, restart) should only be called by one thread
+      at a time (enforced by WatchdogManager's lock when accessing monitors dict)
+"""
 
 import subprocess
 from datetime import datetime
@@ -11,7 +23,11 @@ from .health_checker import HealthChecker
 
 
 class ProcessMonitor:
-    """Monitors a single MCP server process."""
+    """Monitors a single MCP server process.
+
+    Note: This class is NOT internally thread-safe. Thread safety is managed
+    by WatchdogManager via _monitors_lock. See module docstring for details.
+    """
 
     def __init__(
         self,
@@ -32,7 +48,11 @@ class ProcessMonitor:
             server_name: Name of the MCP server
             command: Command to execute
             args: Command arguments
-            env: Environment variables
+            env: Environment variables dict to use for the subprocess.
+                 If None (default), the subprocess will inherit the parent process's
+                 environment. If an empty dict {} is provided, the subprocess will
+                 have no environment variables. In practice, callers should pass
+                 a merged dict of os.environ + custom vars to ensure proper inheritance.
             working_dir: Working directory for the process
             port: Server port for health checks
             host: Server host for health checks
@@ -235,58 +255,26 @@ class ProcessMonitor:
     def get_logs(self, lines: int = 50) -> Dict[str, str]:
         """Get recent logs from the process.
 
-        IMPORTANT: This method is intentionally simplified for stdio-based MCP servers
-        where the pipes are managed by FastAPI router for JSON-RPC communication.
-        Calling readlines() would block indefinitely on active pipes.
+        IMPORTANT: For stdio-based MCP servers, stdout/stderr pipes are used for JSON-RPC
+        communication and may contain large amounts of protocol traffic. Reading from these
+        pipes to obtain a "tail" of logs would require consuming the entire stream into
+        memory, which can cause memory issues for terminated processes with large outputs
+        and interfere with the router's management of the pipes.
 
-        For production HTTP-based servers with separate logging, implement a proper
-        log buffer with non-blocking reads using select/threading, or capture logs
-        to files and read from there.
+        To avoid these problems, this method intentionally does not read from the process
+        pipes. If detailed logs are required, the underlying server should be configured to
+        write to log files, and those files should be read through a separate, dedicated
+        mechanism.
 
         Args:
-            lines: Number of lines to retrieve
+            lines: Number of lines to retrieve (unused, kept for API compatibility)
 
         Returns:
-            Dictionary with stdout and stderr logs (empty for active stdio servers)
+            Empty dictionary (stdio pipes not accessible)
         """
-        if self.process is None:
-            return {"stdout": "", "stderr": ""}
-
-        try:
-            stdout_lines = []
-            stderr_lines = []
-
-            # For stdio servers, pipes are in use for JSON-RPC - don't read from them
-            # Only attempt to read if the process has terminated (streams closed)
-            # Use deque for memory-efficient tail reading
-            from collections import deque
-
-            if self.process.stdout and self.process.poll() is not None:
-                try:
-                    # Read only last N lines to avoid memory issues with large outputs
-                    stdout_deque = deque(self.process.stdout, maxlen=lines)
-                    stdout_lines = list(stdout_deque)
-                except (IOError, ValueError) as e:
-                    # Stream closed or invalid - this is expected if process ended
-                    logger.debug(f"Could not read stdout for {self.server_name}: {e}")
-
-            if self.process.stderr and self.process.poll() is not None:
-                try:
-                    # Read only last N lines to avoid memory issues with large outputs
-                    stderr_deque = deque(self.process.stderr, maxlen=lines)
-                    stderr_lines = list(stderr_deque)
-                except (IOError, ValueError) as e:
-                    # Stream closed or invalid - this is expected if process ended
-                    logger.debug(f"Could not read stderr for {self.server_name}: {e}")
-
-            return {
-                "stdout": "".join(stdout_lines),
-                "stderr": "".join(stderr_lines)
-            }
-
-        except Exception as e:
-            logger.error(f"Error reading logs for {self.server_name}: {e}")
-            return {"stdout": "", "stderr": ""}
+        # For stdio-based MCP servers, pipes are managed by FastAPI router
+        # and should not be read from this monitoring code
+        return {"stdout": "", "stderr": ""}
 
     def get_exit_code(self) -> Optional[int]:
         """Get process exit code if terminated.

@@ -349,10 +349,11 @@ class WatchdogManager:
         Returns:
             True if restarted successfully, False otherwise
         """
-        monitor = self.monitors.get(server_name)
-        if not monitor:
-            logger.error(f"Server {server_name} not found")
-            return False
+        with self._monitors_lock:
+            monitor = self.monitors.get(server_name)
+            if not monitor:
+                logger.error(f"Server {server_name} not found")
+                return False
 
         logger.info(f"Manually restarting {server_name}")
 
@@ -377,17 +378,18 @@ class WatchdogManager:
         Returns:
             Dictionary with summary statistics
         """
-        total = len(self.monitors)
-        states = {}
+        with self._monitors_lock:
+            total = len(self.monitors)
+            states = {}
 
-        for monitor in self.monitors.values():
-            status = monitor.get_status()
-            state = status.state.value
-            states[state] = states.get(state, 0) + 1
+            for monitor in self.monitors.values():
+                status = monitor.get_status()
+                state = status.state.value
+                states[state] = states.get(state, 0) + 1
 
-        return {
-            "total_servers": total,
-            "monitoring_enabled": self._monitoring,
-            "health_check_interval": self.health_check_interval,
-            "states": states
-        }
+            return {
+                "total_servers": total,
+                "monitoring_enabled": self._monitoring,
+                "health_check_interval": self.health_check_interval,
+                "states": states
+            }
