@@ -49,10 +49,10 @@ class ProcessMonitor:
             command: Command to execute
             args: Command arguments
             env: Environment variables dict to use for the subprocess.
-                 If None (default), the subprocess will inherit the parent process's
-                 environment. If an empty dict {} is provided, the subprocess will
-                 have no environment variables. In practice, callers should pass
-                 a merged dict of os.environ + custom vars to ensure proper inheritance.
+                 IMPORTANT: Callers MUST pass a merged environment dict (os.environ + custom vars)
+                 to ensure proper inheritance. Passing None or an empty dict will result in
+                 no environment variables being available to the subprocess, which will likely
+                 cause failures. The implementation does not automatically merge with os.environ.
             working_dir: Working directory for the process
             port: Server port for health checks
             host: Server host for health checks
@@ -63,9 +63,8 @@ class ProcessMonitor:
         self.server_name = server_name
         self.command = command
         self.args = args
-        # If env is None, use None to inherit parent environment
-        # If env is provided (even empty dict), use it as-is
-        self.env = env if env is not None else None
+        # Callers are responsible for merging with os.environ if needed
+        self.env = env
         self.working_dir = working_dir
         self.port = port
         self.host = host

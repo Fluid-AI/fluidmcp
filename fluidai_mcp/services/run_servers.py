@@ -120,24 +120,28 @@ def run_servers(
         try:
             print(f"Launching server '{server_name}' from: {install_path}")
 
-            # Launch with process info if watchdog is enabled
+            # Always request process info; only use it when watchdog is enabled
             package_name, router, process_info = None, None, None
-            if watchdog:
-                result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=True)
-                if result is not None:
-                    try:
-                        package_name, router, process_info = result
-                    except (TypeError, ValueError):
-                        # Unexpected result shape; keep defaults (None, None, None)
-                        logger.warning(f"Unexpected result format from launch_mcp_using_fastapi_proxy for {server_name}")
+            result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=True)
+
+            if result is not None:
+                if not isinstance(result, tuple):
+                    logger.error(
+                        f"Unexpected result type from launch_mcp_using_fastapi_proxy for {server_name}: "
+                        f"{type(result).__name__}. Expected tuple."
+                    )
+                elif len(result) == 3:
+                    package_name, router, process_info = result
+                elif len(result) == 2:
+                    package_name, router = result
+                    logger.debug(f"Received 2-tuple from launch (no process_info) for {server_name}")
+                else:
+                    logger.error(
+                        f"Unexpected result length from launch_mcp_using_fastapi_proxy for {server_name}: "
+                        f"{len(result)}. Expected 2 or 3 elements."
+                    )
             else:
-                result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=False)
-                if result is not None:
-                    try:
-                        package_name, router = result
-                    except (TypeError, ValueError):
-                        # Unexpected result shape; keep defaults (None, None)
-                        logger.warning(f"Unexpected result format from launch_mcp_using_fastapi_proxy for {server_name}")
+                logger.error(f"launch_mcp_using_fastapi_proxy returned None for {server_name}")
 
             if router:
                 app.include_router(router, tags=[server_name])
@@ -362,7 +366,7 @@ def _start_server(
                 return
 
     # Add shutdown event handler for watchdog cleanup
-    async def shutdown_event():
+    def shutdown_event() -> None:
         _cleanup_watchdog(watchdog)
 
     app.add_event_handler("shutdown", shutdown_event)
@@ -375,5 +379,6 @@ def _start_server(
         uvicorn.run(app, host="0.0.0.0", port=port)
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
-        _cleanup_watchdog(watchdog)
+        # Note: uvicorn triggers shutdown event handlers, so _cleanup_watchdog
+        # will be called via shutdown_event(). No need to call it again here.
         print("\nServer stopped")
