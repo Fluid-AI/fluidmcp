@@ -1,6 +1,5 @@
 """Watchdog manager for monitoring and auto-restarting MCP servers."""
 
-import asyncio
 import threading
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -62,6 +61,7 @@ class WatchdogManager:
             restart_policy: Restart policy (uses default if None)
             health_check_enabled: Whether to perform health checks
             auto_start: Whether to start the server immediately
+            enable_restart: Whether to enable automatic restart on crash (default: True)
 
         Returns:
             True if added and started successfully, False otherwise
@@ -80,13 +80,11 @@ class WatchdogManager:
             port=port,
             host=host,
             restart_policy=restart_policy or self.default_restart_policy,
-            health_check_enabled=health_check_enabled
+            health_check_enabled=health_check_enabled,
+            restart_enabled=enable_restart
         )
 
         self.monitors[server_name] = monitor
-
-        # Store restart enabled flag on the monitor
-        monitor.restart_enabled = enable_restart
 
         # Start the server if auto_start is enabled
         if auto_start:
@@ -211,7 +209,7 @@ class WatchdogManager:
         )
 
         # Check if restart is enabled for this server
-        if not getattr(monitor, 'restart_enabled', True):
+        if not monitor.restart_enabled:
             logger.info(
                 f"Auto-restart is disabled for {server_name} (stdio-based server). "
                 f"Marking as FAILED and stopping watchdog monitoring."

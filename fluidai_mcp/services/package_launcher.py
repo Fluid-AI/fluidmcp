@@ -2,16 +2,12 @@ import os
 import json
 import subprocess
 import shutil
-from typing import Union, Dict, Any, Iterator
+from typing import Union, Dict, Any, Iterator, Tuple, Optional
 from pathlib import Path
 from loguru import logger
 import time
 import sys
 import threading
-import json
-import subprocess
-from pathlib import Path
-from typing import Dict
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -32,7 +28,13 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
     return credentials.credentials
 
-def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], return_process_info: bool = False):
+def launch_mcp_using_fastapi_proxy(
+    dest_dir: Union[str, Path],
+    return_process_info: bool = False
+) -> Union[
+    Tuple[Optional[str], Optional[APIRouter]],
+    Tuple[Optional[str], Optional[APIRouter], Optional[Dict[str, Any]]]
+]:
     """Launch MCP server using FastAPI proxy.
 
     Args:
@@ -40,8 +42,8 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], return_process_in
         return_process_info: If True, returns (pkg, router, process_info). If False, returns (pkg, router) for backward compatibility.
 
     Returns:
-        If return_process_info=False: (pkg_name, router)
-        If return_process_info=True: (pkg_name, router, process_info_dict)
+        If return_process_info=False: Tuple of (pkg_name, router) or (None, None) on error
+        If return_process_info=True: Tuple of (pkg_name, router, process_info_dict) or (None, None, None) on error
     """
     dest_dir = Path(dest_dir)
     metadata_path = dest_dir / "metadata.json"

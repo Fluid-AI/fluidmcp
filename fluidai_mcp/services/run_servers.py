@@ -21,7 +21,7 @@ from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .watchdog_manager import WatchdogManager
-from ..models.server_status import RestartPolicy
+from ..models.server_status import RestartPolicy, ServerState
 from fastapi.middleware.cors import CORSMiddleware
 
 # Default ports
@@ -141,8 +141,6 @@ def run_servers(
 
                 # Register with watchdog if enabled
                 if watchdog and process_info:
-                    from ..models.server_status import ServerState
-
                     # Add server to watchdog (but don't auto-start since already started)
                     # Note: Disable auto-restart for stdio-based MCP servers because they
                     # can't be restarted independently - they need FastAPI router integration
@@ -346,11 +344,12 @@ def _start_server(
 
     # Add shutdown event handler for watchdog cleanup
     if watchdog:
-        @app.on_event("shutdown")
         async def shutdown_event():
             logger.info("Shutting down servers...")
             watchdog.stop_monitoring()
             watchdog.stop_all_servers()
+
+        app.add_event_handler("shutdown", shutdown_event)
 
     logger.info(f"Starting FastAPI server on port {port}")
     print(f"Starting FastAPI server on port {port}")

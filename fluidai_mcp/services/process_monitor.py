@@ -2,7 +2,7 @@
 
 import subprocess
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 from pathlib import Path
 from loguru import logger
 
@@ -23,7 +23,8 @@ class ProcessMonitor:
         port: Optional[int] = None,
         host: str = "localhost",
         restart_policy: Optional[RestartPolicy] = None,
-        health_check_enabled: bool = True
+        health_check_enabled: bool = True,
+        restart_enabled: bool = True
     ):
         """Initialize process monitor.
 
@@ -37,6 +38,7 @@ class ProcessMonitor:
             host: Server host for health checks
             restart_policy: Restart policy (uses default if None)
             health_check_enabled: Whether to perform health checks
+            restart_enabled: Whether automatic restart is enabled
         """
         self.server_name = server_name
         self.command = command
@@ -47,6 +49,7 @@ class ProcessMonitor:
         self.host = host
         self.restart_policy = restart_policy or RestartPolicy()
         self.health_check_enabled = health_check_enabled
+        self.restart_enabled = restart_enabled
 
         self.process: Optional[subprocess.Popen] = None
         self.status = ServerStatus(
@@ -226,14 +229,16 @@ class ProcessMonitor:
             if self.process.stdout:
                 try:
                     stdout_lines = self.process.stdout.readlines()[-lines:]
-                except:
-                    pass
+                except (IOError, ValueError) as e:
+                    # Stream closed or invalid - this is expected if process ended
+                    logger.debug(f"Could not read stdout for {self.server_name}: {e}")
 
             if self.process.stderr:
                 try:
                     stderr_lines = self.process.stderr.readlines()[-lines:]
-                except:
-                    pass
+                except (IOError, ValueError) as e:
+                    # Stream closed or invalid - this is expected if process ended
+                    logger.debug(f"Could not read stderr for {self.server_name}: {e}")
 
             return {
                 "stdout": "".join(stdout_lines),
