@@ -32,13 +32,25 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
     return credentials.credentials
 
-def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
+def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], return_process_info: bool = False):
+    """Launch MCP server using FastAPI proxy.
+
+    Args:
+        dest_dir: Directory containing metadata.json
+        return_process_info: If True, returns (pkg, router, process_info). If False, returns (pkg, router) for backward compatibility.
+
+    Returns:
+        If return_process_info=False: (pkg_name, router)
+        If return_process_info=True: (pkg_name, router, process_info_dict)
+    """
     dest_dir = Path(dest_dir)
     metadata_path = dest_dir / "metadata.json"
 
     try:
         if not metadata_path.exists():
             logger.info(f":warning: No metadata.json found at {metadata_path}")
+            if return_process_info:
+                return None, None, None
             return None, None
         print(f":blue_book: Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
@@ -48,6 +60,8 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         print(pkg, servers)
     except Exception as e:
         print(f":x: Error reading metadata.json: {e}")
+        if return_process_info:
+            return None, None, None
         return None, None
 
     try:
@@ -101,13 +115,31 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
             print(f"Warning: Failed to initialize MCP server for {pkg}")
 
         router = create_mcp_router(pkg, process)
+
+        # Prepare process info for watchdog integration
+        if return_process_info:
+            process_info = {
+                "pid": process.pid,
+                "command": base_command,
+                "args": args,
+                "env": env_vars,
+                "working_dir": str(working_dir),
+                "process_handle": process,
+                "server_name": pkg
+            }
+            return pkg, router, process_info
+
         return pkg, router
 
     except FileNotFoundError as e:
         print(f":x: Command not found: {e}")
+        if return_process_info:
+            return None, None, None
         return None, None
     except Exception as e:
         print(f":x: Error launching MCP server: {e}")
+        if return_process_info:
+            return None, None, None
         return None, None
     
 

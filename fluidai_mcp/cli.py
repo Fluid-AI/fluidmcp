@@ -332,6 +332,9 @@ def main():
     run_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
     run_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     run_parser.add_argument("--s3", action="store_true", help="Treat package argument as path to S3 URL to a JSON file containing server configurations (format: s3://bucket-name/key)")
+    run_parser.add_argument("--watchdog", action="store_true", help="Enable automatic process monitoring and restart")
+    run_parser.add_argument("--health-check-interval", type=int, default=30, help="Health check interval in seconds (default: 30)")
+    run_parser.add_argument("--max-restarts", type=int, default=5, help="Maximum restart attempts per server (default: 5)")
 
     # list command
     subparsers.add_parser("list", help="List installed packages")
@@ -349,6 +352,9 @@ def main():
     github_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    github_parser.add_argument("--watchdog", action="store_true", help="Enable automatic process monitoring and restart")
+    github_parser.add_argument("--health-check-interval", type=int, default=30, help="Health check interval in seconds (default: 30)")
+    github_parser.add_argument("--max-restarts", type=int, default=5, help="Maximum restart attempts per server (default: 5)")
 
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
@@ -410,7 +416,10 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             token=token,
             single_package=single_package,
             start_server=getattr(args, 'start_server', False),
-            force_reload=getattr(args, 'force_reload', False)
+            force_reload=getattr(args, 'force_reload', False),
+            enable_watchdog=getattr(args, 'watchdog', False),
+            health_check_interval=getattr(args, 'health_check_interval', 30),
+            max_restarts=getattr(args, 'max_restarts', 5)
         )
 
     except FileNotFoundError as e:

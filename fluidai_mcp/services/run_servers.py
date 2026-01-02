@@ -20,6 +20,8 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
+from .watchdog_manager import WatchdogManager
+from ..models.server_status import RestartPolicy
 from fastapi.middleware.cors import CORSMiddleware
 
 # Default ports
@@ -33,7 +35,10 @@ def run_servers(
     token: Optional[str] = None,
     single_package: bool = False,
     start_server: bool = True,
-    force_reload: bool = False
+    force_reload: bool = False,
+    enable_watchdog: bool = False,
+    health_check_interval: int = 30,
+    max_restarts: int = 5
 ) -> None:
     """
     Unified server launcher for all run modes.
@@ -45,6 +50,9 @@ def run_servers(
         single_package: True if running a single package (uses port 8090)
         start_server: Whether to start the FastAPI server
         force_reload: Force kill existing process on port without prompting
+        enable_watchdog: Enable automatic process monitoring and restart
+        health_check_interval: Interval in seconds between health checks (default: 30)
+        max_restarts: Maximum number of restart attempts per server (default: 5)
     """
     # Set up secure mode environment
     if secure_mode and token:
@@ -58,6 +66,22 @@ def run_servers(
 
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
+
+    # Initialize watchdog if enabled
+    watchdog = None
+    if enable_watchdog:
+        restart_policy = RestartPolicy(
+            max_restarts=max_restarts,
+            initial_delay_seconds=2,
+            backoff_multiplier=2.0,
+            max_delay_seconds=60,
+            restart_window_seconds=300
+        )
+        watchdog = WatchdogManager(
+            health_check_interval=health_check_interval,
+            default_restart_policy=restart_policy
+        )
+        print(f"Watchdog enabled: health checks every {health_check_interval}s, max {max_restarts} restarts")
 
     # Create FastAPI app
     app = FastAPI(
@@ -94,12 +118,56 @@ def run_servers(
 
         try:
             print(f"Launching server '{server_name}' from: {install_path}")
-            package_name, router = launch_mcp_using_fastapi_proxy(install_path)
+
+            # Launch with process info if watchdog is enabled
+            if watchdog:
+                result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=True)
+                if result and len(result) == 3:
+                    package_name, router, process_info = result
+                else:
+                    package_name, router, process_info = None, None, None
+            else:
+                result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=False)
+                if result and len(result) == 2:
+                    package_name, router = result
+                else:
+                    package_name, router = None, None
+                process_info = None
 
             if router:
                 app.include_router(router, tags=[server_name])
                 print(f"Added {package_name} endpoints")
                 launched_servers += 1
+
+                # Register with watchdog if enabled
+                if watchdog and process_info:
+                    from ..models.server_status import ServerState
+
+                    # Add server to watchdog (but don't auto-start since already started)
+                    # Note: Disable auto-restart for stdio-based MCP servers because they
+                    # can't be restarted independently - they need FastAPI router integration
+                    watchdog.add_server(
+                        server_name=process_info["server_name"],
+                        command=process_info["command"],
+                        args=process_info["args"],
+                        env=process_info["env"],
+                        working_dir=Path(process_info["working_dir"]),
+                        port=None,  # No HTTP port for stdio-based servers
+                        host="localhost",
+                        auto_start=False,  # Already started by launch function
+                        health_check_enabled=False,  # Only check process alive, not HTTP
+                        enable_restart=False  # Disable auto-restart for stdio servers
+                    )
+
+                    # Update the monitor with the existing process
+                    from datetime import datetime
+                    monitor = watchdog.monitors[process_info["server_name"]]
+                    monitor.process = process_info["process_handle"]
+                    monitor.status.pid = process_info["pid"]
+                    monitor.status.state = ServerState.RUNNING
+                    monitor.status.started_at = datetime.now()
+
+                    logger.info(f"Registered {process_info['server_name']} with watchdog (PID: {process_info['pid']})")
             else:
                 print(f"Failed to create router for {server_name}")
 
@@ -112,9 +180,14 @@ def run_servers(
 
     print(f"Successfully launched {launched_servers} MCP server(s)")
 
+    # Start watchdog monitoring if enabled
+    if watchdog:
+        watchdog.start_monitoring()
+        print(f"Started watchdog monitoring for {launched_servers} server(s)")
+
     # Start FastAPI server if requested
     if start_server:
-        _start_server(app, port, force_reload)
+        _start_server(app, port, force_reload, watchdog)
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:
@@ -240,7 +313,12 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
+def _start_server(
+    app: FastAPI,
+    port: int,
+    force_reload: bool,
+    watchdog: Optional[WatchdogManager] = None
+) -> None:
     """
     Start the FastAPI server on the specified port.
 
@@ -248,6 +326,7 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         app: FastAPI application
         port: Port to listen on
         force_reload: Force kill existing process without prompting
+        watchdog: Optional WatchdogManager instance for cleanup on shutdown
     """
     if is_port_in_use(port):
         print(f"Port {port} is already in use.")
@@ -265,7 +344,23 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
                 print("Invalid choice. Aborting.")
                 return
 
+    # Add shutdown event handler for watchdog cleanup
+    if watchdog:
+        @app.on_event("shutdown")
+        async def shutdown_event():
+            logger.info("Shutting down servers...")
+            watchdog.stop_monitoring()
+            watchdog.stop_all_servers()
+
     logger.info(f"Starting FastAPI server on port {port}")
     print(f"Starting FastAPI server on port {port}")
     print(f"Swagger UI available at: http://localhost:{port}/docs")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt")
+        if watchdog:
+            watchdog.stop_monitoring()
+            watchdog.stop_all_servers()
+        print("\nServer stopped")
