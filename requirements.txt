@@ -39,3 +39,6 @@ urllib3==2.4.0
 uvicorn==0.34.2
 uv==0.7.2
 asyncio==3.4.3
+
+# Authentication dependencies (Auth0 OAuth)
+python-jose[cryptography]==3.3.0

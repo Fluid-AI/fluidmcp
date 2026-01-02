@@ -58,7 +58,9 @@ local-*.json
 test-*.json
 
 # FluidMCP packages directory
-.fmcp-packages/
 
 # Temporary server directories (created when running from config files)
 .temp_servers/
+
+# Auth0 configuration (contains secrets)
+auth0-config.json

@@ -311,7 +311,7 @@ def main():
     '''
     Main function to handle command line arguments and execute the appropriate action.
     '''
-    # Parse command line arguments with the commands given in setup.py 
+    # Parse command line arguments with the commands given in setup.py
     parser = argparse.ArgumentParser(description="FluidAI MCP CLI")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -330,6 +330,9 @@ def main():
     run_parser.add_argument("--master", action="store_true", help="Use master metadata file from S3")
     run_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     run_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    run_parser.add_argument("--jwt-auth", action="store_true", help="Enable JWT authentication mode with username/password login")
+    run_parser.add_argument("--jwt-secret", type=str, help="JWT secret key (auto-generated if not provided)")
+    run_parser.add_argument("--auth0", action="store_true", help="Enable Auth0 OAuth authentication (GitHub, Google, Zoho, Atlassian, Confluence)")
     run_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     run_parser.add_argument("--s3", action="store_true", help="Treat package argument as path to S3 URL to a JSON file containing server configurations (format: s3://bucket-name/key)")
 
@@ -393,6 +396,59 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
         token: Bearer token for secure mode
     """
     try:
+        # Handle Auth0 authentication mode
+        auth0_mode = getattr(args, "auth0", False)
+        if auth0_mode:
+            # Set Auth0 mode
+            os.environ["FMCP_AUTH0_MODE"] = "true"
+
+            # Validate Auth0 configuration
+            required_vars = ['AUTH0_DOMAIN', 'AUTH0_CLIENT_ID', 'AUTH0_CLIENT_SECRET', 'FMCP_JWT_SECRET']
+            missing = [var for var in required_vars if not os.getenv(var)]
+
+            if missing:
+                print("\n" + "=" * 70)
+                print("⚠️  Auth0 configuration incomplete!")
+                print("=" * 70)
+                print("Missing required environment variables:")
+                for var in missing:
+                    print(f"  - {var}")
+                print("\nPlease see docs/OAUTH_SETUP_QUICK_START.md for setup instructions.")
+                print("=" * 70 + "\n")
+                sys.exit(1)
+
+            print("🔐 Auth0 OAuth authentication enabled")
+            print(f"   Supported providers: GitHub, Google, Zoho, Atlassian, Confluence")
+
+        # Handle JWT authentication mode (legacy)
+        jwt_auth = getattr(args, "jwt_auth", False)
+        if jwt_auth:
+            from fluidai_mcp.services.auth_db import init_db, has_users
+
+            # Set up JWT mode
+            jwt_secret = getattr(args, "jwt_secret", None) or secrets.token_urlsafe(32)
+            os.environ["FMCP_JWT_MODE"] = "true"
+            os.environ["FMCP_JWT_SECRET"] = jwt_secret
+
+            # Initialize database
+            init_db()
+
+            # Check if users exist
+            if not has_users():
+                print("\n" + "=" * 70)
+                print("⚠️  No users found in the database!")
+                print("=" * 70)
+                print("You must create an admin user before starting the server.")
+                print("\nCreate an admin user with:")
+                print("  fluidmcp auth create-admin --username admin --password <password>")
+                print("\nThen run this command again.")
+                print("=" * 70 + "\n")
+                sys.exit(1)
+
+            print("🔐 JWT authentication mode enabled")
+            if not getattr(args, "jwt_secret", None):
+                print(f"   Generated JWT secret: {jwt_secret[:16]}... (set FMCP_JWT_SECRET to persist)")
+
         # Resolve configuration from the appropriate source
         config = resolve_config(args)
 

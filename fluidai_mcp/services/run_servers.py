@@ -12,6 +12,8 @@ from typing import Optional
 from loguru import logger
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse
 import uvicorn
 
 from .config_resolver import ServerConfig, INSTALLATION_DIR
@@ -21,6 +23,16 @@ from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from fastapi.middleware.cors import CORSMiddleware
+
+# Import auth URL utilities (with fallback for backwards compatibility)
+try:
+    from fluidai_mcp.auth.url_utils import get_cors_origins, get_base_url, print_auth_urls
+    AUTH_URL_UTILS_AVAILABLE = True
+except ImportError:
+    AUTH_URL_UTILS_AVAILABLE = False
+    def get_cors_origins(port): return ["*"]
+    def get_base_url(port): return f"http://localhost:{port}"
+    def print_auth_urls(port): pass
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -59,21 +71,128 @@ def run_servers(
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
 
+    # Check authentication modes
+    auth0_mode = os.environ.get("FMCP_AUTH0_MODE") == "true"
+    jwt_mode = os.environ.get("FMCP_JWT_MODE") == "true"  # Legacy mode
+
     # Create FastAPI app
     app = FastAPI(
         title=f"FluidMCP Gateway ({config.source_type})",
         description=f"Unified gateway for MCP servers from {config.source_type}",
         version="2.0.0"
     )
-    #CORS setup to allow React dev server access
-    # "http://localhost:5173"
+
+    # CORS setup with dynamic origin detection
+    if auth0_mode or jwt_mode:
+        # Use dynamic CORS origins (supports Codespaces, Gitpod, custom domains)
+        if AUTH_URL_UTILS_AVAILABLE:
+            allowed_origins = get_cors_origins(port)
+        else:
+            # Fallback for backwards compatibility
+            allowed_origins = os.environ.get("FMCP_ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*").split(",")
+    else:
+        # Allow all origins in non-auth mode
+        allowed_origins = ["*"]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Auth0 mode setup
+    if auth0_mode:
+        try:
+            from fluidai_mcp.auth import Auth0Config, auth_router, init_auth_routes
+            from fluidai_mcp.auth.db_manager import AuthDatabase
+            from fluidai_mcp.auth.session_store import session_store
+            from fluidai_mcp.auth.logging_middleware import APIAccessLoggingMiddleware
+
+            # Initialize authentication database
+            db_path = Path(INSTALLATION_DIR) / "fluidmcp_auth.db"
+            try:
+                auth_db = AuthDatabase(str(db_path))
+                auth_db.initialize_database()
+                logger.info(f"✅ Auth database initialized: {db_path}")
+
+                # Connect database to session store
+                session_store.db = auth_db
+
+                # Add API access logging middleware
+                app.add_middleware(APIAccessLoggingMiddleware, db_manager=auth_db)
+                logger.info("✅ API access logging middleware enabled")
+
+            except Exception as db_error:
+                logger.warning(f"⚠️  Failed to initialize auth database: {db_error}")
+                logger.warning("⚠️  Continuing without persistent logging (in-memory only)")
+                auth_db = None
+
+            # Load Auth0 configuration with dynamic URL detection
+            auth_config = Auth0Config.from_env_or_file(port=port)
+            auth_config.validate_required()
+
+            # Print detected URLs for user to configure in Auth0
+            if AUTH_URL_UTILS_AVAILABLE:
+                print_auth_urls(port)
+
+            # Initialize auth routes with config
+            init_auth_routes(auth_config)
+
+            # Mount auth static files
+            auth_static_path = Path(__file__).parent.parent / "auth" / "static"
+            if auth_static_path.exists():
+                app.mount("/auth/static", StaticFiles(directory=str(auth_static_path)), name="auth_static")
+
+            # Include auth router
+            app.include_router(auth_router)
+
+            # Root route - serve login page
+            @app.get("/")
+            async def root():
+                return FileResponse(str(auth_static_path / "login.html"))
+
+        except ValueError as e:
+            print(f"❌ Auth0 configuration error: {e}")
+            print("\nPlease set required environment variables:")
+            print("  - AUTH0_DOMAIN")
+            print("  - AUTH0_CLIENT_ID")
+            print("  - AUTH0_CLIENT_SECRET")
+            print("  - FMCP_JWT_SECRET")
+            print("\nSee docs/OAUTH_SETUP_QUICK_START.md for setup instructions.")
+            import sys
+            sys.exit(1)
+
+    # Legacy JWT mode setup (from old implementation)
+    elif jwt_mode:
+        static_path = Path(__file__).parent.parent / "static"
+        if static_path.exists():
+            app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+            # Include authentication routes (old implementation)
+            try:
+                from .auth_routes import router as auth_router
+                app.include_router(auth_router)
+            except ImportError:
+                pass
+
+            # Root route - serve login page
+            @app.get("/")
+            async def root():
+                return FileResponse(str(static_path / "index.html"))
+        else:
+            # No static files, redirect to docs
+            @app.get("/")
+            async def root():
+                return RedirectResponse(url="/docs")
+
+    # No auth mode
+    else:
+        # In non-auth mode, redirect root to docs
+        @app.get("/")
+        async def root():
+            return RedirectResponse(url="/docs")
     # Launch each server and add its router
     launched_servers = 0
     for server_name, server_cfg in config.servers.items():
@@ -114,7 +233,7 @@ def run_servers(
 
     # Start FastAPI server if requested
     if start_server:
-        _start_server(app, port, force_reload)
+        _start_server(app, port, force_reload, auth0_mode, jwt_mode)
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:
@@ -240,7 +359,7 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
+def _start_server(app: FastAPI, port: int, force_reload: bool, auth0_mode: bool = False, jwt_mode: bool = False) -> None:
     """
     Start the FastAPI server on the specified port.
 
@@ -248,7 +367,22 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         app: FastAPI application
         port: Port to listen on
         force_reload: Force kill existing process without prompting
+        auth0_mode: Whether Auth0 mode is enabled
+        jwt_mode: Whether JWT mode is enabled
     """
+    # Check for JWT mode and display security warning (if not already set by caller)
+    if jwt_mode and not os.environ.get("FMCP_ALLOW_HTTP"):
+        print("\n" + "=" * 70)
+        print("⚠️  SECURITY WARNING: JWT authentication without HTTPS!")
+        print("=" * 70)
+        print("JWT tokens can be intercepted over HTTP.")
+        print("For production use, consider:")
+        print("  1. Using a reverse proxy with SSL (nginx, caddy, etc.)")
+        print("  2. Deploying behind a secure gateway")
+        print("  3. Using SSH tunneling for remote access")
+        print("\nSet FMCP_ALLOW_HTTP=true to suppress this warning.")
+        print("=" * 70 + "\n")
+
     if is_port_in_use(port):
         print(f"Port {port} is already in use.")
         if force_reload:
@@ -266,6 +400,26 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
                 return
 
     logger.info(f"Starting FastAPI server on port {port}")
-    print(f"Starting FastAPI server on port {port}")
-    print(f"Swagger UI available at: http://localhost:{port}/docs")
+    print(f"\n{'='*70}")
+    print(f"🚀 FluidMCP Server Starting")
+    print(f"{'='*70}")
+
+    # Get dynamic base URL
+    base_url = get_base_url(port) if AUTH_URL_UTILS_AVAILABLE else f"http://localhost:{port}"
+
+    if jwt_mode:
+        print(f"🔐 JWT Authentication: ENABLED")
+        print(f"   Login at: {base_url}/")
+        print(f"   Swagger UI: {base_url}/docs")
+    elif auth0_mode:
+        print(f"🔐 Auth0 OAuth: ENABLED")
+        print(f"   Login at: {base_url}/")
+        print(f"   Swagger UI: {base_url}/docs")
+    else:
+        print(f"   Base URL: {base_url}")
+        print(f"   Swagger UI: {base_url}/docs")
+
+    print(f"{'='*70}\n")
+    print(f"Server running on {base_url}\n")
+
     uvicorn.run(app, host="0.0.0.0", port=port)

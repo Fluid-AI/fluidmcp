@@ -173,4 +173,41 @@ GITHUB_TOKEN       # Alternative environment variable
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
+
+# Auth0 OAuth (optional, for secure authentication)
+AUTH0_DOMAIN                # Auth0 tenant domain (e.g., "your-tenant.us.auth0.com")
+AUTH0_CLIENT_ID             # Auth0 application client ID
+AUTH0_CLIENT_SECRET         # Auth0 application client secret
+FMCP_JWT_SECRET            # Secret for JWT token signing (generate with: openssl rand -base64 32)
+AUTH0_CALLBACK_URL         # Optional: Override auto-detected callback URL
+FMCP_BASE_URL              # Optional: Set custom base URL (for production deployments)
+FMCP_ALLOWED_ORIGINS       # Optional: Comma-separated CORS origins
 ```
+
+## OAuth Authentication (NEW!)
+
+FluidMCP now supports **dynamic OAuth authentication** with automatic URL detection for:
+- GitHub Codespaces (auto-detected)
+- Gitpod (auto-detected)
+- Local development (default)
+- Custom domains (via `FMCP_BASE_URL`)
+
+### Quick OAuth Setup
+
+1. **Get your environment-specific URLs**:
+   ```bash
+   python print-auth0-urls.py
+   ```
+
+2. **Set up Auth0** (see [OAUTH_SETUP_QUICK_START.md](OAUTH_SETUP_QUICK_START.md))
+
+3. **Run with OAuth**:
+   ```bash
+   fluidmcp run all --start-server --auth0
+   ```
+
+The server automatically detects your environment and displays the correct URLs! 🎯
+
+**Documentation**:
+- Quick Start: [docs/OAUTH_SETUP_QUICK_START.md](docs/OAUTH_SETUP_QUICK_START.md)
+- Wildcard Setup: [docs/AUTH0_WILDCARD_SETUP.md](docs/AUTH0_WILDCARD_SETUP.md)

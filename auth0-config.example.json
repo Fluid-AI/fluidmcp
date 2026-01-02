@@ -1,0 +1,10 @@
+{
+  "domain": "your-tenant.us.auth0.com",
+  "client_id": "YOUR_CLIENT_ID_HERE",
+  "client_secret": "YOUR_CLIENT_SECRET_HERE",
+  "callback_url": "http://localhost:8099/auth/callback",
+  "audience": "optional-api-identifier",
+  "jwt_secret": "your-jwt-secret-here-generate-with-openssl",
+  "jwt_algorithm": "HS256",
+  "jwt_expiration_minutes": 30
+}

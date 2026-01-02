@@ -1,0 +1,217 @@
+/* Modern Auth0 Login Styling */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.login-container {
+    width: 100%;
+    max-width: 450px;
+}
+
+.login-box {
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    padding: 48px;
+    animation: slideIn 0.4s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.logo {
+    text-align: center;
+    margin-bottom: 40px;
+}
+
+.logo h1 {
+    font-size: 36px;
+    color: #333;
+    margin-bottom: 8px;
+}
+
+.subtitle {
+    color: #666;
+    font-size: 15px;
+}
+
+.providers {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.providers-title {
+    text-align: center;
+    font-size: 18px;
+    color: #333;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+/* Common button styles */
+.btn-provider {
+    padding: 14px 24px;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    width: 100%;
+}
+
+.btn-provider:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+}
+
+.btn-provider:active {
+    transform: translateY(0);
+}
+
+.provider-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+/* Google button */
+.btn-google {
+    background: white;
+    color: #333;
+    border: 1px solid #ddd;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.btn-google:hover {
+    background: #f8f9fa;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* GitHub button */
+.btn-github {
+    background: #24292e;
+    box-shadow: 0 4px 12px rgba(36, 41, 46, 0.3);
+}
+
+.btn-github:hover {
+    background: #1a1f23;
+    box-shadow: 0 6px 16px rgba(36, 41, 46, 0.4);
+}
+
+/* Zoho button */
+.btn-zoho {
+    background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+    box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
+}
+
+.btn-zoho:hover {
+    box-shadow: 0 6px 16px rgba(231, 76, 60, 0.4);
+}
+
+/* Atlassian button */
+.btn-atlassian {
+    background: linear-gradient(135deg, #0052CC 0%, #0747A6 100%);
+    box-shadow: 0 4px 12px rgba(0, 82, 204, 0.3);
+}
+
+.btn-atlassian:hover {
+    box-shadow: 0 6px 16px rgba(0, 82, 204, 0.4);
+}
+
+/* Confluence/Microsoft button */
+.btn-confluence {
+    background: linear-gradient(135deg, #0078D4 0%, #106EBE 100%);
+    box-shadow: 0 4px 12px rgba(0, 120, 212, 0.3);
+}
+
+.btn-confluence:hover {
+    box-shadow: 0 6px 16px rgba(0, 120, 212, 0.4);
+}
+
+/* Auth0 Universal Login button */
+.btn-auth0-universal {
+    background: linear-gradient(135deg, #eb5424 0%, #f47b30 100%);
+    box-shadow: 0 4px 12px rgba(235, 84, 36, 0.3);
+}
+
+.btn-auth0-universal:hover {
+    box-shadow: 0 6px 16px rgba(235, 84, 36, 0.4);
+}
+
+/* Divider */
+.divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    margin: 8px 0;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid #ddd;
+}
+
+.divider span {
+    padding: 0 16px;
+    color: #999;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.footer {
+    margin-top: 32px;
+    text-align: center;
+}
+
+.footer p {
+    font-size: 12px;
+    color: #999;
+}
+
+@media (max-width: 480px) {
+    .login-box {
+        padding: 32px 24px;
+    }
+
+    .logo h1 {
+        font-size: 30px;
+    }
+
+    .btn-provider {
+        padding: 12px 20px;
+        font-size: 14px;
+    }
+
+    .providers-title {
+        font-size: 16px;
+    }
+}

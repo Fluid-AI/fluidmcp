@@ -21,16 +21,69 @@ import time
 
 security = HTTPBearer(auto_error=False)
 
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-    
-    if not secure_mode:
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Unified authentication dependency supporting Auth0 JWT, legacy JWT, and bearer token.
+
+    Priority:
+    1. If FMCP_AUTH0_MODE=true, require Auth0 JWT authentication
+    2. If FMCP_JWT_MODE=true (legacy), require JWT authentication
+    3. If FMCP_SECURE_MODE=true (legacy), use bearer token
+    4. Otherwise, no authentication required
+    """
+    from jose import JWTError
+
+    auth0_mode = os.environ.get("FMCP_AUTH0_MODE") == "true"
+    jwt_mode = os.environ.get("FMCP_JWT_MODE") == "true"
+    legacy_secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    # No authentication required
+    if not auth0_mode and not jwt_mode and not legacy_secure_mode:
         return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
+
+    # Check for credentials
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Auth0 Mode (highest priority)
+    if auth0_mode:
+        try:
+            from fluidai_mcp.auth import Auth0Config
+            from fluidai_mcp.auth.token_manager import TokenManager
+
+            config = Auth0Config.from_env()
+            token_manager = TokenManager(config)
+
+            payload = token_manager.verify_token(credentials.credentials)
+            if not payload:
+                raise HTTPException(status_code=401, detail="Invalid or expired Auth0 token")
+
+            return payload
+
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Auth0 authentication error: {str(e)}")
+
+    # Legacy JWT Mode
+    if jwt_mode:
+        try:
+            from .auth_service import decode_token
+            payload = decode_token(credentials.credentials)
+            if payload.get("type") != "access":
+                raise HTTPException(status_code=401, detail="Invalid token type")
+            return payload
+        except JWTError as e:
+            raise HTTPException(status_code=401, detail=f"Invalid JWT token: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=f"Authentication error: {str(e)}")
+
+    # Legacy bearer token mode
+    if legacy_secure_mode:
+        bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+        if credentials.credentials != bearer_token:
+            raise HTTPException(status_code=401, detail="Invalid bearer token")
+        return {"legacy_mode": True}
+
+    return None
 
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     dest_dir = Path(dest_dir)
@@ -191,7 +244,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ), user: dict = Depends(get_current_user)
     ):
         try:
             # Convert dict to JSON string
@@ -214,7 +267,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ), user: dict = Depends(get_current_user)
     ):
         async def event_generator() -> Iterator[str]:
             try:
@@ -255,7 +308,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
         )
         
     @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
-    async def list_tools(token: str = Depends(get_token)):
+    async def list_tools(user: dict = Depends(get_current_user)):
         try:
             # Pre-filled JSON-RPC request for tools/list
             request_payload = {
@@ -284,9 +337,9 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
         ...,
         alias="params",
         example={
-            "name": "", 
+            "name": "",
         }
-    ), token: str = Depends(get_token)
+    ), user: dict = Depends(get_current_user)
 ):      
         params = request_body
 
