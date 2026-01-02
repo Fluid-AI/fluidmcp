@@ -81,11 +81,11 @@ def list_installed_packages() -> None:
   
         # Check if the directory is empty
         if not install_dir.exists() or not any(install_dir.iterdir()):
-            print("No mcp packages found.")
+            logger.info("No mcp packages found")
             # return none if the directory is empty
             return
-        
-        print(f"Installation directory: {install_dir}")
+
+        logger.info(f"Installation directory: {install_dir}")
         # If the directory is not empty, list all packages
         found_packages = False
         # Iterate through the installation directory
@@ -98,15 +98,15 @@ def list_installed_packages() -> None:
                     if pkg.is_dir():
                         # Iterate through the versions for each package
                         for version in pkg.iterdir():
-                            # Log the author package name and version 
+                            # Log the author package name and version
                             if version.is_dir():
                                 found_packages = True
-                                print(f"{author.name}/{pkg.name}@{version.name}")
+                                logger.info(f"{author.name}/{pkg.name}@{version.name}")
         if not found_packages:
-            print("No packages found in the installation directory structure.")
-    except Exception as e:
+            logger.info("No packages found in the installation directory structure")
+    except Exception:
         # Handle any errors that occur while listing packages
-        print(f"Error listing installed packages: {str(e)}")
+        logger.exception("Error listing installed packages")
 
 
 def edit_env(args):
@@ -120,11 +120,11 @@ def edit_env(args):
     try:
         dest_dir = resolve_package_dest_dir(args.package)
         if not package_exists(dest_dir):
-            print(f"Package not found at {dest_dir}. Have you installed it?")
+            logger.error(f"Package not found at {dest_dir}. Have you installed it?")
             sys.exit(1)
         edit_env_variables(dest_dir)
-    except Exception as e:
-        print(f"Error editing environment variables: {str(e)}")
+    except Exception:
+        logger.exception("Error editing environment variables")
         sys.exit(1)
 
 
@@ -207,11 +207,11 @@ def install_command(args):
     install_package(args.package, skip_env=getattr(args, "master", False))
     try:
         dest_dir = resolve_package_dest_dir(args.package)
-    except Exception as e:
-        print(str(e))
+    except Exception:
+        logger.exception("Package resolution failed")
         sys.exit(1)
     if not package_exists(dest_dir):
-        print(f"Package not found at {dest_dir}. Have you installed it?")
+        logger.error(f"Package not found at {dest_dir}. Have you installed it?")
         sys.exit(1)
     if getattr(args, "master", False):
         update_env_from_common_env(dest_dir, pkg)
@@ -243,33 +243,33 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         if secure_mode and token:
             os.environ["FMCP_BEARER_TOKEN"] = token
             os.environ["FMCP_SECURE_MODE"] = "true"
-            print(f"🔒 Secure mode enabled with bearer token")
+            logger.info("Secure mode enabled with bearer token")
 
         # Clone the repository
-        print(f"📥 Cloning GitHub repository: {args.repo}")
+        logger.info(f"Cloning GitHub repository: {args.repo}")
         dest_dir = clone_github_repo(args.repo, args.github_token, args.branch)
 
         # Extract or create metadata.json
-        print(f"📄 Processing metadata...")
+        logger.info("Processing metadata")
         metadata_path = extract_or_create_metadata(dest_dir)
 
         # Launch the MCP server
-        print(f"🚀 Launching MCP server...")
+        logger.info("Launching MCP server")
         package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
 
         if not router:
-            print("❌ Failed to launch MCP server")
+            logger.error("Failed to launch MCP server")
             sys.exit(1)
 
-        print(f"✅ MCP server '{package_name}' launched successfully from GitHub")
+        logger.info(f"MCP server '{package_name}' launched successfully from GitHub")
 
         # Start FastAPI server if requested
         if args.start_server:
             # Check if port is in use
             if is_port_in_use(client_server_port):
-                print(f"Port {client_server_port} is already in use.")
+                logger.warning(f"Port {client_server_port} is already in use")
                 if args.force_reload:
-                    print(f"Force reloading server on port {client_server_port}")
+                    logger.info(f"Force reloading server on port {client_server_port}")
                     kill_process_on_port(client_server_port)
                 else:
                     choice = input("Kill existing process and reload? (y/n): ").strip().lower()
@@ -279,7 +279,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
                         print(f"Keeping existing process on port {client_server_port}")
                         return
                     else:
-                        print("Invalid choice. Aborting.")
+                        print("Invalid choice. Aborting")
                         return
 
             # Create FastAPI app
@@ -291,19 +291,19 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
 
             app.include_router(router, tags=[package_name])
 
-            print(f"🚀 Starting FastAPI server for {package_name}")
-            print(f"📖 Swagger UI available at: http://localhost:{client_server_port}/docs")
+            logger.info(f"Starting FastAPI server for {package_name}")
+            logger.info(f"Swagger UI available at: http://localhost:{client_server_port}/docs")
 
             uvicorn.run(app, host="0.0.0.0", port=client_server_port)
 
-    except ValueError as e:
-        print(f"❌ Configuration error: {e}")
+    except ValueError:
+        logger.exception("Configuration error")
         sys.exit(1)
-    except RuntimeError as e:
-        print(f"❌ Runtime error: {e}")
+    except RuntimeError:
+        logger.exception("Runtime error")
         sys.exit(1)
-    except Exception as e:
-        print(f"❌ Error running GitHub MCP server: {e}")
+    except Exception:
+        logger.exception("Error running GitHub MCP server")
         sys.exit(1)
 
 
@@ -366,7 +366,7 @@ def main():
         # else use the provided token and set it in the environment variables
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        print(f"Secure mode enabled. Bearer token: {token}")
+        logger.info(f"Secure mode enabled. Bearer token: {token}")
 
     # Main Command dispatch Logic
     if args.command == "install":
@@ -413,12 +413,12 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             force_reload=getattr(args, 'force_reload', False)
         )
 
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
+    except FileNotFoundError:
+        logger.exception("File not found error")
         sys.exit(1)
-    except ValueError as e:
-        print(f"Configuration error: {e}")
+    except ValueError:
+        logger.exception("Configuration error")
         sys.exit(1)
-    except Exception as e:
-        print(f"Error running servers: {e}")
+    except Exception:
+        logger.exception("Error running servers")
         sys.exit(1)

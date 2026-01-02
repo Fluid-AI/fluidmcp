@@ -38,16 +38,16 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
 
     try:
         if not metadata_path.exists():
-            logger.info(f":warning: No metadata.json found at {metadata_path}")
+            logger.warning(f"No metadata.json found at {metadata_path}")
             return None, None
-        print(f":blue_book: Reading metadata.json from {metadata_path}")
+        logger.info(f"Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
-        print(pkg, servers)
-    except Exception as e:
-        print(f":x: Error reading metadata.json: {e}")
+        logger.debug(f"Package: {pkg}, Servers: {servers}")
+    except Exception:
+        logger.exception("Error reading metadata.json")
         return None, None
 
     try:
@@ -98,16 +98,16 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
 
         # Initialize MCP server
         if not initialize_mcp_server(process):
-            print(f"Warning: Failed to initialize MCP server for {pkg}")
+            logger.warning(f"Failed to initialize MCP server for {pkg}")
 
         router = create_mcp_router(pkg, process)
         return pkg, router
 
-    except FileNotFoundError as e:
-        print(f":x: Command not found: {e}")
+    except FileNotFoundError:
+        logger.exception("Command not found")
         return None, None
-    except Exception as e:
-        print(f":x: Error launching MCP server: {e}")
+    except Exception:
+        logger.exception("Error launching MCP server")
         return None, None
     
 
@@ -173,8 +173,8 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
                     return True
             time.sleep(0.1)
         return False
-    except Exception as e:
-        print(f"Initialization error: {e}")
+    except Exception:
+        logger.exception("Initialization error")
         return False
     
 
@@ -336,10 +336,10 @@ if __name__ == '__main__':
         "/workspaces/fluid-ai-gpt-mcp/fluidmcp/.fmcp-packages/Airbnb/airbnb/0.1.0"
     ]
     for install_path in install_paths:
-        print(f"Launching MCP server for {install_path}")
+        logger.info(f"Launching MCP server for {install_path}")
         package_name, router = launch_mcp_using_fastapi_proxy(install_path)
         if package_name is not None and router is not None:
             app.include_router(router)
         else:
-            print(f"Skipping {install_path} due to missing metadata or launch error.")
+            logger.warning(f"Skipping {install_path} due to missing metadata or launch error")
     uvicorn.run(app, host="0.0.0.0", port=8099)

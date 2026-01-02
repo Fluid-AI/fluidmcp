@@ -4,7 +4,6 @@ Unified server runner for FluidMCP CLI.
 This module provides a single entry point for launching MCP servers
 regardless of the configuration source.
 """
-
 import os
 import json
 from pathlib import Path
@@ -50,7 +49,7 @@ def run_servers(
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        print(f"Secure mode enabled with bearer token")
+        logger.info("Secure mode enabled with bearer token")
 
     # Install packages if needed
     if config.needs_install:
@@ -79,38 +78,38 @@ def run_servers(
     for server_name, server_cfg in config.servers.items():
         install_path = server_cfg.get("install_path")
         if not install_path:
-            print(f"No installation path for server '{server_name}', skipping")
+            logger.warning(f"No installation path for server '{server_name}', skipping")
             continue
 
         install_path = Path(install_path)
         if not install_path.exists():
-            print(f"Installation path '{install_path}' does not exist, skipping")
+            logger.warning(f"Installation path '{install_path}' does not exist, skipping")
             continue
 
         metadata_path = install_path / "metadata.json"
         if not metadata_path.exists():
-            print(f"No metadata.json in '{install_path}', skipping")
+            logger.warning(f"No metadata.json in '{install_path}', skipping")
             continue
 
         try:
-            print(f"Launching server '{server_name}' from: {install_path}")
+            logger.info(f"Launching server '{server_name}' from: {install_path}")
             package_name, router = launch_mcp_using_fastapi_proxy(install_path)
 
             if router:
                 app.include_router(router, tags=[server_name])
-                print(f"Added {package_name} endpoints")
+                logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
             else:
-                print(f"Failed to create router for {server_name}")
+                logger.error(f"Failed to create router for {server_name}")
 
-        except Exception as e:
-            print(f"Error launching server '{server_name}': {e}")
+        except Exception:
+            logger.exception(f"Error launching server '{server_name}'")
 
     if launched_servers == 0:
-        print("No servers were successfully launched")
+        logger.warning("No servers were successfully launched")
         return
 
-    print(f"Successfully launched {launched_servers} MCP server(s)")
+    logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
     # Start FastAPI server if requested
     if start_server:
@@ -132,7 +131,7 @@ def _install_packages_from_config(config: ServerConfig) -> None:
             # Already installed or no package reference
             continue
 
-        print(f"Installing package: {fmcp_package}")
+        logger.info(f"Installing package: {fmcp_package}")
         pkg = parse_package_string(fmcp_package)
 
         try:
@@ -150,11 +149,11 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 try:
                     dest_dir = get_latest_version_dir(package_dir)
                 except FileNotFoundError:
-                    print(f"Package not found after install: {author}/{package_name}")
+                    logger.error(f"Package not found after install: {author}/{package_name}")
                     continue
 
             if not dest_dir.exists():
-                print(f"Package directory not found: {dest_dir}")
+                logger.error(f"Package directory not found: {dest_dir}")
                 continue
 
             # Update install_path in config
@@ -168,15 +167,15 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                     with open(config.metadata_path, 'r') as f:
                         source_config = json.load(f)
                     update_env_from_config(metadata_path, fmcp_package, source_config, pkg)
-                except Exception as e:
-                    print(f"Error updating env for {fmcp_package}: {e}")
+                except Exception:
+                    logger.exception(f"Error updating env for {fmcp_package}")
 
             # For master mode, update from shared .env
             if config.source_type == "s3_master":
                 _update_env_from_common_env(dest_dir, pkg)
 
-        except Exception as e:
-            print(f"Error installing {fmcp_package}: {e}")
+        except Exception:
+            logger.exception(f"Error installing {fmcp_package}")
 
 
 def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
@@ -250,22 +249,20 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         force_reload: Force kill existing process without prompting
     """
     if is_port_in_use(port):
-        print(f"Port {port} is already in use.")
+        logger.warning(f"Port {port} is already in use")
         if force_reload:
-            print(f"Force reloading server on port {port}")
+            logger.info(f"Force reloading server on port {port}")
             kill_process_on_port(port)
         else:
             choice = input("Kill existing process and reload? (y/n): ").strip().lower()
             if choice == 'y':
                 kill_process_on_port(port)
             elif choice == 'n':
-                print(f"Keeping existing process on port {port}")
+                logger.info(f"Keeping existing process on port {port}")
                 return
             else:
-                print("Invalid choice. Aborting.")
+                logger.warning("Invalid choice. Aborting")
                 return
 
-    logger.info(f"Starting FastAPI server on port {port}")
-    print(f"Starting FastAPI server on port {port}")
-    print(f"Swagger UI available at: http://localhost:{port}/docs")
+    logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
     uvicorn.run(app, host="0.0.0.0", port=port)
