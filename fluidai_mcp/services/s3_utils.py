@@ -35,7 +35,9 @@ def s3_upload_file(s3_client, src_path, bucket, key):
         logger.info(f"Successfully uploaded {key} to S3 bucket {bucket}")
         return True
     except Exception:
-        logger.exception("Error uploading file to S3")
+        logger.exception(
+            f"Error uploading {src_path} to S3 bucket {bucket} with key {key}"
+        )
         return False
 
 def load_json_file(path):
