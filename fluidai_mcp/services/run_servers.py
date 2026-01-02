@@ -7,6 +7,7 @@ regardless of the configuration source.
 
 import os
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -123,7 +124,7 @@ def run_servers(
             package_name, router, process_info = None, None, None
             if watchdog:
                 result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=True)
-                if result:
+                if result is not None:
                     try:
                         package_name, router, process_info = result
                     except (TypeError, ValueError):
@@ -131,7 +132,7 @@ def run_servers(
                         logger.warning(f"Unexpected result format from launch_mcp_using_fastapi_proxy for {server_name}")
             else:
                 result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=False)
-                if result:
+                if result is not None:
                     try:
                         package_name, router = result
                     except (TypeError, ValueError):
@@ -162,7 +163,6 @@ def run_servers(
                     )
 
                     # Attach the existing process to the monitor
-                    from datetime import datetime
                     monitor = watchdog.get_monitor(process_info["server_name"])
                     if monitor:
                         monitor.attach_existing_process(
@@ -317,6 +317,19 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
+def _cleanup_watchdog(watchdog: Optional[WatchdogManager]) -> None:
+    """
+    Clean up watchdog monitoring and stop all servers.
+
+    Args:
+        watchdog: Optional WatchdogManager instance to cleanup
+    """
+    if watchdog:
+        logger.info("Shutting down servers...")
+        watchdog.stop_monitoring()
+        watchdog.stop_all_servers()
+
+
 def _start_server(
     app: FastAPI,
     port: int,
@@ -349,13 +362,10 @@ def _start_server(
                 return
 
     # Add shutdown event handler for watchdog cleanup
-    if watchdog:
-        async def shutdown_event():
-            logger.info("Shutting down servers...")
-            watchdog.stop_monitoring()
-            watchdog.stop_all_servers()
+    async def shutdown_event():
+        _cleanup_watchdog(watchdog)
 
-        app.add_event_handler("shutdown", shutdown_event)
+    app.add_event_handler("shutdown", shutdown_event)
 
     logger.info(f"Starting FastAPI server on port {port}")
     print(f"Starting FastAPI server on port {port}")
@@ -365,7 +375,5 @@ def _start_server(
         uvicorn.run(app, host="0.0.0.0", port=port)
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
-        if watchdog:
-            watchdog.stop_monitoring()
-            watchdog.stop_all_servers()
+        _cleanup_watchdog(watchdog)
         print("\nServer stopped")

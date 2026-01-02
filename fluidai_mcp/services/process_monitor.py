@@ -270,11 +270,15 @@ class ProcessMonitor:
             lines: Number of lines to retrieve (unused, kept for API compatibility)
 
         Returns:
-            Empty dictionary (stdio pipes not accessible)
+            Dictionary with empty strings for stdout/stderr and explanatory message
         """
         # For stdio-based MCP servers, pipes are managed by FastAPI router
         # and should not be read from this monitoring code
-        return {"stdout": "", "stderr": ""}
+        return {
+            "stdout": "",
+            "stderr": "",
+            "message": "Logs not available for stdio-based servers (pipes managed by router)"
+        }
 
     def get_exit_code(self) -> Optional[int]:
         """Get process exit code if terminated.

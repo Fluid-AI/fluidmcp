@@ -51,11 +51,11 @@ class ServerStatus:
     def get_status_display(self) -> str:
         """Get human-readable status display for CLI with colors."""
         state_emoji = {
-            ServerState.STOPPED: "⏹️ ",
+            ServerState.STOPPED: "⏹️",
             ServerState.STARTING: "🔄",
-            ServerState.RUNNING: "▶️ ",
+            ServerState.RUNNING: "▶️",
             ServerState.HEALTHY: "✅",
-            ServerState.UNHEALTHY: "⚠️ ",
+            ServerState.UNHEALTHY: "⚠️",
             ServerState.CRASHED: "💥",
             ServerState.RESTARTING: "🔄",
             ServerState.FAILED: "❌"
