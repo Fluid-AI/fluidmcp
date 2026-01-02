@@ -4,7 +4,6 @@ Unified server runner for FluidMCP CLI.
 This module provides a single entry point for launching MCP servers
 regardless of the configuration source.
 """
-
 import os
 import json
 from pathlib import Path
@@ -150,7 +149,7 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 try:
                     dest_dir = get_latest_version_dir(package_dir)
                 except FileNotFoundError:
-                    logger.exception(f"Package not found after install: {author}/{package_name}")
+                    logger.error(f"Package not found after install: {author}/{package_name}")
                     continue
 
             if not dest_dir.exists():
@@ -259,12 +258,11 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
             if choice == 'y':
                 kill_process_on_port(port)
             elif choice == 'n':
-                print(f"Keeping existing process on port {port}")
+                logger.info(f"Keeping existing process on port {port}")
                 return
             else:
-                print("Invalid choice. Aborting")
+                logger.warning("Invalid choice. Aborting")
                 return
 
-    logger.info(f"Starting FastAPI server on port {port}")
     logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
     uvicorn.run(app, host="0.0.0.0", port=port)
