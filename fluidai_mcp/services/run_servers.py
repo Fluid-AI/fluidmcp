@@ -157,13 +157,15 @@ def run_servers(
                         enable_restart=False  # Disable auto-restart for stdio servers
                     )
 
-                    # Update the monitor with the existing process
+                    # Attach the existing process to the monitor
                     from datetime import datetime
                     monitor = watchdog.monitors[process_info["server_name"]]
-                    monitor.process = process_info["process_handle"]
-                    monitor.status.pid = process_info["pid"]
-                    monitor.status.state = ServerState.RUNNING
-                    monitor.status.started_at = datetime.now()
+                    monitor.attach_existing_process(
+                        process_handle=process_info["process_handle"],
+                        pid=process_info["pid"],
+                        state=ServerState.RUNNING,
+                        started_at=datetime.now()
+                    )
 
                     logger.info(f"Registered {process_info['server_name']} with watchdog (PID: {process_info['pid']})")
             else:

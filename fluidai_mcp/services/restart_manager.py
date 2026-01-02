@@ -2,7 +2,7 @@
 
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from loguru import logger
 
 from ..models.server_status import RestartPolicy
@@ -21,7 +21,7 @@ class RestartManager:
         server_name: str,
         policy: RestartPolicy,
         current_restart_count: int
-    ) -> tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[str]]:
         """Check if a server can be restarted based on its policy.
 
         Args:

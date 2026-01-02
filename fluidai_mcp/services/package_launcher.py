@@ -124,7 +124,7 @@ def launch_mcp_using_fastapi_proxy(
                 "pid": process.pid,
                 "command": base_command,
                 "args": args,
-                "env": env_vars,
+                "env": env,  # Use full merged environment, not just custom env_vars
                 "working_dir": str(working_dir),
                 "process_handle": process,
                 "server_name": pkg

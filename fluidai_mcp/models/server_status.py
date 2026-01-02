@@ -30,6 +30,24 @@ class ServerStatus:
     restart_count: int = 0
     error_message: Optional[str] = None
 
+    def get_uptime_seconds(self) -> Optional[int]:
+        """Calculate uptime in seconds based on started_at timestamp.
+
+        Returns:
+            Uptime in seconds if server is running, None otherwise
+        """
+        if self.started_at is None:
+            return None
+
+        # Compute uptime based on the recorded start time
+        if self.started_at.tzinfo is not None:
+            now = datetime.now(self.started_at.tzinfo)
+        else:
+            now = datetime.now()
+
+        uptime_delta = now - self.started_at
+        return int(uptime_delta.total_seconds())
+
     def get_status_display(self) -> str:
         """Get human-readable status display for CLI with colors."""
         state_emoji = {
@@ -46,11 +64,11 @@ class ServerStatus:
         emoji = state_emoji.get(self.state, "❓")
         uptime_str = ""
 
-        if hasattr(self, '_uptime_seconds'):
-            uptime = getattr(self, '_uptime_seconds')
-            hours = int(uptime // 3600)
-            minutes = int((uptime % 3600) // 60)
-            seconds = int(uptime % 60)
+        uptime_seconds = self.get_uptime_seconds()
+        if uptime_seconds is not None and uptime_seconds > 0:
+            hours = int(uptime_seconds // 3600)
+            minutes = int((uptime_seconds % 3600) // 60)
+            seconds = int(uptime_seconds % 60)
             uptime_str = f" (uptime: {hours}h {minutes}m {seconds}s)"
 
         base_str = f"{emoji} {self.name} [{self.state.value}]"

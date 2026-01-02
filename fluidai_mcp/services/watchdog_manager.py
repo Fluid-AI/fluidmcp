@@ -121,7 +121,14 @@ class WatchdogManager:
         return True
 
     def start_monitoring(self) -> None:
-        """Start the monitoring loop in a background thread."""
+        """Start the monitoring loop in a background thread.
+
+        The thread is created as a daemon to ensure it doesn't prevent program exit,
+        but proper shutdown is ensured through:
+        1. stop_monitoring() which signals the thread to stop gracefully
+        2. Application shutdown handlers that call stop_monitoring() and stop_all_servers()
+        3. The monitoring loop checking _stop_event regularly for clean shutdown
+        """
         if self._monitoring:
             logger.warning("Monitoring is already running")
             return
@@ -263,16 +270,13 @@ class WatchdogManager:
             restart_count=monitor.status.restart_count
         )
 
-        # Increment restart counter
-        monitor.increment_restart_count()
-
-        # Record restart attempt
-        self.restart_manager.record_restart(server_name)
-
         # Start the server
         success = monitor.start()
 
         if success:
+            # Only increment counter and record restart if successful
+            monitor.increment_restart_count()
+            self.restart_manager.record_restart(server_name)
             logger.info(
                 f"Successfully restarted {server_name} "
                 f"(restart #{monitor.status.restart_count})"

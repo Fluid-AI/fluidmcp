@@ -100,6 +100,30 @@ class ProcessMonitor:
             self.status.error_message = error_msg
             return False
 
+    def attach_existing_process(
+        self,
+        process_handle: subprocess.Popen,
+        pid: int,
+        state: ServerState,
+        started_at: datetime
+    ) -> None:
+        """Attach an existing process to this monitor.
+
+        Used when a process is already running and needs to be registered
+        with the watchdog after the fact.
+
+        Args:
+            process_handle: Subprocess.Popen object
+            pid: Process ID
+            state: Initial server state
+            started_at: Process start timestamp
+        """
+        self.process = process_handle
+        self.status.pid = pid
+        self.status.state = state
+        self.status.started_at = started_at
+        logger.info(f"Attached existing process {pid} to monitor {self.server_name}")
+
     def stop(self) -> bool:
         """Stop the server process.
 
@@ -111,7 +135,12 @@ class ProcessMonitor:
             return True
 
         try:
-            logger.info(f"Stopping server {self.server_name} (PID {self.process.pid})")
+            # Safely get PID before attempting to access it
+            pid = getattr(self.process, "pid", None)
+            if pid is not None:
+                logger.info(f"Stopping server {self.server_name} (PID {pid})")
+            else:
+                logger.info(f"Stopping server {self.server_name} (PID unknown)")
 
             self.process.terminate()
 
@@ -193,14 +222,8 @@ class ProcessMonitor:
         """Get current server status.
 
         Returns:
-            ServerStatus object
+            ServerStatus object with computed uptime via get_uptime_seconds()
         """
-        # Update uptime if running
-        if self.status.started_at and self.is_running():
-            uptime = (datetime.now() - self.status.started_at).total_seconds()
-            # Store uptime in a custom attribute (not in dataclass)
-            setattr(self.status, '_uptime_seconds', uptime)
-
         return self.status
 
     def increment_restart_count(self) -> None:
@@ -210,30 +233,37 @@ class ProcessMonitor:
     def get_logs(self, lines: int = 50) -> Dict[str, str]:
         """Get recent logs from the process.
 
+        IMPORTANT: This method is intentionally simplified for stdio-based MCP servers
+        where the pipes are managed by FastAPI router for JSON-RPC communication.
+        Calling readlines() would block indefinitely on active pipes.
+
+        For production HTTP-based servers with separate logging, implement a proper
+        log buffer with non-blocking reads using select/threading, or capture logs
+        to files and read from there.
+
         Args:
             lines: Number of lines to retrieve
 
         Returns:
-            Dictionary with stdout and stderr logs
+            Dictionary with stdout and stderr logs (empty for active stdio servers)
         """
         if self.process is None:
             return {"stdout": "", "stderr": ""}
 
         try:
-            # Read available output (non-blocking)
             stdout_lines = []
             stderr_lines = []
 
-            # Note: This is a simplified version
-            # In production, you'd want to use a proper log buffer
-            if self.process.stdout:
+            # For stdio servers, pipes are in use for JSON-RPC - don't read from them
+            # Only attempt to read if the process has terminated (streams closed)
+            if self.process.stdout and self.process.poll() is not None:
                 try:
                     stdout_lines = self.process.stdout.readlines()[-lines:]
                 except (IOError, ValueError) as e:
                     # Stream closed or invalid - this is expected if process ended
                     logger.debug(f"Could not read stdout for {self.server_name}: {e}")
 
-            if self.process.stderr:
+            if self.process.stderr and self.process.poll() is not None:
                 try:
                     stderr_lines = self.process.stderr.readlines()[-lines:]
                 except (IOError, ValueError) as e:
