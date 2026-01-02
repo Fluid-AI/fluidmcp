@@ -159,15 +159,15 @@ def run_servers(
 
                     # Attach the existing process to the monitor
                     from datetime import datetime
-                    monitor = watchdog.monitors[process_info["server_name"]]
-                    monitor.attach_existing_process(
-                        process_handle=process_info["process_handle"],
-                        pid=process_info["pid"],
-                        state=ServerState.RUNNING,
-                        started_at=datetime.now()
-                    )
-
-                    logger.info(f"Registered {process_info['server_name']} with watchdog (PID: {process_info['pid']})")
+                    monitor = watchdog.get_monitor(process_info["server_name"])
+                    if monitor:
+                        monitor.attach_existing_process(
+                            process_handle=process_info["process_handle"],
+                            pid=process_info["pid"],
+                            state=ServerState.RUNNING,
+                            started_at=datetime.now()
+                        )
+                        logger.info(f"Registered {process_info['server_name']} with watchdog (PID: {process_info['pid']})")
             else:
                 print(f"Failed to create router for {server_name}")
 

@@ -74,10 +74,14 @@ class HealthChecker:
         url = f"http://{host}:{port}{path}"
 
         try:
+            # For localhost/127.0.0.1, SSL verification is not needed
+            # For external servers, verify SSL certificates
+            verify_ssl = not (host in ('localhost', '127.0.0.1', '0.0.0.0'))
+
             if method.upper() == "POST":
-                response = requests.post(url, timeout=self.http_timeout)
+                response = requests.post(url, timeout=self.http_timeout, verify=verify_ssl)
             else:
-                response = requests.get(url, timeout=self.http_timeout)
+                response = requests.get(url, timeout=self.http_timeout, verify=verify_ssl)
 
             # Consider 2xx and 3xx as healthy
             if 200 <= response.status_code < 400:

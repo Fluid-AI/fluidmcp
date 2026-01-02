@@ -33,6 +33,7 @@ class WatchdogManager:
         self._monitoring = False
         self._monitor_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._monitors_lock = threading.RLock()  # Reentrant lock for thread-safe access
 
     def add_server(
         self,
@@ -66,25 +67,26 @@ class WatchdogManager:
         Returns:
             True if added and started successfully, False otherwise
         """
-        if server_name in self.monitors:
-            logger.warning(f"Server {server_name} already exists in watchdog")
-            return False
+        with self._monitors_lock:
+            if server_name in self.monitors:
+                logger.warning(f"Server {server_name} already exists in watchdog")
+                return False
 
-        # Create process monitor
-        monitor = ProcessMonitor(
-            server_name=server_name,
-            command=command,
-            args=args,
-            env=env,
-            working_dir=working_dir,
-            port=port,
-            host=host,
-            restart_policy=restart_policy or self.default_restart_policy,
-            health_check_enabled=health_check_enabled,
-            restart_enabled=enable_restart
-        )
+            # Create process monitor
+            monitor = ProcessMonitor(
+                server_name=server_name,
+                command=command,
+                args=args,
+                env=env,
+                working_dir=working_dir,
+                port=port,
+                host=host,
+                restart_policy=restart_policy or self.default_restart_policy,
+                health_check_enabled=health_check_enabled,
+                restart_enabled=enable_restart
+            )
 
-        self.monitors[server_name] = monitor
+            self.monitors[server_name] = monitor
 
         # Start the server if auto_start is enabled
         if auto_start:
@@ -105,20 +107,21 @@ class WatchdogManager:
         Returns:
             True if removed successfully, False otherwise
         """
-        if server_name not in self.monitors:
-            logger.warning(f"Server {server_name} not found in watchdog")
-            return False
+        with self._monitors_lock:
+            if server_name not in self.monitors:
+                logger.warning(f"Server {server_name} not found in watchdog")
+                return False
 
-        # Stop the server
-        monitor = self.monitors[server_name]
-        monitor.stop()
+            # Stop the server
+            monitor = self.monitors[server_name]
+            monitor.stop()
 
-        # Remove from tracking
-        del self.monitors[server_name]
-        self.restart_manager.reset_restart_history(server_name)
+            # Remove from tracking
+            del self.monitors[server_name]
+            self.restart_manager.reset_restart_history(server_name)
 
-        logger.info(f"Removed {server_name} from watchdog")
-        return True
+            logger.info(f"Removed {server_name} from watchdog")
+            return True
 
     def start_monitoring(self) -> None:
         """Start the monitoring loop in a background thread.
@@ -168,8 +171,11 @@ class WatchdogManager:
 
         while self._monitoring and not self._stop_event.is_set():
             try:
-                # Check health of all servers
-                for server_name, monitor in list(self.monitors.items()):
+                # Check health of all servers (create snapshot with lock)
+                with self._monitors_lock:
+                    monitors_snapshot = list(self.monitors.items())
+
+                for server_name, monitor in monitors_snapshot:
                     self._check_and_restart_if_needed(server_name, monitor)
 
                 # Clean up old restart history
@@ -290,7 +296,20 @@ class WatchdogManager:
         Returns:
             List of ServerStatus objects
         """
-        return [monitor.get_status() for monitor in self.monitors.values()]
+        with self._monitors_lock:
+            return [monitor.get_status() for monitor in self.monitors.values()]
+
+    def get_monitor(self, server_name: str) -> Optional[ProcessMonitor]:
+        """Get a specific server monitor (for internal use).
+
+        Args:
+            server_name: Name of the server
+
+        Returns:
+            ProcessMonitor object or None if not found
+        """
+        with self._monitors_lock:
+            return self.monitors.get(server_name)
 
     def get_server_status(self, server_name: str) -> Optional[ServerStatus]:
         """Get status of a specific server.
@@ -301,16 +320,19 @@ class WatchdogManager:
         Returns:
             ServerStatus object or None if not found
         """
-        monitor = self.monitors.get(server_name)
+        monitor = self.get_monitor(server_name)
         if monitor:
             return monitor.get_status()
         return None
 
     def stop_all_servers(self) -> None:
         """Stop all monitored servers."""
-        logger.info(f"Stopping all {len(self.monitors)} servers...")
+        with self._monitors_lock:
+            server_count = len(self.monitors)
+            logger.info(f"Stopping all {server_count} servers...")
+            monitors_snapshot = list(self.monitors.items())
 
-        for server_name, monitor in self.monitors.items():
+        for server_name, monitor in monitors_snapshot:
             try:
                 monitor.stop()
             except Exception as e:

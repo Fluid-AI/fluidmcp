@@ -43,7 +43,9 @@ class ProcessMonitor:
         self.server_name = server_name
         self.command = command
         self.args = args
-        self.env = env or {}
+        # If env is None, use None to inherit parent environment
+        # If env is provided (even empty dict), use it as-is
+        self.env = env if env is not None else None
         self.working_dir = working_dir
         self.port = port
         self.host = host
@@ -256,16 +258,23 @@ class ProcessMonitor:
 
             # For stdio servers, pipes are in use for JSON-RPC - don't read from them
             # Only attempt to read if the process has terminated (streams closed)
+            # Use deque for memory-efficient tail reading
+            from collections import deque
+
             if self.process.stdout and self.process.poll() is not None:
                 try:
-                    stdout_lines = self.process.stdout.readlines()[-lines:]
+                    # Read only last N lines to avoid memory issues with large outputs
+                    stdout_deque = deque(self.process.stdout, maxlen=lines)
+                    stdout_lines = list(stdout_deque)
                 except (IOError, ValueError) as e:
                     # Stream closed or invalid - this is expected if process ended
                     logger.debug(f"Could not read stdout for {self.server_name}: {e}")
 
             if self.process.stderr and self.process.poll() is not None:
                 try:
-                    stderr_lines = self.process.stderr.readlines()[-lines:]
+                    # Read only last N lines to avoid memory issues with large outputs
+                    stderr_deque = deque(self.process.stderr, maxlen=lines)
+                    stderr_lines = list(stderr_deque)
                 except (IOError, ValueError) as e:
                     # Stream closed or invalid - this is expected if process ended
                     logger.debug(f"Could not read stderr for {self.server_name}: {e}")

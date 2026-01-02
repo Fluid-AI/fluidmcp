@@ -75,11 +75,15 @@ class RestartManager:
         Returns:
             Delay in seconds
         """
-        # Calculate exponential backoff
-        delay = policy.initial_delay_seconds * (policy.backoff_multiplier ** restart_count)
-
-        # Cap at max delay
-        delay = min(delay, policy.max_delay_seconds)
+        # Calculate exponential backoff with overflow protection
+        # Use min during calculation to avoid intermediate overflow
+        try:
+            exponent = min(restart_count, 20)  # Cap exponent to prevent overflow
+            delay = policy.initial_delay_seconds * (policy.backoff_multiplier ** exponent)
+            delay = min(delay, policy.max_delay_seconds)
+        except OverflowError:
+            # If somehow we still overflow, use max delay
+            delay = policy.max_delay_seconds
 
         logger.debug(
             f"Calculated backoff delay for {server_name}: "
