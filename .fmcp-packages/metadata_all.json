@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "airbnb": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@openbnb/mcp-server-airbnb",
+        "--ignore-robots-txt"
+      ],
+      "port": "8101",
+      "install_path": "/workspaces/fluidmcp/.fmcp-packages/Airbnb/airbnb/0.1.0"
+    }
+  }
+}

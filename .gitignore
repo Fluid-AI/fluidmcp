@@ -58,7 +58,6 @@ local-*.json
 test-*.json
 
 # FluidMCP packages directory
-.fmcp-packages/
 
 # Temporary server directories (created when running from config files)
 .temp_servers/
