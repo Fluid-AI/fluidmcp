@@ -4,8 +4,10 @@ Authentication API routes for Auth0 OAuth flow.
 This module provides FastAPI endpoints for Auth0 authentication.
 """
 
+from datetime import datetime
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
+from loguru import logger
 from .config import Auth0Config
 from .oauth_client import Auth0Client
 from .token_manager import TokenManager
@@ -52,7 +54,24 @@ async def login(request: Request, connection: str = None):
 @router.get("/callback")
 async def callback(request: Request, code: str = None, state: str = None, error: str = None):
     """Handle Auth0 OAuth callback"""
+    # Extract request metadata for logging
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get('user-agent', '')
+
     if error:
+        # Log failed authentication attempt
+        if oauth_client and session_store.db:
+            try:
+                session_store.db.log_auth_event({
+                    'event_type': 'login_failed',
+                    'ip_address': ip_address,
+                    'user_agent': user_agent,
+                    'success': False,
+                    'error_message': error
+                })
+            except Exception as e:
+                logger.error(f"Failed to log auth failure: {e}")
+
         error_html = f"""
         <!DOCTYPE html>
         <html>
@@ -95,8 +114,22 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         # Create our custom JWT token
         access_token = token_manager.create_access_token(user_info)
 
-        # Create session
-        session_id = session_store.create_session(user_info)
+        # Get token expiration
+        from jose import jwt
+        try:
+            decoded = jwt.decode(access_token, options={"verify_signature": False})
+            expires_at = datetime.fromtimestamp(decoded.get('exp', 0)).isoformat() if decoded.get('exp') else ''
+        except:
+            expires_at = ''
+
+        # Create session with metadata
+        session_id = session_store.create_session(
+            user_info,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            access_token=access_token,
+            expires_at=expires_at
+        )
 
         # Return HTML that stores token and redirects
         success_html = f"""
@@ -132,6 +165,19 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         return HTMLResponse(content=success_html)
 
     except Exception as e:
+        # Log failed token exchange
+        if session_store.db:
+            try:
+                session_store.db.log_auth_event({
+                    'event_type': 'login_failed',
+                    'ip_address': ip_address,
+                    'user_agent': user_agent,
+                    'success': False,
+                    'error_message': str(e)
+                })
+            except Exception as log_error:
+                logger.error(f"Failed to log token exchange failure: {log_error}")
+
         error_html = f"""
         <!DOCTYPE html>
         <html>
@@ -172,10 +218,18 @@ async def get_user_info(request: Request):
 @router.post("/logout")
 async def logout(request: Request):
     """Logout user and clear session"""
+    # Extract request metadata for logging
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get('user-agent', '')
+
     # Get session ID from request if available
     session_id = request.headers.get('X-Session-ID')
     if session_id:
-        session_store.delete_session(session_id)
+        session_store.delete_session(
+            session_id,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
 
     # Generate Auth0 logout URL
     logout_url = oauth_client.logout_url(str(request.base_url))

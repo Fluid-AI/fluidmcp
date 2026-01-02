@@ -46,9 +46,9 @@ Welcome to FluidMCP! This index helps you find the right documentation for your 
 
 | Document | Purpose |
 |----------|---------|
-| [DYNAMIC_OAUTH_CHANGES.md](DYNAMIC_OAUTH_CHANGES.md) | Technical implementation details |
-| [fluidai_mcp/auth/AUTH0_SETUP.md](fluidai_mcp/auth/AUTH0_SETUP.md) | Detailed Auth0 configuration |
-| [CLAUDE.md](CLAUDE.md) | Architecture and development guide |
+| [REGISTRY_PACKAGE_AUTH.md](REGISTRY_PACKAGE_AUTH.md) | Securing registry packages with OAuth |
+| [AUTH0_WILDCARD_SETUP.md](AUTH0_WILDCARD_SETUP.md) | Wildcard URL configuration |
+| [../CLAUDE.md](../CLAUDE.md) | Architecture and development guide |
 
 ---
 

@@ -30,7 +30,7 @@ def main():
     print("   2. Go to https://manage.auth0.com")
     print("   3. Select your application")
     print("   4. Paste the URLs into Application URIs settings")
-    print("   5. Set your environment variables (see AUTH0_SETUP.md)")
+    print("   5. Set your environment variables (see docs/OAUTH_SETUP_QUICK_START.md)")
     print("   6. Run: fluidmcp run all --start-server --auth0")
     print()
 

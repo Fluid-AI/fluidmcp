@@ -413,7 +413,7 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
                 print("Missing required environment variables:")
                 for var in missing:
                     print(f"  - {var}")
-                print("\nPlease see fluidai_mcp/auth/AUTH0_SETUP.md for setup instructions.")
+                print("\nPlease see docs/OAUTH_SETUP_QUICK_START.md for setup instructions.")
                 print("=" * 70 + "\n")
                 sys.exit(1)
 

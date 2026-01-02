@@ -209,5 +209,5 @@ FluidMCP now supports **dynamic OAuth authentication** with automatic URL detect
 The server automatically detects your environment and displays the correct URLs! 🎯
 
 **Documentation**:
-- Quick Start: [OAUTH_SETUP_QUICK_START.md](OAUTH_SETUP_QUICK_START.md)
-- Detailed Guide: [fluidai_mcp/auth/AUTH0_SETUP.md](fluidai_mcp/auth/AUTH0_SETUP.md)
+- Quick Start: [docs/OAUTH_SETUP_QUICK_START.md](docs/OAUTH_SETUP_QUICK_START.md)
+- Wildcard Setup: [docs/AUTH0_WILDCARD_SETUP.md](docs/AUTH0_WILDCARD_SETUP.md)

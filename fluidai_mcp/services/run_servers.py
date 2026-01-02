@@ -106,6 +106,28 @@ def run_servers(
     if auth0_mode:
         try:
             from fluidai_mcp.auth import Auth0Config, auth_router, init_auth_routes
+            from fluidai_mcp.auth.db_manager import AuthDatabase
+            from fluidai_mcp.auth.session_store import session_store
+            from fluidai_mcp.auth.logging_middleware import APIAccessLoggingMiddleware
+
+            # Initialize authentication database
+            db_path = Path(INSTALLATION_DIR) / "fluidmcp_auth.db"
+            try:
+                auth_db = AuthDatabase(str(db_path))
+                auth_db.initialize_database()
+                logger.info(f"✅ Auth database initialized: {db_path}")
+
+                # Connect database to session store
+                session_store.db = auth_db
+
+                # Add API access logging middleware
+                app.add_middleware(APIAccessLoggingMiddleware, db_manager=auth_db)
+                logger.info("✅ API access logging middleware enabled")
+
+            except Exception as db_error:
+                logger.warning(f"⚠️  Failed to initialize auth database: {db_error}")
+                logger.warning("⚠️  Continuing without persistent logging (in-memory only)")
+                auth_db = None
 
             # Load Auth0 configuration with dynamic URL detection
             auth_config = Auth0Config.from_env_or_file(port=port)
@@ -138,7 +160,7 @@ def run_servers(
             print("  - AUTH0_CLIENT_ID")
             print("  - AUTH0_CLIENT_SECRET")
             print("  - FMCP_JWT_SECRET")
-            print("\nSee fluidai_mcp/auth/AUTH0_SETUP.md for setup instructions.")
+            print("\nSee docs/OAUTH_SETUP_QUICK_START.md for setup instructions.")
             import sys
             sys.exit(1)
 

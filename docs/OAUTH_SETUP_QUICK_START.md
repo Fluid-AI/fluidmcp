@@ -190,9 +190,10 @@ export AUTH0_CALLBACK_URL="https://yourdomain.com/auth/callback"
 
 ## 📚 More Information
 
-- **Full Setup Guide**: See [fluidai_mcp/auth/AUTH0_SETUP.md](fluidai_mcp/auth/AUTH0_SETUP.md)
+- **Wildcard Setup Guide**: See [AUTH0_WILDCARD_SETUP.md](AUTH0_WILDCARD_SETUP.md)
+- **Registry Package Auth**: See [REGISTRY_PACKAGE_AUTH.md](REGISTRY_PACKAGE_AUTH.md)
 - **Auth0 Documentation**: https://auth0.com/docs
-- **Report Issues**: https://github.com/your-org/fluidmcp/issues
+- **Report Issues**: https://github.com/Fluid-AI/fluidmcp/issues
 
 ---
 

@@ -24,7 +24,7 @@ class Auth0Config(BaseModel):
     # JWT settings
     jwt_secret: Optional[str] = Field(default=None)
     jwt_algorithm: str = "HS256"
-    jwt_expiration_minutes: int = 30
+    jwt_expiration_minutes: int = 60  # 1 hour
 
     # Port for URL generation
     port: int = Field(default=8099)
@@ -107,7 +107,7 @@ class Auth0Config(BaseModel):
         # Start with defaults
         config_data = {
             'jwt_algorithm': 'HS256',
-            'jwt_expiration_minutes': 30,
+            'jwt_expiration_minutes': 60,  # 1 hour
             'port': port
         }
 
