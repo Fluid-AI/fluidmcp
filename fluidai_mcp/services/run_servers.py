@@ -124,24 +124,21 @@ def run_servers(
             package_name, router, process_info = None, None, None
             result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=True)
 
-            if result is not None:
-                if not isinstance(result, tuple):
-                    logger.error(
-                        f"Unexpected result type from launch_mcp_using_fastapi_proxy for {server_name}: "
-                        f"{type(result).__name__}. Expected tuple."
-                    )
-                elif len(result) == 3:
-                    package_name, router, process_info = result
-                elif len(result) == 2:
-                    package_name, router = result
-                    logger.debug(f"Received 2-tuple from launch (no process_info) for {server_name}")
-                else:
-                    logger.error(
-                        f"Unexpected result length from launch_mcp_using_fastapi_proxy for {server_name}: "
-                        f"{len(result)}. Expected 2 or 3 elements."
-                    )
-            else:
+            if result is None:
                 logger.error(f"launch_mcp_using_fastapi_proxy returned None for {server_name}")
+            elif not isinstance(result, tuple):
+                logger.error(
+                    f"Unexpected result type from launch_mcp_using_fastapi_proxy for {server_name}: "
+                    f"{type(result).__name__}. Expected 3-tuple."
+                )
+            elif len(result) != 3:
+                logger.error(
+                    f"Unexpected result length from launch_mcp_using_fastapi_proxy for {server_name}: "
+                    f"{len(result)}. Expected 3 elements (package_name, router, process_info) "
+                    f"when return_process_info=True."
+                )
+            else:
+                package_name, router, process_info = result
 
             if router:
                 app.include_router(router, tags=[server_name])
@@ -321,17 +318,25 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def _cleanup_watchdog(watchdog: Optional[WatchdogManager]) -> None:
+def _cleanup_watchdog(watchdog: Optional[WatchdogManager], cleanup_done_flag: Optional[dict] = None) -> None:
     """
     Clean up watchdog monitoring and stop all servers.
 
     Args:
         watchdog: Optional WatchdogManager instance to cleanup
+        cleanup_done_flag: Optional dict with 'done' key to track if cleanup was already performed
     """
+    if cleanup_done_flag and cleanup_done_flag.get('done'):
+        # Already cleaned up, skip to prevent duplicate cleanup
+        return
+
     if watchdog:
         logger.info("Shutting down servers...")
         watchdog.stop_monitoring()
         watchdog.stop_all_servers()
+
+    if cleanup_done_flag is not None:
+        cleanup_done_flag['done'] = True
 
 
 def _start_server(
@@ -365,11 +370,17 @@ def _start_server(
                 print("Invalid choice. Aborting.")
                 return
 
-    # Add shutdown event handler for watchdog cleanup
-    def shutdown_event() -> None:
-        _cleanup_watchdog(watchdog)
+    # Flag to track if cleanup has been performed (prevents duplicate cleanup)
+    cleanup_done = {'done': False}
 
-    app.add_event_handler("shutdown", shutdown_event)
+    # Add shutdown event handler for watchdog cleanup
+    # Ensure the shutdown handler is only registered once per app instance
+    def shutdown_event() -> None:
+        _cleanup_watchdog(watchdog, cleanup_done)
+
+    if not getattr(app, "_watchdog_shutdown_registered", False):
+        app.add_event_handler("shutdown", shutdown_event)
+        setattr(app, "_watchdog_shutdown_registered", True)
 
     logger.info(f"Starting FastAPI server on port {port}")
     print(f"Starting FastAPI server on port {port}")
@@ -379,6 +390,7 @@ def _start_server(
         uvicorn.run(app, host="0.0.0.0", port=port)
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
-        # Note: uvicorn triggers shutdown event handlers, so _cleanup_watchdog
-        # will be called via shutdown_event(). No need to call it again here.
+        # Call cleanup explicitly to ensure it happens even if shutdown event doesn't fire
+        # The flag prevents duplicate cleanup if shutdown event also fires
+        _cleanup_watchdog(watchdog, cleanup_done)
         print("\nServer stopped")

@@ -75,8 +75,8 @@ class RestartManager:
         Returns:
             Delay in seconds
         """
-        # Calculate exponential backoff with capped exponent to avoid excessively large delays
-        exponent = min(restart_count, 20)  # Cap exponent to prevent excessively large values
+        # Calculate exponential backoff with a conservative exponent cap to avoid excessively large delays
+        exponent = min(restart_count, 10)  # Cap exponent to prevent excessively large intermediate values
         delay = policy.initial_delay_seconds * (policy.backoff_multiplier ** exponent)
         delay = min(delay, policy.max_delay_seconds)
 

@@ -63,7 +63,14 @@ class ProcessMonitor:
         self.server_name = server_name
         self.command = command
         self.args = args
-        # Callers are responsible for merging with os.environ if needed
+
+        # Validate and warn about environment variable handling
+        if env is None or (isinstance(env, dict) and len(env) == 0):
+            logger.warning(
+                f"ProcessMonitor for {server_name}: env is None or empty. "
+                f"Subprocess will have no environment variables, which may cause failures. "
+                f"Callers should pass a merged dict of os.environ + custom vars."
+            )
         self.env = env
         self.working_dir = working_dir
         self.port = port
@@ -98,13 +105,14 @@ class ProcessMonitor:
             self.status.started_at = datetime.now()
 
             # Start the process
+            # For HTTP-based servers, we don't capture stdout/stderr to avoid pipe deadlocks.
+            # Stdio-based servers are started externally and attached via attach_existing_process().
             self.process = subprocess.Popen(
                 [self.command] + self.args,
                 env=self.env,
                 cwd=self.working_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
             )
 
             self.status.pid = self.process.pid
@@ -254,22 +262,23 @@ class ProcessMonitor:
     def get_logs(self, lines: int = 50) -> Dict[str, str]:
         """Get recent logs from the process.
 
-        IMPORTANT: For stdio-based MCP servers, stdout/stderr pipes are used for JSON-RPC
-        communication and may contain large amounts of protocol traffic. Reading from these
-        pipes to obtain a "tail" of logs would require consuming the entire stream into
-        memory, which can cause memory issues for terminated processes with large outputs
-        and interfere with the router's management of the pipes.
+        NOTE: This method intentionally returns empty strings and does NOT read from
+        process pipes. This design choice avoids several issues:
 
-        To avoid these problems, this method intentionally does not read from the process
-        pipes. If detailed logs are required, the underlying server should be configured to
-        write to log files, and those files should be read through a separate, dedicated
-        mechanism.
+        - For stdio-based MCP servers, stdout/stderr are used for JSON-RPC communication
+          and are managed by the FastAPI router, not by this monitor
+        - For HTTP-based servers, process logs are not captured (stdout/stderr → DEVNULL)
+        - Reading from pipes could cause memory issues or interfere with router management
+
+        If detailed logs are required, configure servers to write to log files and read
+        those files through a separate, dedicated mechanism.
 
         Args:
             lines: Number of lines to retrieve (unused, kept for API compatibility)
 
         Returns:
-            Dictionary with empty strings for stdout/stderr and explanatory message
+            Dictionary with empty strings for stdout/stderr and explanatory message.
+            Always returns empty logs regardless of server type.
         """
         # For stdio-based MCP servers, pipes are managed by FastAPI router
         # and should not be read from this monitoring code
