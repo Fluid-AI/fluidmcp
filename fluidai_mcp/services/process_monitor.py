@@ -67,12 +67,13 @@ class ProcessMonitor:
         self.args = args
 
         # Validate and warn about environment variable handling
-        if isinstance(env, dict) and len(env) == 0:
+        if env is not None and not env:
             logger.warning(
-                f"ProcessMonitor for {server_name}: empty env dict passed. "
-                f"Subprocess will have no environment variables. "
-                f"Pass os.environ merged with custom vars instead."
-            )
+        f"ProcessMonitor for {server_name}: empty or falsy env dict-like object passed. "
+        f"Subprocess may have no environment variables. "
+        f"Pass os.environ merged with custom vars instead."
+        )
+
         self.env = env
         self.working_dir = working_dir
         self.port = port
@@ -167,11 +168,12 @@ class ProcessMonitor:
 
         try:
             # Log PID if available; fall back to "unknown" if attribute is missing
-            try:
-                pid = self.process.pid
+            if self.process is not None:
+                pid = getattr(self.process, "pid", "unknown")
                 logger.info(f"Stopping server {self.server_name} (PID {pid})")
-            except AttributeError:
+            else:
                 logger.info(f"Stopping server {self.server_name} (PID unknown)")
+
 
             self.process.terminate()
 
