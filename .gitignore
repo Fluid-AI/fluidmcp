@@ -65,4 +65,3 @@ test-*.json
 
 # Auth0 configuration (contains secrets)
 auth0-config.json
-auth0-config-*.jsonoutput_record/
