@@ -352,6 +352,9 @@ def main():
     github_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    github_parser.add_argument("--watchdog", action="store_true", help="Enable automatic process monitoring and restart")
+    github_parser.add_argument("--health-check-interval", type=int, default=30, help="Health check interval in seconds (default: 30)")
+    github_parser.add_argument("--max-restarts", type=int, default=5, help="Maximum restart attempts per server (default: 5)")
 
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
