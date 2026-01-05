@@ -140,8 +140,12 @@ def start_fastapi_in_thread(app: FastAPI, port: int):
 def initialize_mcp_server(process: subprocess.Popen) -> bool:
     """Initialize MCP server with proper handshake"""
     try:
-        
-        
+        # Check if process is already dead
+        if process.poll() is not None:
+            stderr_output = process.stderr.read() if process.stderr else "No stderr available"
+            logger.error(f"Process died before initialization. stderr: {stderr_output}")
+            return False
+
         # Send initialize request
         init_request = {
             "jsonrpc": "2.0",
@@ -153,25 +157,35 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
                 "clientInfo": {"name": "fluidmcp-client", "version": "1.0.0"}
             }
         }
-        
+
+        logger.debug(f"Sending initialize request: {json.dumps(init_request)}")
         process.stdin.write(json.dumps(init_request) + "\n")
         process.stdin.flush()
-        
+
         # Wait for response
         start_time = time.time()
         while time.time() - start_time < 10:
             if process.poll() is not None:
+                stderr_output = process.stderr.read() if process.stderr else "No stderr available"
+                logger.error(f"Process died during initialization. stderr: {stderr_output}")
                 return False
             response_line = process.stdout.readline().strip()
             if response_line:
-                response = json.loads(response_line)
-                if response.get("id") == 0 and "result" in response:
-                    # Send initialized notification
-                    notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-                    process.stdin.write(json.dumps(notif) + "\n")
-                    process.stdin.flush()
-                    return True
+                logger.debug(f"Received initialization response: {response_line}")
+                try:
+                    response = json.loads(response_line)
+                    if response.get("id") == 0 and "result" in response:
+                        # Send initialized notification
+                        notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                        logger.debug(f"Sending initialized notification: {json.dumps(notif)}")
+                        process.stdin.write(json.dumps(notif) + "\n")
+                        process.stdin.flush()
+                        logger.info("MCP server initialized successfully")
+                        return True
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse response: {response_line}, error: {e}")
             time.sleep(0.1)
+        logger.warning("Initialization timeout after 10 seconds")
         return False
     except Exception:
         logger.exception("Initialization error")

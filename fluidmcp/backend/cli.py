@@ -6,16 +6,16 @@ import json
 from loguru import logger
 import secrets
 
-from fluidai_mcp.services import (
+from .services import (
     install_package,
     edit_env_variables,
     parse_package_string,
     resolve_config,
     run_servers,
 )
-from fluidai_mcp.services.package_installer import package_exists
-from fluidai_mcp.services.package_list import get_latest_version_dir
-from fluidai_mcp.services.config_resolver import INSTALLATION_DIR
+from .services.package_installer import package_exists
+from .services.package_list import get_latest_version_dir
+from .services.config_resolver import INSTALLATION_DIR
 
 
 
@@ -226,12 +226,12 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
     """
-    from fluidai_mcp.services import (
+    from .services import (
         clone_github_repo,
         extract_or_create_metadata,
     )
-    from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
-    from fluidai_mcp.services.network_utils import is_port_in_use, kill_process_on_port
+    from .services.package_launcher import launch_mcp_using_fastapi_proxy
+    from .services.network_utils import is_port_in_use, kill_process_on_port
     from fastapi import FastAPI
     import uvicorn
 
