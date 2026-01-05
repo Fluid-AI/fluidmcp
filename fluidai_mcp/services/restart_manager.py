@@ -2,10 +2,18 @@
 
 import time
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List, TypedDict
 from loguru import logger
 
 from ..models.server_status import RestartPolicy
+
+
+class RestartStats(TypedDict):
+    """Restart statistics for a server."""
+    total_restarts: int
+    last_restart: Optional[str]
+    recent_restarts_1h: int
+    recent_restarts_24h: int
 
 
 class RestartManager:
@@ -13,8 +21,7 @@ class RestartManager:
 
     def __init__(self):
         """Initialize restart manager."""
-        self._restart_history: Dict[str, list] = {}  # server_name -> list of restart timestamps
-        self._backoff_state: Dict[str, int] = {}  # server_name -> current backoff level
+        self._restart_history: Dict[str, List[datetime]] = {}  # server_name -> list of restart timestamps
 
     def can_restart(
         self,
@@ -75,9 +82,18 @@ class RestartManager:
         Returns:
             Delay in seconds
         """
+        # Validate/cap backoff_multiplier to avoid extremely large intermediate values
+        safe_multiplier = policy.backoff_multiplier
+        if safe_multiplier > 10.0:
+            logger.warning(
+                f"backoff_multiplier {safe_multiplier} for {server_name} is too large; "
+                "capping to 10.0 for backoff calculation"
+            )
+            safe_multiplier = 10.0
+
         # Calculate exponential backoff with a conservative exponent cap to avoid excessively large delays
         exponent = min(restart_count, 10)  # Cap exponent to prevent excessively large intermediate values
-        delay = policy.initial_delay_seconds * (policy.backoff_multiplier ** exponent)
+        delay = policy.initial_delay_seconds * (safe_multiplier ** exponent)
         delay = min(delay, policy.max_delay_seconds)
 
         logger.debug(
@@ -111,9 +127,6 @@ class RestartManager:
         if server_name in self._restart_history:
             del self._restart_history[server_name]
 
-        if server_name in self._backoff_state:
-            del self._backoff_state[server_name]
-
         logger.info(f"Reset restart history for {server_name}")
 
     def cleanup_old_history(self, max_age_seconds: int = 3600) -> None:
@@ -136,14 +149,14 @@ class RestartManager:
                 # Remove server if no recent history
                 del self._restart_history[server_name]
 
-    def get_restart_stats(self, server_name: str) -> Dict:
+    def get_restart_stats(self, server_name: str) -> RestartStats:
         """Get restart statistics for a server.
 
         Args:
             server_name: Name of the server
 
         Returns:
-            Dictionary with restart statistics
+            RestartStats dictionary with restart statistics
         """
         history = self._restart_history.get(server_name, [])
 

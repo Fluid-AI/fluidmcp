@@ -98,7 +98,7 @@ class HealthChecker:
         port: int,
         server_name: str
     ) -> Tuple[bool, Optional[str]]:
-        """Check MCP server health via JSON-RPC ping request.
+        """Check MCP server health via JSON-RPC tools/list request.
 
         Args:
             host: Server host
@@ -110,11 +110,11 @@ class HealthChecker:
         """
         url = f"http://{host}:{port}/{server_name}/mcp"
 
-        # JSON-RPC ping request
+        # JSON-RPC tools/list request (standard MCP method)
         payload = {
             "jsonrpc": "2.0",
             "id": f"health_check_{datetime.now().timestamp()}",
-            "method": "ping",
+            "method": "tools/list",
             "params": {}
         }
 
@@ -134,7 +134,7 @@ class HealthChecker:
             # Check for JSON-RPC error
             if "error" in data:
                 error = data["error"]
-                return False, f"JSON-RPC error: {error.get('message', error)}"
+                return False, f"JSON-RPC error: {error.get('message', str(error))}"
 
             # Successful response
             return True, None
