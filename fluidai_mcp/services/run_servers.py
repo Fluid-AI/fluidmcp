@@ -400,3 +400,4 @@ def _start_server(
         # The flag prevents duplicate cleanup if shutdown event also fires
         _cleanup_watchdog(watchdog, cleanup_done)
         print("\nServer stopped")
+
