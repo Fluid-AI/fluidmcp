@@ -165,18 +165,34 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
     from .package_launcher import get_token
 
     @app.get("/api/tools", tags=["unified"])
-    async def get_all_tools(token: str = Depends(get_token) if secure_mode else None):
+    async def get_all_tools(token: str = Depends(get_token)):
         """
         Dynamic tool discovery across all running MCP servers.
 
         Returns:
-            JSON response with all tools from all servers, including:
-            - tools: List of tool definitions with server labels
-            - summary: Metadata about total tools and servers
+            JSONResponse: A JSON response with the following structure:
+                {
+                    "tools": [
+                        {
+                            "name": str,
+                            "description": str,
+                            "input_schema": dict,   # Tool input schema as returned by the MCP server
+                            "server": str           # Identifier/label of the MCP server providing the tool
+                        },
+                        ...
+                    ],
+                    "summary": {
+                        "total_tools": int,          # Total number of discovered tools
+                        "servers": list[str],        # List of server identifiers that responded successfully
+                        "server_count": int,         # Number of servers that responded successfully
+                        "error_count": int,          # Number of servers that returned an error or no tools
+                        "servers_with_errors": list[str] | None  # Optional: identifiers of servers that had errors
+                    }
+                }
         """
         all_tools = []
         servers_found = []
-        servers_with_errors = []
+        servers_with_errors = set()  # Use set to avoid duplicates
 
         # Get server processes from explicit registry
         server_processes = _get_server_processes()
@@ -218,21 +234,23 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
                         )
                     except asyncio.TimeoutError:
                         logger.warning(f"Timeout waiting for response from server: {server_name}")
-                        servers_with_errors.append(server_name)
+                        servers_with_errors.add(server_name)
                         continue
 
-                if not response_line:
-                    logger.warning(f"No response from server: {server_name}")
-                    servers_with_errors.append(server_name)
+                # Strip whitespace/newlines before checking and parsing
+                response_line_stripped = response_line.strip()
+                if not response_line_stripped:
+                    logger.warning(f"Empty response (after stripping) from server: {server_name}")
+                    servers_with_errors.add(server_name)
                     continue
 
-                response_data = json.loads(response_line)
+                response_data = json.loads(response_line_stripped)
 
                 # Check for JSON-RPC error
                 if "error" in response_data:
                     error_msg = response_data["error"].get("message", "Unknown error")
                     logger.warning(f"Error from server {server_name}: {error_msg}")
-                    servers_with_errors.append(server_name)
+                    servers_with_errors.add(server_name)
                     continue
 
                 # Extract tools from response
@@ -249,14 +267,14 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
                     logger.debug(f"Found {len(server_tools)} tools from {server_name}")
                 else:
                     logger.warning(f"Unexpected response format from {server_name}")
-                    servers_with_errors.append(server_name)
+                    servers_with_errors.add(server_name)
 
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON response from {server_name}: {e}")
-                servers_with_errors.append(server_name)
+                servers_with_errors.add(server_name)
             except Exception as e:
                 logger.error(f"Error querying tools from {server_name}: {e}")
-                servers_with_errors.append(server_name)
+                servers_with_errors.add(server_name)
 
         # Build response (error_count always present for API consistency)
         response = {
@@ -270,7 +288,7 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         }
 
         if servers_with_errors:
-            response["summary"]["servers_with_errors"] = servers_with_errors
+            response["summary"]["servers_with_errors"] = list(servers_with_errors)
 
         logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
 
