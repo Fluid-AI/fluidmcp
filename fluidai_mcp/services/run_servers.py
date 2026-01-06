@@ -7,7 +7,7 @@ regardless of the configuration source.
 import os
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from loguru import logger
 
 from fastapi import FastAPI
@@ -154,13 +154,103 @@ def _get_server_processes() -> Dict[str, subprocess.Popen]:
     return _server_processes.copy()
 
 
+async def _query_server_tools(server_name: str, process: subprocess.Popen, lock: threading.Lock) -> Tuple[str, list, Optional[str]]:
+    """
+    Query a single MCP server for its available tools.
+
+    Args:
+        server_name: Name of the server
+        process: Server process handle
+        lock: Thread lock for safe stdin/stdout communication
+
+    Returns:
+        Tuple of (server_name, tools_list, error_message)
+        - tools_list is empty if there was an error
+        - error_message is None if successful
+    """
+    try:
+        # Check if process is still alive
+        if process.poll() is not None:
+            return (server_name, [], "Process is not running")
+
+        logger.debug(f"Querying tools from server: {server_name}")
+
+        # Send tools/list JSON-RPC request to the server
+        tools_request = {
+            "jsonrpc": "2.0",
+            "id": f"tools_discovery_{server_name}",
+            "method": "tools/list",
+            "params": {}
+        }
+
+        # Acquire lock for thread-safe stdin/stdout communication
+        with lock:
+            # Wrap blocking I/O in asyncio.to_thread to avoid blocking event loop
+            await asyncio.to_thread(
+                process.stdin.write,
+                json.dumps(tools_request) + "\n"
+            )
+            await asyncio.to_thread(process.stdin.flush)
+
+            # Add timeout to prevent indefinite hanging
+            try:
+                response_line = await asyncio.wait_for(
+                    asyncio.to_thread(process.stdout.readline),
+                    timeout=5.0  # 5 second timeout
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout waiting for response from server: {server_name}")
+                return (server_name, [], "Timeout waiting for response")
+
+        # Strip whitespace/newlines before checking and parsing
+        response_line_stripped = response_line.strip()
+        if not response_line_stripped:
+            logger.warning(f"Empty response (after stripping) from server: {server_name}")
+            return (server_name, [], "Empty response from server")
+
+        response_data = json.loads(response_line_stripped)
+
+        # Check for JSON-RPC error
+        if "error" in response_data:
+            error_msg = response_data["error"].get("message", "Unknown error")
+            logger.warning(f"Error from server {server_name}: {error_msg}")
+            return (server_name, [], f"JSON-RPC error: {error_msg}")
+
+        # Extract tools from response
+        if "result" in response_data and "tools" in response_data["result"]:
+            server_tools = response_data["result"]["tools"]
+
+            # Create new tool dicts with server label (don't mutate originals)
+            tools_with_server = []
+            for tool in server_tools:
+                new_tool = dict(tool)
+                new_tool["server"] = server_name
+                tools_with_server.append(new_tool)
+
+            logger.debug(f"Found {len(server_tools)} tools from {server_name}")
+            return (server_name, tools_with_server, None)
+        else:
+            logger.warning(f"Unexpected response format from {server_name}")
+            return (server_name, [], "Unexpected response format")
+
+    except json.JSONDecodeError as e:
+        logger.error(
+            f"Invalid JSON response from {server_name}: {e}. "
+            f"Raw response: {response_line_stripped!r}"
+        )
+        return (server_name, [], f"Invalid JSON: {e}")
+    except Exception as e:
+        logger.error(f"Error querying tools from {server_name}: {e}")
+        return (server_name, [], str(e))
+
+
 def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
     """
     Add GET /api/tools endpoint for unified tool discovery across all MCP servers.
 
     Args:
         app: FastAPI application instance
-        secure_mode: Whether secure mode is enabled
+        secure_mode: Whether secure mode is enabled (unused, kept for API compatibility)
     """
     from .package_launcher import get_token
 
@@ -199,82 +289,39 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
 
         logger.info(f"Discovering tools from {len(server_processes)} MCP server(s)")
 
-        for server_name, process in server_processes.items():
-            # Get or create lock for thread-safe process communication
+        # Clean up stale locks for servers that no longer exist
+        current_server_names = set(server_processes.keys())
+        stale_server_names = set(_process_locks.keys()) - current_server_names
+        for stale_name in stale_server_names:
+            del _process_locks[stale_name]
+            logger.debug(f"Removed stale lock for server: {stale_name}")
+
+        # Ensure all servers have locks
+        for server_name in server_processes:
             if server_name not in _process_locks:
                 _process_locks[server_name] = threading.Lock()
 
-            lock = _process_locks[server_name]
+        # Query all servers concurrently using asyncio.gather
+        query_tasks = [
+            _query_server_tools(server_name, process, _process_locks[server_name])
+            for server_name, process in server_processes.items()
+        ]
 
-            try:
-                logger.debug(f"Querying tools from server: {server_name}")
+        # Execute all queries concurrently with individual timeouts
+        results = await asyncio.gather(*query_tasks, return_exceptions=True)
 
-                # Send tools/list JSON-RPC request to the server
-                tools_request = {
-                    "jsonrpc": "2.0",
-                    "id": f"tools_discovery_{server_name}",
-                    "method": "tools/list",
-                    "params": {}
-                }
+        # Process results
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Unexpected error during concurrent query: {result}")
+                continue
 
-                # Acquire lock for thread-safe stdin/stdout communication
-                with lock:
-                    # Wrap blocking I/O in asyncio.to_thread to avoid blocking event loop
-                    await asyncio.to_thread(
-                        process.stdin.write,
-                        json.dumps(tools_request) + "\n"
-                    )
-                    await asyncio.to_thread(process.stdin.flush)
-
-                    # Add timeout to prevent indefinite hanging
-                    try:
-                        response_line = await asyncio.wait_for(
-                            asyncio.to_thread(process.stdout.readline),
-                            timeout=5.0  # 5 second timeout
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(f"Timeout waiting for response from server: {server_name}")
-                        servers_with_errors.add(server_name)
-                        continue
-
-                # Strip whitespace/newlines before checking and parsing
-                response_line_stripped = response_line.strip()
-                if not response_line_stripped:
-                    logger.warning(f"Empty response (after stripping) from server: {server_name}")
-                    servers_with_errors.add(server_name)
-                    continue
-
-                response_data = json.loads(response_line_stripped)
-
-                # Check for JSON-RPC error
-                if "error" in response_data:
-                    error_msg = response_data["error"].get("message", "Unknown error")
-                    logger.warning(f"Error from server {server_name}: {error_msg}")
-                    servers_with_errors.add(server_name)
-                    continue
-
-                # Extract tools from response
-                if "result" in response_data and "tools" in response_data["result"]:
-                    server_tools = response_data["result"]["tools"]
-
-                    # Create new tool dicts with server label (don't mutate originals)
-                    for tool in server_tools:
-                        new_tool = dict(tool)
-                        new_tool["server"] = server_name
-                        all_tools.append(new_tool)
-
-                    servers_found.append(server_name)
-                    logger.debug(f"Found {len(server_tools)} tools from {server_name}")
-                else:
-                    logger.warning(f"Unexpected response format from {server_name}")
-                    servers_with_errors.add(server_name)
-
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON response from {server_name}: {e}")
+            server_name, tools, error = result
+            if error:
                 servers_with_errors.add(server_name)
-            except Exception as e:
-                logger.error(f"Error querying tools from {server_name}: {e}")
-                servers_with_errors.add(server_name)
+            else:
+                all_tools.extend(tools)
+                servers_found.append(server_name)
 
         # Build response (error_count always present for API consistency)
         response = {
