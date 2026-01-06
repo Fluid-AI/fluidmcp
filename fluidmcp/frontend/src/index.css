@@ -1,3 +1,7 @@
+/* =========================
+   Global base styles
+========================= */
+
 :root {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -19,15 +23,23 @@ body {
   background: linear-gradient(180deg, #20293a 0%, #0f172a 100%);
 }
 
+/* =========================
+   Links
+========================= */
+
 a {
   color: #7aa2ff;
   text-decoration: none;
 }
+
 a:hover {
   text-decoration: underline;
 }
 
-/* Inputs */
+/* =========================
+   Inputs
+========================= */
+
 input {
   width: 100%;
   padding: 0.6rem 0.7rem;
@@ -43,7 +55,21 @@ input:focus {
   border-color: #7aa2ff;
 }
 
-/* Buttons */
+/* Date picker + number input fixes */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  filter: invert(1);
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+  cursor: pointer;
+}
+
+/* =========================
+   Buttons
+========================= */
+
 button {
   margin-top: 0.75rem;
   padding: 0.6rem 1.2rem;
@@ -54,15 +80,9 @@ button {
   font-weight: 600;
   cursor: pointer;
 }
-/* for date picker and number scroll */
-input[type="number"]::-webkit-inner-spin-button, 
-input[type="number"]::-webkit-outer-spin-button {
-  filter: invert(1);
-}
 
-input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(1);
-  cursor: pointer;
+button:hover:not(:disabled) {
+  background: #5f8cff;
 }
 
 button:disabled {
@@ -70,6 +90,166 @@ button:disabled {
   cursor: not-allowed;
 }
 
-button:hover:not(:disabled) {
-  background: #5f8cff;
+/* =========================
+   Dashboard layout
+========================= */
+
+.dashboard {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.dashboard-header {
+  margin-bottom: 32px;
+}
+
+.subtitle {
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.dashboard-section {
+  margin-bottom: 40px;
+}
+
+.dashboard-section h2 {
+  margin-bottom: 16px;
+}
+
+/* =========================
+   Configured servers (cards)
+========================= */
+
+.server-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.server-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.2s ease;
+}
+
+.server-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px);
+}
+
+.server-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.server-card-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.server-description {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0 0 16px 0;
+}
+
+.server-action {
+  width: 100%;
+  margin-top: 0;
+}
+
+/* Responsive fallback */
+@media (max-width: 900px) {
+  .server-list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .server-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   Active servers section
+========================= */
+
+.active-server-container {
+  max-width: 720px; /* keeps section visually secondary */
+}
+
+.active-server-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.active-server-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.active-server-row strong {
+  margin-right: 8px;
+}
+
+/* =========================
+   Status badges
+========================= */
+
+.status {
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  border-radius: 12px;
+  text-transform: capitalize;
+}
+
+.status.running {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.status.starting {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eab308;
+}
+
+.status.stopped {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+/* =========================
+   Buttons in active list
+========================= */
+
+.details-btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* =========================
+   Empty state
+========================= */
+
+.empty-state {
+  color: #9ca3af;
+  font-size: 0.9rem;
 }
