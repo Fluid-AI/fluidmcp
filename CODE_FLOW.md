@@ -44,9 +44,12 @@ main()
 ├── ArgumentParser setup (lines 228-254)
 ├── Secure mode token handling (lines 261-272)
 └── Command dispatch (lines 274-284)
+    ├── --version → print_version_info()
     ├── "install" → install_command()
+    ├── "validate" → validate_command()
     ├── "run"     → run_command()
     ├── "edit-env" → edit_env()
+    ├── "github"  → github_command()
     └── "list"    → list_installed_packages()
 ```
 
@@ -73,6 +76,75 @@ install_command(args)
 └── [if --master] update_env_from_common_env()  [cli.py:131]
     └── Read .env from install dir, update metadata.json
 ```
+
+---
+
+## Command: `fluidmcp --version`
+
+**Entry:** `print_version_info()` (line 71)
+
+```
+print_version_info()
+│
+├── importlib.metadata.version("fluidmcp")
+│   └── Get installed package version
+│
+├── importlib.metadata.distribution("fluidmcp")
+│   └── Get distribution information
+│
+└── Print version, Python version, and installation path
+```
+
+**Output:**
+```
+FluidMCP version: 0.1.0
+Python version: 3.12.1
+Installation path: /usr/local/python/3.12.1/lib/python3.12/site-packages
+```
+
+---
+
+## Command: `fluidmcp validate ...`
+
+**Entry:** `validate_command()` (line 136)
+
+```
+validate_command(args)
+│
+├── resolve_config(args)                        [config_resolver.py:47]
+│   └── Same routing as run command
+│       ├── --file → resolve_from_file()
+│       └── <package> → resolve_from_package()
+│
+├── Validate command availability
+│   └── For each server:
+│       └── shutil.which(command)
+│           └── Check if command exists in PATH
+│
+├── Validate environment variables
+│   └── For each server's env section:
+│       ├── Check required env vars (structured format) → ERRORS
+│       ├── Check optional env vars (structured format) → WARNINGS
+│       ├── Check TOKEN env vars (simple format) → WARNINGS
+│       └── Note: Lookup is case-insensitive (checks both key and key.upper())
+│
+└── Print validation results
+    ├── Exit 1 if ERRORS found → ❌ Configuration validation failed with errors
+    ├── Exit 0 if only WARNINGS → ⚠️ Configuration is valid with warnings
+    └── Exit 0 if no issues → ✔ Configuration is valid with no issues found
+```
+
+**Use Cases:**
+- `fluidmcp validate config.json --file` - Validate local config
+- `fluidmcp validate author/package@version` - Validate installed package
+
+**Validation Checks:**
+1. Configuration file structure and resolution
+2. Command availability in system PATH
+3. Required environment variables (structured `{required: true}`) → Errors
+4. Optional environment variables and tokens → Warnings
+5. Environment variable lookup is case-insensitive (checks both `key` and `KEY`)
+6. Metadata.json existence for installed packages
 
 ---
 
