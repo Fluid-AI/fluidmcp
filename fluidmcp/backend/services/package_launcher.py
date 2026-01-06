@@ -21,6 +21,36 @@ import time
 
 security = HTTPBearer(auto_error=False)
 
+def is_placeholder_value(value: str) -> bool:
+    """
+    Detect if an environment variable value is a placeholder.
+
+    Common placeholder patterns:
+    - Contains angle brackets: <your-username>, <password>
+    - Contains 'xxxx' pattern: xxxx.databases.neo4j.io
+    - Contains 'placeholder' keyword
+    - Generic patterns: 'your-*', 'my-*'
+
+    Args:
+        value: The environment variable value to check
+
+    Returns:
+        True if the value appears to be a placeholder, False otherwise
+    """
+    if not isinstance(value, str):
+        return False
+
+    placeholder_indicators = [
+        '<' in value and '>' in value,  # <your-username>
+        'xxxx' in value.lower(),         # xxxx.example.com
+        'placeholder' in value.lower(),  # placeholder-value
+        value.startswith('<') and value.endswith('>'),
+        'your-' in value.lower(),        # your-password
+        'my-' in value.lower(),          # my-api-key
+    ]
+
+    return any(placeholder_indicators)
+
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
@@ -50,6 +80,21 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         logger.exception("Error reading metadata.json")
         return None, None
 
+    def replace_path_placeholders(arg: str, dest_dir: Path) -> str:
+        """Replace common path placeholder patterns with actual directory"""
+        placeholders = [
+            "<path to mcp-servers>",
+            "<path-to-your-directory>",
+            "<path-to-directory>",
+            "<installation-path>",
+            "<package-dir>",
+            "<package-directory>"
+        ]
+        result = arg
+        for placeholder in placeholders:
+            result = result.replace(placeholder, str(dest_dir))
+        return result
+
     try:
         base_command = servers["command"]
         raw_args = servers["args"]
@@ -63,10 +108,38 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
             elif npx_path and base_command == "npx":
                 base_command = npx_path
 
-        args = [arg.replace("<path to mcp-servers>", str(dest_dir)) for arg in raw_args]
+        logger.debug(f"Raw args from metadata: {raw_args}")
+        args = [replace_path_placeholders(arg, dest_dir) for arg in raw_args]
+        logger.debug(f"Resolved args after placeholder replacement: {args}")
         stdio_command = [base_command] + args
         env_vars = servers.get("env", {})
-        env = {**dict(os.environ), **env_vars}
+
+        # Start with shell environment variables (these take precedence)
+        env = dict(os.environ)
+
+        # Add metadata.json env vars, but skip placeholders
+        # Shell env vars take precedence (won't be overwritten)
+        placeholders_found = []
+        for key, value in env_vars.items():
+            if key not in env:  # Only add if not already in shell env
+                if is_placeholder_value(value):
+                    placeholders_found.append((key, value))
+                    logger.warning(
+                        f"Skipping placeholder value for {key}='{value}'. "
+                        f"Set this environment variable or use 'fmcp edit-env' to configure."
+                    )
+                else:
+                    env[key] = value
+            else:
+                logger.debug(f"Using shell environment value for {key} (metadata.json value ignored)")
+
+        # Log summary if placeholders were found
+        if placeholders_found:
+            logger.warning(
+                f"Found {len(placeholders_found)} placeholder environment variable(s). "
+                f"Server may fail to start. Use 'fmcp edit-env {pkg}' to configure: "
+                f"{', '.join([k for k, v in placeholders_found])}"
+            )
 
         # Determine working directory based on package type
         is_github_repo = (dest_dir / ".git").exists()
@@ -98,7 +171,14 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
 
         # Initialize MCP server
         if not initialize_mcp_server(process):
-            logger.warning(f"Failed to initialize MCP server for {pkg}")
+            error_msg = f"Failed to initialize MCP server for {pkg}"
+            if placeholders_found:
+                error_msg += (
+                    f"\n\nPossible cause: {len(placeholders_found)} placeholder environment variable(s) detected."
+                    f"\nPlease configure: {', '.join([k for k, v in placeholders_found])}"
+                    f"\n\nTo fix: fmcp edit-env {pkg}"
+                )
+            logger.warning(error_msg)
 
         router = create_mcp_router(pkg, process)
         return pkg, router
