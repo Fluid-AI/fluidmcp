@@ -20,6 +20,10 @@ from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends
+from fastapi.responses import JSONResponse
+from typing import Dict, List, Any
+import subprocess
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -111,9 +115,157 @@ def run_servers(
 
     logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
+    # Add unified tool discovery endpoint
+    _add_unified_tools_endpoint(app, secure_mode)
+
     # Start FastAPI server if requested
     if start_server:
         _start_server(app, port, force_reload)
+
+
+def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
+    """
+    Add GET /api/tools endpoint for unified tool discovery across all MCP servers.
+
+    Args:
+        app: FastAPI application instance
+        secure_mode: Whether secure mode is enabled
+    """
+    from .package_launcher import get_token
+
+    @app.get("/api/tools", tags=["unified"])
+    async def get_all_tools(token: str = Depends(get_token) if secure_mode else None):
+        """
+        Dynamic tool discovery across all running MCP servers.
+
+        Returns:
+            JSON response with all tools from all servers, including:
+            - tools: List of tool definitions with server labels
+            - summary: Metadata about total tools and servers
+        """
+        all_tools = []
+        servers_found = []
+        servers_with_errors = []
+
+        # Extract server processes from app routes
+        server_processes = _extract_server_processes(app)
+
+        logger.info(f"Discovering tools from {len(server_processes)} MCP server(s)")
+
+        for server_name, process in server_processes.items():
+            try:
+                logger.debug(f"Querying tools from server: {server_name}")
+
+                # Send tools/list JSON-RPC request to the server
+                tools_request = {
+                    "jsonrpc": "2.0",
+                    "id": f"tools_discovery_{server_name}",
+                    "method": "tools/list",
+                    "params": {}
+                }
+
+                # Send request to server's stdin
+                process.stdin.write(json.dumps(tools_request) + "\n")
+                process.stdin.flush()
+
+                # Read response from server's stdout
+                response_line = process.stdout.readline()
+
+                if not response_line:
+                    logger.warning(f"No response from server: {server_name}")
+                    servers_with_errors.append(server_name)
+                    continue
+
+                response_data = json.loads(response_line)
+
+                # Check for JSON-RPC error
+                if "error" in response_data:
+                    error_msg = response_data["error"].get("message", "Unknown error")
+                    logger.warning(f"Error from server {server_name}: {error_msg}")
+                    servers_with_errors.append(server_name)
+                    continue
+
+                # Extract tools from response
+                if "result" in response_data and "tools" in response_data["result"]:
+                    server_tools = response_data["result"]["tools"]
+
+                    # Add server label to each tool
+                    for tool in server_tools:
+                        tool["server"] = server_name
+                        all_tools.append(tool)
+
+                    servers_found.append(server_name)
+                    logger.debug(f"Found {len(server_tools)} tools from {server_name}")
+                else:
+                    logger.warning(f"Unexpected response format from {server_name}")
+                    servers_with_errors.append(server_name)
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON response from {server_name}: {e}")
+                servers_with_errors.append(server_name)
+            except Exception as e:
+                logger.error(f"Error querying tools from {server_name}: {e}")
+                servers_with_errors.append(server_name)
+
+        # Build response
+        response = {
+            "tools": all_tools,
+            "summary": {
+                "total_tools": len(all_tools),
+                "servers": servers_found,
+                "server_count": len(servers_found)
+            }
+        }
+
+        if servers_with_errors:
+            response["summary"]["servers_with_errors"] = servers_with_errors
+            response["summary"]["error_count"] = len(servers_with_errors)
+
+        logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
+
+        return JSONResponse(content=response)
+
+
+def _extract_server_processes(app: FastAPI) -> Dict[str, subprocess.Popen]:
+    """
+    Extract MCP server processes from FastAPI app routes.
+
+    This function inspects the FastAPI app's registered routes to find
+    MCP server endpoints and extract their associated subprocess.Popen objects.
+
+    Args:
+        app: FastAPI application instance
+
+    Returns:
+        Dictionary mapping server names to their subprocess.Popen objects
+    """
+    server_processes = {}
+
+    # Iterate through all registered routes
+    for route in app.routes:
+        # Look for routes that match the pattern /{server_name}/mcp/tools/list
+        if hasattr(route, 'path') and route.path.endswith("/mcp/tools/list"):
+            # Extract server name from path (e.g., "/filesystem/mcp/tools/list" -> "filesystem")
+            path_parts = route.path.strip('/').split('/')
+            if len(path_parts) >= 3 and path_parts[1] == "mcp":
+                server_name = path_parts[0]
+
+                # Try to get the process from the route's endpoint closure
+                if hasattr(route, 'endpoint') and hasattr(route.endpoint, '__closure__'):
+                    closure = route.endpoint.__closure__
+                    if closure:
+                        for cell in closure:
+                            try:
+                                cell_content = cell.cell_contents
+                                # Look for subprocess.Popen objects in the closure
+                                if isinstance(cell_content, subprocess.Popen):
+                                    server_processes[server_name] = cell_content
+                                    logger.debug(f"Found process for server: {server_name}")
+                                    break
+                            except (ValueError, AttributeError):
+                                continue
+
+    return server_processes
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:
