@@ -22,12 +22,17 @@ from .env_manager import update_env_from_config
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Depends
 from fastapi.responses import JSONResponse
-from typing import Dict, List, Any
+from typing import Dict
 import subprocess
+import asyncio
+import threading
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
 client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"))
+
+# Thread-safety locks for process stdin/stdout communication
+_process_locks: Dict[str, threading.Lock] = {}
 
 
 def run_servers(
@@ -153,6 +158,12 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         logger.info(f"Discovering tools from {len(server_processes)} MCP server(s)")
 
         for server_name, process in server_processes.items():
+            # Get or create lock for thread-safe process communication
+            if server_name not in _process_locks:
+                _process_locks[server_name] = threading.Lock()
+
+            lock = _process_locks[server_name]
+
             try:
                 logger.debug(f"Querying tools from server: {server_name}")
 
@@ -164,12 +175,25 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
                     "params": {}
                 }
 
-                # Send request to server's stdin
-                process.stdin.write(json.dumps(tools_request) + "\n")
-                process.stdin.flush()
+                # Acquire lock for thread-safe stdin/stdout communication
+                with lock:
+                    # Wrap blocking I/O in asyncio.to_thread to avoid blocking event loop
+                    await asyncio.to_thread(
+                        process.stdin.write,
+                        json.dumps(tools_request) + "\n"
+                    )
+                    await asyncio.to_thread(process.stdin.flush)
 
-                # Read response from server's stdout
-                response_line = process.stdout.readline()
+                    # Add timeout to prevent indefinite hanging
+                    try:
+                        response_line = await asyncio.wait_for(
+                            asyncio.to_thread(process.stdout.readline),
+                            timeout=5.0  # 5 second timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout waiting for response from server: {server_name}")
+                        servers_with_errors.append(server_name)
+                        continue
 
                 if not response_line:
                     logger.warning(f"No response from server: {server_name}")
@@ -189,10 +213,11 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
                 if "result" in response_data and "tools" in response_data["result"]:
                     server_tools = response_data["result"]["tools"]
 
-                    # Add server label to each tool
+                    # Create new tool dicts with server label (don't mutate originals)
                     for tool in server_tools:
-                        tool["server"] = server_name
-                        all_tools.append(tool)
+                        new_tool = dict(tool)
+                        new_tool["server"] = server_name
+                        all_tools.append(new_tool)
 
                     servers_found.append(server_name)
                     logger.debug(f"Found {len(server_tools)} tools from {server_name}")
@@ -207,19 +232,19 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
                 logger.error(f"Error querying tools from {server_name}: {e}")
                 servers_with_errors.append(server_name)
 
-        # Build response
+        # Build response (error_count always present for API consistency)
         response = {
             "tools": all_tools,
             "summary": {
                 "total_tools": len(all_tools),
                 "servers": servers_found,
-                "server_count": len(servers_found)
+                "server_count": len(servers_found),
+                "error_count": len(servers_with_errors)
             }
         }
 
         if servers_with_errors:
             response["summary"]["servers_with_errors"] = servers_with_errors
-            response["summary"]["error_count"] = len(servers_with_errors)
 
         logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
 
