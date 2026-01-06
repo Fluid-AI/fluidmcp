@@ -31,6 +31,9 @@ import threading
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
 client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"))
 
+# Explicit process registry for server tracking
+_server_processes: Dict[str, subprocess.Popen] = {}
+
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 
@@ -102,10 +105,11 @@ def run_servers(
 
         try:
             logger.info(f"Launching server '{server_name}' from: {install_path}")
-            package_name, router = launch_mcp_using_fastapi_proxy(install_path)
+            package_name, router, process = launch_mcp_using_fastapi_proxy(install_path)
 
-            if router:
+            if router and process:
                 app.include_router(router, tags=[server_name])
+                _register_server_process(server_name, process)  # Register in explicit registry
                 logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
             else:
@@ -126,6 +130,28 @@ def run_servers(
     # Start FastAPI server if requested
     if start_server:
         _start_server(app, port, force_reload)
+
+
+def _register_server_process(name: str, process: subprocess.Popen) -> None:
+    """
+    Register a server process in the explicit registry.
+
+    Args:
+        name: Server name
+        process: Subprocess.Popen object for the server
+    """
+    _server_processes[name] = process
+    logger.debug(f"Registered process for server: {name} (PID: {process.pid})")
+
+
+def _get_server_processes() -> Dict[str, subprocess.Popen]:
+    """
+    Get all registered server processes.
+
+    Returns:
+        Dictionary mapping server names to their subprocess.Popen objects
+    """
+    return _server_processes.copy()
 
 
 def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
@@ -152,8 +178,8 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         servers_found = []
         servers_with_errors = []
 
-        # Extract server processes from app routes
-        server_processes = _extract_server_processes(app)
+        # Get server processes from explicit registry
+        server_processes = _get_server_processes()
 
         logger.info(f"Discovering tools from {len(server_processes)} MCP server(s)")
 
@@ -249,48 +275,6 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
 
         return JSONResponse(content=response)
-
-
-def _extract_server_processes(app: FastAPI) -> Dict[str, subprocess.Popen]:
-    """
-    Extract MCP server processes from FastAPI app routes.
-
-    This function inspects the FastAPI app's registered routes to find
-    MCP server endpoints and extract their associated subprocess.Popen objects.
-
-    Args:
-        app: FastAPI application instance
-
-    Returns:
-        Dictionary mapping server names to their subprocess.Popen objects
-    """
-    server_processes = {}
-
-    # Iterate through all registered routes
-    for route in app.routes:
-        # Look for routes that match the pattern /{server_name}/mcp/tools/list
-        if hasattr(route, 'path') and route.path.endswith("/mcp/tools/list"):
-            # Extract server name from path (e.g., "/filesystem/mcp/tools/list" -> "filesystem")
-            path_parts = route.path.strip('/').split('/')
-            if len(path_parts) >= 3 and path_parts[1] == "mcp":
-                server_name = path_parts[0]
-
-                # Try to get the process from the route's endpoint closure
-                if hasattr(route, 'endpoint') and hasattr(route.endpoint, '__closure__'):
-                    closure = route.endpoint.__closure__
-                    if closure:
-                        for cell in closure:
-                            try:
-                                cell_content = cell.cell_contents
-                                # Look for subprocess.Popen objects in the closure
-                                if isinstance(cell_content, subprocess.Popen):
-                                    server_processes[server_name] = cell_content
-                                    logger.debug(f"Found process for server: {server_name}")
-                                    break
-                            except (ValueError, AttributeError):
-                                continue
-
-    return server_processes
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:
