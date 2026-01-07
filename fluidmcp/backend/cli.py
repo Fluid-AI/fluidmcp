@@ -350,6 +350,20 @@ def main():
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
 
+    # serve command - NEW: Run as standalone API server
+    serve_parser = subparsers.add_parser("serve", help="Run as standalone API server (backend starts without MCP servers)")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    serve_parser.add_argument("--port", type=int, default=8099, help="Port to listen on (default: 8099)")
+    serve_parser.add_argument("--mongodb-uri",
+                              default=os.getenv("MONGODB_URI", "mongodb://localhost:27017"),
+                              help="MongoDB connection URI (default: env MONGODB_URI or mongodb://localhost:27017)")
+    serve_parser.add_argument("--database", default="fluidmcp",
+                              help="MongoDB database name (default: fluidmcp)")
+    serve_parser.add_argument("--secure", action="store_true",
+                              help="Enable secure mode with bearer token authentication")
+    serve_parser.add_argument("--token", type=str,
+                              help="Bearer token for secure mode (will be generated if not provided)")
+
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
@@ -379,6 +393,24 @@ def main():
         github_command(args, secure_mode=secure_mode, token=token)
     elif args.command == "list":
         list_installed_packages()
+    elif args.command == "serve":
+        # Run standalone API server
+        from .server import main as server_main
+        import asyncio
+
+        # Generate token if secure mode enabled but no token provided
+        if secure_mode and not token:
+            import secrets
+            token = secrets.token_urlsafe(32)
+            logger.info(f"Generated bearer token: {token}")
+
+        try:
+            asyncio.run(server_main(args))
+        except KeyboardInterrupt:
+            logger.info("Server interrupted by user")
+        except Exception as e:
+            logger.exception(f"Server error: {e}")
+            sys.exit(1)
     else:
         parser.print_help()
 
