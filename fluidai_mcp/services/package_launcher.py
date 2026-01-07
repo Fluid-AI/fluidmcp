@@ -33,13 +33,22 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return credentials.credentials
 
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
+    """
+    Launch an MCP server and create a FastAPI router for it.
+
+    Args:
+        dest_dir: Path to the package installation directory
+
+    Returns:
+        Tuple of (package_name, router, process) or (None, None, None) on failure
+    """
     dest_dir = Path(dest_dir)
     metadata_path = dest_dir / "metadata.json"
 
     try:
         if not metadata_path.exists():
             logger.warning(f"No metadata.json found at {metadata_path}")
-            return None, None
+            return None, None, None
         logger.info(f"Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
@@ -48,7 +57,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         logger.debug(f"Package: {pkg}, Servers: {servers}")
     except Exception:
         logger.exception("Error reading metadata.json")
-        return None, None
+        return None, None, None
 
     try:
         base_command = servers["command"]
@@ -101,14 +110,14 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
             logger.warning(f"Failed to initialize MCP server for {pkg}")
 
         router = create_mcp_router(pkg, process)
-        return pkg, router
+        return pkg, router, process  # Return process for explicit registry
 
     except FileNotFoundError:
         logger.exception("Command not found")
-        return None, None
+        return None, None, None
     except Exception:
         logger.exception("Error launching MCP server")
-        return None, None
+        return None, None, None
     
 
 
