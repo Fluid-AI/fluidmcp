@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import os
 import signal
+import secrets
 from loguru import logger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,7 +86,7 @@ async def main(args):
     logger.info("Starting FluidMCP backend server (standalone mode)")
 
     # 1. Initialize MongoDB connection
-    logger.info(f"Connecting to MongoDB at {args.mongodb_uri}")
+    logger.info("Connecting to MongoDB...")
     db_manager = DatabaseManager(
         mongodb_uri=args.mongodb_uri,
         database_name=args.database
@@ -186,7 +187,7 @@ def run():
     if args.secure and not args.token:
         import secrets
         args.token = secrets.token_urlsafe(32)
-        logger.info(f"Generated bearer token: {args.token}")
+        logger.info(f"Generated bearer token (prefix: {args.token[:8]}...)")
 
     try:
         asyncio.run(main(args))

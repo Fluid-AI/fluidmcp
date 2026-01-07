@@ -380,7 +380,7 @@ def main():
         # else use the provided token and set it in the environment variables
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        logger.info(f"Secure mode enabled. Bearer token: {token}")
+        logger.info(f"Secure mode enabled. Bearer token (prefix: {token[:8]}...)")
 
     # Main Command dispatch Logic
     if args.command == "install":
@@ -398,11 +398,6 @@ def main():
         from .server import main as server_main
         import asyncio
 
-        # Generate token if secure mode enabled but no token provided
-        if secure_mode and not token:
-            import secrets
-            token = secrets.token_urlsafe(32)
-            logger.info(f"Generated bearer token: {token}")
 
         try:
             asyncio.run(server_main(args))

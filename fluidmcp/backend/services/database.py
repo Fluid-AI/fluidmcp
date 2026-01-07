@@ -49,7 +49,7 @@ class DatabaseManager:
 
             # Test connection
             await self.client.admin.command('ping')
-            logger.info(f"Connected to MongoDB at {self.mongodb_uri}")
+            logger.info("Successfully connected to MongoDB")
 
             # Check if change streams are supported (requires replica set)
             try:
