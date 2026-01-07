@@ -138,7 +138,6 @@ def resolve_from_installed() -> ServerConfig:
     merged = {"mcpServers": servers}
     meta_all_path.write_text(json.dumps(merged, indent=2))
     logger.info(f"Wrote merged metadata to {meta_all_path}")
-    logger.debug(f"Merged {len(servers)} server(s)")
 
     return ServerConfig(
         servers=servers,
@@ -210,10 +209,8 @@ def resolve_from_file(file_path: str) -> ServerConfig:
             else:
                 # Unknown format
                 logger.warning(f"Unknown format for server '{server_name}'")
-                logger.debug(f"Unknown format for '{server_name}': {server_cfg}")
         else:
             logger.warning(f"Invalid server configuration for '{server_name}'")
-            logger.debug(f"Invalid configuration type for '{server_name}': {type(server_cfg)}")
 
     # Preprocess only if we have package strings
     if needs_install:
@@ -248,7 +245,6 @@ def resolve_from_s3_url(presigned_url: str) -> ServerConfig:
 
     # Download config from S3
     logger.info("Downloading configuration file from presigned URL")
-    logger.debug(f"Presigned URL: {presigned_url[:100]}...")
     response = requests.get(presigned_url)
     response.raise_for_status()
 
@@ -299,16 +295,14 @@ def resolve_from_s3_master() -> ServerConfig:
 
     # Check if file exists in S3
     try:
-        logger.info(f"Checking if {s3_file_key} exists in S3 bucket {bucket_name}...")
-        logger.debug(f"S3 bucket: {bucket_name}, Key: {s3_file_key}")
+        logger.info(f"Checking if {s3_file_key} exists in S3 bucket {bucket_name}")
         s3_client.head_object(Bucket=bucket_name, Key=s3_file_key)
         file_exists = True
-        logger.success(f"File {s3_file_key} found in S3 bucket")
+        logger.info(f"File {s3_file_key} found in S3 bucket")
     except ClientError as e:
         if e.response['Error']['Code'] == '404':
             file_exists = False
             logger.info(f"File {s3_file_key} not found in S3 bucket")
-            logger.debug("Will create new metadata file")
         else:
             raise
 
@@ -425,8 +419,7 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
 
         if has_command:
             # Mode 1: Use provided command directly
-            logger.info(f"📝 Using provided command for '{server_name}'")
-            logger.debug(f"Command: {server_cfg.get('command')}, Args: {server_cfg.get('args')}")
+            logger.info(f"Using provided command for '{server_name}'")
 
             # Create metadata.json with provided command
             metadata = {
@@ -442,10 +435,10 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
             with open(metadata_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
 
-            logger.success(f"✅ Created metadata.json with provided command")
+            logger.info("Created metadata.json with provided command")
         else:
             # Mode 2: Extract from README or use existing metadata.json
-            logger.info(f"📄 Extracting metadata from repository")
+            logger.info("Extracting metadata from repository")
             metadata_path = extract_or_create_metadata(dest_dir)
             logger.debug(f"Metadata extracted/created at: {metadata_path}")
 
@@ -457,12 +450,10 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
         # Set install_path for the launcher
         server_cfg["install_path"] = str(dest_dir)
 
-        logger.success(f"✅ GitHub server '{server_name}' prepared from {github_repo}")
-        logger.debug(f"Install path set to: {dest_dir}")
+        logger.info(f"GitHub server '{server_name}' prepared from {github_repo}")
 
-    except Exception as e:
-        logger.error(f"Error preparing GitHub server '{server_name}': {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+    except Exception:
+        logger.exception(f"Error preparing GitHub server '{server_name}'")
         raise
 
 
@@ -531,7 +522,6 @@ def _collect_installed_servers(install_dir: Path, taken_ports: set) -> Dict[str,
                 metadata = json.loads(md.read_text())
             except json.JSONDecodeError:
                 logger.warning(f"Invalid JSON in {md}")
-                logger.debug(f"Skipping package at {version_dir}")
                 continue
 
             for key, cfg in metadata.get("mcpServers", {}).items():
@@ -566,7 +556,6 @@ def _preprocess_metadata_file(metadata_path: Path) -> None:
         replaced_metadata = replace_package_metadata_from_package_name(server_entry)
         if not replaced_metadata or "mcpServers" not in replaced_metadata:
             logger.warning(f"Could not fetch metadata for {server_entry}")
-            logger.debug(f"Skipping package string: {server_entry}")
             continue
 
         # Store original package string

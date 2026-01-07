@@ -40,15 +40,14 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         if not metadata_path.exists():
             logger.warning(f"No metadata.json found at {metadata_path}")
             return None, None
-        logger.info(f"📘 Reading metadata.json from {metadata_path}")
+        logger.info(f"Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
-        logger.debug(f"Package: {pkg}, Config: {servers}")
-    except Exception as e:
-        logger.error(f"Error reading metadata.json: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+        logger.debug(f"Package: {pkg}, Servers: {servers}")
+    except Exception:
+        logger.exception("Error reading metadata.json")
         return None, None
 
     try:
@@ -105,13 +104,11 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
         logger.debug(f"Created router for package: {pkg}")
         return pkg, router
 
-    except FileNotFoundError as e:
-        logger.error(f"Command not found: {e}")
-        logger.debug(f"FileNotFoundError details: {type(e).__name__}: {e}")
+    except FileNotFoundError:
+        logger.exception("Command not found")
         return None, None
-    except Exception as e:
-        logger.error(f"Error launching MCP server: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+    except Exception:
+        logger.exception("Error launching MCP server")
         return None, None
     
 
@@ -177,9 +174,8 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
                     return True
             time.sleep(0.1)
         return False
-    except Exception as e:
-        logger.error(f"Initialization error: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+    except Exception:
+        logger.exception("Initialization error")
         return False
     
 
@@ -346,5 +342,5 @@ if __name__ == '__main__':
         if package_name is not None and router is not None:
             app.include_router(router)
         else:
-            logger.warning(f"Skipping {install_path} due to missing metadata or launch error.")
+            logger.warning(f"Skipping {install_path} due to missing metadata or launch error")
     uvicorn.run(app, host="0.0.0.0", port=8099)

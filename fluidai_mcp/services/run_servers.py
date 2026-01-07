@@ -4,7 +4,6 @@ Unified server runner for FluidMCP CLI.
 This module provides a single entry point for launching MCP servers
 regardless of the configuration source.
 """
-
 import os
 import json
 from pathlib import Path
@@ -54,8 +53,7 @@ def run_servers(
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        logger.success(f"Secure mode enabled with bearer token")
-        logger.debug(f"Bearer token set in environment")
+        logger.info("Secure mode enabled with bearer token")
 
     # Install packages if needed
     if config.needs_install:
@@ -106,7 +104,6 @@ def run_servers(
 
         try:
             logger.info(f"Launching server '{server_name}' from: {install_path}")
-            logger.debug(f"Calling launch_mcp_using_fastapi_proxy for {server_name}")
             package_name, router = launch_mcp_using_fastapi_proxy(install_path)
 
             if router:
@@ -117,16 +114,15 @@ def run_servers(
             else:
                 logger.error(f"Failed to create router for {server_name}")
 
-        except Exception as e:
-            logger.error(f"Error launching server '{server_name}': {e}")
-            logger.debug(f"Exception details: {type(e).__name__}: {e}")
+        except Exception:
+            logger.exception(f"Error launching server '{server_name}'")
 
     logger.debug(f"Total servers launched: {launched_servers}")
     if launched_servers == 0:
-        logger.error("No servers were successfully launched")
+        logger.warning("No servers were successfully launched")
         return
 
-    logger.success(f"Successfully launched {launched_servers} MCP server(s)")
+    logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
     # Start FastAPI server if requested
     if start_server:
@@ -187,18 +183,16 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                     with open(config.metadata_path, 'r') as f:
                         source_config = json.load(f)
                     update_env_from_config(metadata_path, fmcp_package, source_config, pkg)
-                    logger.debug(f"Updated env variables for {fmcp_package}")
-                except Exception as e:
-                    logger.error(f"Error updating env for {fmcp_package}: {e}")
+                except Exception:
+                    logger.exception(f"Error updating env for {fmcp_package}")
 
             # For master mode, update from shared .env
             if config.source_type == "s3_master":
                 logger.debug(f"Updating from common .env for master mode")
                 _update_env_from_common_env(dest_dir, pkg)
 
-        except Exception as e:
-            logger.error(f"Error installing {fmcp_package}: {e}")
-            logger.debug(f"Exception details: {type(e).__name__}: {e}")
+        except Exception:
+            logger.exception(f"Error installing {fmcp_package}")
 
 
 def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
@@ -274,7 +268,7 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
     logger.debug(f"_start_server called with port {port}, force_reload={force_reload}")
 
     if is_port_in_use(port):
-        logger.warning(f"Port {port} is already in use.")
+        logger.warning(f"Port {port} is already in use")
         if force_reload:
             logger.info(f"Force reloading server on port {port}")
             kill_process_on_port(port)
@@ -287,9 +281,8 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
                 logger.info(f"Keeping existing process on port {port}")
                 return
             else:
-                logger.error("Invalid choice. Aborting.")
+                logger.warning("Invalid choice. Aborting")
                 return
 
-    logger.success(f"Starting FastAPI server on port {port}")
     logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
     uvicorn.run(app, host="0.0.0.0", port=port)

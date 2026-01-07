@@ -76,18 +76,16 @@ def install_package(package_str, skip_env=False):
     headers,payload ,pkg =make_registry_request(package_str,auth=False)
     
     try:
-        logger.info(f"☁️  Installing package from Fluid MCP registry...")
-        logger.debug(f"API URL: {API_URL}")
+        logger.info("Installing package from Fluid MCP registry")
         try:
             # Make the API request to fetch the package
             response = requests.post(API_URL, headers=headers, json=payload)
             response.raise_for_status()
-        except:
-            logger.error(f"Error fetching package from MCP registry: {response.json()}")
-            logger.debug(f"Request payload: {payload}")
+        except requests.RequestException:
+            logger.exception("Error fetching package from MCP registry")
             return
 
-        logger.info(f"☁️  Downloading packages")
+        logger.info("Downloading packages")
         # Check if the response contains a valid pre-signed URL
         try:
             # Extract the pre-signed URL from the response
@@ -97,10 +95,8 @@ def install_package(package_str, skip_env=False):
             s3_response = requests.get(s3_url)
             s3_response.raise_for_status()
             s3_content = s3_response.content
-            logger.debug(f"Downloaded {len(s3_content)} bytes")
-        except:
-            logger.error(f"Error fetching package from MCP registry: {response.json()}")
-            logger.debug(f"S3 download failed")
+        except requests.RequestException:
+            logger.exception("Error downloading package from S3")
             return
      
         # Form the destination directory path
@@ -109,12 +105,12 @@ def install_package(package_str, skip_env=False):
 
         # Detect file type
         if is_tar_gz(s3_content):
-            logger.info("📦 Extracting tar.gz contents...")
+            logger.info("Extracting tar.gz contents")
             with tarfile.open(fileobj=BytesIO(s3_content), mode="r:gz") as tar:
                  tar.extractall(path=dest_dir)
             logger.debug(f"Extracted to {dest_dir}")
         elif is_json(s3_content):
-            logger.info("📦 Saving metadata.json...")
+            logger.info("Saving metadata.json")
             metadata_path = dest_dir / "metadata.json"
             with open(metadata_path, "wb") as f:
                 f.write(s3_content)
@@ -124,16 +120,14 @@ def install_package(package_str, skip_env=False):
 
         try:
             write_keys_during_install(dest_dir, pkg, skip_env=skip_env)
-        except Exception as e:
-            logger.error(f"Error writing keys during installation: {e}")
-            logger.debug(f"Exception details: {type(e).__name__}: {e}")
+        except Exception:
+            logger.exception("Error writing keys during installation")
             return
 
-        logger.success(f"✅ Installation completed successfully.")
-    except Exception as e:
+        logger.info("Installation completed successfully")
+    except Exception:
         # Handle any errors that occur during the installation process
-        logger.error(f"Installation failed: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+        logger.exception("Installation failed")
 
 def package_exists(dest_dir: Path) -> bool:
     """Check if the destination directory exists.
@@ -154,8 +148,7 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
     returns:
         dest_dir (str): The destination directory of the installed package.
     '''
-    logger.info(f"**** Installing package: {package}")
-    logger.debug(f"Installation directory: {INSTALLATION_DIR}")
+    logger.info(f"Installing package: {package}")
     install_package(package, skip_env=True)
     # Find installed package directory
     author, package_name = pkg["author"], pkg["package_name"]
@@ -168,15 +161,13 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
             dest_dir = get_latest_version_dir(package_dir)
         except FileNotFoundError:
             logger.error(f"Package not found: {author}/{package_name}")
-            logger.debug(f"Searched in: {package_dir}")
     return dest_dir
     
 
 def make_registry_request(package_str: str,auth: bool) -> Dict[str, Any]:
     # Parse the package string to extract author, name, and version
     pkg = parse_package_string(package_str)
-    logger.info(f"🔧 Installing {pkg['author']}/{pkg['package_name']}@{pkg['version']}")
-    logger.debug(f"Auth enabled: {auth}")
+    logger.info(f"Installing {pkg['author']}/{pkg['package_name']}@{pkg['version']}")
     
     # Payload for the API request to fetch the package
     payload = {
@@ -211,7 +202,6 @@ def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, A
         response = requests.get("https://registry-dev.fluidmcp.com/fetch-metadata", headers=headers, params=payload)
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching package metadata: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+    except requests.RequestException:
+        logger.exception("Error fetching package metadata")
         return {}

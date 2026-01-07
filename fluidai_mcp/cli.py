@@ -5,6 +5,9 @@ from pathlib import Path
 import json
 from loguru import logger
 import secrets
+import importlib.metadata
+import platform
+import shutil
 
 from fluidai_mcp.services import (
     install_package,
@@ -87,7 +90,33 @@ def resolve_package_dest_dir(package_str: str) -> Path:
                 raise FileNotFoundError(f"Package not found: {package_str}")
     return dest_dir
 
+def print_version_info() -> None:
+    '''
+    Print version details about FluidMCP.
+    args:
+        none
+    returns:
+        none
+    '''
+    logger.debug("Retrieving FluidMCP version information")
+    try:
+        package_name = "fluidmcp"
 
+        version = importlib.metadata.version(package_name)
+        dist = importlib.metadata.distribution(package_name)
+        install_path = dist.locate_file("")
+
+        logger.debug(f"Version: {version}, Install path: {install_path}")
+
+        print(f"FluidMCP version: {version}")
+        print(f"Python version: {platform.python_version()}")
+        print(f"Installation path: {install_path}")
+
+    except importlib.metadata.PackageNotFoundError:
+        logger.exception("FluidMCP package metadata not found")
+        print("FluidMCP is not installed as a package")
+        sys.exit(1)
+    
 def list_installed_packages() -> None:
     '''
     Print all installed packages in the installation directory.
@@ -103,7 +132,7 @@ def list_installed_packages() -> None:
 
         # Check if the directory is empty
         if not install_dir.exists() or not any(install_dir.iterdir()):
-            logger.info("No mcp packages found.")
+            logger.info("No mcp packages found")
             # return none if the directory is empty
             return
 
@@ -125,10 +154,129 @@ def list_installed_packages() -> None:
                                 found_packages = True
                                 logger.info(f"{author.name}/{pkg.name}@{version.name}")
         if not found_packages:
-            logger.info("No packages found in the installation directory structure.")
-    except Exception as e:
+            logger.info("No packages found in the installation directory structure")
+    except Exception:
         # Handle any errors that occur while listing packages
-        logger.error(f"Error listing installed packages: {str(e)}")
+        logger.exception("Error listing installed packages")
+
+def validate_command(args) -> None:
+    """
+    Validate MCP configuration without running servers.
+
+    Args:
+        args (argparse.Namespace): Parsed CLI arguments
+
+    Returns:
+        None
+
+    Separates validation issues into errors (fatal) and warnings (non-fatal).
+    Exits with code 1 if errors are found, code 0 if only warnings or success.
+    """
+    logger.debug(f"validate_command called for package: {args.package}")
+    logger.debug(f"File mode: {getattr(args, 'file', False)}")
+
+    errors = []
+    warnings = []
+
+    try:
+        # 1. Resolve configuration from the appropriate source
+        logger.debug("Resolving configuration")
+        config = resolve_config(args)
+        logger.debug(f"Configuration resolved with {len(config.servers)} server(s)")
+
+    except FileNotFoundError as e:
+        errors.append(str(e))
+
+    except ValueError as e:
+        errors.append(f"Configuration error: {e}")
+
+    except Exception as e:
+        errors.append(f"Unexpected error while resolving config: {e}")
+
+    if errors:
+        print("❌ Validation failed with the following errors:")
+
+        for err in errors:
+            print(f"  - {err}")
+        sys.exit(1)
+
+    # 2. Validate command availability
+    logger.debug("Validating command availability")
+    for server_name, server_cfg in config.servers.items():
+        command = server_cfg.get("command")
+
+        if not command:
+            errors.append(f"Missing command for server '{server_name}'")
+            continue
+
+        if shutil.which(command) is None:
+            errors.append(
+                f"Command '{command}' not found in PATH (server: {server_name})"
+            )
+
+
+    # 3. Check environment variables & token validation
+    logger.debug("Validating environment variables")
+    for server_name, server_cfg in config.servers.items():
+        env_cfg = server_cfg.get("env", {})
+
+        for key, val in env_cfg.items():
+            # Structured format: {required: true/false, value: "..."}
+            if isinstance(val, dict):
+                required = val.get("required", False)
+                value = val.get("value")
+
+                # Check if value is provided or available in environment
+                # Try both original case and uppercase (common env var convention)
+                env_value = os.environ.get(key) or os.environ.get(key.upper())
+                has_value = value or env_value
+
+                if required and not has_value:
+                    # Missing required env var is an ERROR
+                    errors.append(f"Missing required env var '{key}' (server: {server_name})")
+                elif not required and not has_value:
+                    # Missing optional env var is a WARNING
+                    warnings.append(f"Optional env var '{key}' is not set (server: {server_name})")
+
+            # Simple format: "KEY": "value" or "KEY": ""
+            else:
+                # Try both original case and uppercase (common env var convention)
+                env_value = os.environ.get(key) or os.environ.get(key.upper())
+                has_value = val or env_value
+
+                if not has_value:
+                    # Check if it's a TOKEN variable (case-insensitive check)
+                    if key.upper().endswith("TOKEN"):
+                        # Missing TOKEN is a WARNING (not explicitly marked as required)
+                        warnings.append(f"Token env var '{key}' is not set (server: {server_name})")
+                    else:
+                        # Missing non-token env var is a WARNING
+                        warnings.append(f"Env var '{key}' is not set (server: {server_name})")
+
+    # Print results
+    logger.debug(f"Validation complete: {len(errors)} error(s), {len(warnings)} warning(s)")
+
+    if errors:
+        logger.error(f"Validation failed with {len(errors)} error(s)")
+        print("❌ Configuration validation failed with errors:")
+        for err in errors:
+            print(f"  - {err}")
+        if warnings:
+            print("\n⚠️  Warnings:")
+            for warn in warnings:
+                print(f"  - {warn}")
+        sys.exit(1)
+    elif warnings:
+        logger.warning(f"Validation passed with {len(warnings)} warning(s)")
+        print("⚠️  Configuration is valid with warnings:")
+        for warn in warnings:
+            print(f"  - {warn}")
+        print("\n✔ No fatal errors found. You may proceed, but consider addressing the warnings above.")
+        sys.exit(0)
+    else:
+        logger.info("Validation passed with no issues")
+        print("✔ Configuration is valid with no issues found.")
+        sys.exit(0)
 
 
 def edit_env(args):
@@ -147,8 +295,8 @@ def edit_env(args):
             logger.error(f"Package not found at {dest_dir}. Have you installed it?")
             sys.exit(1)
         edit_env_variables(dest_dir)
-    except Exception as e:
-        logger.error(f"Error editing environment variables: {str(e)}")
+    except Exception:
+        logger.exception("Error editing environment variables")
         sys.exit(1)
 
 
@@ -235,9 +383,8 @@ def install_command(args):
     install_package(args.package, skip_env=master_mode)
     try:
         dest_dir = resolve_package_dest_dir(args.package)
-        logger.debug(f"Package installed at: {dest_dir}")
-    except Exception as e:
-        logger.error(str(e))
+    except Exception:
+        logger.exception("Package resolution failed")
         sys.exit(1)
     if not package_exists(dest_dir):
         logger.error(f"Package not found at {dest_dir}. Have you installed it?")
@@ -277,34 +424,34 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         if secure_mode and token:
             os.environ["FMCP_BEARER_TOKEN"] = token
             os.environ["FMCP_SECURE_MODE"] = "true"
-            logger.success(f"🔒 Secure mode enabled with bearer token")
+            logger.info("Secure mode enabled with bearer token")
 
         # Clone the repository
-        logger.info(f"📥 Cloning GitHub repository: {args.repo}")
+        logger.info(f"Cloning GitHub repository: {args.repo}")
         dest_dir = clone_github_repo(args.repo, args.github_token, args.branch)
         logger.debug(f"Repository cloned to: {dest_dir}")
 
         # Extract or create metadata.json
-        logger.info(f"📄 Processing metadata...")
+        logger.info("Processing metadata")
         metadata_path = extract_or_create_metadata(dest_dir)
         logger.debug(f"Metadata processed: {metadata_path}")
 
         # Launch the MCP server
-        logger.info(f"🚀 Launching MCP server...")
+        logger.info("Launching MCP server")
         package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
 
         if not router:
-            logger.error("❌ Failed to launch MCP server")
+            logger.error("Failed to launch MCP server")
             sys.exit(1)
 
-        logger.success(f"✅ MCP server '{package_name}' launched successfully from GitHub")
+        logger.info(f"MCP server '{package_name}' launched successfully from GitHub")
 
         # Start FastAPI server if requested
         if args.start_server:
             logger.debug("Starting FastAPI server")
             # Check if port is in use
             if is_port_in_use(client_server_port):
-                logger.warning(f"Port {client_server_port} is already in use.")
+                logger.warning(f"Port {client_server_port} is already in use")
                 if args.force_reload:
                     logger.info(f"Force reloading server on port {client_server_port}")
                     kill_process_on_port(client_server_port)
@@ -316,7 +463,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
                         logger.info(f"Keeping existing process on port {client_server_port}")
                         return
                     else:
-                        logger.error("Invalid choice. Aborting.")
+                        print("Invalid choice. Aborting")
                         return
 
             # Create FastAPI app
@@ -328,22 +475,19 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
 
             app.include_router(router, tags=[package_name])
 
-            logger.success(f"🚀 Starting FastAPI server for {package_name}")
-            logger.info(f"📖 Swagger UI available at: http://localhost:{client_server_port}/docs")
+            logger.info(f"Starting FastAPI server for {package_name}")
+            logger.info(f"Swagger UI available at: http://localhost:{client_server_port}/docs")
 
             uvicorn.run(app, host="0.0.0.0", port=client_server_port)
 
-    except ValueError as e:
-        logger.error(f"❌ Configuration error: {e}")
-        logger.debug(f"ValueError details: {type(e).__name__}: {e}")
+    except ValueError:
+        logger.exception("Configuration error")
         sys.exit(1)
-    except RuntimeError as e:
-        logger.error(f"❌ Runtime error: {e}")
-        logger.debug(f"RuntimeError details: {type(e).__name__}: {e}")
+    except RuntimeError:
+        logger.exception("Runtime error")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"❌ Error running GitHub MCP server: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+    except Exception:
+        logger.exception("Error running GitHub MCP server")
         sys.exit(1)
 
 
@@ -354,8 +498,9 @@ def main():
     # Parse command line arguments with the commands given in setup.py
     parser = argparse.ArgumentParser(description="FluidAI MCP CLI")
 
-    # Add global --verbose flag
+    # Add global flags
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
+    parser.add_argument("--version", action="store_true", help="Show FluidMCP version information and exit")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -394,6 +539,11 @@ def main():
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
 
+    # validate comand
+    validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
+    validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
+    validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file") 
+
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
@@ -418,12 +568,19 @@ def main():
         # else use the provided token and set it in the environment variables
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        logger.success(f"Secure mode enabled. Bearer token: {token}")
+        logger.info(f"Secure mode enabled. Bearer token: {token}")
+
+    # version flag
+    if args.version:
+        print_version_info()
+        sys.exit(0)
 
     # Main Command dispatch Logic
     if args.command == "install":
         logger.debug(f"Dispatching to install_command for package: {args.package}")
         install_command(args)
+    elif args.command == "validate":
+        validate_command(args)
     elif args.command == "run":
         logger.debug(f"Dispatching to run_command for: {args.package}")
         run_command(args, secure_mode=secure_mode, token=token)
@@ -476,15 +633,12 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
             force_reload=getattr(args, 'force_reload', False)
         )
 
-    except FileNotFoundError as e:
-        logger.error(f"Error: {e}")
-        logger.debug(f"FileNotFoundError details: {type(e).__name__}: {e}")
+    except FileNotFoundError:
+        logger.exception("File not found error")
         sys.exit(1)
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
-        logger.debug(f"ValueError details: {type(e).__name__}: {e}")
+    except ValueError:
+        logger.exception("Configuration error")
         sys.exit(1)
-    except Exception as e:
-        logger.error(f"Error running servers: {e}")
-        logger.debug(f"Exception details: {type(e).__name__}: {e}")
+    except Exception:
+        logger.exception("Error running servers")
         sys.exit(1)
