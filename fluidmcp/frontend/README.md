@@ -4,6 +4,8 @@ A **React + TypeScript frontend** providing user-friendly interfaces for MCP (Mo
 
 This UI layer sits on top of FluidMCP's FastAPI gateway, consuming MCP endpoints without modifying any backend logic. The goal is to transform developer-oriented MCP tools (Swagger/JSON) into intuitive web interfaces.
 
+> **Note:** The project has been restructured as a monorepo. The frontend is now located at `fluidmcp/frontend/` (previously `frontend/`). If you have an existing setup, update your paths and CI/CD pipelines accordingly. The root `package.json` scripts now use `--prefix fluidmcp/frontend`.
+
 ## Overview
 
 **Architecture:**

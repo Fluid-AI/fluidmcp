@@ -25,7 +25,7 @@ export default function Dashboard() {
         {/* Server list will go here */}
         <div className="server-list">
           {mockServers.map((server) => (
-            <ServerCard key={server.id} server ={server} />
+            <ServerCard key={server.id} server={server} />
           ))}
         </div>
       </section>

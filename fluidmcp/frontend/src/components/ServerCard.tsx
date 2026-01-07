@@ -1,6 +1,6 @@
 import type { Server } from "../data/servers.mock"
 
-export default function ServerCard( {server}: { server: Server}){
+export default function ServerCard({ server }: { server: Server }) {
     return(
         <div className="server-card">
             <div className="server-card-header">
@@ -11,6 +11,7 @@ export default function ServerCard( {server}: { server: Server}){
             </div>
             <p className="server-description">{server.description}</p>
 
+            {/* TODO: Make button functional once API integration is complete */}
             <button disabled className="server-action">
                 {server.status === "running" ? "Running" : "Start"}
             </button>
