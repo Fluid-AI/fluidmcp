@@ -185,7 +185,6 @@ def run():
 
     # Generate token if secure mode enabled but no token provided
     if args.secure and not args.token:
-        import secrets
         args.token = secrets.token_urlsafe(32)
         logger.info(f"Generated bearer token (prefix: {args.token[:8]}...)")
 
