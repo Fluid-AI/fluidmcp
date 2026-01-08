@@ -284,7 +284,26 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
             kill_process_on_port(port)
 
             # Wait for socket to be released with configurable timeout
-            release_timeout = float(os.environ.get("MCP_PORT_RELEASE_TIMEOUT", "5"))
+            default_release_timeout = 5.0
+            env_timeout = os.environ.get("MCP_PORT_RELEASE_TIMEOUT")
+            if env_timeout is None or env_timeout == "":
+                release_timeout = default_release_timeout
+            else:
+                try:
+                    release_timeout = float(env_timeout)
+                    if release_timeout <= 0:
+                        logger.warning(
+                            f"Invalid MCP_PORT_RELEASE_TIMEOUT value {env_timeout!r} (must be positive); "
+                            f"using default {default_release_timeout} seconds instead."
+                        )
+                        release_timeout = default_release_timeout
+                except ValueError:
+                    logger.warning(
+                        f"Invalid MCP_PORT_RELEASE_TIMEOUT value {env_timeout!r}; "
+                        f"using default {default_release_timeout} seconds instead."
+                    )
+                    release_timeout = default_release_timeout
+
             start_time = time.time()
             logger.info(f"Waiting for port {port} to be released (timeout: {release_timeout}s)")
 
