@@ -6,7 +6,6 @@ regardless of the configuration source.
 """
 import os
 import json
-import signal
 import asyncio
 import time
 from pathlib import Path
@@ -244,10 +243,11 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
 
 async def _serve_async(app: FastAPI, port: int) -> None:
     """
-    Run the FastAPI server asynchronously with graceful shutdown support.
+    Run the FastAPI server inside an asyncio event loop with graceful shutdown support.
 
-    This allows the server to run without blocking the main thread and
-    provides proper signal handling for graceful shutdown.
+    When used with asyncio.run(), this will block the calling thread while running
+    the server until shutdown is requested via signal (SIGINT/SIGTERM).
+    Uvicorn handles signal processing internally for graceful shutdown.
 
     Args:
         app: FastAPI application
@@ -262,16 +262,7 @@ async def _serve_async(app: FastAPI, port: int) -> None:
     )
     server = uvicorn.Server(config)
 
-    # Setup graceful shutdown handlers
-    def handle_shutdown(sig, frame):
-        logger.info(f"Received signal {sig}, shutting down gracefully...")
-        asyncio.create_task(server.shutdown())
-
-    # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, handle_shutdown)
-    signal.signal(signal.SIGTERM, handle_shutdown)
-
-    # Run the server
+    # Run the server (uvicorn handles signal processing internally)
     await server.serve()
 
 
@@ -291,8 +282,22 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         if force_reload:
             logger.info(f"Port {port} is already in use - force reloading")
             kill_process_on_port(port)
-            # Wait for socket to be released
-            time.sleep(1)
+
+            # Wait for socket to be released with configurable timeout
+            release_timeout = float(os.environ.get("MCP_PORT_RELEASE_TIMEOUT", "5"))
+            start_time = time.time()
+            logger.info(f"Waiting for port {port} to be released (timeout: {release_timeout}s)")
+
+            while is_port_in_use(port) and (time.time() - start_time) < release_timeout:
+                time.sleep(0.1)
+
+            if is_port_in_use(port):
+                logger.error(
+                    f"Port {port} is still in use after waiting {release_timeout} seconds. "
+                    f"Aborting server start. Increase MCP_PORT_RELEASE_TIMEOUT if needed."
+                )
+                return
+
             logger.info("Port released, starting new server")
         else:
             logger.error(

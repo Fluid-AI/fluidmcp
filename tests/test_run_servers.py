@@ -186,34 +186,52 @@ class TestUpdateEnvFromCommonEnv:
 class TestStartServer:
     """Tests for _start_server"""
 
-    def test_starts_uvicorn_on_free_port(self):
+    def test_starts_server_on_free_port(self):
         mock_app = Mock()
 
         with patch('fluidai_mcp.services.run_servers.is_port_in_use', return_value=False):
-            with patch('fluidai_mcp.services.run_servers.uvicorn') as mock_uvicorn:
+            with patch('fluidai_mcp.services.run_servers.asyncio.run') as mock_asyncio_run:
                 _start_server(mock_app, 8099, force_reload=False)
 
-                mock_uvicorn.run.assert_called_once_with(
-                    mock_app, host="0.0.0.0", port=8099
-                )
+                mock_asyncio_run.assert_called_once()
 
     def test_kills_process_when_force_reload(self):
         mock_app = Mock()
 
-        with patch('fluidai_mcp.services.run_servers.is_port_in_use', return_value=True):
+        # First call returns True (port in use), then False (port released after kill)
+        call_count = [0]
+        def is_port_in_use_side_effect(port):
+            call_count[0] += 1
+            # First call: port in use
+            # Subsequent calls in retry loop: port is free
+            return call_count[0] == 1
+
+        with patch('fluidai_mcp.services.run_servers.is_port_in_use', side_effect=is_port_in_use_side_effect):
             with patch('fluidai_mcp.services.run_servers.kill_process_on_port') as mock_kill:
-                with patch('fluidai_mcp.services.run_servers.uvicorn'):
+                with patch('fluidai_mcp.services.run_servers.asyncio.run'):
                     _start_server(mock_app, 8099, force_reload=True)
 
                     mock_kill.assert_called_once_with(8099)
 
-    def test_prompts_user_when_port_busy(self):
+    def test_aborts_when_port_busy_and_no_force_reload(self):
         mock_app = Mock()
 
         with patch('fluidai_mcp.services.run_servers.is_port_in_use', return_value=True):
-            with patch('builtins.input', return_value='n'):
-                with patch('fluidai_mcp.services.run_servers.uvicorn') as mock_uvicorn:
-                    _start_server(mock_app, 8099, force_reload=False)
+            with patch('fluidai_mcp.services.run_servers.asyncio.run') as mock_asyncio_run:
+                _start_server(mock_app, 8099, force_reload=False)
 
-                    # Should not start server when user says 'n'
-                    mock_uvicorn.run.assert_not_called()
+                # Should not start server when force_reload is False and port is busy
+                mock_asyncio_run.assert_not_called()
+
+    def test_aborts_when_port_not_released_in_time(self):
+        mock_app = Mock()
+
+        # Port stays in use even after killing process
+        with patch('fluidai_mcp.services.run_servers.is_port_in_use', return_value=True):
+            with patch('fluidai_mcp.services.run_servers.kill_process_on_port'):
+                with patch('fluidai_mcp.services.run_servers.asyncio.run') as mock_asyncio_run:
+                    with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "0.1"}):
+                        _start_server(mock_app, 8099, force_reload=True)
+
+                        # Should not start server when port is still in use after timeout
+                        mock_asyncio_run.assert_not_called()
