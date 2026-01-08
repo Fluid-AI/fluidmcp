@@ -263,6 +263,9 @@ mkdir -p /tmp/test-directory
 # 2. Run the sample config
 fluidmcp run examples/sample-config.json --file --start-server
 
+# Or with verbose logging for debugging
+fluidmcp run examples/sample-config.json --file --start-server --verbose
+
 # 3. In another terminal, test the endpoint
 curl http://localhost:8099/filesystem/mcp \
   -H "Content-Type: application/json" \
