@@ -229,9 +229,12 @@ class TestStartServer:
         # Port stays in use even after killing process
         with patch('fluidai_mcp.services.run_servers.is_port_in_use', return_value=True):
             with patch('fluidai_mcp.services.run_servers.kill_process_on_port'):
-                with patch('fluidai_mcp.services.run_servers.asyncio.run') as mock_asyncio_run:
-                    with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "0.1"}):
-                        _start_server(mock_app, 8099, force_reload=True)
+                with patch('fluidai_mcp.services.run_servers.time.sleep') as mock_sleep:
+                    with patch('fluidai_mcp.services.run_servers.asyncio.run') as mock_asyncio_run:
+                        with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "0.1"}):
+                            _start_server(mock_app, 8099, force_reload=True)
 
-                        # Should not start server when port is still in use after timeout
-                        mock_asyncio_run.assert_not_called()
+                            # Should not start server when port is still in use after timeout
+                            mock_asyncio_run.assert_not_called()
+                            # Verify sleep was called during retry loop
+                            assert mock_sleep.called
