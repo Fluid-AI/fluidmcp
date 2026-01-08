@@ -46,10 +46,12 @@ class ServerStatus:
             now = datetime.now()
 
         uptime_delta = now - self.started_at
-        return int(uptime_delta.total_seconds())
+        uptime_seconds = int(uptime_delta.total_seconds())
+        # Ensure uptime is never negative (possible with future started_at due to clock skew/manual changes)
+        return max(0, uptime_seconds)
 
     def get_status_display(self) -> str:
-        """Get human-readable status display for CLI with colors."""
+        """Get human-readable status display string for CLI using emoji icons."""
         state_emoji = {
             ServerState.STOPPED: "⏹️",
             ServerState.STARTING: "🔄",
