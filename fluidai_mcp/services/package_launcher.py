@@ -110,6 +110,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
             logger.warning(f"Failed to initialize MCP server for {pkg}")
 
         router = create_mcp_router(pkg, process)
+        logger.debug(f"Created router for package: {pkg}")
         return pkg, router, process  # Return process for explicit registry
 
     except FileNotFoundError:

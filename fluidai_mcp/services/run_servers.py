@@ -57,6 +57,10 @@ def run_servers(
         start_server: Whether to start the FastAPI server
         force_reload: Force kill existing process on port without prompting
     """
+    logger.debug(f"Starting run_servers with config source: {config.source_type}")
+    logger.debug(f"Single package mode: {single_package}, Start server: {start_server}")
+    logger.debug(f"Secure mode: {secure_mode}, Force reload: {force_reload}")
+
     # Set up secure mode environment
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
@@ -65,10 +69,12 @@ def run_servers(
 
     # Install packages if needed
     if config.needs_install:
+        logger.debug(f"Configuration requires package installation")
         _install_packages_from_config(config)
 
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
+    logger.debug(f"Using port {port} for {'single package' if single_package else 'unified'} mode")
 
     # Create FastAPI app
     app = FastAPI(
@@ -87,13 +93,18 @@ def run_servers(
     )
     # Launch each server and add its router
     launched_servers = 0
+    logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
+
     for server_name, server_cfg in config.servers.items():
+        logger.debug(f"Processing server: {server_name}")
         install_path = server_cfg.get("install_path")
         if not install_path:
             logger.warning(f"No installation path for server '{server_name}', skipping")
             continue
 
         install_path = Path(install_path)
+        logger.debug(f"Installation path for {server_name}: {install_path}")
+
         if not install_path.exists():
             logger.warning(f"Installation path '{install_path}' does not exist, skipping")
             continue
@@ -112,12 +123,14 @@ def run_servers(
                 _register_server_process(server_name, process)  # Register in explicit registry
                 logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
+                logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
             else:
                 logger.error(f"Failed to create router for {server_name}")
 
         except Exception:
             logger.exception(f"Error launching server '{server_name}'")
 
+    logger.debug(f"Total servers launched: {launched_servers}")
     if launched_servers == 0:
         logger.warning("No servers were successfully launched")
         return
@@ -355,10 +368,12 @@ def _install_packages_from_config(config: ServerConfig) -> None:
         fmcp_package = server_cfg.get("fmcp_package")
         if not fmcp_package:
             # Already installed or no package reference
+            logger.debug(f"Server '{server_name}' has no fmcp_package reference, skipping installation")
             continue
 
         logger.info(f"Installing package: {fmcp_package}")
         pkg = parse_package_string(fmcp_package)
+        logger.debug(f"Parsed package: {pkg}")
 
         try:
             # Install package (skip env prompts, we'll update from config)
@@ -382,6 +397,7 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 logger.error(f"Package directory not found: {dest_dir}")
                 continue
 
+            logger.debug(f"Package installed at: {dest_dir}")
             # Update install_path in config
             server_cfg["install_path"] = str(dest_dir)
 
@@ -398,6 +414,7 @@ def _install_packages_from_config(config: ServerConfig) -> None:
 
             # For master mode, update from shared .env
             if config.source_type == "s3_master":
+                logger.debug(f"Updating from common .env for master mode")
                 _update_env_from_common_env(dest_dir, pkg)
 
         except Exception:
@@ -474,6 +491,8 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         port: Port to listen on
         force_reload: Force kill existing process without prompting
     """
+    logger.debug(f"_start_server called with port {port}, force_reload={force_reload}")
+
     if is_port_in_use(port):
         logger.warning(f"Port {port} is already in use")
         if force_reload:
@@ -482,6 +501,7 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
         else:
             choice = input("Kill existing process and reload? (y/n): ").strip().lower()
             if choice == 'y':
+                logger.debug("User chose to kill existing process")
                 kill_process_on_port(port)
             elif choice == 'n':
                 logger.info(f"Keeping existing process on port {port}")

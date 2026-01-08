@@ -56,15 +56,22 @@ def resolve_config(args) -> ServerConfig:
     Returns:
         ServerConfig with unified server configuration
     """
+    logger.debug("Resolving configuration from CLI arguments")
+
     if getattr(args, 's3', False):
+        logger.debug(f"Resolving from S3 URL: {args.package}")
         return resolve_from_s3_url(args.package)
     elif getattr(args, 'file', False):
+        logger.debug(f"Resolving from file: {args.package}")
         return resolve_from_file(args.package)
     elif args.package.lower() == "all":
         if getattr(args, 'master', False):
+            logger.debug("Resolving from S3 master mode")
             return resolve_from_s3_master()
+        logger.debug("Resolving from all installed packages")
         return resolve_from_installed()
     else:
+        logger.debug(f"Resolving from single package: {args.package}")
         return resolve_from_package(args.package)
 
 
@@ -177,20 +184,28 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     )
 
     # Check each server to determine type and prepare it
+    logger.debug(f"Processing {len(servers)} server(s) from file configuration")
+
     for server_name, server_cfg in servers.items():
+        logger.debug(f"Checking server type for '{server_name}'")
+
         if isinstance(server_cfg, str):
             # Package string - needs installation from registry
+            logger.debug(f"'{server_name}' is a package string: {server_cfg}")
             needs_install = True
 
         elif isinstance(server_cfg, dict):
             if server_cfg.get("github_repo"):
                 # GitHub repository - clone it
+                logger.debug(f"'{server_name}' is a GitHub repo: {server_cfg.get('github_repo')}")
                 _handle_github_server(server_name, server_cfg, default_github_token)
 
             elif server_cfg.get("command"):
                 # Direct configuration - create temp directory with metadata.json
+                logger.debug(f"'{server_name}' is a direct configuration with command: {server_cfg.get('command')}")
                 temp_dir = _create_temp_server_dir(server_name, server_cfg)
                 servers[server_name]["install_path"] = str(temp_dir)
+                logger.debug(f"Created temp directory for '{server_name}': {temp_dir}")
             else:
                 # Unknown format
                 logger.warning(f"Unknown format for server '{server_name}'")
@@ -425,9 +440,11 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
             # Mode 2: Extract from README or use existing metadata.json
             logger.info("Extracting metadata from repository")
             metadata_path = extract_or_create_metadata(dest_dir)
+            logger.debug(f"Metadata extracted/created at: {metadata_path}")
 
             # Apply environment variables if provided
             if server_cfg.get("env"):
+                logger.debug(f"Applying environment variables to {server_name}")
                 apply_env_to_metadata(metadata_path, server_name, server_cfg["env"])
 
         # Set install_path for the launcher
