@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from argparse import Namespace
 
-from fluidmcp.services.config_resolver import ServerConfig, resolve_config
-from fluidmcp.services.run_servers import run_servers
-from fluidmcp.cli import run_command, main
+from fluidmcp.cli.services.config_resolver import ServerConfig, resolve_config
+from fluidmcp.cli.services.run_servers import run_servers
+from fluidmcp.cli.cli import run_command, main
 
 
 class TestRunCommandIntegration:
