@@ -44,9 +44,9 @@ def kill_process(pid):
     '''
     try:
         os.kill(pid, signal.SIGTERM)
-        print(f":boom: Killed process {pid} running on port.")
-    except Exception as e:
-        print(f":x: Failed to kill process {pid}: {e}")
+        logger.info(f"Killed process {pid} running on port")
+    except Exception:
+        logger.exception(f"Failed to kill process {pid}")
 
 
 
@@ -59,9 +59,11 @@ def kill_process_on_port(port):
     """
     pid = get_pid_on_port(port)
     if pid:
+        logger.debug(f"Found process {pid} on port {port}")
         kill_process(pid)
-        print(f"Existing process on port {port} killed.")
+        logger.info(f"Existing process on port {port} killed")
         return True
+    logger.debug(f"No process found on port {port}")
     return False
 
 def find_free_port(start=8100, end=9000, taken_ports=None):

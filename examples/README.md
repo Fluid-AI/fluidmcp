@@ -2,6 +2,30 @@
 
 This directory contains sample configuration files for testing and development.
 
+## Important Security Notice
+
+**All tokens, API keys, and credentials in these example files are placeholders and should never be real secrets.** Never commit files containing real API keys, tokens, or credentials to any repository. When using these examples:
+
+- Replace placeholder values with your actual credentials only in local copies
+- Use environment variables for sensitive data in production
+- Add your local configuration files to `.gitignore`
+- Rotate any credentials that are accidentally exposed
+
+## Prerequisites
+
+Before running these examples, ensure you have the following installed:
+
+- **Node.js** (v18 or higher) - Required for npx-based MCP servers
+- **TSX** - Required for TypeScript-based MCP servers: `npm install -g tsx`
+- **UV** - Required for Python-based MCP servers: Install from [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+To verify your installation:
+```bash
+node --version    # Should show v18 or higher
+npx tsx --version # Should show tsx version
+uv --version      # Should show uv version
+```
+
 ## Sample Files
 
 ### 1. `sample-metadata.json`
@@ -124,6 +148,110 @@ mkdir -p /tmp/test-directory
 fluidmcp run my-config.json --file --start-server
 ```
 
+### 7. `github-private-repo.json`
+A template configuration for accessing private GitHub repositories with authentication.
+
+**Use case**: Running MCP servers from private/internal company repositories or private forks.
+
+**Usage**:
+```bash
+# 1. Edit the file with your actual private repository details
+# Replace placeholder repositories with your own private repos
+# Add your GitHub personal access token(s)
+
+# 2. Run with FluidMCP
+fluidmcp run examples/github-private-repo.json --file --start-server
+```
+
+**Servers included (templates)**:
+- `private-company-server`: Example private company MCP server with TypeScript
+- `private-fork-with-custom-token`: Example private fork with per-server token override
+- `public-server-for-comparison`: Public MCP server for comparison
+
+**Note**: This is a template file. Replace the placeholder repositories (`your-org/private-mcp-server`, `your-username/forked-mcp-server`) with your actual private repositories. The file demonstrates both default `github_token` for all servers and per-server `github_token` overrides.
+
+### 8. `multi-server-dependencies.json`
+Demonstrates environment variable sharing across multiple MCP servers.
+
+**Use case**: Running multiple servers with shared configuration (logging levels, workspace paths, API keys).
+
+**Usage**:
+```bash
+# 1. Create the shared workspace directory
+mkdir -p /tmp/shared-workspace
+
+# 2. Run with FluidMCP
+fluidmcp run examples/multi-server-dependencies.json --file --start-server
+
+# Access the Swagger UI at http://localhost:8099/docs
+# Test filesystem endpoint:
+curl http://localhost:8099/filesystem/mcp/tools/list
+
+# Test sqlite endpoint:
+curl http://localhost:8099/sqlite/mcp/tools/list
+```
+
+**Servers included**:
+- `filesystem`: File system operations in shared workspace
+- `sqlite`: SQLite database in shared workspace
+- `brave-search`: Web search (requires BRAVE_API_KEY)
+
+**Shared environment variables**:
+- `LOG_LEVEL`: Shared across all 3 servers for consistent logging
+- `WORKSPACE_ROOT`: Shared between filesystem and sqlite for same working directory
+- `BRAVE_API_KEY`: Unique to brave-search server
+
+**Note**: This example shows a realistic pattern where multiple servers work in the same workspace and share common configuration values, reducing duplication.
+
+### 9. `secure-mode.json`
+Configuration for production deployment with bearer token authentication.
+
+**Use case**: Deploying FluidMCP in production environments with security enabled, protecting API endpoints from unauthorized access.
+
+**Usage**:
+```bash
+# 1. Create the test directory
+mkdir -p /tmp/test-directory
+
+# 2. Run with secure mode enabled and custom token
+fluidmcp run examples/secure-mode.json --file --start-server --secure --token mySecureToken123
+
+# 3. Test with authentication (in another terminal)
+# This will succeed with correct token:
+curl http://localhost:8099/filesystem/mcp/tools/list \
+  -H "Authorization: Bearer mySecureToken123"
+
+# This will fail without authentication:
+curl http://localhost:8099/filesystem/mcp/tools/list
+```
+
+**How to provide your token (3 methods)**:
+
+1. **Via command-line flag** (Recommended for testing):
+   ```bash
+   fluidmcp run examples/secure-mode.json --file --start-server --secure --token YOUR_TOKEN_HERE
+   ```
+
+2. **Via environment variable** (Recommended for production):
+   ```bash
+   export FMCP_BEARER_TOKEN="your-production-token-here"
+   fluidmcp run examples/secure-mode.json --file --start-server --secure
+   ```
+
+3. **Auto-generated token** (If no token provided):
+   ```bash
+   # FluidMCP will generate a random secure token and display it
+   fluidmcp run examples/secure-mode.json --file --start-server --secure
+   # Output: "Secure mode enabled. Bearer token: <generated-token>"
+   ```
+
+**Servers included**:
+- `filesystem`: File system operations server
+- `memory`: In-memory storage server
+- `brave-search`: Web search (requires BRAVE_API_KEY)
+
+**Note**: When `--secure` flag is used, all API endpoints require a valid bearer token in the `Authorization` header. The token can be provided via `--token` flag, `FMCP_BEARER_TOKEN` environment variable, or will be auto-generated. This is recommended for production deployments to prevent unauthorized access.
+
 ## Quick Start for Developers
 
 ### Testing Basic Functionality
@@ -134,6 +262,9 @@ mkdir -p /tmp/test-directory
 
 # 2. Run the sample config
 fluidmcp run examples/sample-config.json --file --start-server
+
+# Or with verbose logging for debugging
+fluidmcp run examples/sample-config.json --file --start-server --verbose
 
 # 3. In another terminal, test the endpoint
 curl http://localhost:8099/filesystem/mcp \
