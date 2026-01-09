@@ -6,6 +6,8 @@ regardless of the configuration source.
 """
 import os
 import json
+import asyncio
+import time
 from pathlib import Path
 from typing import Optional, Tuple
 from loguru import logger
@@ -482,9 +484,37 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
+async def _serve_async(app: FastAPI, port: int) -> None:
+    """
+    Run the FastAPI server inside an asyncio event loop with graceful shutdown support.
+
+    When used with asyncio.run(), this will block the calling thread while running
+    the server until shutdown is requested via signal (SIGINT/SIGTERM).
+    Uvicorn handles signal processing internally for graceful shutdown.
+
+    Args:
+        app: FastAPI application
+        port: Port to listen on
+    """
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        access_log=True
+    )
+    server = uvicorn.Server(config)
+
+    # Run the server (uvicorn handles signal processing internally)
+    await server.serve()
+
+
 def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
     """
     Start the FastAPI server on the specified port.
+
+    This function handles port conflict resolution and runs the server
+    using asyncio for better control and graceful shutdown support.
 
     Args:
         app: FastAPI application
@@ -494,21 +524,59 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
     logger.debug(f"_start_server called with port {port}, force_reload={force_reload}")
 
     if is_port_in_use(port):
-        logger.warning(f"Port {port} is already in use")
         if force_reload:
-            logger.info(f"Force reloading server on port {port}")
+            logger.info(f"Port {port} is already in use - force reloading")
             kill_process_on_port(port)
-        else:
-            choice = input("Kill existing process and reload? (y/n): ").strip().lower()
-            if choice == 'y':
-                logger.debug("User chose to kill existing process")
-                kill_process_on_port(port)
-            elif choice == 'n':
-                logger.info(f"Keeping existing process on port {port}")
-                return
+
+            # Wait for socket to be released with configurable timeout
+            default_release_timeout = 5.0
+            env_timeout = os.environ.get("MCP_PORT_RELEASE_TIMEOUT")
+            if env_timeout is None or env_timeout == "":
+                release_timeout = default_release_timeout
             else:
-                logger.warning("Invalid choice. Aborting")
+                try:
+                    release_timeout = float(env_timeout)
+                    if release_timeout <= 0:
+                        logger.warning(
+                            f"Invalid MCP_PORT_RELEASE_TIMEOUT value {env_timeout!r} (must be positive); "
+                            f"using default {default_release_timeout} seconds instead."
+                        )
+                        release_timeout = default_release_timeout
+                except ValueError:
+                    logger.warning(
+                        f"Invalid MCP_PORT_RELEASE_TIMEOUT value {env_timeout!r}; "
+                        f"using default {default_release_timeout} seconds instead."
+                    )
+                    release_timeout = default_release_timeout
+
+            start_time = time.time()
+            logger.info(f"Waiting for port {port} to be released (timeout: {release_timeout}s)")
+
+            while is_port_in_use(port) and (time.time() - start_time) < release_timeout:
+                time.sleep(0.1)
+
+            if is_port_in_use(port):
+                logger.error(
+                    f"Port {port} is still in use after waiting {release_timeout} seconds. "
+                    f"Aborting server start. Increase MCP_PORT_RELEASE_TIMEOUT if needed."
+                )
                 return
 
+            logger.info("Port released, starting new server")
+        else:
+            logger.error(
+                f"Port {port} is already in use. "
+                f"Use --force-reload flag to restart the server automatically."
+            )
+            return
+
     logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    logger.info("Press Ctrl+C to stop the server")
+
+    try:
+        # Run server with asyncio for graceful shutdown support
+        asyncio.run(_serve_async(app, port))
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.error(f"Server error: {e}", exc_info=True)

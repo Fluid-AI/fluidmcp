@@ -180,4 +180,7 @@ GITHUB_TOKEN       # Alternative environment variable
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
+
+# Server startup configuration
+MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (default: 5)
 ```
