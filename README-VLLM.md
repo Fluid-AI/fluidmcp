@@ -138,6 +138,8 @@ role: content
 
 This works for base models like OPT and GPT-2. For chat-tuned models (Llama, Mistral, etc.), automatic chat template detection will be added in a future PR.
 
+**Security Note**: The naive concatenation approach does NOT prevent prompt injection attacks. If you're exposing this server to untrusted user input in production, implement proper input validation and consider using model-specific chat templates via `tokenizer.apply_chat_template()`.
+
 ## Examples
 
 ### Basic Chat Completion
@@ -292,9 +294,11 @@ vLLM is designed for GPU inference. CPU mode is extremely slow and may not work 
 ```
 
 **Common issues:**
-1. Model still loading (can take 30s-10min depending on model size)
-2. Long-running request blocking queue (sequential processing)
-3. Server crashed (check logs for errors)
+1. **Model still loading** - Large models can take 30s-10min to initialize depending on model size and hardware. Look for "Ready to accept MCP requests" in logs to confirm startup is complete.
+2. **Long-running request blocking queue** - Sequential processing means one slow request blocks all others.
+3. **Server crashed** - Check logs for errors during initialization or request processing.
+
+**Note on Startup**: vLLM initialization is synchronous and blocking. There is no explicit health check endpoint. Monitor stderr logs for "Ready to accept MCP requests" to confirm the server is fully initialized.
 
 ## Current Limitations
 

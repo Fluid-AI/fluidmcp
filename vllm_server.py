@@ -73,7 +73,7 @@ def initialize_vllm():
         if not (0.0 < gpu_memory_utilization <= 1.0):
             raise ValueError()
     except ValueError:
-        logger.error("Invalid VLLM_GPU_MEMORY_UTILIZATION, must be float in (0.0, 1.0]")
+        logger.error("Invalid VLLM_GPU_MEMORY_UTILIZATION, must be float between 0.0 (exclusive) and 1.0 (inclusive)")
         sys.exit(1)
 
     # Parse max_model_len
@@ -227,7 +227,10 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
         top_p = arguments.get("top_p", 1.0)
         temperature, max_tokens, top_p = validate_sampling_params(temperature, max_tokens, top_p)
 
-        # Build prompt
+        # Build prompt using naive concatenation
+        # WARNING: This approach does NOT prevent prompt injection attacks.
+        # For production use with untrusted input, implement proper chat templates
+        # or use vLLM's tokenizer.apply_chat_template() with model-specific formatting.
         prompt_lines = []
         idx = None
         try:
@@ -330,10 +333,16 @@ def main():
                 logger.error(f"Invalid JSON: {e}")
                 print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}), flush=True)
 
+            except BrokenPipeError:
+                logger.info("Broken pipe detected (client disconnected), shutting down...")
+                break
+
             except Exception as e:
                 logger.error(f"Error processing request: {e}", exc_info=True)
                 print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32603, "message": "Internal error"}}), flush=True)
 
+    except BrokenPipeError:
+        logger.info("Broken pipe detected (client disconnected), shutting down...")
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     except Exception as e:
