@@ -239,12 +239,22 @@ def handle_tools_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]
             }
         }
 
-def process_request(request: Dict[str, Any]) -> Dict[str, Any]:
-    """Process a single MCP JSON-RPC request"""
+def process_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Process a single MCP JSON-RPC request
+
+    Returns None for notifications (no response needed),
+    otherwise returns response dict
+    """
     method = request.get("method")
     request_id = request.get("id")
     params = request.get("params", {})
 
+    # Handle notifications (no response expected)
+    if method == "notifications/initialized":
+        logger.debug("Received initialized notification")
+        return None
+
+    # Handle regular requests
     if method == "initialize":
         return handle_initialize(request_id)
     elif method == "tools/list":
@@ -285,8 +295,9 @@ def main():
 
                 response = process_request(request)
 
-                # Write response to stdout (line-delimited JSON)
-                print(json.dumps(response), flush=True)
+                # Write response to stdout only if not a notification
+                if response is not None:
+                    print(json.dumps(response), flush=True)
 
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON: {e}")
