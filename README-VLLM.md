@@ -88,8 +88,8 @@ Generate text completions using vLLM.
 **Parameters:**
 - `messages` (required): Array of message objects with `role` and `content`
   - `role`: "system", "user", or "assistant"
-  - `content`: Message text
-- `temperature` (optional): Sampling temperature (0.0-2.0), default: 0.7
+  - `content`: Message text (stripped of leading/trailing whitespace, must be non-empty)
+- `temperature` (optional): Sampling temperature (0.0 < temperature ≤ 2.0), default: 0.7. Must be greater than 0.0 to avoid division by zero in sampling.
 - `max_tokens` (optional): Maximum tokens to generate, default: 512
 - `top_p` (optional): Nucleus sampling parameter (0.0-1.0), default: 1.0
 

@@ -181,12 +181,16 @@ def validate_messages(messages: Any) -> None:
         content = msg.get("content")
         if role not in allowed_roles:
             raise ValueError(f"'messages[{idx}].role' must be one of {sorted(allowed_roles)}")
-        if not isinstance(content, str) or not content.strip():
+        if not isinstance(content, str):
+            raise ValueError(f"'messages[{idx}].content' must be a string")
+
+        stripped_content = content.strip()
+        if not stripped_content:
             raise ValueError(f"'messages[{idx}].content' must be non-empty string")
-        if len(content) > MAX_CONTENT_LENGTH:
+        if len(stripped_content) > MAX_CONTENT_LENGTH:
             raise ValueError(f"'messages[{idx}].content' is too long (max {MAX_CONTENT_LENGTH})")
 
-        total_content_length += len(content)
+        total_content_length += len(stripped_content)
 
     if total_content_length > MAX_TOTAL_CONTENT:
         raise ValueError(f"Total content length too large (max {MAX_TOTAL_CONTENT}, got {total_content_length})")
@@ -200,8 +204,8 @@ def validate_sampling_params(temperature: Any, max_tokens: Any, top_p: Any) -> t
     except (TypeError, ValueError) as e:
         raise ValueError(f"Invalid parameter types: {e}")
 
-    if not (0.0 <= temperature_f <= 2.0):
-        raise ValueError(f"temperature must be between 0.0 and 2.0 inclusive")
+    if not (0.0 < temperature_f <= 2.0):
+        raise ValueError("temperature must be greater than 0.0 and at most 2.0")
     if not (1 <= max_tokens_i <= MAX_TOKENS_LIMIT):
         raise ValueError(f"max_tokens must be 1-{MAX_TOKENS_LIMIT}")
     if not (0.0 <= top_p_f <= 1.0):
