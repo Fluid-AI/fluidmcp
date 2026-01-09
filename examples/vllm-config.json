@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "vllm": {
+      "command": "python",
+      "args": ["vllm_server.py"],
+      "env": {
+        "VLLM_MODEL_NAME": "facebook/opt-125m",
+        "VLLM_TENSOR_PARALLEL_SIZE": "1",
+        "VLLM_GPU_MEMORY_UTILIZATION": "0.9",
+        "VLLM_MAX_MODEL_LEN": "2048",
+        "VLLM_DTYPE": "float16",
+        "VLLM_DEFAULT_TEMPERATURE": "0.7",
+        "VLLM_DEFAULT_MAX_TOKENS": "512",
+        "VLLM_DEFAULT_TOP_P": "1.0",
+        "VLLM_DEFAULT_TOP_K": "-1",
+        "VLLM_MAX_SESSIONS": "100",
+        "VLLM_MAX_SESSION_MESSAGES": "50",
+        "VLLM_LOG_LEVEL": "INFO",
+        "HUGGING_FACE_HUB_TOKEN": ""
+      }
+    }
+  }
+}
