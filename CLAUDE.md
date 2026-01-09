@@ -26,9 +26,11 @@ There are no automated tests in this repository currently. Manual testing can be
 ## Architecture
 
 ### Entry Point
-- `fluidai_mcp/cli.py` - Main CLI implementation with argument parsing and command handlers
+- `fluidmcp/cli/cli.py` - Main CLI implementation with argument parsing and command handlers
+- `fluidmcp/cli/__init__.py` - Package entry point with `main()` function
+- `fluidmcp/cli/__main__.py` - Module execution handler
 
-### Services Layer (`fluidai_mcp/services/`)
+### Services Layer (`fluidmcp/cli/services/`)
 - `config_resolver.py` - Unified config resolution from multiple sources (packages, files, S3, GitHub)
   - `resolve_from_file()` - Handles direct configs, package strings, and GitHub repos
   - `_handle_github_server()` - Clones and prepares GitHub repositories

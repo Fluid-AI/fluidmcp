@@ -1,6 +1,3 @@
 include README.md
 include LICENSE
-include fluidai_mcp/client_server/*
-recursive-include fluidai_mcp/templates *
-recursive-include fluidai_mcp/static *
-recursive-include fluidai_mcp/data *
+recursive-include fluidmcp/cli/examples *

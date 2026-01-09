@@ -9,16 +9,16 @@ import importlib.metadata
 import platform
 import shutil
 
-from fluidai_mcp.services import (
+from .services import (
     install_package,
     edit_env_variables,
     parse_package_string,
     resolve_config,
     run_servers,
 )
-from fluidai_mcp.services.package_installer import package_exists
-from fluidai_mcp.services.package_list import get_latest_version_dir
-from fluidai_mcp.services.config_resolver import INSTALLATION_DIR
+from .services.package_installer import package_exists
+from .services.package_list import get_latest_version_dir
+from .services.config_resolver import INSTALLATION_DIR
 
 
 def configure_logger(verbose: bool = False) -> None:
@@ -403,12 +403,12 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
     """
-    from fluidai_mcp.services import (
+    from .services import (
         clone_github_repo,
         extract_or_create_metadata,
     )
-    from fluidai_mcp.services.package_launcher import launch_mcp_using_fastapi_proxy
-    from fluidai_mcp.services.network_utils import is_port_in_use, kill_process_on_port
+    from .services.package_launcher import launch_mcp_using_fastapi_proxy
+    from .services.network_utils import is_port_in_use, kill_process_on_port
     from fastapi import FastAPI
     import uvicorn
 
@@ -505,10 +505,11 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     # Add subparsers for different commands
-    # install command 
+    # install command
     install_parser = subparsers.add_parser("install", help="Install a package")
     install_parser.add_argument("package", type=str, help="<author/package@version>")
     install_parser.add_argument("--master", action="store_true", help="Use master env file for API keys")
+    install_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # run command
     run_parser = subparsers.add_parser("run", help="Run a package")
@@ -521,13 +522,16 @@ def main():
     run_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
     run_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     run_parser.add_argument("--s3", action="store_true", help="Treat package argument as path to S3 URL to a JSON file containing server configurations (format: s3://bucket-name/key)")
+    run_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # list command
-    subparsers.add_parser("list", help="List installed packages")
+    list_parser = subparsers.add_parser("list", help="List installed packages")
+    list_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # edit-env commannd
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
     edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
+    edit_env_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # github command
     github_parser = subparsers.add_parser("github", help="Clone and run an MCP server from GitHub")
@@ -538,11 +542,13 @@ def main():
     github_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    github_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # validate comand
     validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
     validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
-    validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file") 
+    validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
+    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)") 
 
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
