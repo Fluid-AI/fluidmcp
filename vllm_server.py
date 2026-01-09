@@ -165,6 +165,8 @@ def validate_sampling_params(temperature: Any, max_tokens: Any, top_p: Any) -> t
 
     Returns: (temperature, max_tokens, top_p) as validated numeric types
     """
+    MAX_TOKENS_LIMIT = 16384  # Reasonable upper bound for most models
+
     # Type validation
     try:
         temperature_f = float(temperature)
@@ -178,6 +180,8 @@ def validate_sampling_params(temperature: Any, max_tokens: Any, top_p: Any) -> t
         raise ValueError(f"temperature must be between 0.0 and 2.0, got {temperature_f}")
     if max_tokens_i < 1:
         raise ValueError(f"max_tokens must be at least 1, got {max_tokens_i}")
+    if max_tokens_i > MAX_TOKENS_LIMIT:
+        raise ValueError(f"max_tokens too large (max {MAX_TOKENS_LIMIT}, got {max_tokens_i})")
     if not (0.0 <= top_p_f <= 1.0):
         raise ValueError(f"top_p must be between 0.0 and 1.0, got {top_p_f}")
 
@@ -208,7 +212,7 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
         temperature, max_tokens, top_p = validate_sampling_params(temperature, max_tokens, top_p)
 
         # Simple prompt formatting (naive concatenation) - safe after validation
-        prompt = "\n".join([f"{msg.get('role', '')}: {msg.get('content', '')}" for msg in messages])
+        prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
         logger.info(f"Generating completion with {len(messages)} messages")
 
@@ -295,10 +299,6 @@ def process_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Returns None for notifications (no response needed),
     otherwise returns response dict
     """
-    # Validate request is a dictionary
-    if not isinstance(request, dict):
-        raise ValueError(f"Request must be a JSON object, got {type(request).__name__}")
-
     method = request.get("method")
     request_id = request.get("id")
     params = request.get("params", {})
@@ -344,6 +344,21 @@ def main():
             request_id = None
             try:
                 request = json.loads(line)
+
+                # Validate request is a JSON object (dict)
+                if not isinstance(request, dict):
+                    logger.error(f"Invalid Request: expected JSON object, got {type(request).__name__}")
+                    error_response = {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": -32600,
+                            "message": "Invalid Request"
+                        }
+                    }
+                    print(json.dumps(error_response), flush=True)
+                    continue
+
                 request_id = request.get("id")
                 logger.debug(f"Received request: {request.get('method')}")
 

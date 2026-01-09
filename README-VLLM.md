@@ -136,7 +136,7 @@ role: content
 role: content
 ```
 
-This works for base models like OPT and GPT-2. For chat-tuned models (LLaMA, Mistral, etc.), automatic chat template detection will be added in a future PR.
+This works for base models like OPT and GPT-2. For chat-tuned models (Llama, Mistral, etc.), automatic chat template detection will be added in a future PR.
 
 ## Examples
 
