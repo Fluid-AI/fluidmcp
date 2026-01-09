@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from argparse import Namespace
 
-from fluidai_mcp.services.config_resolver import ServerConfig, resolve_config
-from fluidai_mcp.services.run_servers import run_servers
-from fluidai_mcp.cli import run_command, main
+from fluidmcp.services.config_resolver import ServerConfig, resolve_config
+from fluidmcp.services.run_servers import run_servers
+from fluidmcp.cli import run_command, main
 
 
 class TestRunCommandIntegration:
@@ -40,7 +40,7 @@ class TestRunCommandIntegration:
             force_reload=False
         )
 
-        with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
+        with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
             config = resolve_config(args)
 
         assert config.source_type == "package"
@@ -72,7 +72,7 @@ class TestRunCommandIntegration:
             force_reload=False
         )
 
-        with patch('fluidai_mcp.services.config_resolver.validate_metadata_config', return_value=True):
+        with patch('fluidmcp.services.config_resolver.validate_metadata_config', return_value=True):
             config = resolve_config(args)
 
         assert config.source_type == "file"
@@ -103,8 +103,8 @@ class TestRunCommandIntegration:
             force_reload=False
         )
 
-        with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
-            with patch('fluidai_mcp.services.config_resolver.find_free_port', side_effect=[8001, 8002]):
+        with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
+            with patch('fluidmcp.services.config_resolver.find_free_port', side_effect=[8001, 8002]):
                 config = resolve_config(args)
 
         assert config.source_type == "installed"
@@ -122,7 +122,7 @@ class TestRunCommandIntegration:
             force_reload=False
         )
 
-        with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', Path("/nonexistent")):
+        with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', Path("/nonexistent")):
             with pytest.raises(SystemExit) as exc_info:
                 run_command(args)
             assert exc_info.value.code == 1
@@ -157,8 +157,8 @@ class TestEndToEndServerLaunch:
             launched_packages.append(str(dest_dir))
             return ("test-pkg", mock_router)
 
-        with patch('fluidai_mcp.services.run_servers.launch_mcp_using_fastapi_proxy', side_effect=capture_launch):
-            with patch('fluidai_mcp.services.run_servers.uvicorn'):
+        with patch('fluidmcp.services.run_servers.launch_mcp_using_fastapi_proxy', side_effect=capture_launch):
+            with patch('fluidmcp.services.run_servers.uvicorn'):
                 run_servers(config, start_server=False)
 
         assert str(pkg_dir) in launched_packages
@@ -176,8 +176,8 @@ class TestEndToEndServerLaunch:
         )
 
         with patch.dict(os.environ, {}, clear=False):
-            with patch('fluidai_mcp.services.run_servers.launch_mcp_using_fastapi_proxy', return_value=("pkg", Mock())):
-                with patch('fluidai_mcp.services.run_servers.uvicorn'):
+            with patch('fluidmcp.services.run_servers.launch_mcp_using_fastapi_proxy', return_value=("pkg", Mock())):
+                with patch('fluidmcp.services.run_servers.uvicorn'):
                     run_servers(config, secure_mode=True, token="secret123", start_server=False)
 
             assert os.environ.get("FMCP_BEARER_TOKEN") == "secret123"
@@ -212,9 +212,9 @@ class TestConfigResolverChain:
             if args.file:
                 args.package = str(config_file)
 
-            with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
-                with patch('fluidai_mcp.services.config_resolver.find_free_port', return_value=8000):
-                    with patch('fluidai_mcp.services.config_resolver.validate_metadata_config', return_value=True):
+            with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
+                with patch('fluidmcp.services.config_resolver.find_free_port', return_value=8000):
+                    with patch('fluidmcp.services.config_resolver.validate_metadata_config', return_value=True):
                         config = resolve_config(args)
 
             assert config.source_type == expected_source, f"Failed for {args}"
@@ -271,9 +271,9 @@ class TestGitHubIntegration:
         )
 
         # Mock GitHub operations
-        with patch('fluidai_mcp.services.config_resolver.validate_metadata_config', return_value=True):
-            with patch('fluidai_mcp.services.github_utils.clone_github_repo', return_value=mock_repo_dir):
-                with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', tmp_path / ".fmcp-packages"):
+        with patch('fluidmcp.services.config_resolver.validate_metadata_config', return_value=True):
+            with patch('fluidmcp.services.github_utils.clone_github_repo', return_value=mock_repo_dir):
+                with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', tmp_path / ".fmcp-packages"):
                     config = resolve_config(args)
 
         # Verify the config was resolved correctly

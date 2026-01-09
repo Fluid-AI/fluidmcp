@@ -18,8 +18,8 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Fluid-AI/fluidmcp",
-    packages=['fluidmcp', 'fluidmcp.services'],
-    package_dir={'fluidmcp': 'fluidmcp/backend'},
+    packages=['fluidmcp', 'fluidmcp.services', 'fluidmcp.models'],
+    package_dir={'fluidmcp': 'fluidmcp/cli'},
     include_package_data=True,
     install_requires=[
         "requests",

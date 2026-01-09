@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from argparse import Namespace
 
-from fluidai_mcp.services.config_resolver import (
+from fluidmcp.services.config_resolver import (
     ServerConfig,
     resolve_config,
     resolve_from_package,
@@ -49,7 +49,7 @@ class TestResolveConfig:
 
     def test_routes_to_s3_url_when_s3_flag(self):
         args = Namespace(s3=True, file=False, master=False, package="https://example.com/config.json")
-        with patch('fluidai_mcp.services.config_resolver.resolve_from_s3_url') as mock:
+        with patch('fluidmcp.services.config_resolver.resolve_from_s3_url') as mock:
             mock.return_value = ServerConfig(source_type="s3_url")
             result = resolve_config(args)
             mock.assert_called_once_with("https://example.com/config.json")
@@ -57,7 +57,7 @@ class TestResolveConfig:
 
     def test_routes_to_file_when_file_flag(self):
         args = Namespace(s3=False, file=True, master=False, package="config.json")
-        with patch('fluidai_mcp.services.config_resolver.resolve_from_file') as mock:
+        with patch('fluidmcp.services.config_resolver.resolve_from_file') as mock:
             mock.return_value = ServerConfig(source_type="file")
             result = resolve_config(args)
             mock.assert_called_once_with("config.json")
@@ -65,7 +65,7 @@ class TestResolveConfig:
 
     def test_routes_to_installed_when_all(self):
         args = Namespace(s3=False, file=False, master=False, package="all")
-        with patch('fluidai_mcp.services.config_resolver.resolve_from_installed') as mock:
+        with patch('fluidmcp.services.config_resolver.resolve_from_installed') as mock:
             mock.return_value = ServerConfig(source_type="installed")
             result = resolve_config(args)
             mock.assert_called_once()
@@ -73,7 +73,7 @@ class TestResolveConfig:
 
     def test_routes_to_s3_master_when_all_with_master(self):
         args = Namespace(s3=False, file=False, master=True, package="all")
-        with patch('fluidai_mcp.services.config_resolver.resolve_from_s3_master') as mock:
+        with patch('fluidmcp.services.config_resolver.resolve_from_s3_master') as mock:
             mock.return_value = ServerConfig(source_type="s3_master")
             result = resolve_config(args)
             mock.assert_called_once()
@@ -81,7 +81,7 @@ class TestResolveConfig:
 
     def test_routes_to_package_for_single_package(self):
         args = Namespace(s3=False, file=False, master=False, package="author/pkg@1.0.0")
-        with patch('fluidai_mcp.services.config_resolver.resolve_from_package') as mock:
+        with patch('fluidmcp.services.config_resolver.resolve_from_package') as mock:
             mock.return_value = ServerConfig(source_type="package")
             result = resolve_config(args)
             mock.assert_called_once_with("author/pkg@1.0.0")
@@ -105,7 +105,7 @@ class TestResolveFromPackage:
         }
         (pkg_dir / "metadata.json").write_text(json.dumps(metadata))
 
-        with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
+        with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
             config = resolve_from_package("Author/TestPkg@1.0.0")
 
         assert "test-server" in config.servers
@@ -114,7 +114,7 @@ class TestResolveFromPackage:
         assert config.source_type == "package"
 
     def test_raises_error_for_missing_package(self, tmp_path):
-        with patch('fluidai_mcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
+        with patch('fluidmcp.services.config_resolver.INSTALLATION_DIR', tmp_path):
             with pytest.raises(FileNotFoundError):
                 resolve_from_package("NonExistent/Pkg@1.0.0")
 
@@ -135,7 +135,7 @@ class TestResolveFromFile:
         }
         config_file.write_text(json.dumps(config_data))
 
-        with patch('fluidai_mcp.services.config_resolver.validate_metadata_config', return_value=True):
+        with patch('fluidmcp.services.config_resolver.validate_metadata_config', return_value=True):
             config = resolve_from_file(str(config_file))
 
         assert "maps" in config.servers
@@ -165,7 +165,7 @@ class TestCollectInstalledServers:
         }))
 
         taken_ports = set()
-        with patch('fluidai_mcp.services.config_resolver.find_free_port', side_effect=[8001, 8002]):
+        with patch('fluidmcp.services.config_resolver.find_free_port', side_effect=[8001, 8002]):
             servers = _collect_installed_servers(tmp_path, taken_ports)
 
         assert "server1" in servers
@@ -196,7 +196,7 @@ class TestResolvePackageDestDir:
         pkg_dir = tmp_path / "Author" / "Package" / "2.0.0"
         pkg_dir.mkdir(parents=True)
 
-        with patch('fluidai_mcp.services.config_resolver.get_latest_version_dir', return_value=pkg_dir):
+        with patch('fluidmcp.services.config_resolver.get_latest_version_dir', return_value=pkg_dir):
             result = _resolve_package_dest_dir("Author/Package", tmp_path)
         assert result == pkg_dir
 

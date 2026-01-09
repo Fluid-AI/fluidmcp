@@ -26,9 +26,11 @@ There are no automated tests in this repository currently. Manual testing can be
 ## Architecture
 
 ### Entry Point
-- `fluidai_mcp/cli.py` - Main CLI implementation with argument parsing and command handlers
+- `fluidmcp/cli/cli.py` - Main CLI implementation with argument parsing and command handlers
+- `fluidmcp/cli/__init__.py` - Package entry point with `main()` function
+- `fluidmcp/cli/__main__.py` - Module execution handler
 
-### Services Layer (`fluidai_mcp/services/`)
+### Services Layer (`fluidmcp/cli/services/`)
 - `config_resolver.py` - Unified config resolution from multiple sources (packages, files, S3, GitHub)
   - `resolve_from_file()` - Handles direct configs, package strings, and GitHub repos
   - `_handle_github_server()` - Clones and prepares GitHub repositories
@@ -128,6 +130,13 @@ fluidmcp list
 
 # Edit package environment variables
 fluidmcp edit-env author/package@version
+
+# Show version information
+fluidmcp --version
+
+# Validate configuration without running servers
+fluidmcp validate config.json --file              # Validate local config file
+fluidmcp validate author/package@version          # Validate installed package
 ```
 
 ## Testing with Sample Configurations
@@ -173,4 +182,7 @@ GITHUB_TOKEN       # Alternative environment variable
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
+
+# Server startup configuration
+MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (default: 5)
 ```

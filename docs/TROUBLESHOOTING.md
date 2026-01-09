@@ -90,6 +90,8 @@ Understanding these failure modes will help users debug issues quickly and confi
         - Missing dependencies required by the server
 
         How to Debug
+        - Run with --verbose flag for detailed DEBUG logs:
+            fluidmcp run <package> --verbose --start-server
         - Inspect metadata.json for the server
         - Try running the server command manually
         - Check logs printed during startup
@@ -238,22 +240,25 @@ Understanding these failure modes will help users debug issues quickly and confi
 
     If something goes wrong:
 
-    1. Identify the command used (install, run, github, etc.)
+    1. Run the command with --verbose flag for detailed logs:
+        fluidmcp <command> --verbose
 
-    2. Read the first error message carefully
+    2. Identify the command used (install, run, github, etc.)
 
-    3. Determine the source:
+    3. Read the first error message carefully
+
+    4. Determine the source:
         Package
         File
         GitHub
         S3
 
-    4. Verify:
+    5. Verify:
         metadata.json
         Environment variables
         Installed dependencies
 
-    5. Retry after fixing the issue
+    6. Retry after fixing the issue
 
 
 9. Final Note

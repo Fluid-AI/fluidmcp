@@ -29,12 +29,12 @@ def edit_env_variables(dest_dir: Union[str, Path]):
     if not metadata_path.exists():
         logger.warning(f"No metadata.json found at {metadata_path}")
         return
-    
+
     try:
         # Read metadata.json
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
-        
+
         try:
             pkg = list(metadata["mcpServers"].keys())[0]
         except (KeyError, IndexError, TypeError):
@@ -49,6 +49,8 @@ def edit_env_variables(dest_dir: Union[str, Path]):
         env_vars = metadata['mcpServers'][pkg]["env"]
         
         # Display package information
+        logger.info(f"\nEditing environment variables for {pkg}\n")
+        logger.debug(f"Found {len(env_vars)} env variables in metadata")
 
         logger.info(f"Editing environment variables for {pkg}")
         
@@ -76,10 +78,10 @@ def edit_env_variables(dest_dir: Union[str, Path]):
                     "current_value": value,
                     "structured": False
                 })
-        
+
         # Initialize variables for tracking changes
         modified_vars = set()
-        
+
         # Start interactive loop
         while True:
             # Display available environment variables
@@ -142,7 +144,7 @@ def edit_env_variables(dest_dir: Union[str, Path]):
                     else:
                         # Update directly for simple format
                         metadata['mcpServers'][pkg]["env"][key] = env_var["current_value"]
-            
+
             # Write updated metadata back to file
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2)
