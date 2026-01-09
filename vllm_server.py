@@ -136,7 +136,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
 def validate_messages(messages: Any) -> None:
     """Validate messages array structure"""
     MAX_MESSAGES = 100  # Prevent DoS with extremely large arrays
-    MAX_CONTENT_LENGTH = 10000  # Prevent memory exhaustion
+    MAX_CONTENT_LENGTH = 10000  # Prevent memory exhaustion per message
+    MAX_TOTAL_CONTENT = 100000  # Prevent aggregate DoS (100k chars total)
 
     if messages is None:
         raise ValueError("Missing required 'messages' argument")
@@ -146,6 +147,8 @@ def validate_messages(messages: Any) -> None:
         raise ValueError(f"'messages' array too large (max {MAX_MESSAGES}, got {len(messages)})")
 
     allowed_roles = {"system", "user", "assistant"}
+    total_content_length = 0
+
     for idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
             raise ValueError(f"'messages[{idx}]' must be an object with 'role' and 'content' fields")
@@ -159,6 +162,12 @@ def validate_messages(messages: Any) -> None:
             raise ValueError(f"'messages[{idx}].content' must not be empty")
         if len(content) > MAX_CONTENT_LENGTH:
             raise ValueError(f"'messages[{idx}].content' too long (max {MAX_CONTENT_LENGTH} chars)")
+
+        total_content_length += len(content)
+
+    # Check aggregate content length
+    if total_content_length > MAX_TOTAL_CONTENT:
+        raise ValueError(f"Total content length too large (max {MAX_TOTAL_CONTENT}, got {total_content_length})")
 
 def validate_sampling_params(temperature: Any, max_tokens: Any, top_p: Any) -> tuple:
     """Validate sampling parameters are within acceptable ranges
@@ -244,7 +253,7 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
         }
 
     except ValueError as e:
-        # Validation errors
+        # Validation errors - safe to expose these
         logger.error(f"Validation error: {e}")
         return {
             "jsonrpc": "2.0",
@@ -255,18 +264,30 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
             }
         }
     except Exception as e:
+        # Internal errors - sanitize message for client
         logger.error(f"Error in chat completion: {e}", exc_info=True)
         return {
             "jsonrpc": "2.0",
             "id": request_id,
             "error": {
                 "code": -32000,
-                "message": f"Error: {str(e)}"
+                "message": "Unexpected error during chat completion"
             }
         }
 
 def handle_tools_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """Handle MCP tools/call request"""
+    # Validate params is a dict
+    if not isinstance(params, dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32602,
+                "message": "Invalid params: expected object"
+            }
+        }
+
     tool_name = params.get("name")
 
     if tool_name is None:
@@ -280,6 +301,17 @@ def handle_tools_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]
         }
 
     arguments = params.get("arguments", {})
+
+    # Validate arguments is a dict
+    if not isinstance(arguments, dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32602,
+                "message": "Invalid arguments: expected object"
+            }
+        }
 
     if tool_name == "chat_completion":
         return handle_chat_completion(request_id, arguments)
@@ -381,13 +413,14 @@ def main():
                 print(json.dumps(error_response), flush=True)
 
             except Exception as e:
+                # Sanitize internal errors for client
                 logger.error(f"Error processing request: {e}", exc_info=True)
                 error_response = {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "error": {
                         "code": -32603,
-                        "message": f"Internal error: {str(e)}"
+                        "message": "Internal error"
                     }
                 }
                 print(json.dumps(error_response), flush=True)
