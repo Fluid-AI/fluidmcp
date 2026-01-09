@@ -565,6 +565,20 @@ def main():
     validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)") 
 
+    # serve command - NEW: Run as standalone API server
+    serve_parser = subparsers.add_parser("serve", help="Run as standalone API server (backend starts without MCP servers)")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    serve_parser.add_argument("--port", type=int, default=8099, help="Port to listen on (default: 8099)")
+    serve_parser.add_argument("--mongodb-uri",
+                              default=os.getenv("MONGODB_URI", "mongodb://localhost:27017"),
+                              help="MongoDB connection URI (default: env MONGODB_URI or mongodb://localhost:27017)")
+    serve_parser.add_argument("--database", default="fluidmcp",
+                              help="MongoDB database name (default: fluidmcp)")
+    serve_parser.add_argument("--secure", action="store_true",
+                              help="Enable secure mode with bearer token authentication")
+    serve_parser.add_argument("--token", type=str,
+                              help="Bearer token for secure mode (will be generated if not provided)")
+
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
 
@@ -589,7 +603,7 @@ def main():
         # else use the provided token and set it in the environment variables
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        logger.info(f"Secure mode enabled. Bearer token: {token}")
+        logger.info(f"Secure mode enabled. Bearer token (prefix: {token[:8]}...)")
 
     # version flag
     if args.version:
