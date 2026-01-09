@@ -40,13 +40,45 @@ def initialize_vllm():
     dtype = os.environ.get("VLLM_DTYPE", "float16")
     max_model_len = os.environ.get("VLLM_MAX_MODEL_LEN")
 
-    try:
-        tensor_parallel_size = int(os.environ.get("VLLM_TENSOR_PARALLEL_SIZE", "1"))
-        gpu_memory_utilization = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
-        max_model_len_int = int(max_model_len) if max_model_len else None
-    except ValueError:
-        logger.error("Invalid environment variable: one or more numeric configuration values could not be parsed")
+    # Validate dtype
+    VALID_DTYPES = {"float16", "bfloat16", "float32"}
+    if dtype not in VALID_DTYPES:
+        logger.error(f"Invalid VLLM_DTYPE='{dtype}': must be one of {sorted(VALID_DTYPES)}")
         sys.exit(1)
+
+    # Parse and validate tensor_parallel_size
+    raw_tensor_parallel_size = os.environ.get("VLLM_TENSOR_PARALLEL_SIZE", "1")
+    try:
+        tensor_parallel_size = int(raw_tensor_parallel_size)
+    except ValueError:
+        logger.error(f"Invalid VLLM_TENSOR_PARALLEL_SIZE='{raw_tensor_parallel_size}': expected integer")
+        sys.exit(1)
+    if tensor_parallel_size < 1:
+        logger.error(f"Invalid VLLM_TENSOR_PARALLEL_SIZE={tensor_parallel_size}: must be >= 1")
+        sys.exit(1)
+
+    # Parse and validate gpu_memory_utilization
+    raw_gpu_memory_utilization = os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.9")
+    try:
+        gpu_memory_utilization = float(raw_gpu_memory_utilization)
+    except ValueError:
+        logger.error(f"Invalid VLLM_GPU_MEMORY_UTILIZATION='{raw_gpu_memory_utilization}': expected float")
+        sys.exit(1)
+    if not (0.0 < gpu_memory_utilization <= 1.0):
+        logger.error(f"Invalid VLLM_GPU_MEMORY_UTILIZATION={gpu_memory_utilization}: must be in range (0.0, 1.0]")
+        sys.exit(1)
+
+    # Parse and validate max_model_len
+    max_model_len_int = None
+    if max_model_len:
+        try:
+            max_model_len_int = int(max_model_len)
+        except ValueError:
+            logger.error(f"Invalid VLLM_MAX_MODEL_LEN='{max_model_len}': expected integer")
+            sys.exit(1)
+        if max_model_len_int <= 0:
+            logger.error(f"Invalid VLLM_MAX_MODEL_LEN={max_model_len_int}: must be > 0")
+            sys.exit(1)
 
     logger.info(f"Initializing vLLM with model: {model_name}")
     logger.info(f"Tensor parallel size: {tensor_parallel_size}")
@@ -231,8 +263,17 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
         # Validate and get properly typed values
         temperature, max_tokens, top_p = validate_sampling_params(temperature, max_tokens, top_p)
 
-        # Simple prompt formatting (naive concatenation) - safe after validation
-        prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+        # Simple prompt formatting (naive concatenation) with robust key access
+        try:
+            lines = []
+            for idx, msg in enumerate(messages):
+                role = msg["role"]
+                content = msg["content"]
+                lines.append(f"{role}: {content}")
+            prompt = "\n".join(lines)
+        except KeyError as e:
+            missing_key = e.args[0] if e.args else "unknown"
+            raise ValueError(f"Message at index {idx if 'idx' in locals() else 'unknown'} is missing required field '{missing_key}'")
 
         logger.info(f"Generating completion with {len(messages)} messages")
 
@@ -253,7 +294,7 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
 
         generated_text = outputs[0].outputs[0].text
 
-        logger.info(f"Generated {len(generated_text)} characters")
+        logger.info(f"Generated {len(generated_text)} characters (character count, not tokens)")
 
         return {
             "jsonrpc": "2.0",
