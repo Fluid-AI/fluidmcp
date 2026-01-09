@@ -24,7 +24,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("vllm-mcp-server")
 
-# Global vLLM engine
+# Global vLLM engine singleton.
+# NOTE: This server is designed as a single-process, single-engine MCP server
+# communicating over a stdin/stdout JSON-RPC protocol. Using a module-level
+# global here avoids repeatedly constructing the (expensive) LLM engine and
+# simplifies the request handling loop, which is strictly sequential in the
+# current design.
 llm_engine: Optional[LLM] = None
 
 def initialize_vllm():
@@ -39,8 +44,8 @@ def initialize_vllm():
         tensor_parallel_size = int(os.environ.get("VLLM_TENSOR_PARALLEL_SIZE", "1"))
         gpu_memory_utilization = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
         max_model_len_int = int(max_model_len) if max_model_len else None
-    except ValueError as e:
-        logger.error(f"Invalid environment variable value: {e}")
+    except ValueError:
+        logger.error("Invalid environment variable: one or more numeric configuration values could not be parsed")
         sys.exit(1)
 
     logger.info(f"Initializing vLLM with model: {model_name}")
@@ -71,6 +76,7 @@ def handle_initialize(request_id: Any) -> Dict[str, Any]:
         "jsonrpc": "2.0",
         "id": request_id,
         "result": {
+            # MCP protocol version follows date-based versioning (YYYY-MM-DD format)
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
             "serverInfo": {
@@ -116,7 +122,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                                 "type": "integer",
                                 "description": "Maximum tokens to generate",
                                 "default": 512,
-                                "minimum": 1
+                                "minimum": 1,
+                                "maximum": 16384
                             },
                             "top_p": {
                                 "type": "number",
@@ -134,10 +141,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
     }
 
 def validate_messages(messages: Any) -> None:
-    """Validate messages array structure"""
+    """Validate messages array structure
+
+    NOTE: Content length validation uses character count (len(str)), not byte length.
+    For non-ASCII content, actual memory usage may be higher (e.g., UTF-8 multi-byte characters).
+    """
     MAX_MESSAGES = 100  # Prevent DoS with extremely large arrays
-    MAX_CONTENT_LENGTH = 10000  # Prevent memory exhaustion per message
-    MAX_TOTAL_CONTENT = 100000  # Prevent aggregate DoS (100k chars total)
+    MAX_CONTENT_LENGTH = 10000  # Prevent memory exhaustion per message (character count)
+    MAX_TOTAL_CONTENT = 100000  # Prevent aggregate DoS (100k chars total, not bytes)
 
     if messages is None:
         raise ValueError("Missing required 'messages' argument")
@@ -205,7 +216,7 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
             "id": request_id,
             "error": {
                 "code": -32000,
-                "message": "vLLM engine not initialized"
+                "message": "vLLM engine not initialized. The engine may have failed to initialize during server startup. Check server logs for initialization errors."
             }
         }
 
