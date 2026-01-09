@@ -1,0 +1,31 @@
+{
+  "github_token": "ghp_defaultTokenForAllPrivateRepos",
+  "mcpServers": {
+    "private-company-server": {
+      "github_repo": "your-org/private-mcp-server",
+      "branch": "main",
+      "command": "npx",
+      "args": ["-y", "tsx", "src/index.ts"],
+      "env": {
+        "API_KEY": "your-api-key-here"
+      }
+    },
+    "private-fork-with-custom-token": {
+      "github_repo": "your-username/forked-mcp-server",
+      "github_token": "ghp_specificTokenForThisRepoOnly",
+      "branch": "custom-features",
+      "command": "uv",
+      "args": ["run", "src/server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://user:pass@localhost/db"
+      }
+    },
+    "public-server-for-comparison": {
+      "github_repo": "modelcontextprotocol/python-sdk",
+      "branch": "main",
+      "command": "uv",
+      "args": ["run", "examples/snippets/servers/fastmcp_quickstart.py"],
+      "env": {}
+    }
+  }
+}

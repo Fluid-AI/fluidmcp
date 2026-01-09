@@ -90,6 +90,7 @@ def install_package(package_str, skip_env=False):
         try:
             # Extract the pre-signed URL from the response
             s3_url = response.json().get("pre_signed_url")
+            logger.debug(f"S3 URL: {s3_url[:100]}...")
             # Download file from S3
             s3_response = requests.get(s3_url)
             s3_response.raise_for_status()
@@ -107,11 +108,13 @@ def install_package(package_str, skip_env=False):
             logger.info("Extracting tar.gz contents")
             with tarfile.open(fileobj=BytesIO(s3_content), mode="r:gz") as tar:
                  tar.extractall(path=dest_dir)
+            logger.debug(f"Extracted to {dest_dir}")
         elif is_json(s3_content):
             logger.info("Saving metadata.json")
             metadata_path = dest_dir / "metadata.json"
             with open(metadata_path, "wb") as f:
                 f.write(s3_content)
+            logger.debug(f"Saved metadata to {metadata_path}")
         else:
             raise Exception("Unknown file type received from S3")
 

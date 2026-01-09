@@ -59,9 +59,11 @@ def kill_process_on_port(port):
     """
     pid = get_pid_on_port(port)
     if pid:
+        logger.debug(f"Found process {pid} on port {port}")
         kill_process(pid)
         logger.info(f"Existing process on port {port} killed")
         return True
+    logger.debug(f"No process found on port {port}")
     return False
 
 def find_free_port(start=8100, end=9000, taken_ports=None):

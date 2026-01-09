@@ -8,7 +8,9 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
+import subprocess
+import threading
 from loguru import logger
 
 from fastapi import FastAPI
@@ -27,6 +29,19 @@ from fastapi.middleware.cors import CORSMiddleware
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
 client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"))
+
+# Explicit process registry for server tracking
+_server_processes: Dict[str, subprocess.Popen] = {}
+
+# Thread-safety locks for process stdin/stdout communication
+_process_locks: Dict[str, threading.Lock] = {}
+
+
+def _register_server_process(server_name: str, process: subprocess.Popen) -> None:
+    """Register a server process in the explicit registry."""
+    _server_processes[server_name] = process
+    _process_locks[server_name] = threading.Lock()
+    logger.debug(f"Registered process for server '{server_name}' (PID: {process.pid})")
 
 
 def run_servers(
@@ -119,65 +134,55 @@ def run_servers(
         try:
             logger.info(f"Launching server '{server_name}' from: {install_path}")
 
-            # Always request process info; only use it when watchdog is enabled
-            package_name, router, process_info = None, None, None
-            result = launch_mcp_using_fastapi_proxy(install_path, return_process_info=True)
+            # Launch server - returns (package_name, router, process)
+            package_name, router, process = launch_mcp_using_fastapi_proxy(install_path)
 
-            if result is None:
-                logger.error(f"launch_mcp_using_fastapi_proxy returned None for {server_name}")
-            elif not isinstance(result, tuple):
-                logger.error(
-                    f"Unexpected result type from launch_mcp_using_fastapi_proxy for {server_name}: "
-                    f"{type(result).__name__}. Expected 3-tuple."
-                )
-            elif len(result) != 3:
-                logger.error(
-                    f"Unexpected result length from launch_mcp_using_fastapi_proxy for {server_name}: "
-                    f"{len(result)}. Expected 3 elements (package_name, router, process_info) "
-                    f"when return_process_info=True."
-                )
-            else:
-                package_name, router, process_info = result
-
-            if router:
+            if router and process:
                 app.include_router(router, tags=[server_name])
+                _register_server_process(server_name, process)  # Register in explicit registry
                 logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
 
                 # Register with watchdog if enabled
-                if watchdog and process_info:
-                    # Add server to watchdog (but don't auto-start since already started)
-                    # Note: Disable auto-restart for stdio-based MCP servers because they
-                    # can't be restarted independently - they need FastAPI router integration
-                    watchdog.add_server(
-                        server_name=process_info["server_name"],
-                        command=process_info["command"],
-                        args=process_info["args"],
-                        env=process_info["env"],
-                        working_dir=Path(process_info["working_dir"]),
-                        port=None,  # No HTTP port for stdio-based servers
-                        host="localhost",
-                        auto_start=False,  # Already started by launch function
-                        health_check_enabled=False,  # Only check process alive, not HTTP
-                        enable_restart=False  # Disable auto-restart for stdio servers
-                    )
+                if watchdog and process:
+                    # Extract process info from metadata for watchdog registration
+                    try:
+                        with open(metadata_path) as f:
+                            metadata = json.load(f)
 
-                    # Attach the existing process to the monitor
-                    monitor = watchdog.get_monitor(process_info["server_name"])
-                    if monitor is None:
-                        logger.error(
-                            f"Watchdog monitor for server '{process_info['server_name']}' "
-                            "was not found immediately after registration."
+                        pkg = list(metadata["mcpServers"].keys())[0]
+                        server_config = metadata["mcpServers"][pkg]
+
+                        # Add server to watchdog (but don't auto-start since already started)
+                        # Note: Disable auto-restart for stdio-based MCP servers because they
+                        # can't be restarted independently - they need FastAPI router integration
+                        watchdog.add_server(
+                            server_name=server_name,
+                            command=server_config["command"],
+                            args=server_config["args"],
+                            env=server_config.get("env", {}),
+                            working_dir=install_path,
+                            port=None,  # No HTTP port for stdio-based servers
+                            host="localhost",
+                            auto_start=False,  # Already started by launch function
+                            health_check_enabled=False,  # Only check process alive, not HTTP
+                            enable_restart=False  # Disable auto-restart for stdio servers
                         )
-                        continue
 
-                    monitor.attach_existing_process(
-                        process_handle=process_info["process_handle"],
-                        pid=process_info["pid"],
-                        state=ServerState.RUNNING,
-                        started_at=datetime.now()
-                    )
-                    logger.info(f"Registered {process_info['server_name']} with watchdog (PID: {process_info['pid']})")
+                        # Attach the existing process to the monitor
+                        monitor = watchdog.get_monitor(server_name)
+                        if monitor:
+                            monitor.attach_existing_process(
+                                process_handle=process,
+                                pid=process.pid,
+                                state=ServerState.RUNNING,
+                                started_at=datetime.now()
+                            )
+                            logger.info(f"Registered {server_name} with watchdog (PID: {process.pid})")
+                        else:
+                            logger.error(f"Watchdog monitor for server '{server_name}' not found after registration")
+                    except Exception as e:
+                        logger.error(f"Failed to register {server_name} with watchdog: {e}")
             else:
                 logger.error(f"Failed to create router for {server_name}")
 
