@@ -12,7 +12,7 @@ The vLLM MCP server runs vLLM directly in-process and communicates via the MCP p
 
 ### Prerequisites
 
-- Python 3.9 or higher
+- Python 3.8 or higher (vLLM supports Python 3.8-3.11)
 - CUDA-capable GPU (optional but strongly recommended)
 - vLLM package installed: `pip install vllm>=0.6.0`
 
