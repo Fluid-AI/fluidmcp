@@ -22,7 +22,7 @@ The vLLM MCP server runs vLLM directly in-process and communicates via the MCP p
 pip install vllm>=0.6.0
 ```
 
-For gated models (Llama, Mistral, etc.), set your HuggingFace token:
+For gated models (Llama, Mistral, etc.), set your Hugging Face token:
 ```bash
 export HUGGING_FACE_HUB_TOKEN="your_token_here"
 ```
@@ -65,7 +65,7 @@ Configuration is done via environment variables in the config file.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `VLLM_MODEL_NAME` | HuggingFace model name | `facebook/opt-125m` |
+| `VLLM_MODEL_NAME` | Hugging Face model name | `facebook/opt-125m` |
 | `VLLM_TENSOR_PARALLEL_SIZE` | Number of GPUs for tensor parallelism | `1` |
 | `VLLM_GPU_MEMORY_UTILIZATION` | GPU memory ratio (0.0-1.0) | `0.9` |
 | `VLLM_MAX_MODEL_LEN` | Maximum context length | Model's default |

@@ -264,8 +264,9 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
         temperature, max_tokens, top_p = validate_sampling_params(temperature, max_tokens, top_p)
 
         # Simple prompt formatting (naive concatenation) with robust key access
+        lines = []
+        idx = -1  # Initialize before loop to ensure it's always defined in except block
         try:
-            lines = []
             for idx, msg in enumerate(messages):
                 role = msg["role"]
                 content = msg["content"]
@@ -273,7 +274,7 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
             prompt = "\n".join(lines)
         except KeyError as e:
             missing_key = e.args[0] if e.args else "unknown"
-            raise ValueError(f"Message at index {idx if 'idx' in locals() else 'unknown'} is missing required field '{missing_key}'")
+            raise ValueError(f"Message at index {idx} is missing required field '{missing_key}'")
 
         logger.info(f"Generating completion with {len(messages)} messages")
 
@@ -349,6 +350,17 @@ def handle_tools_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]
             "error": {
                 "code": -32602,
                 "message": "Missing required 'name' parameter"
+            }
+        }
+
+    # Validate tool_name is not empty string
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32602,
+                "message": "Tool name cannot be empty"
             }
         }
 
