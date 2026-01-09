@@ -6,10 +6,11 @@ regardless of the configuration source.
 """
 import os
 import json
-import asyncio
-import time
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Dict
+import subprocess
+import threading
 from loguru import logger
 
 from fastapi import FastAPI
@@ -21,13 +22,9 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
+from .watchdog_manager import WatchdogManager
+from ..models.server_status import RestartPolicy, ServerState
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
-from fastapi.responses import JSONResponse
-from typing import Dict
-import subprocess
-import asyncio
-import threading
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -40,13 +37,23 @@ _server_processes: Dict[str, subprocess.Popen] = {}
 _process_locks: Dict[str, threading.Lock] = {}
 
 
+def _register_server_process(server_name: str, process: subprocess.Popen) -> None:
+    """Register a server process in the explicit registry."""
+    _server_processes[server_name] = process
+    _process_locks[server_name] = threading.Lock()
+    logger.debug(f"Registered process for server '{server_name}' (PID: {process.pid})")
+
+
 def run_servers(
     config: ServerConfig,
     secure_mode: bool = False,
     token: Optional[str] = None,
     single_package: bool = False,
     start_server: bool = True,
-    force_reload: bool = False
+    force_reload: bool = False,
+    enable_watchdog: bool = False,
+    health_check_interval: int = 30,
+    max_restarts: int = 5
 ) -> None:
     """
     Unified server launcher for all run modes.
@@ -58,11 +65,10 @@ def run_servers(
         single_package: True if running a single package (uses port 8090)
         start_server: Whether to start the FastAPI server
         force_reload: Force kill existing process on port without prompting
+        enable_watchdog: Enable automatic process monitoring and restart
+        health_check_interval: Interval in seconds between health checks (default: 30)
+        max_restarts: Maximum number of restart attempts per server (default: 5)
     """
-    logger.debug(f"Starting run_servers with config source: {config.source_type}")
-    logger.debug(f"Single package mode: {single_package}, Start server: {start_server}")
-    logger.debug(f"Secure mode: {secure_mode}, Force reload: {force_reload}")
-
     # Set up secure mode environment
     if secure_mode and token:
         os.environ["FMCP_BEARER_TOKEN"] = token
@@ -71,12 +77,26 @@ def run_servers(
 
     # Install packages if needed
     if config.needs_install:
-        logger.debug(f"Configuration requires package installation")
         _install_packages_from_config(config)
 
     # Determine port based on mode
     port = client_server_port if single_package else client_server_all_port
-    logger.debug(f"Using port {port} for {'single package' if single_package else 'unified'} mode")
+
+    # Initialize watchdog if enabled
+    watchdog = None
+    if enable_watchdog:
+        restart_policy = RestartPolicy(
+            max_restarts=max_restarts,
+            initial_delay_seconds=2,
+            backoff_multiplier=2.0,
+            max_delay_seconds=60,
+            restart_window_seconds=300
+        )
+        watchdog = WatchdogManager(
+            health_check_interval=health_check_interval,
+            default_restart_policy=restart_policy
+        )
+        print(f"Watchdog enabled: health checks every {health_check_interval}s, max {max_restarts} restarts")
 
     # Create FastAPI app
     app = FastAPI(
@@ -95,18 +115,13 @@ def run_servers(
     )
     # Launch each server and add its router
     launched_servers = 0
-    logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
-
     for server_name, server_cfg in config.servers.items():
-        logger.debug(f"Processing server: {server_name}")
         install_path = server_cfg.get("install_path")
         if not install_path:
             logger.warning(f"No installation path for server '{server_name}', skipping")
             continue
 
         install_path = Path(install_path)
-        logger.debug(f"Installation path for {server_name}: {install_path}")
-
         if not install_path.exists():
             logger.warning(f"Installation path '{install_path}' does not exist, skipping")
             continue
@@ -118,6 +133,8 @@ def run_servers(
 
         try:
             logger.info(f"Launching server '{server_name}' from: {install_path}")
+
+            # Launch server - returns (package_name, router, process)
             package_name, router, process = launch_mcp_using_fastapi_proxy(install_path)
 
             if router and process:
@@ -125,236 +142,67 @@ def run_servers(
                 _register_server_process(server_name, process)  # Register in explicit registry
                 logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
-                logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
+
+                # Register with watchdog if enabled
+                if watchdog and process:
+                    # Extract process info from metadata for watchdog registration
+                    try:
+                        with open(metadata_path) as f:
+                            metadata = json.load(f)
+
+                        pkg = list(metadata["mcpServers"].keys())[0]
+                        server_config = metadata["mcpServers"][pkg]
+
+                        # Add server to watchdog (but don't auto-start since already started)
+                        # Note: Disable auto-restart for stdio-based MCP servers because they
+                        # can't be restarted independently - they need FastAPI router integration
+                        watchdog.add_server(
+                            server_name=server_name,
+                            command=server_config["command"],
+                            args=server_config["args"],
+                            env=server_config.get("env", {}),
+                            working_dir=install_path,
+                            port=None,  # No HTTP port for stdio-based servers
+                            host="localhost",
+                            auto_start=False,  # Already started by launch function
+                            health_check_enabled=False,  # Only check process alive, not HTTP
+                            enable_restart=False  # Disable auto-restart for stdio servers
+                        )
+
+                        # Attach the existing process to the monitor
+                        monitor = watchdog.get_monitor(server_name)
+                        if monitor:
+                            monitor.attach_existing_process(
+                                process_handle=process,
+                                pid=process.pid,
+                                state=ServerState.RUNNING,
+                                started_at=datetime.now()
+                            )
+                            logger.info(f"Registered {server_name} with watchdog (PID: {process.pid})")
+                        else:
+                            logger.error(f"Watchdog monitor for server '{server_name}' not found after registration")
+                    except Exception as e:
+                        logger.error(f"Failed to register {server_name} with watchdog: {e}")
             else:
                 logger.error(f"Failed to create router for {server_name}")
 
         except Exception:
             logger.exception(f"Error launching server '{server_name}'")
 
-    logger.debug(f"Total servers launched: {launched_servers}")
     if launched_servers == 0:
         logger.warning("No servers were successfully launched")
         return
 
     logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
-    # Add unified tool discovery endpoint
-    _add_unified_tools_endpoint(app, secure_mode)
+    # Start watchdog monitoring if enabled
+    if watchdog:
+        watchdog.start_monitoring()
+        print(f"Started watchdog monitoring for {launched_servers} server(s)")
 
     # Start FastAPI server if requested
     if start_server:
-        _start_server(app, port, force_reload)
-
-
-def _register_server_process(name: str, process: subprocess.Popen) -> None:
-    """
-    Register a server process in the explicit registry.
-
-    Args:
-        name: Server name
-        process: Subprocess.Popen object for the server
-    """
-    _server_processes[name] = process
-    logger.debug(f"Registered process for server: {name} (PID: {process.pid})")
-
-
-def _get_server_processes() -> Dict[str, subprocess.Popen]:
-    """
-    Get all registered server processes.
-
-    Returns:
-        Dictionary mapping server names to their subprocess.Popen objects
-    """
-    return _server_processes.copy()
-
-
-async def _query_server_tools(server_name: str, process: subprocess.Popen, lock: threading.Lock) -> Tuple[str, list, Optional[str]]:
-    """
-    Query a single MCP server for its available tools.
-
-    Args:
-        server_name: Name of the server
-        process: Server process handle
-        lock: Thread lock for safe stdin/stdout communication
-
-    Returns:
-        Tuple of (server_name, tools_list, error_message)
-        - tools_list is empty if there was an error
-        - error_message is None if successful
-    """
-    try:
-        # Check if process is still alive
-        if process.poll() is not None:
-            return (server_name, [], "Process is not running")
-
-        logger.debug(f"Querying tools from server: {server_name}")
-
-        # Send tools/list JSON-RPC request to the server
-        tools_request = {
-            "jsonrpc": "2.0",
-            "id": f"tools_discovery_{server_name}",
-            "method": "tools/list",
-            "params": {}
-        }
-
-        # Acquire lock for thread-safe stdin/stdout communication
-        with lock:
-            # Wrap blocking I/O in asyncio.to_thread to avoid blocking event loop
-            await asyncio.to_thread(
-                process.stdin.write,
-                json.dumps(tools_request) + "\n"
-            )
-            await asyncio.to_thread(process.stdin.flush)
-
-            # Add timeout to prevent indefinite hanging
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=5.0  # 5 second timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout waiting for response from server: {server_name}")
-                return (server_name, [], "Timeout waiting for response")
-
-        # Strip whitespace/newlines before checking and parsing
-        response_line_stripped = response_line.strip()
-        if not response_line_stripped:
-            logger.warning(f"Empty response (after stripping) from server: {server_name}")
-            return (server_name, [], "Empty response from server")
-
-        response_data = json.loads(response_line_stripped)
-
-        # Check for JSON-RPC error
-        if "error" in response_data:
-            error_msg = response_data["error"].get("message", "Unknown error")
-            logger.warning(f"Error from server {server_name}: {error_msg}")
-            return (server_name, [], f"JSON-RPC error: {error_msg}")
-
-        # Extract tools from response
-        if "result" in response_data and "tools" in response_data["result"]:
-            server_tools = response_data["result"]["tools"]
-
-            # Create new tool dicts with server label (don't mutate originals)
-            tools_with_server = []
-            for tool in server_tools:
-                new_tool = dict(tool)
-                new_tool["server"] = server_name
-                tools_with_server.append(new_tool)
-
-            logger.debug(f"Found {len(server_tools)} tools from {server_name}")
-            return (server_name, tools_with_server, None)
-        else:
-            logger.warning(f"Unexpected response format from {server_name}")
-            return (server_name, [], "Unexpected response format")
-
-    except json.JSONDecodeError as e:
-        logger.error(
-            f"Invalid JSON response from {server_name}: {e}. "
-            f"Raw response: {response_line_stripped!r}"
-        )
-        return (server_name, [], f"Invalid JSON: {e}")
-    except Exception as e:
-        logger.error(f"Error querying tools from {server_name}: {e}")
-        return (server_name, [], str(e))
-
-
-def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
-    """
-    Add GET /api/tools endpoint for unified tool discovery across all MCP servers.
-
-    Args:
-        app: FastAPI application instance
-        secure_mode: Whether secure mode is enabled (unused, kept for API compatibility)
-    """
-    from .package_launcher import get_token
-
-    @app.get("/api/tools", tags=["unified"])
-    async def get_all_tools(token: str = Depends(get_token)):
-        """
-        Dynamic tool discovery across all running MCP servers.
-
-        Returns:
-            JSONResponse: A JSON response with the following structure:
-                {
-                    "tools": [
-                        {
-                            "name": str,
-                            "description": str,
-                            "input_schema": dict,   # Tool input schema as returned by the MCP server
-                            "server": str           # Identifier/label of the MCP server providing the tool
-                        },
-                        ...
-                    ],
-                    "summary": {
-                        "total_tools": int,          # Total number of discovered tools
-                        "servers": list[str],        # List of server identifiers that responded successfully
-                        "server_count": int,         # Number of servers that responded successfully
-                        "error_count": int,          # Number of servers that returned an error or no tools
-                        "servers_with_errors": list[str] | None  # Optional: identifiers of servers that had errors
-                    }
-                }
-        """
-        all_tools = []
-        servers_found = []
-        servers_with_errors = set()  # Use set to avoid duplicates
-
-        # Get server processes from explicit registry
-        server_processes = _get_server_processes()
-
-        logger.info(f"Discovering tools from {len(server_processes)} MCP server(s)")
-
-        # Clean up stale locks for servers that no longer exist
-        current_server_names = set(server_processes.keys())
-        stale_server_names = set(_process_locks.keys()) - current_server_names
-        for stale_name in stale_server_names:
-            del _process_locks[stale_name]
-            logger.debug(f"Removed stale lock for server: {stale_name}")
-
-        # Ensure all servers have locks
-        for server_name in server_processes:
-            if server_name not in _process_locks:
-                _process_locks[server_name] = threading.Lock()
-
-        # Query all servers concurrently using asyncio.gather
-        query_tasks = [
-            _query_server_tools(server_name, process, _process_locks[server_name])
-            for server_name, process in server_processes.items()
-        ]
-
-        # Execute all queries concurrently with individual timeouts
-        results = await asyncio.gather(*query_tasks, return_exceptions=True)
-
-        # Process results
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(f"Unexpected error during concurrent query: {result}")
-                continue
-
-            server_name, tools, error = result
-            if error:
-                servers_with_errors.add(server_name)
-            else:
-                all_tools.extend(tools)
-                servers_found.append(server_name)
-
-        # Build response (error_count always present for API consistency)
-        response = {
-            "tools": all_tools,
-            "summary": {
-                "total_tools": len(all_tools),
-                "servers": servers_found,
-                "server_count": len(servers_found),
-                "error_count": len(servers_with_errors)
-            }
-        }
-
-        if servers_with_errors:
-            response["summary"]["servers_with_errors"] = list(servers_with_errors)
-
-        logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
-
-        return JSONResponse(content=response)
+        _start_server(app, port, force_reload, watchdog)
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:
@@ -370,12 +218,10 @@ def _install_packages_from_config(config: ServerConfig) -> None:
         fmcp_package = server_cfg.get("fmcp_package")
         if not fmcp_package:
             # Already installed or no package reference
-            logger.debug(f"Server '{server_name}' has no fmcp_package reference, skipping installation")
             continue
 
         logger.info(f"Installing package: {fmcp_package}")
         pkg = parse_package_string(fmcp_package)
-        logger.debug(f"Parsed package: {pkg}")
 
         try:
             # Install package (skip env prompts, we'll update from config)
@@ -399,7 +245,6 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 logger.error(f"Package directory not found: {dest_dir}")
                 continue
 
-            logger.debug(f"Package installed at: {dest_dir}")
             # Update install_path in config
             server_cfg["install_path"] = str(dest_dir)
 
@@ -416,7 +261,6 @@ def _install_packages_from_config(config: ServerConfig) -> None:
 
             # For master mode, update from shared .env
             if config.source_type == "s3_master":
-                logger.debug(f"Updating from common .env for master mode")
                 _update_env_from_common_env(dest_dir, pkg)
 
         except Exception:
@@ -484,99 +328,78 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-async def _serve_async(app: FastAPI, port: int) -> None:
+def _cleanup_watchdog(watchdog: Optional[WatchdogManager], cleanup_done_flag: Optional[dict] = None) -> None:
     """
-    Run the FastAPI server inside an asyncio event loop with graceful shutdown support.
-
-    When used with asyncio.run(), this will block the calling thread while running
-    the server until shutdown is requested via signal (SIGINT/SIGTERM).
-    Uvicorn handles signal processing internally for graceful shutdown.
+    Clean up watchdog monitoring and stop all servers.
 
     Args:
-        app: FastAPI application
-        port: Port to listen on
+        watchdog: Optional WatchdogManager instance to cleanup
+        cleanup_done_flag: Optional dict with 'done' key to track if cleanup was already performed
     """
-    config = uvicorn.Config(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        access_log=True
-    )
-    server = uvicorn.Server(config)
+    if cleanup_done_flag and cleanup_done_flag.get('done'):
+        # Already cleaned up, skip to prevent duplicate cleanup
+        return
 
-    # Run the server (uvicorn handles signal processing internally)
-    await server.serve()
+    if watchdog:
+        logger.info("Shutting down servers...")
+        watchdog.stop_monitoring()
+        watchdog.stop_all_servers()
+
+    if cleanup_done_flag is not None:
+        cleanup_done_flag['done'] = True
 
 
-def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
+def _start_server(
+    app: FastAPI,
+    port: int,
+    force_reload: bool,
+    watchdog: Optional[WatchdogManager] = None
+) -> None:
     """
     Start the FastAPI server on the specified port.
-
-    This function handles port conflict resolution and runs the server
-    using asyncio for better control and graceful shutdown support.
 
     Args:
         app: FastAPI application
         port: Port to listen on
         force_reload: Force kill existing process without prompting
+        watchdog: Optional WatchdogManager instance for cleanup on shutdown
     """
-    logger.debug(f"_start_server called with port {port}, force_reload={force_reload}")
-
     if is_port_in_use(port):
+        logger.warning(f"Port {port} is already in use")
         if force_reload:
-            logger.info(f"Port {port} is already in use - force reloading")
+            logger.info(f"Force reloading server on port {port}")
             kill_process_on_port(port)
-
-            # Wait for socket to be released with configurable timeout
-            default_release_timeout = 5.0
-            env_timeout = os.environ.get("MCP_PORT_RELEASE_TIMEOUT")
-            if env_timeout is None or env_timeout == "":
-                release_timeout = default_release_timeout
+        else:
+            choice = input("Kill existing process and reload? (y/n): ").strip().lower()
+            if choice == 'y':
+                kill_process_on_port(port)
+            elif choice == 'n':
+                logger.info(f"Keeping existing process on port {port}")
+                return
             else:
-                try:
-                    release_timeout = float(env_timeout)
-                    if release_timeout <= 0:
-                        logger.warning(
-                            f"Invalid MCP_PORT_RELEASE_TIMEOUT value {env_timeout!r} (must be positive); "
-                            f"using default {default_release_timeout} seconds instead."
-                        )
-                        release_timeout = default_release_timeout
-                except ValueError:
-                    logger.warning(
-                        f"Invalid MCP_PORT_RELEASE_TIMEOUT value {env_timeout!r}; "
-                        f"using default {default_release_timeout} seconds instead."
-                    )
-                    release_timeout = default_release_timeout
-
-            start_time = time.time()
-            logger.info(f"Waiting for port {port} to be released (timeout: {release_timeout}s)")
-
-            while is_port_in_use(port) and (time.time() - start_time) < release_timeout:
-                time.sleep(0.1)
-
-            if is_port_in_use(port):
-                logger.error(
-                    f"Port {port} is still in use after waiting {release_timeout} seconds. "
-                    f"Aborting server start. Increase MCP_PORT_RELEASE_TIMEOUT if needed."
-                )
+                logger.warning("Invalid choice. Aborting")
                 return
 
-            logger.info("Port released, starting new server")
-        else:
-            logger.error(
-                f"Port {port} is already in use. "
-                f"Use --force-reload flag to restart the server automatically."
-            )
-            return
+    # Flag to track if cleanup has been performed (prevents duplicate cleanup)
+    cleanup_done = {'done': False}
 
-    logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
-    logger.info("Press Ctrl+C to stop the server")
+    # Add shutdown event handler for watchdog cleanup
+    # Ensure the shutdown handler is only registered once per app instance
+    def shutdown_event() -> None:
+        _cleanup_watchdog(watchdog, cleanup_done)
+
+    if not getattr(app, "_watchdog_shutdown_registered", False):
+        app.add_event_handler("shutdown", shutdown_event)
+        setattr(app, "_watchdog_shutdown_registered", True)
+
+    logger.info(f"Starting FastAPI server on port {port}")
 
     try:
-        # Run server with asyncio for graceful shutdown support
-        asyncio.run(_serve_async(app, port))
+        uvicorn.run(app, host="0.0.0.0", port=port)
     except KeyboardInterrupt:
-        logger.info("Server stopped by user")
-    except Exception as e:
-        logger.error(f"Server error: {e}", exc_info=True)
+        logger.info("Received keyboard interrupt")
+        # Call cleanup explicitly to ensure it happens even if shutdown event doesn't fire
+        # The flag prevents duplicate cleanup if shutdown event also fires
+        _cleanup_watchdog(watchdog, cleanup_done)
+        logger.info("Server stopped")
+
