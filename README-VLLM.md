@@ -326,11 +326,11 @@ Contributions are welcome! This is a minimal initial implementation - see "Plann
 
 ## License
 
-[Your license here]
+This project is licensed under the same terms as FluidMCP. See the LICENSE file in the repository root.
 
 ## Support
 
 For issues and questions:
-- GitHub Issues: [Your repo URL]
+- GitHub Issues: Please open an issue in the FluidMCP repository
 - Documentation: This README
-- FluidMCP Docs: [FluidMCP documentation]
+- FluidMCP Docs: See the main FluidMCP documentation

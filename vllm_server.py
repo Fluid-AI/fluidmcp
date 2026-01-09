@@ -29,10 +29,15 @@ def initialize_vllm():
     global llm_engine
 
     model_name = os.environ.get("VLLM_MODEL_NAME", "facebook/opt-125m")
-    tensor_parallel_size = int(os.environ.get("VLLM_TENSOR_PARALLEL_SIZE", "1"))
-    gpu_memory_utilization = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
     dtype = os.environ.get("VLLM_DTYPE", "float16")
     max_model_len = os.environ.get("VLLM_MAX_MODEL_LEN")
+
+    try:
+        tensor_parallel_size = int(os.environ.get("VLLM_TENSOR_PARALLEL_SIZE", "1"))
+        gpu_memory_utilization = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.9"))
+    except ValueError as e:
+        logger.error(f"Invalid environment variable value: {e}")
+        sys.exit(1)
 
     logger.info(f"Initializing vLLM with model: {model_name}")
     logger.info(f"Tensor parallel size: {tensor_parallel_size}")
@@ -225,6 +230,17 @@ def handle_chat_completion(request_id: Any, arguments: Dict[str, Any]) -> Dict[s
 def handle_tools_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """Handle MCP tools/call request"""
     tool_name = params.get("name")
+
+    if tool_name is None:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32602,
+                "message": "Missing required 'name' parameter"
+            }
+        }
+
     arguments = params.get("arguments", {})
 
     if tool_name == "chat_completion":
