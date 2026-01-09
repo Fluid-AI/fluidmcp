@@ -184,7 +184,7 @@ def validate_messages(messages: Any) -> None:
         if not isinstance(content, str) or not content.strip():
             raise ValueError(f"'messages[{idx}].content' must be non-empty string")
         if len(content) > MAX_CONTENT_LENGTH:
-            raise ValueError(f"'messages[{idx}].content too long (max {MAX_CONTENT_LENGTH})")
+            raise ValueError(f"'messages[{idx}].content' is too long (max {MAX_CONTENT_LENGTH})")
 
         total_content_length += len(content)
 
