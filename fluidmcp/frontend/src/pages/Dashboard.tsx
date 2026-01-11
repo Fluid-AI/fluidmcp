@@ -1,8 +1,10 @@
 import ServerCard from "../components/ServerCard";
 import { mockServers } from "../data/servers.mock";
+import { useNavigate } from "react-router-dom";
 
 export default function Dashboard() {
 
+  const navigate = useNavigate();
   const activeServers = mockServers.filter(
     (server) => server.status === "running" || server.status === "starting"
   );
@@ -48,7 +50,9 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  <button disabled className="details-btn">
+                  <button className="details-btn" 
+                    onClick={()=> navigate(`/servers/${server.id}`)}
+                  >
                     See details
                   </button>
                 </div>
