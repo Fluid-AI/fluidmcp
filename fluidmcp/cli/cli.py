@@ -8,6 +8,7 @@ import secrets
 import importlib.metadata
 import platform
 import shutil
+from dotenv import load_dotenv
 
 from .services import (
     install_package,
@@ -495,6 +496,10 @@ def main():
     '''
     Main function to handle command line arguments and execute the appropriate action.
     '''
+    # Load environment variables from .env file
+    env_path = Path(__file__).parent / '.env'
+    load_dotenv(dotenv_path=env_path)
+
     # Parse command line arguments with the commands given in setup.py
     parser = argparse.ArgumentParser(description="FluidAI MCP CLI")
 
@@ -563,21 +568,7 @@ def main():
     validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
     validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
     validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
-    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)") 
-
-    # serve command - NEW: Run as standalone API server
-    serve_parser = subparsers.add_parser("serve", help="Run as standalone API server (backend starts without MCP servers)")
-    serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
-    serve_parser.add_argument("--port", type=int, default=8099, help="Port to listen on (default: 8099)")
-    serve_parser.add_argument("--mongodb-uri",
-                              default=os.getenv("MONGODB_URI", "mongodb://localhost:27017"),
-                              help="MongoDB connection URI (default: env MONGODB_URI or mongodb://localhost:27017)")
-    serve_parser.add_argument("--database", default="fluidmcp",
-                              help="MongoDB database name (default: fluidmcp)")
-    serve_parser.add_argument("--secure", action="store_true",
-                              help="Enable secure mode with bearer token authentication")
-    serve_parser.add_argument("--token", type=str,
-                              help="Bearer token for secure mode (will be generated if not provided)")
+    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()

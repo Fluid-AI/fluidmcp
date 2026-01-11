@@ -7,12 +7,58 @@ Provides REST API for:
 - Querying server status and logs
 - Listing all configured servers
 """
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, Request, HTTPException, Body, Query
-from fastapi.responses import JSONResponse
+from typing import Dict, Any
+from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
+import os
 
 router = APIRouter()
+security = HTTPBearer(auto_error=False)
+
+
+def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Validate bearer token if secure mode is enabled"""
+    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    if not secure_mode:
+        return None
+    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
+    return credentials.credentials
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """
+    Extract user identifier from bearer token.
+
+    For now, uses a simple approach:
+    - In secure mode: Uses the token itself as user ID (simple but works)
+    - In non-secure mode: Returns "anonymous"
+
+    Future: Parse JWT tokens to extract user email/ID from claims
+
+    Returns:
+        User identifier string
+    """
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    if not secure_mode:
+        return "anonymous"
+
+    if not credentials or not credentials.credentials:
+        return "anonymous"
+
+    # For now, use token as user ID (simple approach)
+    # In production, decode JWT and extract user_id/email claim
+    token = credentials.credentials
+
+    # Simple user extraction: use first 8 chars of token as user ID
+    # This ensures different tokens = different users
+    user_id = f"user_{token[:8]}"
+
+    return user_id
 
 
 def get_server_manager(request: Request):
@@ -20,6 +66,65 @@ def get_server_manager(request: Request):
     if not hasattr(request.app.state, "server_manager"):
         raise HTTPException(500, "ServerManager not initialized")
     return request.app.state.server_manager
+
+
+def validate_server_config(config: Dict[str, Any]) -> None:
+    """
+    Validate server configuration to prevent command injection and ensure safety.
+
+    Args:
+        config: Server configuration dict
+
+    Raises:
+        HTTPException: If validation fails
+    """
+    # Validate required fields
+    if "command" not in config:
+        raise HTTPException(400, "Server configuration must include 'command' field")
+
+    command = config["command"]
+
+    # Whitelist of allowed commands (can be extended via environment variable)
+    allowed_commands_default = ["npx", "node", "python", "python3", "uvx", "docker"]
+    allowed_commands_env = os.environ.get("FMCP_ALLOWED_COMMANDS", "").split(",")
+    allowed_commands = allowed_commands_default + [cmd.strip() for cmd in allowed_commands_env if cmd.strip()]
+
+    # Check if command is in whitelist
+    if command not in allowed_commands:
+        raise HTTPException(
+            400,
+            f"Command '{command}' is not allowed. Allowed commands: {', '.join(allowed_commands)}. "
+            f"To add more commands, set FMCP_ALLOWED_COMMANDS environment variable."
+        )
+
+    # Validate args if present
+    if "args" in config:
+        args = config["args"]
+        if not isinstance(args, list):
+            raise HTTPException(400, "Server configuration 'args' must be a list")
+
+        # Check for shell injection patterns in args
+        dangerous_patterns = [";", "&", "|", "`", "$", "&&", "||", ">", "<", "$(", "${"]
+        for arg in args:
+            if not isinstance(arg, str):
+                raise HTTPException(400, "All arguments must be strings")
+            for pattern in dangerous_patterns:
+                if pattern in arg:
+                    raise HTTPException(
+                        400,
+                        f"Argument contains potentially dangerous pattern '{pattern}': {arg}"
+                    )
+
+    # Validate env if present
+    if "env" in config:
+        env = config["env"]
+        if not isinstance(env, dict):
+            raise HTTPException(400, "Server configuration 'env' must be a dictionary")
+
+        # Check env keys and values are strings
+        for key, value in env.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise HTTPException(400, "Environment variable keys and values must be strings")
 
 
 # ==================== Configuration Management ====================
@@ -40,7 +145,8 @@ async def add_server(
             "restart_policy": "on-failure",
             "max_restarts": 3
         }
-    )
+    ),
+    token: str = Depends(get_token)
 ):
     """
     Add a new server configuration.
@@ -63,6 +169,9 @@ async def add_server(
         raise HTTPException(400, "Server id is required")
     if "name" not in config:
         raise HTTPException(400, "Server name is required")
+
+    # Validate configuration for security
+    validate_server_config(config)
 
     id = config["id"]
     name = config["name"]
@@ -115,7 +224,7 @@ async def get_server(request: Request, id: str):
     Get detailed information about a specific server.
 
     Args:
-        id: Server identifier (name)
+        id: Server identifier
 
     Returns:
         Server config and status
@@ -144,14 +253,29 @@ async def get_server(request: Request, id: str):
 async def update_server(
     request: Request,
     id: str,
-    config: Dict[str, Any] = Body(...)
+    config: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
 ):
     """
     Update server configuration (only when stopped).
 
     Args:
-        id: Server identifier (name)
-        config: New configuration
+        id: Server identifier
+        config: New configuration (must include 'name' and 'command' fields)
+
+    Required Fields:
+        name (str): Human-readable display name
+        command (str): Command to run (must be whitelisted)
+
+    Optional Fields:
+        args (list): Command arguments
+        env (dict): Environment variables
+        description (str): Server description
+        enabled (bool): Whether server is enabled
+        restart_policy (str): 'no', 'on-failure', or 'always'
+        max_restarts (int): Maximum restart attempts
+        working_dir (str): Working directory
+        install_path (str): Installation path
 
     Returns:
         Success message
@@ -175,6 +299,9 @@ async def update_server(
     if "name" not in config:
         raise HTTPException(400, "Server name is required")
 
+    # Validate configuration for security
+    validate_server_config(config)
+
     # Update config (preserve id)
     config["id"] = id
 
@@ -194,12 +321,21 @@ async def update_server(
 
 
 @router.delete("/servers/{id}")
-async def delete_server(request: Request, id: str):
+async def delete_server(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
     """
     Delete server configuration (stops server if running).
 
+    Authorization: Only admins can delete server configurations.
+    Regular users cannot delete servers (they can only stop instances they started).
+
     Args:
-        id: Server identifier (name)
+        id: Server identifier
+        user_id: Current user (from token)
 
     Returns:
         Success message
@@ -212,6 +348,14 @@ async def delete_server(request: Request, id: str):
         config = await manager.db.get_server_config(id)
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
+
+    # Authorization: Only allow in anonymous mode for now
+    # In production, check if user has admin role
+    if user_id != "anonymous":
+        raise HTTPException(
+            403,
+            "Forbidden: Only administrators can delete server configurations. Contact your admin."
+        )
 
     # Stop server if running
     if id in manager.processes:
@@ -234,12 +378,18 @@ async def delete_server(request: Request, id: str):
 # ==================== Lifecycle Control ====================
 
 @router.post("/servers/{id}/start")
-async def start_server(request: Request, id: str):
+async def start_server(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
     """
     Start an MCP server.
 
     Args:
-        id: Server identifier (name)
+        id: Server identifier
+        user_id: User identifier (extracted from token)
 
     Returns:
         Success message with PID
@@ -259,8 +409,8 @@ async def start_server(request: Request, id: str):
         if process.poll() is None:
             raise HTTPException(400, f"Server '{id}' is already running (PID: {process.pid})")
 
-    # Start server
-    success = await manager.start_server(id, config)
+    # Start server with user tracking
+    success = await manager.start_server(id, config, user_id=user_id)
     if not success:
         raise HTTPException(500, f"Failed to start server '{id}'")
 
@@ -279,14 +429,19 @@ async def start_server(request: Request, id: str):
 async def stop_server(
     request: Request,
     id: str,
-    force: bool = Query(False, description="Use SIGKILL instead of SIGTERM")
+    force: bool = Query(False, description="Use SIGKILL instead of SIGTERM"),
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
 ):
     """
     Stop a running MCP server.
 
+    Authorization: Users can only stop servers they started (unless admin).
+
     Args:
-        id: Server identifier (name)
+        id: Server identifier
         force: If true, use SIGKILL
+        user_id: Current user (from token)
 
     Returns:
         Success message with exit code
@@ -296,6 +451,17 @@ async def stop_server(
     # Check if server is running
     if id not in manager.processes:
         raise HTTPException(400, f"Server '{id}' is not running")
+
+    # Authorization: Check if user started this server
+    instance = await manager.db.get_instance_state(id)
+    if instance:
+        started_by = instance.get("started_by")
+        # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
+        if started_by and started_by != user_id and user_id != "anonymous":
+            raise HTTPException(
+                403,
+                f"Forbidden: Server '{id}' was started by another user. Only the user who started it can stop it."
+            )
 
     # Stop server
     success = await manager.stop_server(id, force=force)
@@ -310,12 +476,20 @@ async def stop_server(
 
 
 @router.post("/servers/{id}/restart")
-async def restart_server(request: Request, id: str):
+async def restart_server(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
     """
     Restart an MCP server.
 
+    Authorization: Users can only restart servers they started (unless admin).
+
     Args:
-        id: Server identifier (name)
+        id: Server identifier
+        user_id: Current user (from token)
 
     Returns:
         Success message with new PID
@@ -328,6 +502,17 @@ async def restart_server(request: Request, id: str):
         config = await manager.db.get_server_config(id)
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
+
+    # Authorization: Check if user started this server
+    instance = await manager.db.get_instance_state(id)
+    if instance:
+        started_by = instance.get("started_by")
+        # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
+        if started_by and started_by != user_id and user_id != "anonymous":
+            raise HTTPException(
+                403,
+                f"Forbidden: Server '{id}' was started by another user. Only the user who started it can restart it."
+            )
 
     # Restart server
     success = await manager.restart_server(id)
@@ -346,7 +531,7 @@ async def restart_server(request: Request, id: str):
 
 
 @router.post("/servers/start-all")
-async def start_all_servers(request: Request):
+async def start_all_servers(request: Request, token: str = Depends(get_token)):
     """
     Start all configured servers.
 
@@ -360,18 +545,20 @@ async def start_all_servers(request: Request):
     failed = []
 
     for config in configs:
-        name = config.get("name")
-        if not name:
+        server_id = config.get("id")
+        if not server_id:
             continue
 
+        name = config.get("name", server_id)
+
         # Skip if already running
-        if name in manager.processes:
-            process = manager.processes[name]
+        if server_id in manager.processes:
+            process = manager.processes[server_id]
             if process.poll() is None:
                 continue
 
         # Start server
-        success = await manager.start_server(name, config)
+        success = await manager.start_server(server_id, config)
         if success:
             started.append(name)
         else:
@@ -386,7 +573,7 @@ async def start_all_servers(request: Request):
 
 
 @router.post("/servers/stop-all")
-async def stop_all_servers(request: Request):
+async def stop_all_servers(request: Request, token: str = Depends(get_token)):
     """
     Stop all running servers.
 
@@ -411,7 +598,7 @@ async def get_server_status(request: Request, id: str):
     Get detailed status of a server.
 
     Args:
-        id: Server identifier (name)
+        id: Server identifier
 
     Returns:
         Status information (state, pid, uptime, etc.)
@@ -436,7 +623,7 @@ async def get_server_logs(
     Get recent logs for a server.
 
     Args:
-        id: Server identifier (name)
+        id: Server identifier
         lines: Number of recent lines to retrieve
 
     Returns:
@@ -498,7 +685,8 @@ async def run_tool(
     request: Request,
     id: str,
     tool_name: str,
-    arguments: Dict[str, Any] = Body(default={})
+    arguments: Dict[str, Any] = Body(default={}),
+    token: str = Depends(get_token)
 ):
     """
     Execute a tool on a running MCP server.
@@ -558,7 +746,7 @@ async def run_tool(
         return response.get("result", {})
 
     except asyncio.TimeoutError:
-        raise HTTPException(504, f"Tool execution timeout (>{30}s)")
+        raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
         raise HTTPException(500, f"Failed to parse tool response: {str(e)}")
     except Exception as e:

@@ -7,13 +7,15 @@ process registry, state persistence, and integration with the backend API.
 import os
 import asyncio
 import subprocess
-import threading
+import json
+import time
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
 from loguru import logger
 
 from .database import DatabaseManager
+from .package_launcher import initialize_mcp_server
 
 
 class ServerManager:
@@ -37,17 +39,20 @@ class ServerManager:
 
     # ==================== Server Lifecycle Methods ====================
 
-    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None) -> bool:
+    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
         Start an MCP server.
 
         Args:
             id: Unique server identifier
             config: Server configuration (if None, loads from database)
+            user_id: User who is starting the server (for tracking)
 
         Returns:
             True if started successfully, False otherwise
         """
+        # Initialize name early for exception handler
+        name = id
         try:
             # Check if already running
             if id in self.processes:
@@ -81,7 +86,7 @@ class ServerManager:
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
-            # Save state to database
+            # Save state to database with user tracking
             await self.db.save_instance_state({
                 "server_id": id,
                 "state": "running",
@@ -91,7 +96,8 @@ class ServerManager:
                 "exit_code": None,
                 "restart_count": 0,
                 "last_health_check": datetime.utcnow(),
-                "health_check_failures": 0
+                "health_check_failures": 0,
+                "started_by": user_id  # Track who started this instance
             })
 
             return True
@@ -282,7 +288,7 @@ class ServerManager:
         List all configured servers with their status.
 
         Returns:
-            List of server info dictionaries
+            List of server info dictionaries with nested config structure
         """
         servers = []
 
@@ -299,19 +305,37 @@ class ServerManager:
             id = config.get("id")
             status = await self.get_server_status(id)
 
-            # Remove redundant id fields from nested objects
-            config_copy = dict(config)
-            config_copy.pop("id", None)  # Remove id from config copy
+            # Separate MCP config fields from metadata fields
+            mcp_config = {
+                "command": config.get("command"),
+                "args": config.get("args", []),
+                "env": config.get("env", {})
+            }
 
-            status_copy = dict(status)
-            status_copy.pop("id", None)  # Remove id from status copy
-
-            servers.append({
+            # Build response with nested structure
+            server_info = {
                 "id": id,
                 "name": config.get("name"),
-                "config": config_copy,
-                "status": status_copy
-            })
+                "config": mcp_config,
+                "description": config.get("description", ""),
+                "enabled": config.get("enabled", True),
+                "restart_window_sec": config.get("restart_window_sec", 300),
+                "restart_policy": config.get("restart_policy"),
+                "max_restarts": config.get("max_restarts"),
+                "tools": config.get("tools", []),
+                "created_by": config.get("created_by"),
+                "created_at": config.get("created_at"),
+                "updated_at": config.get("updated_at"),
+                "status": {
+                    "state": status.get("state"),
+                    "pid": status.get("pid"),
+                    "uptime": status.get("uptime"),
+                    "restart_count": status.get("restart_count", 0),
+                    "exit_code": status.get("exit_code")
+                }
+            }
+
+            servers.append(server_info)
 
         return servers
 
@@ -337,6 +361,8 @@ class ServerManager:
         Returns:
             Popen process or None if failed
         """
+        # Initialize name early for exception handler
+        name = id
         try:
             # Extract configuration
             command = config.get("command")
@@ -384,112 +410,46 @@ class ServerManager:
 
             # Check if process is still alive
             if process.poll() is not None:
-                stderr_output = process.stderr.read() if process.stderr else "No stderr available"
+                stderr_output = "No stderr available"
+                if process.stderr:
+                    try:
+                        stderr_output = await asyncio.to_thread(process.stderr.read)
+                    except Exception as exc:
+                        logger.exception(f"Failed to read stderr: {exc}")
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 return None
 
-            # Initialize MCP server with handshake
-            if not await self._initialize_mcp_server(process, id):
+            # Initialize MCP server with handshake (using shared utility)
+            logger.info(f"[{id}] Initializing MCP server...")
+            init_success = await asyncio.to_thread(initialize_mcp_server, process)
+
+            if not init_success:
                 logger.error(f"MCP initialization failed for server '{name}' (id: {id})")
-                # Read stderr for debugging
-                import select
-                if process.stderr and select.select([process.stderr], [], [], 0)[0]:
-                    stderr_output = process.stderr.read()
-                    logger.error(f"Process stderr: {stderr_output}")
+                # Read stderr for debugging (non-blocking)
+                stderr_output = None
+                if process.stderr:
+                    try:
+                        stderr_output = await asyncio.wait_for(
+                            asyncio.to_thread(process.stderr.read),
+                            timeout=1.0
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Failed to read stderr: {exc}")
+                if stderr_output:
+                    logger.error(f"[{id}] Process stderr: {stderr_output[:500]}")
                 process.kill()
                 return None
+
+            logger.info(f"[{id}] MCP server initialized successfully")
+
+            # Discover and cache tools (PDF spec requirement)
+            await self._discover_and_cache_tools(id, process)
 
             return process
 
         except Exception as e:
             logger.exception(f"Error spawning process for server '{name}': {e}")
             return None
-
-    async def _initialize_mcp_server(self, process: subprocess.Popen, server_id: str) -> bool:
-        """
-        Initialize MCP server with handshake protocol and discover tools.
-
-        Args:
-            process: Subprocess.Popen instance
-            server_id: Server identifier for tool discovery
-
-        Returns:
-            True if initialization successful
-        """
-        try:
-            # Check if process is already dead
-            if process.poll() is not None:
-                logger.error("Process died before initialization")
-                return False
-
-            # Send initialize request
-            init_request = {
-                "jsonrpc": "2.0",
-                "id": 0,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"roots": {"listChanged": True}, "sampling": {}},
-                    "clientInfo": {"name": "fluidmcp-client", "version": "2.0.0"}
-                }
-            }
-
-            import json
-            logger.debug(f"Sending initialize request: {json.dumps(init_request)}")
-            try:
-                process.stdin.write(json.dumps(init_request) + "\n")
-                process.stdin.flush()
-                logger.debug("Initialize request sent successfully")
-            except Exception as e:
-                logger.error(f"Failed to write initialize request: {e}")
-                return False
-
-            # Wait for response (10 second timeout)
-            import time
-            start_time = time.time()
-            while time.time() - start_time < 10:
-                if process.poll() is not None:
-                    logger.error("Process died during initialization")
-                    return False
-
-                # Try to read response
-                try:
-                    response_line = await asyncio.wait_for(
-                        asyncio.to_thread(process.stdout.readline),
-                        timeout=0.5
-                    )
-
-                    if response_line:
-                        response_line = response_line.strip()
-                        logger.debug(f"Received initialization response: {response_line}")
-
-                        try:
-                            response = json.loads(response_line)
-                            if response.get("id") == 0 and "result" in response:
-                                # Send initialized notification
-                                notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-                                process.stdin.write(json.dumps(notif) + "\n")
-                                process.stdin.flush()
-                                logger.info("MCP server initialized successfully")
-
-                                # Discover and cache tools (PDF spec requirement)
-                                await self._discover_and_cache_tools(server_id, process)
-
-                                return True
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse response: {e}")
-                except asyncio.TimeoutError:
-                    # No response yet, continue waiting
-                    pass
-
-                await asyncio.sleep(0.1)
-
-            logger.warning("MCP initialization timeout after 10 seconds")
-            return False
-
-        except Exception as e:
-            logger.exception(f"MCP initialization error: {e}")
-            return False
 
     async def _discover_and_cache_tools(self, server_id: str, process: subprocess.Popen) -> None:
         """
@@ -500,8 +460,6 @@ class ServerManager:
             process: Running MCP server process
         """
         try:
-            import json
-
             # Send tools/list request
             tools_request = {
                 "jsonrpc": "2.0",
@@ -510,8 +468,12 @@ class ServerManager:
             }
 
             logger.debug(f"Discovering tools for server '{server_id}'...")
-            process.stdin.write(json.dumps(tools_request) + "\n")
-            process.stdin.flush()
+            try:
+                process.stdin.write(json.dumps(tools_request) + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                logger.warning(f"Failed to send tools/list request: {e}")
+                return
 
             # Read response with timeout
             try:

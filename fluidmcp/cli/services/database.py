@@ -140,14 +140,14 @@ class DatabaseManager:
         """
         Convert nested MongoDB format to flat backend format.
 
-        MongoDB stores configs with nested mcp_config, but backend expects flat format.
-        This maintains backward compatibility with existing backend code.
+        MongoDB stores configs with nested mcp_config, but backend expects flat format
+        for process spawning (command, args, env at root level).
 
         Args:
             nested_config: Config from MongoDB with mcp_config nested structure
 
         Returns:
-            Flat config dict for backend consumption
+            Flat config dict for backend consumption (command/args/env at root + metadata)
         """
         if not nested_config:
             return nested_config
@@ -155,9 +155,10 @@ class DatabaseManager:
         # Make a copy to avoid modifying original
         flat_config = dict(nested_config)
 
-        # Extract mcp_config fields to root level for backend
+        # Extract mcp_config fields to root level for backend process spawning
         if "mcp_config" in flat_config:
             mcp = flat_config.pop("mcp_config")
+            # Put command/args/env at root level (backend needs this for subprocess)
             if "command" in mcp:
                 flat_config["command"] = mcp["command"]
             if "args" in mcp:
@@ -232,11 +233,14 @@ class DatabaseManager:
 
             config["updated_at"] = datetime.utcnow()
 
+            # Remove created_at from config to avoid conflict with $setOnInsert
+            update_config = {k: v for k, v in config.items() if k != "created_at"}
+
             # Upsert: update if exists, insert if not
             result = await self.db.servers.update_one(
                 {"id": config["id"]},
                 {
-                    "$set": config,
+                    "$set": update_config,
                     "$setOnInsert": {"created_at": datetime.utcnow()}
                 },
                 upsert=True
@@ -325,16 +329,18 @@ class DatabaseManager:
                 - server_id (required): Server identifier
                 - state, pid, start_time, stop_time, exit_code
                 - restart_count, last_health_check, health_check_failures
-                - host, port, last_error (new PDF spec fields)
+                - host, port, last_error (PDF spec fields)
+                - started_by (optional): User who started this instance
 
         Returns:
             True if saved successfully
         """
         try:
-            # Add new PDF spec fields with defaults
+            # Add PDF spec fields with defaults
             instance.setdefault("host", "localhost")
             instance.setdefault("port", None)
             instance.setdefault("last_error", None)
+            instance.setdefault("started_by", None)
 
             instance["updated_at"] = datetime.utcnow()
 
@@ -365,7 +371,11 @@ class DatabaseManager:
             Instance state dict or None if not found
         """
         try:
-            instance = await self.db.server_instances.find_one({"server_id": server_id}, {"_id": 0})  # Exclude MongoDB _id
+            # Support both server_id (new) and server_name (old) for backward compatibility
+            instance = await self.db.server_instances.find_one(
+                {"$or": [{"server_id": server_id}, {"server_name": server_id}]},
+                {"_id": 0}  # Exclude MongoDB _id
+            )
             return instance
         except Exception as e:
             logger.error(f"Error retrieving instance state: {e}")

@@ -2,22 +2,17 @@ import os
 import json
 import subprocess
 import shutil
-from typing import Union, Dict, Any, Iterator
-from pathlib import Path
-from loguru import logger
+import asyncio
 import time
 import sys
 import threading
-import json
-import subprocess
+from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
-from typing import Dict
+from loguru import logger
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
-import threading
-import time
 
 security = HTTPBearer(auto_error=False)
 
@@ -227,8 +222,17 @@ def start_fastapi_in_thread(app: FastAPI, port: int):
     thread.start()
 
 
-def initialize_mcp_server(process: subprocess.Popen) -> bool:
-    """Initialize MCP server with proper handshake"""
+def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
+    """
+    Initialize MCP server with proper handshake.
+
+    Args:
+        process: Subprocess.Popen instance
+        timeout: Timeout in seconds (default: 30, increased for npx -y downloads)
+
+    Returns:
+        True if initialization successful
+    """
     try:
         # Check if process is already dead
         if process.poll() is not None:
@@ -244,38 +248,77 @@ def initialize_mcp_server(process: subprocess.Popen) -> bool:
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"roots": {"listChanged": True}, "sampling": {}},
-                "clientInfo": {"name": "fluidmcp-client", "version": "1.0.0"}
+                "clientInfo": {"name": "fluidmcp-client", "version": "2.0.0"}
             }
         }
 
         logger.debug(f"Sending initialize request: {json.dumps(init_request)}")
-        process.stdin.write(json.dumps(init_request) + "\n")
-        process.stdin.flush()
+        try:
+            process.stdin.write(json.dumps(init_request) + "\n")
+            process.stdin.flush()
+            logger.debug("Initialize request sent successfully")
+        except (BrokenPipeError, OSError) as e:
+            logger.error(f"Failed to write initialize request (process likely died): {e}")
+            return False
 
         # Wait for response
         start_time = time.time()
-        while time.time() - start_time < 10:
+        lines_received = []
+        non_json_lines = []
+
+        while time.time() - start_time < timeout:
             if process.poll() is not None:
                 stderr_output = process.stderr.read() if process.stderr else "No stderr available"
-                logger.error(f"Process died during initialization. stderr: {stderr_output}")
+                logger.error(f"Process died during initialization (exit code: {process.returncode}). stderr: {stderr_output}")
                 return False
+
             response_line = process.stdout.readline().strip()
             if response_line:
-                logger.debug(f"Received initialization response: {response_line}")
+                lines_received.append(response_line)
+                logger.debug(f"Received line: {response_line[:200]}")
                 try:
                     response = json.loads(response_line)
+                    # Check if this is the initialize response
                     if response.get("id") == 0 and "result" in response:
                         # Send initialized notification
                         notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
                         logger.debug(f"Sending initialized notification: {json.dumps(notif)}")
-                        process.stdin.write(json.dumps(notif) + "\n")
-                        process.stdin.flush()
-                        logger.info("MCP server initialized successfully")
+                        try:
+                            process.stdin.write(json.dumps(notif) + "\n")
+                            process.stdin.flush()
+                        except (BrokenPipeError, OSError) as e:
+                            logger.error(f"Failed to send initialized notification: {e}")
+                            return False
+
+                        if non_json_lines:
+                            logger.info(f"MCP server initialized successfully (skipped {len(non_json_lines)} non-JSON log lines)")
+                        else:
+                            logger.info("MCP server initialized successfully")
                         return True
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse response: {response_line}, error: {e}")
+                except json.JSONDecodeError:
+                    # Not JSON - likely a log message from the server
+                    # Some servers output logs to stdout instead of stderr
+                    non_json_lines.append(response_line[:200])
+                    if len(non_json_lines) <= 5:
+                        logger.debug(f"Skipping non-JSON line: {response_line[:200]}")
+                    continue
+
             time.sleep(0.1)
-        logger.warning("Initialization timeout after 10 seconds")
+
+        logger.error(f"MCP initialization timeout after {timeout} seconds")
+        if lines_received:
+            logger.error(f"Received {len(lines_received)} lines. First few: {lines_received[:3]}")
+        else:
+            logger.error("No output received from MCP server during initialization")
+
+        # Try to read stderr for context
+        try:
+            stderr_output = process.stderr.read() if process.stderr else None
+            if stderr_output:
+                logger.error(f"Process stderr: {stderr_output[:500]}")
+        except Exception:
+            pass
+
         return False
     except Exception:
         logger.exception("Initialization error")
@@ -485,13 +528,18 @@ def create_dynamic_router(server_manager):
         try:
             # Send request to MCP server
             msg = json.dumps(request)
-            process.stdin.write(msg + "\n")
-            process.stdin.flush()
+            try:
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Read response
-            response_line = process.stdout.readline()
+            # Read response (non-blocking with asyncio.to_thread)
+            response_line = await asyncio.to_thread(process.stdout.readline)
             return JSONResponse(content=json.loads(response_line))
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error proxying request to '{server_name}': {e}")
             raise HTTPException(500, f"Error communicating with server: {str(e)}")
@@ -513,14 +561,19 @@ def create_dynamic_router(server_manager):
         if process.poll() is not None:
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
-        async def event_generator() -> Iterator[str]:
+        async def event_generator() -> AsyncIterator[str]:
             try:
                 msg = json.dumps(request)
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                    return
 
                 while True:
-                    response_line = process.stdout.readline()
+                    # Non-blocking I/O with asyncio.to_thread
+                    response_line = await asyncio.to_thread(process.stdout.readline)
                     if not response_line:
                         break
 
@@ -533,9 +586,11 @@ def create_dynamic_router(server_manager):
                         if "result" in response_data:
                             break
                     except json.JSONDecodeError:
-                        pass
+                        # Non-JSON lines are expected in the stream; ignore them but continue reading
+                        logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
 
             except Exception as e:
+                logger.exception(f"Error in event generator for '{server_name}': {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
         return StreamingResponse(
@@ -567,14 +622,20 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            process.stdin.write(msg + "\n")
-            process.stdin.flush()
+            try:
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            response_line = process.stdout.readline()
+            # Non-blocking I/O with asyncio.to_thread
+            response_line = await asyncio.to_thread(process.stdout.readline)
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error listing tools for '{server_name}': {e}")
             raise HTTPException(500, f"Error communicating with server: {str(e)}")
@@ -614,10 +675,14 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            process.stdin.write(msg + "\n")
-            process.stdin.flush()
+            try:
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            response_line = process.stdout.readline()
+            # Non-blocking I/O with asyncio.to_thread
+            response_line = await asyncio.to_thread(process.stdout.readline)
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
