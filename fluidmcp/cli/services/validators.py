@@ -52,16 +52,10 @@ def validate_package_string(s: str) -> bool:
     if s.count('/') != 1 or s.count('@') != 1:
         return False
 
-    # Validate parts are non-empty
+    # Split and extract parts
     parts = s.split('/')
-    if len(parts) != 2:
-        return False
-
     author = parts[0]
     package_version = parts[1]
-
-    if '@' not in package_version:
-        return False
 
     package, version = package_version.split('@', 1)
 
@@ -147,7 +141,7 @@ def validate_github_token(token: str) -> bool:
 
     # Fine-grained personal access tokens: github_pat_... (82 chars)
     if token.startswith('github_pat_'):
-        return len(token) == 82 and all(c.isalnum() or c == '_' for c in token)
+        return len(token) == 82 and token[len('github_pat_'):].isalnum()
 
     # OAuth access tokens: gho_... (36 chars)
     if token.startswith('gho_'):
@@ -404,7 +398,8 @@ def is_valid_package_version(version: str) -> bool:
 
     # Pattern for semantic versioning: X.Y.Z or X.Y.Z-prerelease
     # X, Y, Z are numbers
-    # prerelease can be alphanumeric with dots and hyphens
-    pattern = r'^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$'
+    # prerelease: one or more non-empty identifiers separated by dots,
+    # each identifier containing alphanumeric characters or hyphens
+    pattern = r'^\d+\.\d+\.\d+(-[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)?$'
 
     return bool(re.match(pattern, version))

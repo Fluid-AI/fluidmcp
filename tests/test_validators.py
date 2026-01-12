@@ -180,6 +180,12 @@ class TestValidateGithubToken:
         assert validate_github_token("github_pat_" + "A" * 70) is False  # Too short
         assert validate_github_token("github_pat_" + "A" * 72) is False  # Too long
 
+    def test_invalid_fine_grained_with_underscores(self):
+        """Test invalid fine-grained token with underscores in payload."""
+        # Fine-grained tokens should only have alphanumeric chars after prefix
+        invalid_token = "github_pat_" + "A" * 35 + "_" + "A" * 35
+        assert validate_github_token(invalid_token) is False
+
     def test_invalid_no_prefix(self):
         """Test invalid tokens without recognized prefix."""
         assert validate_github_token("A" * 40) is False
@@ -574,6 +580,12 @@ class TestIsValidPackageVersion:
         """Test invalid versions with disallowed special characters."""
         assert is_valid_package_version("1.0.0!") is False
         assert is_valid_package_version("1.0.0#beta") is False
+
+    def test_invalid_prerelease_formats(self):
+        """Test invalid semver prerelease formats."""
+        assert is_valid_package_version("1.0.0-..") is False  # Consecutive dots
+        assert is_valid_package_version("1.0.0-.") is False  # Trailing dot
+        assert is_valid_package_version("1.0.0-alpha..beta") is False  # Double dots
 
     def test_invalid_empty_or_none(self):
         """Test invalid empty or None inputs."""
