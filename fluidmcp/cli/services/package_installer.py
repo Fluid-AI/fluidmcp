@@ -63,12 +63,13 @@ def is_tar_gz(data: bytes) -> bool:
     """Check if the data is a tar.gz file.
 
     Args:
-        data (bytes): Raw file bytes to check.
+        data (bytes): Raw file bytes to check (must be at least 2 bytes).
 
     Returns:
-        bool: True if the data is a tar.gz file, False otherwise.
+        bool: True if the data starts with GZIP magic number, False otherwise.
+              Returns False if data has fewer than 2 bytes.
     """
-    return data[:2] == b'\x1f\x8b'  # GZIP magic number
+    return len(data) >= 2 and data[:2] == b'\x1f\x8b'  # GZIP magic number
 
 def is_json(data: bytes) -> bool:
     """Check if the data is a JSON file.
@@ -125,6 +126,9 @@ def install_package(package_str, skip_env=False):
         try:
             # Extract the pre-signed URL from the response
             s3_url = response.json().get("pre_signed_url")
+            if not s3_url:
+                logger.error("Registry response missing pre_signed_url")
+                return
             logger.debug(f"S3 URL: {s3_url[:100]}...")
             # Download file from S3
             s3_response = requests.get(s3_url)
@@ -188,13 +192,12 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         pkg (Dict[str, Any]): The package metadata dictionary with 'author', 'package_name', 'version'.
 
     Returns:
-        Path: Path object to the installed package directory.
-
-    Raises:
-        FileNotFoundError: If the package cannot be located after installation.
+        Path: Path object to the installed package directory. May be undefined if
+              the package cannot be located and FileNotFoundError is caught.
 
     Note:
-        May return with dest_dir undefined if FileNotFoundError is caught and logged.
+        If the package cannot be located after installation, an error is logged
+        but the function continues and may return an undefined dest_dir variable.
     """
     logger.info(f"Installing package: {package}")
     install_package(package, skip_env=True)
@@ -213,15 +216,15 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
     
 
 def make_registry_request(package_str: str, auth: bool) -> tuple:
-    """Build HTTP headers, payload, and package metadata for registry API request.
+    """Build HTTP headers, payload, and package metadata for registry API requests.
 
     This function prepares the data needed to interact with the FluidMCP registry API.
     It parses the package string, constructs the JSON payload, and optionally adds
-    authentication headers.
+    authentication headers. It does not perform any HTTP requests itself.
 
     Registry API Interaction:
         - Endpoint: MCP_FETCH_URL environment variable (default: https://registry.fluidmcp.com/fetch-mcp-package)
-        - Method: POST
+        - HTTP method: Determined by the caller (this function only prepares request data)
         - Authentication: Optional bearer token from MCP_TOKEN environment variable
 
     Args:
