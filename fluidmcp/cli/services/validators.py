@@ -7,10 +7,18 @@ This module provides validation utilities for:
 - GitHub tokens (format and basic structure)
 - Server configurations (MCP server config structure)
 - Environment dictionaries (env variable format)
+- MCP servers configurations (full mcpServers config structure)
+- Package versions (semantic version string format)
 """
 
 import re
 from typing import Dict, List, Any
+
+
+# Compiled regex patterns for performance
+PACKAGE_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+$')
+ENV_VAR_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+VERSION_PATTERN = re.compile(r'^\d+\.\d+\.\d+(-[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)?$')
 
 
 def validate_package_string(s: str) -> bool:
@@ -40,12 +48,8 @@ def validate_package_string(s: str) -> bool:
     if not s or not isinstance(s, str):
         return False
 
-    # Pattern: Author/Package@version
-    # Author and Package: alphanumeric, hyphens, underscores
-    # Version: alphanumeric, dots, hyphens (e.g., 1.0.0, v1.0.0, 1.0.0-beta, latest)
-    pattern = r'^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+$'
-
-    if not re.match(pattern, s):
+    # Use compiled pattern for performance
+    if not PACKAGE_PATTERN.match(s):
         return False
 
     # Additional validation: ensure we have exactly one '/' and one '@'
@@ -220,13 +224,12 @@ def validate_server_config(config: Dict[str, Any]) -> List[str]:
         else:
             # Validate env structure with detailed error reporting
             env_dict = config['env']
-            env_var_pattern = r'^[a-zA-Z_][a-zA-Z0-9_]*$'
 
             for key, value in env_dict.items():
-                # Validate key format
+                # Validate key format using compiled pattern
                 if not isinstance(key, str):
                     errors.append(f"Environment variable key {repr(key)} must be a string")
-                elif not re.match(env_var_pattern, key):
+                elif not ENV_VAR_PATTERN.match(key):
                     errors.append(f"Environment variable key '{key}' has invalid format (must start with letter/underscore, contain only letters/numbers/underscores)")
                 # Validate value format
                 elif isinstance(value, str):
@@ -281,13 +284,9 @@ def validate_env_dict(env: Dict[str, Any]) -> bool:
     if not isinstance(env, dict):
         return False
 
-    # Pattern for valid environment variable names
-    # Must start with letter or underscore, then letters/numbers/underscores
-    env_var_pattern = r'^[a-zA-Z_][a-zA-Z0-9_]*$'
-
     for key, value in env.items():
-        # Validate key format
-        if not isinstance(key, str) or not re.match(env_var_pattern, key):
+        # Validate key format using compiled pattern
+        if not isinstance(key, str) or not ENV_VAR_PATTERN.match(key):
             return False
 
         # Validate value format
@@ -418,10 +417,5 @@ def is_valid_package_version(version: str) -> bool:
     if version.startswith('v'):
         version = version[1:]
 
-    # Pattern for semantic versioning: X.Y.Z or X.Y.Z-prerelease
-    # X, Y, Z are numbers
-    # prerelease: one or more non-empty identifiers separated by dots,
-    # each identifier containing alphanumeric characters or hyphens
-    pattern = r'^\d+\.\d+\.\d+(-[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)?$'
-
-    return bool(re.match(pattern, version))
+    # Use compiled pattern for performance
+    return bool(VERSION_PATTERN.match(version))
