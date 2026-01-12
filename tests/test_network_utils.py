@@ -183,11 +183,9 @@ class TestIsPortInUse:
             # Port is in use
             assert is_port_in_use(port) is True
 
-        # Small delay to ensure OS releases the port
-        time.sleep(0.1)
-
-        # Port should now be free
-        assert is_port_in_use(port) is False
+        # Wait for OS to release the port
+        success = wait_for_condition(lambda: not is_port_in_use(port), timeout=1.0)
+        assert success, "Port was not released within timeout"
 
     def test_multiple_checks_on_same_port(self):
         """Test that is_port_in_use can be called multiple times on the same port"""
@@ -200,8 +198,9 @@ class TestIsPortInUse:
             # Use higher backlog to allow multiple connection attempts
             server_socket.listen(10)
 
-            # Small delay to ensure the socket is ready
-            time.sleep(0.1)
+            # Wait for socket to be ready
+            success = wait_for_condition(lambda: is_port_in_use(port), timeout=1.0)
+            assert success, "Port was not detected as in use within timeout"
 
             # Multiple checks should all return True
             assert is_port_in_use(port) is True
@@ -265,10 +264,8 @@ class TestFindFreePort:
         end = 50220
 
         # Occupy port 50210
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind(('', start))
             server_socket.listen(1)
 
@@ -277,8 +274,6 @@ class TestFindFreePort:
 
             assert port != start  # Should not return the occupied port
             assert start < port < end
-        finally:
-            server_socket.close()
 
     def test_default_range(self):
         """Test find_free_port with default range (8100-9000)"""
@@ -322,12 +317,11 @@ class TestFindFreePort:
         end = 50602  # Only 2 ports: 50600, 50601
 
         # Occupy both ports
-        socket1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket1, \
+             socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket2:
+            socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        try:
             socket1.bind(('', 50600))
             socket1.listen(1)
             socket2.bind(('', 50601))
@@ -336,9 +330,6 @@ class TestFindFreePort:
             # Should raise RuntimeError
             with pytest.raises(RuntimeError, match="No free ports available in the range"):
                 find_free_port(start, end)
-        finally:
-            socket1.close()
-            socket2.close()
 
     def test_empty_taken_ports_set(self):
         """Test find_free_port with an empty taken_ports set"""
@@ -464,11 +455,11 @@ class TestGetPidOnPort:
             server_socket.bind(('', port))
             server_socket.listen(1)
 
-            # Small delay to ensure the socket is registered
-            time.sleep(0.1)
+            # Wait for socket to be registered
+            success = wait_for_condition(lambda: get_pid_on_port(port) == current_pid, timeout=1.0)
+            assert success, "PID was not registered within timeout"
 
             pid = get_pid_on_port(port)
-
             # Should return our current process PID
             assert pid == current_pid
 
@@ -598,8 +589,9 @@ class TestEdgeCases:
             # Use higher backlog to allow multiple connection attempts
             server_socket.listen(10)
 
-            # Small delay to ensure the socket is ready
-            time.sleep(0.1)
+            # Wait for socket to be ready
+            success = wait_for_condition(lambda: is_port_in_use(port), timeout=1.0)
+            assert success, "Port was not detected as in use within timeout"
 
             # Simulate concurrent checks
             results = []
@@ -629,20 +621,21 @@ class TestEdgeCases:
         port = 54200
 
         # First usage
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket1:
-            socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            socket1.bind(('', port))
-            socket1.listen(1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as first_socket:
+            first_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            first_socket.bind(('', port))
+            first_socket.listen(1)
             assert is_port_in_use(port) is True
 
-        # Small delay to ensure OS releases the port
-        time.sleep(0.1)
+        # Wait for OS to release the port
+        success = wait_for_condition(lambda: not is_port_in_use(port), timeout=1.0)
+        assert success, "Port was not released within timeout"
 
         # Second usage on the same port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket2:
-            socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            socket2.bind(('', port))
-            socket2.listen(1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as second_socket:
+            second_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            second_socket.bind(('', port))
+            second_socket.listen(1)
             assert is_port_in_use(port) is True
 
     def test_find_free_port_boundary_cases(self):
@@ -660,12 +653,12 @@ class TestEdgeCases:
         port = 55300
 
         # Create multiple sockets but only bind one to the port
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM), \
-             socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket2, \
-             socket.socket(socket.AF_INET, socket.SOCK_STREAM):
-            socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            socket2.bind(('', port))
-            socket2.listen(1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unused_socket1, \
+             socket.socket(socket.AF_INET, socket.SOCK_STREAM) as bound_socket, \
+             socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unused_socket2:
+            bound_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            bound_socket.bind(('', port))
+            bound_socket.listen(1)
 
             # Port should be detected as in use
             assert is_port_in_use(port) is True
