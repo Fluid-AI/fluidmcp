@@ -10,7 +10,7 @@ This module provides validation utilities for:
 """
 
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 
 def validate_package_string(s: str) -> bool:
@@ -95,7 +95,8 @@ def validate_port_number(port: int) -> bool:
         >>> validate_port_number(70000)
         False
     """
-    if not isinstance(port, int):
+    # Reject bool types (bool is a subclass of int in Python)
+    if isinstance(port, bool) or not isinstance(port, int):
         return False
 
     # Valid TCP port range: 1-65535
@@ -104,13 +105,15 @@ def validate_port_number(port: int) -> bool:
 
 def validate_github_token(token: str) -> bool:
     """
-    Validate GitHub personal access token format.
+    Validate GitHub personal access and related token formats.
 
     GitHub tokens have specific formats:
-    - Classic tokens: ghp_... (40 chars after prefix)
-    - Fine-grained tokens: github_pat_... (82 chars after prefix)
-    - OAuth tokens: gho_... (36 chars after prefix)
-    - Installation tokens: ghs_... (36 chars after prefix)
+    - Classic tokens: ghp_... (40 chars total; 'ghp_' + 36 alphanumeric chars)
+    - Fine-grained tokens: github_pat_... (82 chars total)
+    - OAuth tokens: gho_... (36 chars total)
+    - Installation tokens: ghs_... (36 chars total)
+    - GitHub App tokens: ghu_... (36 chars total)
+    - Refresh tokens: ghr_... (76 chars total)
 
     Note: This only validates format, not authenticity or permissions.
 
@@ -222,8 +225,8 @@ def validate_server_config(config: Dict[str, Any]) -> List[str]:
             errors.append("Field 'env' must be a dictionary")
         else:
             # Validate env structure
-            env_errors = validate_env_dict(config['env'])
-            if not env_errors:
+            env_valid = validate_env_dict(config['env'])
+            if not env_valid:
                 errors.append("Field 'env' contains invalid environment variables")
 
     return errors
