@@ -7,10 +7,46 @@ for storing server configurations, runtime instances, and logs.
 import os
 import certifi
 from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Deque
 from datetime import datetime
+from collections import deque
+import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
 from loguru import logger
+
+
+class LogBuffer:
+    """In-memory buffer for failed log writes with retry mechanism."""
+
+    def __init__(self, max_size: int = 100):
+        """Initialize log buffer."""
+        self.buffer: Deque[Dict[str, Any]] = deque(maxlen=max_size)
+        self.failed_count = 0
+        self.success_count = 0
+
+    def add(self, log_entry: Dict[str, Any]):
+        """Add failed log entry to buffer."""
+        self.buffer.append(log_entry)
+        self.failed_count += 1
+
+    def get_all(self) -> List[Dict[str, Any]]:
+        """Get all buffered entries and clear buffer."""
+        entries = list(self.buffer)
+        self.buffer.clear()
+        return entries
+
+    def size(self) -> int:
+        """Get current buffer size."""
+        return len(self.buffer)
+
+    def get_stats(self) -> Dict[str, int]:
+        """Get buffer statistics."""
+        return {
+            "buffered": len(self.buffer),
+            "failed_total": self.failed_count,
+            "success_total": self.success_count
+        }
 
 
 class DatabaseManager:
@@ -29,6 +65,8 @@ class DatabaseManager:
         self.client: Optional[AsyncIOMotorClient] = None
         self.db: Optional[AsyncIOMotorDatabase] = None
         self._change_streams_supported: Optional[bool] = None
+        self._log_buffer = LogBuffer(max_size=100)
+        self._retry_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> bool:
         """
@@ -47,7 +85,28 @@ class DatabaseManager:
                 socketTimeoutMS=10000,
                 tlsCAFile=certifi.where(),  # Use certifi's CA bundle for proper SSL validation
                 retryWrites=True  # Enable retry writes for Atlas
+            # Get timeout values from environment or use defaults
+            server_timeout = int(os.getenv("FMCP_MONGODB_SERVER_TIMEOUT", "30000"))
+            connect_timeout = int(os.getenv("FMCP_MONGODB_CONNECT_TIMEOUT", "10000"))
+            socket_timeout = int(os.getenv("FMCP_MONGODB_SOCKET_TIMEOUT", "45000"))
+
+            # TLS certificate validation - secure by default
+            allow_invalid_certs = os.getenv("FMCP_MONGODB_ALLOW_INVALID_CERTS", "false").lower() == "true"
+
+            if allow_invalid_certs:
+                logger.warning("⚠️  WARNING: TLS certificate validation DISABLED for MongoDB!")
+                logger.warning("⚠️  This is a SECURITY RISK - vulnerable to man-in-the-middle attacks!")
+                logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
+
+            self.client = AsyncIOMotorClient(
+                self.mongodb_uri,
+                serverSelectionTimeoutMS=server_timeout,
+                connectTimeoutMS=connect_timeout,
+                socketTimeoutMS=socket_timeout,
+                tlsAllowInvalidCertificates=allow_invalid_certs
             )
+
+            logger.debug(f"MongoDB timeouts: server={server_timeout}ms, connect={connect_timeout}ms, socket={socket_timeout}ms")
             self.db = self.client[self.database_name]
 
             # Test connection
@@ -403,7 +462,7 @@ class DatabaseManager:
 
     async def save_log_entry(self, server_name: str, stream: str, content: str) -> bool:
         """
-        Save a log entry.
+        Save a log entry with automatic buffering on failure.
 
         Args:
             server_name: Server name
@@ -413,20 +472,71 @@ class DatabaseManager:
         Returns:
             True if saved successfully
         """
-        try:
-            log_entry = {
-                "server_name": server_name,
-                "timestamp": datetime.utcnow(),
-                "stream": stream,
-                "content": content
-            }
+        log_entry = {
+            "server_name": server_name,
+            "timestamp": datetime.utcnow(),
+            "stream": stream,
+            "content": content
+        }
 
+        try:
             await self.db.server_logs.insert_one(log_entry)
+            self._log_buffer.success_count += 1
             return True
 
         except Exception as e:
-            logger.error(f"Error saving log entry: {e}")
+            # Buffer the failed log entry for retry
+            self._log_buffer.add(log_entry)
+            logger.error(f"Error saving log entry (buffered for retry): {e}")
+            logger.debug(f"Buffer status: {self._log_buffer.get_stats()}")
+
+            # Start retry task if not already running
+            if self._retry_task is None or self._retry_task.done():
+                self._retry_task = asyncio.create_task(self._retry_failed_logs())
+
             return False
+
+    async def _retry_failed_logs(self):
+        """Periodic retry of buffered log entries."""
+        await asyncio.sleep(30)  # Wait 30 seconds before retry
+
+        if self._log_buffer.size() == 0:
+            return
+
+        logger.info(f"Retrying {self._log_buffer.size()} buffered log entries...")
+
+        entries = self._log_buffer.get_all()
+        retry_failed = []
+
+        for entry in entries:
+            try:
+                await self.db.server_logs.insert_one(entry)
+                self._log_buffer.success_count += 1
+            except Exception as e:
+                logger.warning(f"Retry failed for log entry: {e}")
+                retry_failed.append(entry)
+
+        # Re-buffer entries that still failed
+        for entry in retry_failed:
+            self._log_buffer.add(entry)
+
+        success_count = len(entries) - len(retry_failed)
+        logger.info(f"Retry complete: {success_count}/{len(entries)} succeeded")
+
+        # Schedule another retry if there are still failures
+        if len(retry_failed) > 0:
+            self._retry_task = asyncio.create_task(self._retry_failed_logs())
+
+    def get_log_stats(self) -> Dict[str, Any]:
+        """Get logging statistics including buffer status."""
+        stats = self._log_buffer.get_stats()
+        total = stats["success_total"] + stats["failed_total"]
+        success_rate = (stats["success_total"] / total * 100) if total > 0 else 100.0
+
+        return {
+            **stats,
+            "success_rate": round(success_rate, 2)
+        }
 
     async def get_logs(
         self,
