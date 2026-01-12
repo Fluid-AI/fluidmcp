@@ -204,6 +204,8 @@ class DatabaseManager:
         # Add new PDF spec fields with defaults
         nested_config.setdefault("description", "")
         nested_config.setdefault("enabled", True)
+        nested_config.setdefault("restart_policy", "on-failure")
+        nested_config.setdefault("max_restarts", 3)
         nested_config.setdefault("restart_window_sec", 300)
         nested_config.setdefault("tools", [])
         nested_config.setdefault("created_by", None)

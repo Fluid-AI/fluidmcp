@@ -244,8 +244,12 @@ async def get_server(request: Request, id: str):
     return {
         "id": id,
         "name": config.get("name"),
+        "description": config.get("description"),
         "config": config,
-        "status": status
+        "status": status,
+        "restart_policy": config.get("restart_policy"),
+        "max_restarts": config.get("max_restarts"),
+        "restart_window_sec": config.get("restart_window_sec")
     }
 
 
