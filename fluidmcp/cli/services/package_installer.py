@@ -108,7 +108,7 @@ def install_package(package_str, skip_env=False):
     """
     
     # Form the headers and payload for the API request
-    headers,payload ,pkg =make_registry_request(package_str,auth=False)
+    headers, payload, pkg = make_registry_request(package_str, auth=False)
     
     try:
         logger.info("Installing package from Fluid MCP registry")
@@ -175,7 +175,7 @@ def package_exists(dest_dir: Path) -> bool:
     """
     return dest_dir.exists()
 
-def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str, Any]) -> str:
+def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str, Any]) -> Path:
     """Install a package listed in a configuration file.
 
     This is a helper function used when installing packages from a config file
@@ -188,7 +188,7 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         pkg (Dict[str, Any]): The package metadata dictionary with 'author', 'package_name', 'version'.
 
     Returns:
-        str: Path to the installed package directory.
+        Path: Path object to the installed package directory.
 
     Raises:
         FileNotFoundError: If the package cannot be located after installation.
@@ -269,7 +269,7 @@ def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, A
         Dict[str, Any]: Dictionary containing the package metadata from the registry.
                         Returns empty dict {} if the request fails.
     """
-    headers, payload ,pkg = make_registry_request(package_name, auth=True)
+    headers, payload, pkg = make_registry_request(package_name, auth=True)
     
     try:
         # Make the API request to fetch the package metadata
