@@ -5,6 +5,8 @@ This module provides async database operations using motor (async MongoDB driver
 for storing server configurations, runtime instances, and logs.
 """
 import os
+import certifi
+from typing import Optional, Dict, Any, List
 from typing import Optional, Dict, Any, List, Deque
 from datetime import datetime
 from collections import deque
@@ -74,6 +76,15 @@ class DatabaseManager:
             True if connection successful, False otherwise
         """
         try:
+            # Configure SSL options for MongoDB Atlas
+            # Use certifi for trusted CA certificates
+            self.client = AsyncIOMotorClient(
+                self.mongodb_uri,
+                serverSelectionTimeoutMS=10000,  # 10 second timeout for Atlas
+                connectTimeoutMS=10000,
+                socketTimeoutMS=10000,
+                tlsCAFile=certifi.where(),  # Use certifi's CA bundle for proper SSL validation
+                retryWrites=True  # Enable retry writes for Atlas
             # Get timeout values from environment or use defaults
             server_timeout = int(os.getenv("FMCP_MONGODB_SERVER_TIMEOUT", "30000"))
             connect_timeout = int(os.getenv("FMCP_MONGODB_CONNECT_TIMEOUT", "10000"))
@@ -100,7 +111,7 @@ class DatabaseManager:
 
             # Test connection
             await self.client.admin.command('ping')
-            logger.info("Successfully connected to MongoDB")
+            logger.info(f"Connected to MongoDB at {self.mongodb_uri}")
 
             # Check if change streams are supported (requires replica set)
             try:
@@ -146,12 +157,12 @@ class DatabaseManager:
 
         try:
             # Create indexes on servers collection
-            await self.db.servers.create_index("name", unique=True)
-            logger.info("Created unique index on servers.name")
+            await self.db.servers.create_index("id", unique=True)
+            logger.info("Created unique index on servers.id")
 
             # Create indexes on server_instances collection
-            await self.db.server_instances.create_index("server_name")
-            logger.info("Created index on server_instances.server_name")
+            await self.db.server_instances.create_index("server_id")
+            logger.info("Created index on server_instances.server_id")
 
             # Create compound index on server_logs for efficient queries
             await self.db.server_logs.create_index([("server_name", 1), ("timestamp", -1)])
@@ -182,6 +193,82 @@ class DatabaseManager:
         """Check if MongoDB instance supports change streams."""
         return self._change_streams_supported is True
 
+    # ==================== Schema Conversion Helpers ====================
+
+    def _flatten_config_for_backend(self, nested_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert nested MongoDB format to flat backend format.
+
+        MongoDB stores configs with nested mcp_config, but backend expects flat format
+        for process spawning (command, args, env at root level).
+
+        Args:
+            nested_config: Config from MongoDB with mcp_config nested structure
+
+        Returns:
+            Flat config dict for backend consumption (command/args/env at root + metadata)
+        """
+        if not nested_config:
+            return nested_config
+
+        # Make a copy to avoid modifying original
+        flat_config = dict(nested_config)
+
+        # Extract mcp_config fields to root level for backend process spawning
+        if "mcp_config" in flat_config:
+            mcp = flat_config.pop("mcp_config")
+            # Put command/args/env at root level (backend needs this for subprocess)
+            if "command" in mcp:
+                flat_config["command"] = mcp["command"]
+            if "args" in mcp:
+                flat_config["args"] = mcp["args"]
+            if "env" in mcp:
+                flat_config["env"] = mcp["env"]
+
+        return flat_config
+
+    def _nest_config_for_storage(self, flat_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert flat backend format to nested MongoDB format (PDF spec).
+
+        Backend uses flat format (command, args, env at root), but we store
+        in nested format (mcp_config: {command, args, env}) per PDF spec.
+
+        Also adds new PDF fields with defaults.
+
+        Args:
+            flat_config: Config from backend with flat structure
+
+        Returns:
+            Nested config dict for MongoDB storage
+        """
+        if not flat_config:
+            return flat_config
+
+        # Make a copy to avoid modifying original
+        nested_config = dict(flat_config)
+
+        # Move command/args/env into mcp_config nested structure
+        mcp_config = {}
+        if "command" in nested_config:
+            mcp_config["command"] = nested_config.pop("command")
+        if "args" in nested_config:
+            mcp_config["args"] = nested_config.pop("args")
+        if "env" in nested_config:
+            mcp_config["env"] = nested_config.pop("env")
+
+        if mcp_config:
+            nested_config["mcp_config"] = mcp_config
+
+        # Add new PDF spec fields with defaults
+        nested_config.setdefault("description", "")
+        nested_config.setdefault("enabled", True)
+        nested_config.setdefault("restart_window_sec", 300)
+        nested_config.setdefault("tools", [])
+        nested_config.setdefault("created_by", None)
+
+        return nested_config
+
     # ==================== Server Configuration Operations ====================
 
     async def save_server_config(self, config: Dict[str, Any]) -> bool:
@@ -190,48 +277,61 @@ class DatabaseManager:
 
         Args:
             config: Server configuration dict with keys:
-                - name (required): Unique server name
-                - command, args, env, working_dir, install_path
-                - restart_policy, max_restarts, restart_window
+                - id (required): Unique server identifier (URL-friendly)
+                - name (required): Human-readable display name
+                - command, args, env (flat format from backend)
+                - working_dir, install_path, restart_policy, max_restarts
+                - description, enabled, tools, created_by (optional)
 
         Returns:
             True if saved successfully
         """
         try:
+            # Convert flat format to nested MongoDB format (PDF spec)
+            config = self._nest_config_for_storage(config)
+
             config["updated_at"] = datetime.utcnow()
+
+            # Remove created_at from config to avoid conflict with $setOnInsert
+            update_config = {k: v for k, v in config.items() if k != "created_at"}
 
             # Upsert: update if exists, insert if not
             result = await self.db.servers.update_one(
-                {"name": config["name"]},
+                {"id": config["id"]},
                 {
-                    "$set": config,
+                    "$set": update_config,
                     "$setOnInsert": {"created_at": datetime.utcnow()}
                 },
                 upsert=True
             )
 
-            logger.debug(f"Saved server config: {config['name']}")
+            logger.debug(f"Saved server config: {config['id']} ({config.get('name', 'unknown')})")
             return True
 
         except DuplicateKeyError:
-            logger.error(f"Server with name '{config['name']}' already exists")
+            logger.error(f"Server with id '{config['id']}' already exists")
             return False
         except Exception as e:
             logger.error(f"Error saving server config: {e}")
             return False
 
-    async def get_server_config(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_server_config(self, id: str) -> Optional[Dict[str, Any]]:
         """
-        Retrieve server configuration by name.
+        Retrieve server configuration by id.
 
         Args:
-            name: Server name
+            id: Server identifier
 
         Returns:
-            Server config dict or None if not found
+            Server config dict in flat format (for backend compatibility)
         """
         try:
-            config = await self.db.servers.find_one({"name": name})
+            config = await self.db.servers.find_one({"id": id}, {"_id": 0})  # Exclude MongoDB _id
+
+            # Convert nested MongoDB format to flat format for backend
+            if config:
+                config = self._flatten_config_for_backend(config)
+
             return config
         except Exception as e:
             logger.error(f"Error retrieving server config: {e}")
@@ -245,29 +345,33 @@ class DatabaseManager:
             filter_dict: Optional MongoDB filter
 
         Returns:
-            List of server config dicts
+            List of server config dicts in flat format (for backend compatibility)
         """
         try:
             filter_dict = filter_dict or {}
-            cursor = self.db.servers.find(filter_dict)
+            cursor = self.db.servers.find(filter_dict, {"_id": 0})  # Exclude MongoDB _id
             configs = await cursor.to_list(length=None)
+
+            # Convert all configs from nested to flat format for backend
+            configs = [self._flatten_config_for_backend(c) for c in configs]
+
             return configs
         except Exception as e:
             logger.error(f"Error listing server configs: {e}")
             return []
 
-    async def delete_server_config(self, name: str) -> bool:
+    async def delete_server_config(self, id: str) -> bool:
         """
         Delete server configuration.
 
         Args:
-            name: Server name
+            id: Server identifier
 
         Returns:
             True if deleted successfully
         """
         try:
-            result = await self.db.servers.delete_one({"name": name})
+            result = await self.db.servers.delete_one({"id": id})
             return result.deleted_count > 0
         except Exception as e:
             logger.error(f"Error deleting server config: {e}")
@@ -281,41 +385,56 @@ class DatabaseManager:
 
         Args:
             instance: Instance state dict with keys:
-                - server_name (required)
+                - server_id (required): Server identifier
                 - state, pid, start_time, stop_time, exit_code
                 - restart_count, last_health_check, health_check_failures
+                - host, port, last_error (PDF spec fields)
+                - started_by (optional): User who started this instance
 
         Returns:
             True if saved successfully
         """
         try:
+            # Add PDF spec fields with defaults
+            instance.setdefault("host", "localhost")
+            instance.setdefault("port", None)
+            instance.setdefault("last_error", None)
+            instance.setdefault("started_by", None)
+
             instance["updated_at"] = datetime.utcnow()
 
+            # Support both server_id (new) and server_name (old) for backward compatibility
+            server_key = instance.get("server_id", instance.get("server_name"))
+
             result = await self.db.server_instances.update_one(
-                {"server_name": instance["server_name"]},
+                {"server_id": server_key},
                 {"$set": instance},
                 upsert=True
             )
 
-            logger.debug(f"Saved instance state: {instance['server_name']}")
+            logger.debug(f"Saved instance state: {server_key}")
             return True
 
         except Exception as e:
             logger.error(f"Error saving instance state: {e}")
             return False
 
-    async def get_instance_state(self, server_name: str) -> Optional[Dict[str, Any]]:
+    async def get_instance_state(self, server_id: str) -> Optional[Dict[str, Any]]:
         """
         Get server instance runtime state.
 
         Args:
-            server_name: Server name
+            server_id: Server identifier
 
         Returns:
             Instance state dict or None if not found
         """
         try:
-            instance = await self.db.server_instances.find_one({"server_name": server_name})
+            # Support both server_id (new) and server_name (old) for backward compatibility
+            instance = await self.db.server_instances.find_one(
+                {"$or": [{"server_id": server_id}, {"server_name": server_id}]},
+                {"_id": 0}  # Exclude MongoDB _id
+            )
             return instance
         except Exception as e:
             logger.error(f"Error retrieving instance state: {e}")

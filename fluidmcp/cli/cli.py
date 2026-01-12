@@ -8,6 +8,7 @@ import secrets
 import importlib.metadata
 import platform
 import shutil
+from dotenv import load_dotenv
 
 from .services import (
     install_package,
@@ -557,6 +558,10 @@ def main():
     '''
     Main function to handle command line arguments and execute the appropriate action.
     '''
+    # Load environment variables from .env file
+    env_path = Path(__file__).parent / '.env'
+    load_dotenv(dotenv_path=env_path)
+
     # Parse command line arguments with the commands given in setup.py
     parser = argparse.ArgumentParser(description="FluidAI MCP CLI")
 
@@ -619,12 +624,6 @@ def main():
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
     github_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
-    # validate comand
-    validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
-    validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
-    validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
-    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)") 
-
     # serve command - NEW: Run as standalone API server
     serve_parser = subparsers.add_parser("serve", help="Run as standalone API server (backend starts without MCP servers)")
     serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
@@ -640,6 +639,13 @@ def main():
                               help="Explicitly allow running without authentication (NOT RECOMMENDED)")
     serve_parser.add_argument("--token", type=str,
                               help="Bearer token for secure mode (will be generated if not provided)")
+    serve_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
+
+    # validate comand
+    validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
+    validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
+    validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
+    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # Parse the command line arguments and run the appropriate command to the subparsers
     args = parser.parse_args()
@@ -715,6 +721,12 @@ def main():
         # Run standalone API server
         from .server import main as server_main
         import asyncio
+
+        # Generate token if secure mode enabled but no token provided
+        if secure_mode and not token:
+            import secrets
+            token = secrets.token_urlsafe(32)
+            logger.info(f"Generated bearer token: {token}")
 
         try:
             asyncio.run(server_main(args))

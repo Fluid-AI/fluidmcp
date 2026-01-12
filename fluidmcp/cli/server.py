@@ -16,8 +16,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
 from .services.database import DatabaseManager
+from .services.server_manager import ServerManager
+from .api.management import router as mgmt_router
+from .services.package_launcher import create_dynamic_router
 
 
+async def create_app(
+    db_manager: DatabaseManager,
+    server_manager: ServerManager,
+    secure_mode: bool = False,
+    token: str = None
+) -> FastAPI:
 def save_token_to_file(token: str) -> Path:
     """
     Save bearer token to secure file.
@@ -48,6 +57,7 @@ async def create_app(db_manager: DatabaseManager, secure_mode: bool = False, tok
 
     Args:
         db_manager: Database manager instance
+        server_manager: ServerManager instance
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
         allowed_origins: List of allowed CORS origins (default: localhost only)
@@ -85,8 +95,9 @@ async def create_app(db_manager: DatabaseManager, secure_mode: bool = False, tok
         allow_headers=["*"],
     )
 
-    # Store database manager in app state for dependency injection
+    # Store managers in app state for dependency injection
     app.state.db_manager = db_manager
+    app.state.server_manager = server_manager
 
     # Set up secure mode if enabled
     if secure_mode and token:
@@ -94,6 +105,28 @@ async def create_app(db_manager: DatabaseManager, secure_mode: bool = False, tok
         os.environ["FMCP_SECURE_MODE"] = "true"
         logger.info("Secure mode enabled with bearer token")
 
+    # Include Management API
+    app.include_router(mgmt_router, prefix="/api", tags=["management"])
+    logger.info("Management API mounted at /api")
+
+    # Include Dynamic MCP Router
+    mcp_router = create_dynamic_router(server_manager)
+    app.include_router(mcp_router, tags=["mcp"])
+    logger.info("Dynamic MCP router mounted")
+
+    # Add a health check endpoint
+    @app.get("/health")
+    async def health_check():
+        """Health check endpoint."""
+        running_servers = len([
+            name for name, proc in server_manager.processes.items()
+            if proc.poll() is None
+        ])
+
+        return {
+            "status": "healthy",
+            "database": "connected" if db_manager.client else "disconnected",
+            "servers_running": running_servers
     # Add a health check endpoint with actual connection verification
     @app.get("/health")
     async def health_check():
@@ -124,7 +157,11 @@ async def create_app(db_manager: DatabaseManager, secure_mode: bool = False, tok
             "name": "FluidMCP Gateway",
             "version": "2.0.0",
             "docs": "/docs",
-            "health": "/health"
+            "health": "/health",
+            "api": {
+                "management": "/api/servers",
+                "mcp": "/{server_name}/mcp"
+            }
         }
 
     logger.info("FastAPI application created (no MCP servers started)")
@@ -195,7 +232,7 @@ async def main(args):
             allowed_origins = [origin.strip() for origin in origins_str.split(",")]
 
     # 1. Initialize MongoDB connection
-    logger.info("Connecting to MongoDB...")
+    logger.info(f"Connecting to MongoDB at {args.mongodb_uri}")
     db_manager = DatabaseManager(
         mongodb_uri=args.mongodb_uri,
         database_name=args.database
@@ -209,9 +246,14 @@ async def main(args):
         require_persistence=require_persistence
     )
 
-    # 2. Create FastAPI app (without MCP servers)
+    # 2. Create ServerManager
+    logger.info("Creating ServerManager...")
+    server_manager = ServerManager(db_manager)
+
+    # 3. Create FastAPI app (without MCP servers)
     app = await create_app(
         db_manager=db_manager,
+        server_manager=server_manager,
         secure_mode=args.secure,
         token=args.token,
         allowed_origins=allowed_origins
@@ -248,6 +290,9 @@ async def main(args):
     await shutdown_event.wait()
 
     # Cleanup
+    logger.info("Stopping all MCP servers...")
+    await server_manager.stop_all_servers()
+
     logger.info("Closing database connection...")
     await db_manager.close()
 
@@ -310,7 +355,9 @@ def run():
 
     # Generate and save token if secure mode enabled but no token provided
     if args.secure and not args.token:
+        import secrets
         args.token = secrets.token_urlsafe(32)
+        logger.info(f"Generated bearer token: {args.token}")
 
         # Save to secure file
         token_file = save_token_to_file(args.token)
