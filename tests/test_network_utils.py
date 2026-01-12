@@ -37,6 +37,7 @@ import time
 import subprocess
 import sys
 import os
+import select
 from fluidai_mcp.services.network_utils import (
     is_port_in_use,
     find_free_port,
@@ -160,7 +161,6 @@ def wait_for_server_ready(proc, timeout=TEST_TIMEOUT):
             pytest.fail(f"Test server process terminated unexpectedly: {stderr_output}")
 
         # Try to read a line with a short timeout
-        import select
         if select.select([proc.stdout], [], [], 0.1)[0]:
             line = proc.stdout.readline()
             if 'READY' in line:
