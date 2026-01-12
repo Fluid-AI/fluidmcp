@@ -130,17 +130,16 @@ def can_bind_to_port(port):
         assert wait_for_condition(lambda: can_bind_to_port(port))
     """
     try:
-        test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        test_socket.bind(('', port))
-        test_socket.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
+            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            test_socket.bind(('', port))
         return True
     except OSError:
         return False
 
 
 class TestIsPortInUse:
-    """Unit tests for is_port_in_use function"""
+    """Integration tests for is_port_in_use function"""
 
     def test_free_port_returns_false(self):
         """Test that is_port_in_use returns False for an unused port"""
@@ -176,16 +175,13 @@ class TestIsPortInUse:
         port = 54323
 
         # Create and close a socket
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_socket.bind(('', port))
-        server_socket.listen(1)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind(('', port))
+            server_socket.listen(1)
 
-        # Port is in use
-        assert is_port_in_use(port) is True
-
-        # Close the socket
-        server_socket.close()
+            # Port is in use
+            assert is_port_in_use(port) is True
 
         # Small delay to ensure OS releases the port
         time.sleep(0.1)
@@ -229,7 +225,7 @@ class TestIsPortInUse:
 
 
 class TestFindFreePort:
-    """Unit tests for find_free_port function"""
+    """Integration tests for find_free_port function"""
 
     def test_finds_available_port_in_range(self):
         """Test that find_free_port returns a port within the specified range"""
@@ -427,7 +423,7 @@ class TestPortRangeValidation:
 
 
 class TestGetPidOnPort:
-    """Unit tests for get_pid_on_port function"""
+    """Integration tests for get_pid_on_port function"""
 
     def test_returns_none_for_unused_port(self):
         """Test that get_pid_on_port returns None for a free port"""
@@ -502,7 +498,7 @@ class TestGetPidOnPort:
 
 
 class TestKillProcessOnPort:
-    """Unit tests for kill_process_on_port function"""
+    """Integration tests for kill_process_on_port function"""
 
     def test_returns_false_for_unused_port(self):
         """Test that kill_process_on_port returns False for a free port"""
@@ -633,23 +629,21 @@ class TestEdgeCases:
         port = 54200
 
         # First usage
-        socket1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket1.bind(('', port))
-        socket1.listen(1)
-        assert is_port_in_use(port) is True
-        socket1.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket1:
+            socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket1.bind(('', port))
+            socket1.listen(1)
+            assert is_port_in_use(port) is True
 
         # Small delay to ensure OS releases the port
         time.sleep(0.1)
 
         # Second usage on the same port
-        socket2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket2.bind(('', port))
-        socket2.listen(1)
-        assert is_port_in_use(port) is True
-        socket2.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket2:
+            socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket2.bind(('', port))
+            socket2.listen(1)
+            assert is_port_in_use(port) is True
 
     def test_find_free_port_boundary_cases(self):
         """Test find_free_port at range boundaries"""
