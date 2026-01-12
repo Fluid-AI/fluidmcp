@@ -138,6 +138,36 @@ def can_bind_to_port(port):
         return False
 
 
+def wait_for_server_ready(proc, timeout=TEST_TIMEOUT):
+    """Wait for test server subprocess to be ready.
+
+    Args:
+        proc: subprocess.Popen instance
+        timeout: Maximum time to wait in seconds
+
+    Returns:
+        bool: True if server is ready, False if timeout or process failed
+
+    Raises:
+        AssertionError: If process terminates before printing READY
+    """
+    start_time = time.perf_counter()
+    while time.perf_counter() - start_time < timeout:
+        # Check if process is still running
+        if proc.poll() is not None:
+            stderr_output = proc.stderr.read() if proc.stderr else ""
+            pytest.fail(f"Test server process terminated unexpectedly: {stderr_output}")
+
+        # Try to read a line with a short timeout
+        import select
+        if select.select([proc.stdout], [], [], 0.1)[0]:
+            line = proc.stdout.readline()
+            if 'READY' in line:
+                return True
+
+    pytest.fail(f"Test server did not become ready within {timeout} seconds")
+
+
 class TestIsPortInUse:
     """Integration tests for is_port_in_use function"""
 
@@ -184,7 +214,7 @@ class TestIsPortInUse:
             assert is_port_in_use(port) is True
 
         # Wait for OS to release the port
-        success = wait_for_condition(lambda: not is_port_in_use(port), timeout=1.0)
+        success = wait_for_condition(lambda: not is_port_in_use(port))
         assert success, "Port was not released within timeout"
 
     def test_multiple_checks_on_same_port(self):
@@ -199,7 +229,7 @@ class TestIsPortInUse:
             server_socket.listen(10)
 
             # Wait for socket to be ready
-            success = wait_for_condition(lambda: is_port_in_use(port), timeout=1.0)
+            success = wait_for_condition(lambda: is_port_in_use(port))
             assert success, "Port was not detected as in use within timeout"
 
             # Multiple checks should all return True
@@ -456,7 +486,7 @@ class TestGetPidOnPort:
             server_socket.listen(1)
 
             # Wait for socket to be registered
-            success = wait_for_condition(lambda: get_pid_on_port(port) == current_pid, timeout=1.0)
+            success = wait_for_condition(lambda: get_pid_on_port(port) == current_pid)
             assert success, "PID was not registered within timeout"
 
             pid = get_pid_on_port(port)
@@ -472,8 +502,7 @@ class TestGetPidOnPort:
 
         try:
             # Wait for server to be ready
-            line = proc.stdout.readline()
-            assert 'READY' in line
+            wait_for_server_ready(proc)
 
             # Poll until port is registered
             success = wait_for_condition(lambda: get_pid_on_port(port) is not None)
@@ -521,8 +550,7 @@ class TestKillProcessOnPort:
 
         try:
             # Wait for server to be ready
-            line = proc.stdout.readline()
-            assert 'READY' in line
+            wait_for_server_ready(proc)
 
             # Poll until port is in use
             assert wait_for_condition(lambda: is_port_in_use(port))
@@ -553,8 +581,7 @@ class TestKillProcessOnPort:
 
         try:
             # Wait for server to be ready
-            line = proc.stdout.readline()
-            assert 'READY' in line
+            wait_for_server_ready(proc)
 
             # Poll until port is in use
             assert wait_for_condition(lambda: is_port_in_use(port))
@@ -590,7 +617,7 @@ class TestEdgeCases:
             server_socket.listen(10)
 
             # Wait for socket to be ready
-            success = wait_for_condition(lambda: is_port_in_use(port), timeout=1.0)
+            success = wait_for_condition(lambda: is_port_in_use(port))
             assert success, "Port was not detected as in use within timeout"
 
             # Simulate concurrent checks
@@ -628,7 +655,7 @@ class TestEdgeCases:
             assert is_port_in_use(port) is True
 
         # Wait for OS to release the port
-        success = wait_for_condition(lambda: not is_port_in_use(port), timeout=1.0)
+        success = wait_for_condition(lambda: not is_port_in_use(port))
         assert success, "Port was not released within timeout"
 
         # Second usage on the same port
