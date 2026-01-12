@@ -117,8 +117,65 @@ def clone_github_repo(
         return dest_dir
 
     except subprocess.CalledProcessError as e:
-        error_msg = e.stderr.strip() if e.stderr else str(e)
-        raise RuntimeError(f"Failed to clone repository {owner}/{repo}: {error_msg}")
+        stderr = e.stderr.strip() if e.stderr else ""
+        stderr_lower = stderr.lower()
+
+        # Construct GitHub URL for error messages (without token)
+        github_url = f"https://github.com/{owner}/{repo}"
+
+        # Detect specific error types and provide actionable messages
+        if "authentication failed" in stderr_lower or "invalid username or password" in stderr_lower:
+            raise RuntimeError(
+                f"Authentication failed when cloning {github_url}\n"
+                f"  Branch: {target_branch}\n"
+                f"  Possible causes:\n"
+                f"    - Invalid GitHub token (check FMCP_GITHUB_TOKEN or GITHUB_TOKEN)\n"
+                f"    - Token lacks required permissions (needs 'repo' scope for private repos)\n"
+                f"    - Token has expired\n"
+                f"  Suggestion: Generate a new token at https://github.com/settings/tokens"
+            )
+
+        elif "repository not found" in stderr_lower or "could not find remote ref" in stderr_lower:
+            raise RuntimeError(
+                f"Repository or branch not found: {github_url}\n"
+                f"  Branch: {target_branch}\n"
+                f"  Possible causes:\n"
+                f"    - Repository doesn't exist (check spelling: '{owner}/{repo}')\n"
+                f"    - Branch '{target_branch}' doesn't exist\n"
+                f"    - Repository is private and token lacks access\n"
+                f"  Suggestion: Verify the repository exists and is accessible"
+            )
+
+        elif "permission denied" in stderr_lower or "403" in stderr_lower:
+            raise RuntimeError(
+                f"Permission denied when accessing {github_url}\n"
+                f"  Branch: {target_branch}\n"
+                f"  Possible causes:\n"
+                f"    - Repository is private and requires authentication\n"
+                f"    - Token lacks required permissions\n"
+                f"    - You don't have access to this repository\n"
+                f"  Suggestion: Check repository visibility and token permissions"
+            )
+
+        elif "could not resolve host" in stderr_lower or "network" in stderr_lower or "connection" in stderr_lower:
+            raise RuntimeError(
+                f"Network error when cloning {github_url}\n"
+                f"  Branch: {target_branch}\n"
+                f"  Possible causes:\n"
+                f"    - No internet connection\n"
+                f"    - GitHub is unreachable\n"
+                f"    - Firewall or proxy blocking access\n"
+                f"  Suggestion: Check your network connection and try again"
+            )
+
+        else:
+            # Generic error with original message
+            raise RuntimeError(
+                f"Failed to clone {github_url}\n"
+                f"  Branch: {target_branch}\n"
+                f"  Git error: {stderr if stderr else 'Unknown error'}\n"
+                f"  Suggestion: Check the repository URL and your GitHub token"
+            )
 
 
 def find_readme_file(directory: Path) -> Path:
