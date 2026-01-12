@@ -159,6 +159,68 @@ def list_installed_packages() -> None:
         # Handle any errors that occur while listing packages
         logger.exception("Error listing installed packages")
 
+
+def get_token_file() -> Path:
+    """Get path to token file."""
+    return Path.home() / ".fmcp" / "tokens" / "current_token.txt"
+
+
+def token_show() -> None:
+    """Display the current saved token."""
+    token_file = get_token_file()
+
+    if not token_file.exists():
+        logger.error("No token found. Generate one with: fluidmcp serve --secure")
+        logger.error("Or: fluidmcp token regenerate")
+        sys.exit(1)
+
+    token = token_file.read_text().strip()
+
+    print("\n" + "="*70)
+    print("🔐 CURRENT BEARER TOKEN:")
+    print("="*70)
+    print(f"\n{token}\n")
+    print("="*70)
+    print(f"Saved at: {token_file}")
+    print("="*70 + "\n")
+
+
+def token_regenerate() -> None:
+    """Generate and save a new token."""
+    token = secrets.token_urlsafe(32)
+
+    token_dir = get_token_file().parent
+    token_dir.mkdir(parents=True, exist_ok=True)
+
+    token_file = get_token_file()
+    token_file.write_text(token)
+    token_file.chmod(0o600)
+
+    print("\n" + "="*70)
+    print("🔐 NEW BEARER TOKEN GENERATED:")
+    print("="*70)
+    print(f"\n{token}\n")
+    print("="*70)
+    print(f"Saved to: {token_file}")
+    print("Use this token with: fluidmcp serve --secure --token <token>")
+    print("="*70 + "\n")
+
+    logger.info("New bearer token generated and saved")
+
+
+def token_clear() -> None:
+    """Remove the saved token."""
+    token_file = get_token_file()
+
+    if not token_file.exists():
+        logger.info("No token file to clear")
+        return
+
+    token_file.unlink()
+    logger.info(f"Token cleared from {token_file}")
+    print("Token removed successfully")
+
+
 def validate_command(args) -> None:
     """
     Validate MCP configuration without running servers.
@@ -528,6 +590,19 @@ def main():
     list_parser = subparsers.add_parser("list", help="List installed packages")
     list_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
+    # token command - Manage bearer tokens
+    token_parser = subparsers.add_parser("token", help="Manage bearer tokens for secure mode")
+    token_subparsers = token_parser.add_subparsers(dest="token_command", help="Token management commands")
+
+    # token show
+    token_show_parser = token_subparsers.add_parser("show", help="Display current saved token")
+
+    # token regenerate
+    token_regen_parser = token_subparsers.add_parser("regenerate", help="Generate and save a new token")
+
+    # token clear
+    token_clear_parser = token_subparsers.add_parser("clear", help="Remove saved token")
+
     # edit-env commannd
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
     edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
@@ -560,7 +635,9 @@ def main():
     serve_parser.add_argument("--database", default="fluidmcp",
                               help="MongoDB database name (default: fluidmcp)")
     serve_parser.add_argument("--secure", action="store_true",
-                              help="Enable secure mode with bearer token authentication")
+                              help="Enable secure mode with bearer token authentication (RECOMMENDED)")
+    serve_parser.add_argument("--allow-insecure", action="store_true",
+                              help="Explicitly allow running without authentication (NOT RECOMMENDED)")
     serve_parser.add_argument("--token", type=str,
                               help="Bearer token for secure mode (will be generated if not provided)")
 
@@ -613,11 +690,31 @@ def main():
     elif args.command == "list":
         logger.debug("Dispatching to list_installed_packages")
         list_installed_packages()
+    elif args.command == "token":
+        if args.token_command == "show":
+            token_show()
+        elif args.token_command == "regenerate":
+            token_regenerate()
+        elif args.token_command == "clear":
+            token_clear()
+        else:
+            token_parser.print_help()
     elif args.command == "serve":
+        # Check authentication requirements
+        if not args.secure and not getattr(args, 'allow_insecure', False):
+            logger.error("❌ ERROR: Server requires authentication for security")
+            logger.error("❌ Use --secure to enable authentication (recommended)")
+            logger.error("❌ Or use --allow-insecure to explicitly disable (NOT recommended)")
+            sys.exit(1)
+
+        if getattr(args, 'allow_insecure', False):
+            logger.warning("⚠️  WARNING: Running in INSECURE mode - no authentication!")
+            logger.warning("⚠️  Anyone can access this API without credentials!")
+            logger.warning("⚠️  This should ONLY be used for local development!")
+
         # Run standalone API server
         from .server import main as server_main
         import asyncio
-
 
         try:
             asyncio.run(server_main(args))
