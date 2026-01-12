@@ -302,6 +302,44 @@ class TestValidateServerConfig:
         errors = validate_server_config(config)
         assert len(errors) >= 2
 
+    def test_invalid_env_detailed_errors(self):
+        """Test that env validation provides detailed error messages."""
+        # Test invalid key format
+        config = {
+            "command": "npx",
+            "args": [],
+            "env": {"123_KEY": "value"}
+        }
+        errors = validate_server_config(config)
+        assert any("'123_KEY'" in e and "invalid format" in e for e in errors)
+
+        # Test invalid value type
+        config = {
+            "command": "npx",
+            "args": [],
+            "env": {"API_KEY": 123}
+        }
+        errors = validate_server_config(config)
+        assert any("'API_KEY'" in e and "must be a string" in e for e in errors)
+
+        # Test structured format missing value
+        config = {
+            "command": "npx",
+            "args": [],
+            "env": {"API_KEY": {"description": "key"}}
+        }
+        errors = validate_server_config(config)
+        assert any("'API_KEY'" in e and "missing required 'value' field" in e for e in errors)
+
+        # Test structured format with wrong value type
+        config = {
+            "command": "npx",
+            "args": [],
+            "env": {"API_KEY": {"value": 123}}
+        }
+        errors = validate_server_config(config)
+        assert any("'API_KEY'" in e and "value must be a string" in e for e in errors)
+
 
 class TestValidateEnvDict:
     """Test validate_env_dict function."""

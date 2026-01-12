@@ -218,10 +218,32 @@ def validate_server_config(config: Dict[str, Any]) -> List[str]:
         if not isinstance(config['env'], dict):
             errors.append("Field 'env' must be a dictionary")
         else:
-            # Validate env structure
-            env_valid = validate_env_dict(config['env'])
-            if not env_valid:
-                errors.append("Field 'env' contains invalid environment variables")
+            # Validate env structure with detailed error reporting
+            env_dict = config['env']
+            env_var_pattern = r'^[a-zA-Z_][a-zA-Z0-9_]*$'
+
+            for key, value in env_dict.items():
+                # Validate key format
+                if not isinstance(key, str):
+                    errors.append(f"Environment variable key {repr(key)} must be a string")
+                elif not re.match(env_var_pattern, key):
+                    errors.append(f"Environment variable key '{key}' has invalid format (must start with letter/underscore, contain only letters/numbers/underscores)")
+                # Validate value format
+                elif isinstance(value, str):
+                    # Simple format is valid
+                    pass
+                elif isinstance(value, dict):
+                    # Structured format validation
+                    if 'value' not in value:
+                        errors.append(f"Environment variable '{key}' structured format missing required 'value' field")
+                    elif not isinstance(value['value'], str):
+                        errors.append(f"Environment variable '{key}' value must be a string, got {type(value['value']).__name__}")
+                    # description is optional, but if present must be a string
+                    if 'description' in value and not isinstance(value['description'], str):
+                        errors.append(f"Environment variable '{key}' description must be a string, got {type(value['description']).__name__}")
+                else:
+                    # Invalid value type
+                    errors.append(f"Environment variable '{key}' value must be a string or dict with 'value' field, got {type(value).__name__}")
 
     return errors
 
