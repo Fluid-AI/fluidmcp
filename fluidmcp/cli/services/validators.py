@@ -18,6 +18,9 @@ from typing import Dict, List, Any
 # Compiled regex patterns for performance
 PACKAGE_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+$')
 ENV_VAR_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+# Semantic version pattern (SemVer 2.0.0 compliant)
+# Note: Prerelease identifiers are limited to [0-9A-Za-z-] as per semver.org
+# and do NOT allow underscores. Versions like "1.0.0-alpha_1" are rejected by design.
 VERSION_PATTERN = re.compile(r'^\d+\.\d+\.\d+(-[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)?$')
 
 
