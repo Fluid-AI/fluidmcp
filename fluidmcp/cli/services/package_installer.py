@@ -21,10 +21,10 @@ def parse_package_string(package_str) -> dict:
     """Parse a package string into its component parts.
 
     Supported formats:
-        "author/name@version" → Full specification
-        "author/name" → Defaults version to 'latest'
-        "name@version" → Defaults author to 'default'
-        "name" → Defaults both to 'default' and 'latest'
+        "author/name@version" -> Full specification
+        "author/name" -> Defaults version to 'latest'
+        "name@version" -> Defaults author to 'default'
+        "name" -> Defaults both to 'default' and 'latest'
 
     Regex Pattern:
         (?:(?P<author>[^/]+)/)?(?P<name>[^@]+)(?:@(?P<version>.+))?
@@ -63,11 +63,10 @@ def is_tar_gz(data: bytes) -> bool:
     """Check if the data is a tar.gz file.
 
     Args:
-        data (bytes): Raw file bytes to check (must be at least 2 bytes).
+        data (bytes): Raw file bytes to check.
 
     Returns:
-        bool: True if the data starts with GZIP magic number, False otherwise.
-              Returns False if data has fewer than 2 bytes.
+        bool: True if the data starts with GZIP magic number, False otherwise (including when data has fewer than 2 bytes).
     """
     return len(data) >= 2 and data[:2] == b'\x1f\x8b'  # GZIP magic number
 
@@ -192,12 +191,10 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         pkg (Dict[str, Any]): The package metadata dictionary with 'author', 'package_name', 'version'.
 
     Returns:
-        Path: Path object to the installed package directory. May be undefined if
-              the package cannot be located and FileNotFoundError is caught.
+        Path: Path object to the installed package directory.
 
-    Note:
-        If the package cannot be located after installation, an error is logged
-        but the function continues and may return an undefined dest_dir variable.
+    Raises:
+        FileNotFoundError: If the package cannot be located after installation.
     """
     logger.info(f"Installing package: {package}")
     install_package(package, skip_env=True)
@@ -208,10 +205,7 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         dest_dir = Path(INSTALLATION_DIR) / author / package_name / version
     else:
         package_dir = Path(INSTALLATION_DIR) / author / package_name
-        try:
-            dest_dir = get_latest_version_dir(package_dir)
-        except FileNotFoundError:
-            logger.error(f"Package not found: {author}/{package_name}")
+        dest_dir = get_latest_version_dir(package_dir)
     return dest_dir
     
 
