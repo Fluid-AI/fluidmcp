@@ -146,10 +146,11 @@ def wait_for_server_ready(proc, timeout=TEST_TIMEOUT):
         timeout: Maximum time to wait in seconds
 
     Returns:
-        bool: True if server is ready, False if timeout or process failed
+        bool: True if server is ready
 
     Raises:
-        AssertionError: If process terminates before printing READY
+        AssertionError: If server process terminates early or does not become
+            ready within the specified timeout
     """
     start_time = time.perf_counter()
     while time.perf_counter() - start_time < timeout:
