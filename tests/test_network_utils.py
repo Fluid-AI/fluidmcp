@@ -16,7 +16,7 @@ Note on Testing Strategy:
     1. Tests are integration-level (not pure unit tests)
     2. Tests may be affected by system state (ports in use)
     3. Tests use ephemeral ports and cleanup to avoid conflicts
-    4. Helper servers are spawned in threads for realistic testing
+    4. Helper servers are spawned in subprocesses for realistic testing
 
     Port Ranges:
     - Valid ports: 1-65535 (0 is reserved)
@@ -26,9 +26,9 @@ Note on Testing Strategy:
 
     Tests use high port numbers (50000+) to avoid conflicts with system services.
 
-Thread Safety:
-    Tests that spawn servers use threading with proper cleanup in finally blocks
-    to ensure server threads are terminated even if tests fail.
+Subprocess Management:
+    Tests that spawn servers use subprocesses with proper cleanup in finally blocks
+    to ensure server processes are terminated even if tests fail.
 """
 
 import socket
@@ -68,13 +68,13 @@ def wait_for_condition(condition_func, timeout=TEST_TIMEOUT, interval=0.1):
         # Wait for PID to be available
         success = wait_for_condition(lambda: get_pid_on_port(port) is not None)
     """
-    elapsed = 0.0
-    while elapsed < timeout:
+    start_time = time.perf_counter()
+    while True:
         if condition_func():
             return True
+        if time.perf_counter() - start_time >= timeout:
+            return False
         time.sleep(interval)
-        elapsed += interval
-    return False
 
 
 def start_test_server(port, duration=3):
@@ -151,7 +151,6 @@ class TestIsPortInUse:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(('', port))
-                s.close()
             except OSError:
                 pytest.skip(f"Port {port} is already in use on this system")
 
@@ -164,17 +163,13 @@ class TestIsPortInUse:
         port = 54322
 
         # Create a listening socket
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind(('', port))
             server_socket.listen(1)
 
             # Port should now be in use
             assert is_port_in_use(port) is True
-        finally:
-            server_socket.close()
 
     def test_port_becomes_free_after_socket_close(self):
         """Test that a port becomes free after closing the socket"""
@@ -202,10 +197,8 @@ class TestIsPortInUse:
         """Test that is_port_in_use can be called multiple times on the same port"""
         port = 54327  # Use a port close to the working test
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             # Bind to all interfaces ('') so is_port_in_use can connect via localhost
             server_socket.bind(('', port))
             # Use higher backlog to allow multiple connection attempts
@@ -218,18 +211,14 @@ class TestIsPortInUse:
             assert is_port_in_use(port) is True
             assert is_port_in_use(port) is True
             assert is_port_in_use(port) is True
-        finally:
-            server_socket.close()
 
     def test_different_ports(self):
         """Test checking multiple different ports"""
         port1 = 54335
         port2 = 54336
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             # Bind to all interfaces ('') so is_port_in_use can connect via localhost
             server_socket.bind(('', port1))
             server_socket.listen(1)
@@ -237,8 +226,6 @@ class TestIsPortInUse:
             # port1 is in use, port2 is free
             assert is_port_in_use(port1) is True
             assert is_port_in_use(port2) is False
-        finally:
-            server_socket.close()
 
 
 class TestFindFreePort:
@@ -330,7 +317,7 @@ class TestFindFreePort:
         # Mark all ports as taken
         taken_ports = {50500, 50501}
 
-        with pytest.raises(RuntimeError, match="No free ports available"):
+        with pytest.raises(RuntimeError, match="No free ports available in the range"):
             find_free_port(start, end, taken_ports)
 
     def test_raises_error_when_range_exhausted(self):
@@ -351,7 +338,7 @@ class TestFindFreePort:
             socket2.listen(1)
 
             # Should raise RuntimeError
-            with pytest.raises(RuntimeError, match="No free ports available"):
+            with pytest.raises(RuntimeError, match="No free ports available in the range"):
                 find_free_port(start, end)
         finally:
             socket1.close()
@@ -405,7 +392,6 @@ class TestFindFreePort:
         taken_ports.add(port3)
 
         # All ports should be different
-        assert port1 != port2 != port3
         assert len({port1, port2, port3}) == 3
 
 
@@ -461,10 +447,8 @@ class TestGetPidOnPort:
         """Test that get_pid_on_port returns an integer PID for an occupied port"""
         port = 52001
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind(('', port))
             server_socket.listen(1)
 
@@ -473,18 +457,14 @@ class TestGetPidOnPort:
             # Should return an integer PID (our own process in this case)
             assert isinstance(pid, int)
             assert pid > 0
-        finally:
-            server_socket.close()
 
     def test_returns_current_process_pid(self):
         """Test that get_pid_on_port returns the current process PID when we bind a port"""
         port = 52002
         current_pid = os.getpid()
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind(('', port))
             server_socket.listen(1)
 
@@ -495,8 +475,6 @@ class TestGetPidOnPort:
 
             # Should return our current process PID
             assert pid == current_pid
-        finally:
-            server_socket.close()
 
     def test_with_subprocess_server(self):
         """Test get_pid_on_port with an actual subprocess listening on a port"""
@@ -618,10 +596,8 @@ class TestEdgeCases:
         """Test that is_port_in_use works correctly with concurrent checks"""
         port = 56100
 
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind(('', port))
             # Use higher backlog to allow multiple connection attempts
             server_socket.listen(10)
@@ -637,8 +613,6 @@ class TestEdgeCases:
             # All checks should return True
             assert all(results)
             assert len(results) == 5
-        finally:
-            server_socket.close()
 
     def test_find_free_port_with_mostly_taken_ports(self):
         """Test find_free_port when most ports in range are taken"""
@@ -692,18 +666,12 @@ class TestEdgeCases:
         port = 55300
 
         # Create multiple sockets but only bind one to the port
-        socket1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket3 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM), \
+             socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket2, \
+             socket.socket(socket.AF_INET, socket.SOCK_STREAM):
+            socket2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             socket2.bind(('', port))
             socket2.listen(1)
 
             # Port should be detected as in use
             assert is_port_in_use(port) is True
-        finally:
-            socket1.close()
-            socket2.close()
-            socket3.close()
