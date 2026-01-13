@@ -18,15 +18,33 @@ INSTALL_BASE = os.environ.get("MCP_INSTALLATION_DIR", Path.cwd() / ".fmcp-packag
 proxy_port = int(os.environ.get("MCP_FASTAPI_PORT", "8080"))
 
 def parse_package_string(package_str) -> dict:
-    '''
-    Parses a package string in the format "author/name@version" or "name@version".
-    
+    """Parse a package string into its component parts.
+
+    Supported formats:
+        "author/name@version" -> Full specification
+        "author/name" -> Defaults version to 'latest'
+        "name@version" -> Defaults author to 'default'
+        "name" -> Defaults both to 'default' and 'latest'
+
+    Regex Pattern:
+        (?:(?P<author>[^/]+)/)?(?P<name>[^@]+)(?:@(?P<version>.+))?
+        - (?:(?P<author>[^/]+)/)? : Optional author followed by '/'
+        - (?P<name>[^@]+) : Required package name (anything except '@')
+        - (?:@(?P<version>.+))? : Optional '@version'
+
     Args:
-        package_str (str): The package string to parse.
-    
+        package_str (str): Package string to parse.
+
     Returns:
-        dict: A dictionary containing the author, name, and version.
-    '''
+        dict: Dictionary with keys 'author', 'package_name', 'version'.
+
+    Raises:
+        ValueError: If package_str doesn't match the expected format.
+
+    Example:
+        >>> parse_package_string("fluidai/filesystem@1.0.0")
+        {'author': 'fluidai', 'package_name': 'filesystem', 'version': '1.0.0'}
+    """
     # Regular expression to match the package string format
     pattern = r'(?:(?P<author>[^/]+)/)?(?P<name>[^@]+)(?:@(?P<version>.+))?'
     match = re.match(pattern, package_str)
@@ -42,38 +60,55 @@ def parse_package_string(package_str) -> dict:
     }
 
 def is_tar_gz(data: bytes) -> bool:
-    '''
-    Check if the data is a tar.gz file.
-    args :
-        data (bytes): The data to check.
-    returns:
-        bool: True if the data is a tar.gz file, False otherwise.
-    '''
-    return data[:2] == b'\x1f\x8b'  # GZIP magic number
+    """Check if the data is a tar.gz file.
+
+    Args:
+        data (bytes): Raw file bytes to check.
+
+    Returns:
+        bool: True if the data starts with GZIP magic number, False otherwise (including when data has fewer than 2 bytes).
+    """
+    return len(data) >= 2 and data[:2] == b'\x1f\x8b'  # GZIP magic number
 
 def is_json(data: bytes) -> bool:
-    '''
-    Check if the data is a JSON file.
-    args :
-        data (bytes): The data to check.
-    returns:
-        bool: True if the data is a JSON file, False otherwise.'''
+    """Check if the data is a JSON file.
+
+    Args:
+        data (bytes): Raw file bytes to check.
+
+    Returns:
+        bool: True if the data is a JSON file, False otherwise.
+    """
     return data.lstrip().startswith(b'{')  # JSON starts with {
 
 def install_package(package_str, skip_env=False):
-    '''
-    Installs a package from the MCP registry.
-    
+    """Install an MCP package from the Fluid MCP registry.
+
+    Installation Flow:
+        1. Parse package string and build registry request
+        2. Fetch package metadata and pre-signed S3 URL from registry
+        3. Download package content from S3
+        4. Detect file type (tar.gz or JSON metadata)
+        5. Extract/save to installation directory
+        6. Prompt for environment variables (unless skip_env=True)
+
     Args:
-        package_str (str): The package string to install.
-        skip_env (bool): Whether to skip writing environment keys during installation.
-    
+        package_str (str): The package string to install (e.g., "author/package@version").
+        skip_env (bool): If True, skip prompting for environment variables during installation.
+                         Used in master mode or batch installations.
+
     Returns:
         None
-    '''
+
+    Raises:
+        Exception: If an unknown file type is received from S3.
+
+    Note:
+        Most errors are logged and handled gracefully with early returns rather than exceptions.
+    """
     
     # Form the headers and payload for the API request
-    headers,payload ,pkg =make_registry_request(package_str,auth=False)
+    headers, payload, pkg = make_registry_request(package_str, auth=False)
     
     try:
         logger.info("Installing package from Fluid MCP registry")
@@ -90,6 +125,9 @@ def install_package(package_str, skip_env=False):
         try:
             # Extract the pre-signed URL from the response
             s3_url = response.json().get("pre_signed_url")
+            if not s3_url:
+                logger.error("Registry response missing pre_signed_url")
+                return
             logger.debug(f"S3 URL: {s3_url[:100]}...")
             # Download file from S3
             s3_response = requests.get(s3_url)
@@ -130,24 +168,34 @@ def install_package(package_str, skip_env=False):
         logger.exception("Installation failed")
 
 def package_exists(dest_dir: Path) -> bool:
-    """Check if the destination directory exists.
-    args :
+    """Check if the package destination directory exists.
+
+    Args:
         dest_dir (Path): The path to the destination directory.
-    returns:
+
+    Returns:
         bool: True if the directory exists, False otherwise.
     """
     return dest_dir.exists()
 
-def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str, Any]) -> str:
-    '''
-    Installs a package from a listed by a file.
-    args :
+def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str, Any]) -> Path:
+    """Install a package listed in a configuration file.
+
+    This is a helper function used when installing packages from a config file
+    or master configuration. It calls install_package() with skip_env=True and
+    then locates the installed package directory.
+
+    Args:
         package (str): The package string to install.
-        INSTALLATION_DIR (str): The installation directory.
-        pkg (Dict[str, Any]): The package metadata.
-    returns:
-        dest_dir (str): The destination directory of the installed package.
-    '''
+        INSTALLATION_DIR (str): The installation directory base path.
+        pkg (Dict[str, Any]): The package metadata dictionary with 'author', 'package_name', 'version'.
+
+    Returns:
+        Path: Path object to the installed package directory.
+
+    Raises:
+        FileNotFoundError: If the package cannot be located after installation.
+    """
     logger.info(f"Installing package: {package}")
     install_package(package, skip_env=True)
     # Find installed package directory
@@ -157,18 +205,36 @@ def install_package_from_file(package: str, INSTALLATION_DIR: str, pkg: Dict[str
         dest_dir = Path(INSTALLATION_DIR) / author / package_name / version
     else:
         package_dir = Path(INSTALLATION_DIR) / author / package_name
-        try:
-            dest_dir = get_latest_version_dir(package_dir)
-        except FileNotFoundError:
-            logger.error(f"Package not found: {author}/{package_name}")
+        dest_dir = get_latest_version_dir(package_dir)
     return dest_dir
     
 
-def make_registry_request(package_str: str,auth: bool) -> Dict[str, Any]:
+def make_registry_request(package_str: str, auth: bool) -> tuple:
+    """Build HTTP headers, payload, and package metadata for registry API requests.
+
+    This function prepares the data needed to interact with the FluidMCP registry API.
+    It parses the package string, constructs the JSON payload, and optionally adds
+    authentication headers. It does not perform any HTTP requests itself.
+
+    Registry API Interaction:
+        - Endpoint: MCP_FETCH_URL environment variable (default: https://registry.fluidmcp.com/fetch-mcp-package)
+        - HTTP method: Determined by the caller (this function only prepares request data)
+        - Authentication: Optional bearer token from MCP_TOKEN environment variable
+
+    Args:
+        package_str (str): The package string to parse (e.g., "author/package@version").
+        auth (bool): If True, include Authorization header with MCP_TOKEN.
+
+    Returns:
+        tuple: (headers, payload, pkg_dict) where:
+            - headers (dict): Dict with Content-Type and optional Authorization
+            - payload (dict): Dict with author, package_name, version for API
+            - pkg_dict (dict): Parsed package dictionary from parse_package_string()
+    """
     # Parse the package string to extract author, name, and version
     pkg = parse_package_string(package_str)
     logger.info(f"Installing {pkg['author']}/{pkg['package_name']}@{pkg['version']}")
-    
+
     # Payload for the API request to fetch the package
     payload = {
         "author": pkg['author'],
@@ -185,17 +251,22 @@ def make_registry_request(package_str: str,auth: bool) -> Dict[str, Any]:
     if auth:
         headers["Authorization"] = AUTH_TOKEN
 
-    return headers, payload ,pkg
+    return headers, payload, pkg
 
 def replace_package_metadata_from_package_name(package_name: str) -> Dict[str, Any]:
-    '''
-    Replaces the package metadata json with the package name.
-    args :
-        package_name (str): The package name to replace.
-    returns:
-        Dict[str, Any]: The updated package metadata.
-    '''
-    headers, payload ,pkg = make_registry_request(package_name, auth=True)
+    """Fetch package metadata from the registry for a given package name.
+
+    This function queries the FluidMCP registry metadata endpoint to retrieve
+    the full package configuration without downloading the package itself.
+
+    Args:
+        package_name (str): The package string (e.g., "author/package@version").
+
+    Returns:
+        Dict[str, Any]: Dictionary containing the package metadata from the registry.
+                        Returns empty dict {} if the request fails.
+    """
+    headers, payload, pkg = make_registry_request(package_name, auth=True)
     
     try:
         # Make the API request to fetch the package metadata

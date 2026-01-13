@@ -1,0 +1,23 @@
+{
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port",
+        "8001",
+        "--host",
+        "0.0.0.0",
+        "--device",
+        "cpu",
+        "--dtype",
+        "float32"
+      ],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      }
+    }
+  }
+}

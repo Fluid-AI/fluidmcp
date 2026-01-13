@@ -623,7 +623,7 @@ def main():
     validate_parser = subparsers.add_parser("validate", help="Validate MCP configuration without running servers")
     validate_parser.add_argument("package", type=str, help="<package[@version]> or path to JSON file when --file is used")
     validate_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
-    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)") 
+    validate_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # serve command - NEW: Run as standalone API server
     serve_parser = subparsers.add_parser("serve", help="Run as standalone API server (backend starts without MCP servers)")
