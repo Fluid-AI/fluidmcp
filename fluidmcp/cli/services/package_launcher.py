@@ -19,7 +19,24 @@ import uvicorn
 import threading
 import time
 
-security = HTTPBearer(auto_error=False)
+# Import centralized authentication from auth module
+try:
+    from ..auth import get_token
+except ImportError:
+    # Fallback if auth module not available
+    from fastapi.security import HTTPBearer
+    security = HTTPBearer(auto_error=False)
+
+    def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+        """Fallback bearer token validation if auth module not available"""
+        bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+        secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+        if not secure_mode:
+            return None
+        if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+            raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
+        return credentials.credentials
 
 def is_placeholder_value(value: str) -> bool:
     """
@@ -50,17 +67,6 @@ def is_placeholder_value(value: str) -> bool:
     ]
 
     return any(placeholder_indicators)
-
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-    
-    if not secure_mode:
-        return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
 
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     """

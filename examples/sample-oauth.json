@@ -1,0 +1,26 @@
+{
+  "oauth": {
+    "enabled": true,
+    "provider": "keycloak",
+    "keycloak": {
+      "server_url": "https://keycloak.example.com",
+      "realm": "mcp-realm",
+      "well_known_url": "https://keycloak.example.com/realms/mcp-realm/.well-known/openid-configuration"
+    },
+    "jwt_validation": {
+      "validate_signature": true,
+      "validate_expiry": true,
+      "validate_audience": true,
+      "audience": ["fluidmcp-gateway", "mcp-api"],
+      "required_scopes": ["mcp:read", "mcp:write"],
+      "issuer": "https://keycloak.example.com/realms/mcp-realm"
+    },
+    "caching": {
+      "enable_token_cache": true,
+      "token_cache_ttl_seconds": 300,
+      "enable_jwks_cache": true,
+      "jwks_cache_ttl_seconds": 3600
+    },
+    "fallback_to_bearer": true
+  }
+}

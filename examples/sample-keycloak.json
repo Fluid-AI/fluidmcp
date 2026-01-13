@@ -1,0 +1,9 @@
+{
+  "keycloak": {
+    "server_url": "https://keycloak.example.com",
+    "realm": "mcp-realm",
+    "audience": ["fluidmcp-gateway"],
+    "required_scopes": ["mcp:read", "mcp:write"],
+    "fallback_to_bearer": true
+  }
+}

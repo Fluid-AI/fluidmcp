@@ -164,6 +164,272 @@ Available sample files:
 - `examples/sample-metadata.json` - Package metadata example
 - `examples/sample-config-with-api-keys.json` - Config with API keys
 - `examples/README.md` - Detailed testing guide
+- `examples/sample-oauth.json` - Full OAuth configuration example
+- `examples/sample-oauth-minimal.json` - Minimal OAuth configuration
+- `examples/sample-keycloak.json` - Simplified Keycloak configuration format
+- `examples/keycloak-setup-guide.md` - Comprehensive Keycloak setup guide
+
+## OAuth 2.0 (OIDC) Authentication
+
+FluidMCP supports OAuth 2.0 authentication with Keycloak using JWT validation. FluidMCP acts as a **resource server** that validates JWT access tokens - it does NOT implement OAuth callback endpoints (those are handled by external clients like ChatGPT Apps SDK).
+
+### Architecture Overview
+
+**Resource Server Pattern:**
+- External clients (ChatGPT, Apps SDK, curl) obtain JWT tokens from Keycloak
+- FluidMCP validates JWT tokens using OIDC discovery and JWKS
+- No custom OAuth callback endpoints (ChatGPT handles OAuth flows)
+- Stateless JWT validation for scalability
+
+**Key Features:**
+- JWT signature validation using JWKS public keys
+- Claims validation: expiry, audience, issuer, scopes
+- Token caching (5-minute TTL) for performance
+- JWKS caching (1-hour TTL)
+- Bearer token fallback for backward compatibility
+- MCP metadata endpoint for OAuth configuration
+
+### Authentication Module Structure
+
+All authentication code is organized in `fluidmcp/cli/auth/`:
+
+```
+fluidmcp/cli/auth/
+├── __init__.py              # Package exports
+├── config.py                # OAuth configuration models and loading
+├── oidc_discovery.py        # OIDC discovery client (fetch JWKS, issuer)
+├── jwt_validator.py         # JWT signature and claims validation
+├── token_cache.py           # Token validation result caching
+├── jwks_cache.py            # JWKS public key caching
+├── middleware.py            # FastAPI authentication middleware
+└── mcp_metadata.py          # MCP resource metadata endpoint
+```
+
+### Supported Grant Types
+
+1. **Client Credentials (M2M)**: Machine-to-machine authentication
+2. **Authorization Code + PKCE**: User authentication via external clients (ChatGPT, web apps)
+
+Note: FluidMCP only **validates** tokens from these flows. External clients handle the OAuth authorization process.
+
+### Configuration
+
+Create `.oauth.json` in the same directory as your MCP configuration file:
+
+**Full Configuration:**
+```json
+{
+  "oauth": {
+    "enabled": true,
+    "provider": "keycloak",
+    "keycloak": {
+      "server_url": "https://keycloak.example.com",
+      "realm": "mcp-realm",
+      "well_known_url": "https://keycloak.example.com/realms/mcp-realm/.well-known/openid-configuration"
+    },
+    "jwt_validation": {
+      "validate_signature": true,
+      "validate_expiry": true,
+      "validate_audience": true,
+      "audience": ["fluidmcp-gateway"],
+      "required_scopes": ["mcp:read", "mcp:write"],
+      "issuer": "https://keycloak.example.com/realms/mcp-realm"
+    },
+    "caching": {
+      "enable_token_cache": true,
+      "token_cache_ttl_seconds": 300,
+      "enable_jwks_cache": true,
+      "jwks_cache_ttl_seconds": 3600
+    },
+    "fallback_to_bearer": true
+  }
+}
+```
+
+**Minimal Configuration** (uses sensible defaults):
+```json
+{
+  "oauth": {
+    "enabled": true,
+    "provider": "keycloak",
+    "keycloak": {
+      "server_url": "https://keycloak.example.com",
+      "realm": "mcp-realm"
+    },
+    "jwt_validation": {
+      "audience": ["fluidmcp-gateway"]
+    }
+  }
+}
+```
+
+**Simplified Keycloak Format** (`.keycloak.json`):
+```json
+{
+  "keycloak": {
+    "server_url": "https://keycloak.example.com",
+    "realm": "mcp-realm",
+    "audience": ["fluidmcp-gateway"]
+  }
+}
+```
+
+### Configuration Discovery
+
+FluidMCP auto-discovers OAuth configuration in this order:
+
+1. `FMCP_OAUTH_CONFIG` environment variable
+2. Same directory as main config (`.oauth.json` or `.keycloak.json`)
+3. `~/.fmcp/.oauth.json`
+4. `./.fmcp/.oauth.json`
+
+### Usage Examples
+
+#### Client Credentials Flow (M2M)
+
+```bash
+# Step 1: Get JWT from Keycloak
+TOKEN=$(curl -X POST https://keycloak.example.com/realms/mcp-realm/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=machine-client" \
+  -d "client_secret=YOUR_CLIENT_SECRET" \
+  -d "scope=mcp:read mcp:write" \
+  | jq -r '.access_token')
+
+# Step 2: Run FluidMCP with OAuth
+fluidmcp run examples/sample-config.json --file --start-server
+
+# Step 3: Use JWT with FluidMCP
+curl -X POST http://localhost:8099/filesystem/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
+```
+
+#### Authorization Code + PKCE Flow
+
+External clients (ChatGPT, web apps) handle the authorization flow and present the JWT to FluidMCP:
+
+```bash
+# External client obtains JWT via Authorization Code + PKCE
+# (handled by ChatGPT Apps SDK or custom implementation)
+
+# Client presents JWT to FluidMCP
+curl -X POST http://localhost:8099/filesystem/mcp \
+  -H "Authorization: Bearer $OBTAINED_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
+```
+
+### MCP Metadata Endpoint
+
+FluidMCP exposes OAuth configuration for MCP clients:
+
+```bash
+curl http://localhost:8099/.well-known/mcp-oauth-config | jq
+```
+
+**Response:**
+```json
+{
+  "authorization_endpoint": "https://keycloak.example.com/realms/mcp-realm/protocol/openid-connect/auth",
+  "token_endpoint": "https://keycloak.example.com/realms/mcp-realm/protocol/openid-connect/token",
+  "issuer": "https://keycloak.example.com/realms/mcp-realm",
+  "jwks_uri": "https://keycloak.example.com/realms/mcp-realm/protocol/openid-connect/certs",
+  "supported_grant_types": ["authorization_code", "client_credentials"],
+  "pkce_required": true,
+  "scopes_supported": ["openid", "mcp:read", "mcp:write"],
+  "audience": ["fluidmcp-gateway"],
+  "required_scopes": ["mcp:read", "mcp:write"]
+}
+```
+
+### Authentication Status Endpoint
+
+Check current authentication configuration:
+
+```bash
+curl http://localhost:8099/.well-known/auth-status | jq
+```
+
+### Keycloak Setup
+
+FluidMCP requires specific Keycloak configuration:
+
+**Critical Requirements:**
+1. **Audience Mapper**: Must be configured on each client scope to add `aud` claim
+   - Without this, JWT validation will fail with "Invalid audience"
+2. **Client Scopes**: Create `mcp:read` and `mcp:write` scopes
+3. **M2M Client**: Configure with Client Credentials grant
+4. **Web Client**: Configure with Authorization Code flow and PKCE (S256)
+
+**Detailed Setup Guide:** See [examples/keycloak-setup-guide.md](examples/keycloak-setup-guide.md)
+
+### JWT Validation Process
+
+FluidMCP validates JWTs in this order:
+
+1. **Check token cache** (5-minute TTL) - Fast path (~0.1ms)
+2. **Decode JWT header** - Extract `kid` (key ID)
+3. **Fetch public key** - From JWKS cache using `kid`
+4. **Verify signature** - Using RS256/ES256 public key (~1-2ms)
+5. **Validate claims**:
+   - `exp` (expiry): Token not expired
+   - `aud` (audience): Must match configured audience
+   - `iss` (issuer): Must match Keycloak issuer
+   - `scope`: Must contain required scopes
+6. **Cache result** - Store validated claims for 5 minutes
+7. **Return claims** - Allow request through
+
+### Performance Characteristics
+
+- **Token cache hit**: ~0.1ms (immediate return)
+- **Token cache miss**: ~1-2ms (full JWT validation)
+- **JWKS cache hit**: ~0.5ms (public key lookup)
+- **JWKS cache miss**: ~50-100ms (fetch from Keycloak, happens once per hour)
+
+### Backward Compatibility
+
+OAuth is completely opt-in:
+- No OAuth config = No OAuth validation (existing behavior preserved)
+- `fallback_to_bearer: true` = Try bearer token if JWT validation fails
+- Bearer token authentication still works independently
+
+### Why No Token Introspection?
+
+FluidMCP uses JWT validation instead of token introspection for:
+
+1. **Performance**: JWT validation is local (~1-2ms) vs introspection network call (~50-100ms)
+2. **Scalability**: No dependency on Keycloak availability after JWKS cached
+3. **Standard practice**: JWT validation is the norm for OAuth 2.0 resource servers
+
+**Token revocation**: Use short-lived JWTs (5-15 minutes) + token cache TTL for effective revocation.
+
+### Security Considerations
+
+1. **HTTPS Required**: Always use HTTPS in production for Keycloak and FluidMCP
+2. **Short Token Lifetimes**: 15-minute access tokens + 5-minute cache = effective revocation
+3. **Audience Validation**: Prevents token reuse across different APIs
+4. **Scope Validation**: Enforces fine-grained permissions
+5. **No Secrets in FluidMCP**: Client secrets stay with OAuth clients, not resource servers
+
+### Troubleshooting
+
+**"Invalid audience" error:**
+- Ensure audience mapper is configured in Keycloak client scopes
+- Verify `audience` in `.oauth.json` matches mapper configuration
+
+**"Missing required scopes" error:**
+- Ensure client scopes (`mcp:read`, `mcp:write`) are added to client's default scopes
+- Check token contains required scopes: `echo $TOKEN | cut -d. -f2 | base64 -d | jq`
+
+**"Invalid issuer" error:**
+- Verify `issuer` in `.oauth.json` matches Keycloak's `issuer` from discovery endpoint
+
+**OIDC discovery fails:**
+- Check Keycloak is accessible and well-known URL format is correct
+- Format: `{server_url}/realms/{realm}/.well-known/openid-configuration`
 
 ## Environment Variables
 

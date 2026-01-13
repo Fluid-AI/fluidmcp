@@ -44,6 +44,7 @@ class ServerConfig:
     sync_to_s3: bool = False  # Whether to sync metadata to S3
     source_type: str = "package"  # For logging: package, installed, file, s3_url, s3_master
     metadata_path: Optional[Path] = None  # Path to save/load metadata
+    oauth_config: Optional[Any] = None  # OAuth configuration from .oauth.json (if present)
 
 
 def resolve_config(args) -> ServerConfig:
@@ -220,12 +221,16 @@ def resolve_from_file(file_path: str) -> ServerConfig:
             config = json.load(f)
         servers = config.get("mcpServers", {})
 
+    # Try to load OAuth configuration from same directory
+    oauth_config = _load_oauth_config_if_present(file_path)
+
     return ServerConfig(
         servers=servers,
         needs_install=needs_install,
         sync_to_s3=False,
         source_type="file",
-        metadata_path=file_path
+        metadata_path=file_path,
+        oauth_config=oauth_config
     )
 
 
@@ -578,3 +583,44 @@ def _preprocess_metadata_file(metadata_path: Path) -> None:
     # Write back
     with open(metadata_path, 'w') as f:
         json.dump(raw_metadata, f, indent=2)
+
+
+def _load_oauth_config_if_present(main_config_path: Path) -> Optional[Any]:
+    """
+    Try to load OAuth configuration from the same directory as main config.
+
+    Searches for .oauth.json or .keycloak.json in the same directory as
+    the main configuration file.
+
+    Args:
+        main_config_path: Path to main configuration file
+
+    Returns:
+        OAuthConfig if found and valid, None otherwise
+    """
+    try:
+        from ..auth import find_oauth_config, load_oauth_config
+
+        # Try to find OAuth config in same directory as main config
+        oauth_config_path = find_oauth_config(main_config_path)
+
+        if oauth_config_path:
+            logger.debug(f"Found OAuth configuration at: {oauth_config_path}")
+            oauth_config = load_oauth_config(oauth_config_path)
+
+            if oauth_config:
+                logger.info("OAuth configuration loaded successfully")
+                return oauth_config
+            else:
+                logger.debug("OAuth configuration found but invalid or disabled")
+                return None
+        else:
+            logger.debug("No OAuth configuration found")
+            return None
+
+    except ImportError:
+        logger.debug("OAuth module not available")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to load OAuth configuration: {e}")
+        return None

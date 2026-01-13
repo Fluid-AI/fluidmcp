@@ -1,0 +1,13 @@
+{
+  "oauth": {
+    "enabled": true,
+    "provider": "keycloak",
+    "keycloak": {
+      "server_url": "https://keycloak.example.com",
+      "realm": "mcp-realm"
+    },
+    "jwt_validation": {
+      "audience": ["fluidmcp-gateway"]
+    }
+  }
+}

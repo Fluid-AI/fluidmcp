@@ -40,7 +40,7 @@ _server_processes: Dict[str, subprocess.Popen] = {}
 _process_locks: Dict[str, threading.Lock] = {}
 
 
-def run_servers(
+async def run_servers(
     config: ServerConfig,
     secure_mode: bool = False,
     token: Optional[str] = None,
@@ -69,6 +69,23 @@ def run_servers(
         os.environ["FMCP_SECURE_MODE"] = "true"
         logger.info("Secure mode enabled with bearer token")
 
+    # Initialize OAuth JWT validator if OAuth config is present
+    jwt_validator = None
+    if config.oauth_config:
+        try:
+            from ..auth import JWTValidator, set_jwt_validator, get_mcp_metadata_endpoint, create_auth_status_endpoint
+
+            logger.info("Initializing OAuth JWT validator")
+            jwt_validator = JWTValidator(config.oauth_config)
+            await jwt_validator.initialize()
+            set_jwt_validator(jwt_validator)
+            logger.info("OAuth JWT validation enabled")
+        except ImportError:
+            logger.warning("OAuth module not available - OAuth authentication disabled")
+        except Exception as e:
+            logger.error(f"Failed to initialize OAuth JWT validator: {e}")
+            logger.warning("Continuing without OAuth authentication")
+
     # Install packages if needed
     if config.needs_install:
         logger.debug(f"Configuration requires package installation")
@@ -93,6 +110,21 @@ def run_servers(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add OAuth metadata endpoints if OAuth is configured
+    if jwt_validator:
+        try:
+            from ..auth import get_mcp_metadata_endpoint, create_auth_status_endpoint
+
+            metadata_router = get_mcp_metadata_endpoint(jwt_validator)
+            app.include_router(metadata_router, tags=["oauth"])
+            logger.debug("Added MCP OAuth metadata endpoint")
+
+            status_router = create_auth_status_endpoint(jwt_validator)
+            app.include_router(status_router, tags=["oauth"])
+            logger.debug("Added authentication status endpoint")
+        except Exception as e:
+            logger.warning(f"Failed to add OAuth metadata endpoints: {e}")
     # Launch each server and add its router
     launched_servers = 0
     logger.debug(f"Processing {len(config.servers)} server(s) from configuration")

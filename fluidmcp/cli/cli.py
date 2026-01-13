@@ -629,15 +629,16 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
         )
         logger.debug(f"Single package mode determined: {single_package}")
 
-        # Run the servers
-        run_servers(
+        # Run the servers (async function)
+        import asyncio
+        asyncio.run(run_servers(
             config=config,
             secure_mode=secure_mode,
             token=token,
             single_package=single_package,
             start_server=getattr(args, 'start_server', False),
             force_reload=getattr(args, 'force_reload', False)
-        )
+        ))
 
     except FileNotFoundError:
         logger.exception("File not found error")
