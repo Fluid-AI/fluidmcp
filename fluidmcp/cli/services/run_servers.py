@@ -30,7 +30,6 @@ from fastapi import Depends
 from fastapi.responses import JSONResponse
 from typing import Dict
 import subprocess
-import asyncio
 import threading
 
 # Default ports
@@ -48,6 +47,9 @@ _llm_endpoints: Dict[str, Dict[str, str]] = {}
 
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
+
+# Thread-safety lock for LLM registry operations
+_llm_registry_lock = threading.Lock()
 
 # Shared HTTP client for LLM proxy (connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None
@@ -160,20 +162,23 @@ def run_servers(
     if config.llm_models:
         logger.info(f"Launching {len(config.llm_models)} LLM model(s)...")
         llm_processes = launch_llm_models(config.llm_models)
-        _llm_processes.update(llm_processes)
 
-        # Register LLM endpoints only for successfully running processes
-        for model_id in llm_processes.keys():
-            model_config = config.llm_models[model_id]
-            endpoints = model_config.get("endpoints", {})
-            base_url = endpoints.get("base_url", f"http://localhost:8001/v1")
-            _llm_endpoints[model_id] = {
-                "base_url": base_url,
-                "chat": endpoints.get("chat", "/chat/completions"),
-                "completions": endpoints.get("completions", "/completions"),
-                "models": endpoints.get("models", "/models"),
-            }
-            logger.info(f"Registered LLM endpoints for '{model_id}' at {base_url}")
+        # Thread-safe update of LLM registries
+        with _llm_registry_lock:
+            _llm_processes.update(llm_processes)
+
+            # Register LLM endpoints only for successfully running processes
+            for model_id in llm_processes.keys():
+                model_config = config.llm_models[model_id]
+                endpoints = model_config.get("endpoints", {})
+                base_url = endpoints.get("base_url", f"http://localhost:8001/v1")
+                _llm_endpoints[model_id] = {
+                    "base_url": base_url,
+                    "chat": endpoints.get("chat", "/chat/completions"),
+                    "completions": endpoints.get("completions", "/completions"),
+                    "models": endpoints.get("models", "/models"),
+                }
+                logger.info(f"Registered LLM endpoints for '{model_id}' at {base_url}")
 
         # Add OpenAI proxy routes if any models started successfully
         if _llm_endpoints:
@@ -358,8 +363,17 @@ async def _proxy_llm_request(
         logger.error(f"LLM timeout for {model_id}: {e}")
         raise HTTPException(504, f"LLM backend timeout: {str(e)}")
     except httpx.HTTPStatusError as e:
-        logger.error(f"LLM HTTP error for {model_id}: {e}")
-        raise HTTPException(e.response.status_code, f"LLM backend error: {e.response.text}")
+        response_text = e.response.text or ""
+        logger.error(f"LLM HTTP error for {model_id}: {e}. Status: {e.response.status_code}, Response: {response_text}")
+
+        # Truncate large error messages to prevent response size issues
+        max_error_length = 1000
+        if len(response_text) > max_error_length:
+            truncated_text = response_text[:max_error_length] + "... [truncated]"
+        else:
+            truncated_text = response_text
+
+        raise HTTPException(e.response.status_code, f"LLM backend error: {truncated_text}")
     except httpx.HTTPError as e:
         logger.error(f"LLM proxy error for {model_id}: {e}")
         raise HTTPException(502, f"LLM backend error: {str(e)}")
@@ -661,12 +675,12 @@ def _cleanup_resources():
         # Close shared HTTP client
         if _http_client is not None:
             try:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(_http_client.aclose())
-                else:
-                    asyncio.run(_http_client.aclose())
+                # Use a fresh event loop for cleanup to ensure it completes
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(_http_client.aclose())
+                finally:
+                    loop.close()
             except Exception as e:
                 logger.debug(f"Error closing HTTP client: {e}")
             _http_client = None
@@ -764,13 +778,8 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
     # atexit handlers can be registered multiple times safely - Python handles deduplication
     atexit.register(_cleanup_resources)
 
-    # Signal handlers replace previous handlers, so this is safe to call multiple times
-    def signal_handler(signum, frame):
-        _cleanup_resources()
-        raise KeyboardInterrupt()
-
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+    # Let uvicorn handle SIGTERM/SIGINT for graceful shutdown
+    # atexit will handle LLM cleanup when the process exits
 
     logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
     logger.info("Press Ctrl+C to stop the server")

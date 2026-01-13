@@ -274,7 +274,7 @@ Response (OpenAI format)
 1. Check GPU availability: `nvidia-smi`
 2. Verify vLLM installation: `python -c "import vllm; print(vllm.__version__)"`
 3. For gated models, set `HUGGING_FACE_HUB_TOKEN`
-4. Check vLLM logs in stderr
+4. Check FluidMCP logs for vLLM launch errors. Note: vLLM stderr/stdout are not captured by FluidMCP. To debug vLLM startup issues, run `vllm serve ...` manually in a separate terminal
 
 ### Server Not Responding
 
