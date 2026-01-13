@@ -53,6 +53,7 @@ _llm_registry_lock = threading.Lock()
 
 # Shared HTTP client for LLM proxy (connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None
+_http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async use
 
 # Cleanup synchronization
 _cleanup_lock = threading.Lock()
@@ -307,10 +308,19 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
 
 
 async def _get_http_client() -> httpx.AsyncClient:
-    """Get or create shared HTTP client for LLM proxy requests."""
-    global _http_client
+    """Get or create shared HTTP client for LLM proxy requests (thread-safe)."""
+    global _http_client, _http_client_lock
+
+    # Initialize lock on first use (can't do at module level due to event loop requirements)
+    if _http_client_lock is None:
+        _http_client_lock = asyncio.Lock()
+
+    # Double-check locking pattern for thread-safe singleton
     if _http_client is None:
-        _http_client = httpx.AsyncClient(timeout=120.0)
+        async with _http_client_lock:
+            if _http_client is None:  # Double check after acquiring lock
+                _http_client = httpx.AsyncClient(timeout=120.0)
+
     return _http_client
 
 
@@ -340,8 +350,14 @@ async def _proxy_llm_request(
     if model_id not in _llm_endpoints:
         raise HTTPException(404, f"LLM model '{model_id}' not configured")
 
-    # Check if process is still running
-    if model_id in _llm_processes and not _llm_processes[model_id].is_running():
+    # Check if process is still running (thread-safe read)
+    with _llm_registry_lock:
+        if model_id in _llm_processes:
+            process = _llm_processes[model_id]
+        else:
+            process = None
+
+    if process is not None and not process.is_running():
         raise HTTPException(503, f"LLM model '{model_id}' process is not running")
 
     endpoint_config = _llm_endpoints[model_id]
@@ -414,10 +430,15 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     async def llm_status():
         """Get status of all configured LLM models."""
         status = {}
+
+        # Thread-safe read of LLM processes
+        with _llm_registry_lock:
+            processes_snapshot = {k: v for k, v in _llm_processes.items()}
+
         for model_id in _llm_endpoints:
             is_running = False
-            if model_id in _llm_processes:
-                is_running = _llm_processes[model_id].is_running()
+            if model_id in processes_snapshot:
+                is_running = processes_snapshot[model_id].is_running()
 
             status[model_id] = {
                 "configured": True,
@@ -678,12 +699,23 @@ def _cleanup_resources():
                 # Use a fresh event loop for cleanup to ensure it completes
                 loop = asyncio.new_event_loop()
                 try:
+                    asyncio.set_event_loop(loop)
                     loop.run_until_complete(_http_client.aclose())
+                except Exception as e:
+                    logger.warning(f"Error during HTTP client cleanup: {e}")
+                    # Try one more time in case of transient error
+                    try:
+                        loop.run_until_complete(_http_client.aclose())
+                    except Exception:
+                        logger.debug("Second cleanup attempt failed, forcing close")
                 finally:
-                    loop.close()
-            except Exception as e:
-                logger.debug(f"Error closing HTTP client: {e}")
-            _http_client = None
+                    try:
+                        loop.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing event loop: {e}")
+            finally:
+                # Always clear the reference even if cleanup failed
+                _http_client = None
 
         _cleanup_done = True
 
