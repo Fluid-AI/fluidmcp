@@ -30,6 +30,7 @@ class LLMProcess:
         self.model_id = model_id
         self.config = config
         self.process: Optional[subprocess.Popen] = None
+        self._stderr_log: Optional[object] = None  # File handle for stderr logging
 
     def start(self) -> subprocess.Popen:
         """
@@ -52,15 +53,27 @@ class LLMProcess:
         logger.info(f"Starting LLM model '{self.model_id}'")
         logger.debug(f"Command: {' '.join(full_command)}")
 
+        # Create log file for stderr to aid debugging startup failures
+        log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        stderr_log_path = os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+
         try:
+            # Open stderr log file for capturing process errors
+            stderr_log = open(stderr_log_path, "a")
+
             self.process = subprocess.Popen(
                 full_command,
                 env=env,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr_log,
             )
 
+            # Store log file handle for cleanup in stop()
+            self._stderr_log = stderr_log
+
             logger.info(f"LLM model '{self.model_id}' started (PID: {self.process.pid})")
+            logger.debug(f"Stderr log: {stderr_log_path}")
             return self.process
 
         except FileNotFoundError:
@@ -96,6 +109,14 @@ class LLMProcess:
             self.process.kill()
             self.process.wait()
             logger.info(f"LLM model '{self.model_id}' force killed")
+        finally:
+            # Close stderr log file if it was opened
+            if self._stderr_log is not None:
+                try:
+                    self._stderr_log.close()
+                    self._stderr_log = None
+                except Exception as e:
+                    logger.debug(f"Error closing stderr log: {e}")
 
     def is_running(self) -> bool:
         """Check if the LLM process is still running."""

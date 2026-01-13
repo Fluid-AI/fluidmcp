@@ -38,7 +38,6 @@ client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"
 # Constants for LLM operations
 MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
 HTTP_CLIENT_TIMEOUT = 120.0  # Timeout in seconds for LLM HTTP requests
-PROCESS_START_DELAY = 0.5  # Delay in seconds to allow LLM process to initialize
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -62,6 +61,50 @@ _http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async u
 # Cleanup synchronization
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
+
+
+def _extract_port_from_args(args) -> int:
+    """
+    Extract port number from command line arguments.
+
+    Supports common CLI patterns:
+    - --port 8001
+    - -p 8001
+    - --port=8001
+
+    Args:
+        args: Command line arguments (list or string)
+
+    Returns:
+        int: Extracted port number, or 8001 as default
+    """
+    # Normalize args to list of strings
+    if isinstance(args, str):
+        args_list = args.split()
+    else:
+        try:
+            args_list = list(args)
+        except TypeError:
+            return 8001
+
+    # Try to extract port from common CLI patterns
+    for i, arg in enumerate(args_list):
+        # Pattern: --port 8001 or -p 8001
+        if arg in ("--port", "-p") and i + 1 < len(args_list):
+            try:
+                return int(args_list[i + 1])
+            except ValueError:
+                continue
+        # Pattern: --port=8001
+        if arg.startswith("--port="):
+            _, _, value = arg.partition("=")
+            try:
+                return int(value)
+            except ValueError:
+                continue
+
+    # Default fallback
+    return 8001
 
 
 def run_servers(
@@ -177,7 +220,15 @@ def run_servers(
             for model_id in llm_processes.keys():
                 model_config = config.llm_models[model_id]
                 endpoints = model_config.get("endpoints", {})
-                base_url = endpoints.get("base_url", f"http://localhost:8001/v1")
+
+                # Determine base_url with smart port extraction
+                base_url = endpoints.get("base_url")
+                if not base_url:
+                    # Try to extract port from command args
+                    port = _extract_port_from_args(model_config.get("args", []))
+                    base_url = f"http://localhost:{port}/v1"
+                    logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
+
                 _llm_endpoints[model_id] = {
                     "base_url": base_url,
                     "chat": endpoints.get("chat", "/chat/completions"),
@@ -401,29 +452,29 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     """
     Add OpenAI-compatible proxy routes for LLM models.
 
-    Creates endpoints:
-    - POST /{model_id}/v1/chat/completions
-    - POST /{model_id}/v1/completions
-    - GET /{model_id}/v1/models
+    Creates endpoints with /llm prefix to avoid conflicts with MCP server names:
+    - POST /llm/{model_id}/v1/chat/completions
+    - POST /llm/{model_id}/v1/completions
+    - GET /llm/{model_id}/v1/models
 
     Args:
         app: FastAPI application instance
     """
     from fastapi import Request, HTTPException
 
-    @app.post("/{model_id}/v1/chat/completions", tags=["llm"])
+    @app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
     async def proxy_chat_completions(model_id: str, request: Request):
         """Proxy OpenAI chat completions to LLM backend."""
         body = await request.json()
         return await _proxy_llm_request(model_id, "chat", "POST", body)
 
-    @app.post("/{model_id}/v1/completions", tags=["llm"])
+    @app.post("/llm/{model_id}/v1/completions", tags=["llm"])
     async def proxy_completions(model_id: str, request: Request):
         """Proxy OpenAI completions to LLM backend."""
         body = await request.json()
         return await _proxy_llm_request(model_id, "completions", "POST", body)
 
-    @app.get("/{model_id}/v1/models", tags=["llm"])
+    @app.get("/llm/{model_id}/v1/models", tags=["llm"])
     async def proxy_models(model_id: str):
         """Proxy models list endpoint to LLM backend."""
         return await _proxy_llm_request(model_id, "models", "GET")
@@ -703,13 +754,9 @@ def _cleanup_resources():
                 try:
                     asyncio.set_event_loop(loop)
                     loop.run_until_complete(_http_client.aclose())
+                    logger.debug("HTTP client closed successfully")
                 except Exception as e:
                     logger.warning(f"Error during HTTP client cleanup: {e}")
-                    # Try one more time in case of transient error
-                    try:
-                        loop.run_until_complete(_http_client.aclose())
-                    except Exception:
-                        logger.debug("Second cleanup attempt failed, forcing close")
                 finally:
                     try:
                         loop.close()
