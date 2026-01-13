@@ -76,15 +76,6 @@ class DatabaseManager:
             True if connection successful, False otherwise
         """
         try:
-            # Configure SSL options for MongoDB Atlas
-            # Use certifi for trusted CA certificates
-            self.client = AsyncIOMotorClient(
-                self.mongodb_uri,
-                serverSelectionTimeoutMS=10000,  # 10 second timeout for Atlas
-                connectTimeoutMS=10000,
-                socketTimeoutMS=10000,
-                tlsCAFile=certifi.where(),  # Use certifi's CA bundle for proper SSL validation
-                retryWrites=True  # Enable retry writes for Atlas
             # Get timeout values from environment or use defaults
             server_timeout = int(os.getenv("FMCP_MONGODB_SERVER_TIMEOUT", "30000"))
             connect_timeout = int(os.getenv("FMCP_MONGODB_CONNECT_TIMEOUT", "10000"))
