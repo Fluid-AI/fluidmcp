@@ -1,20 +1,23 @@
-# vLLM MCP Server
+# vLLM Integration with FluidMCP
 
-A native MCP (Model Context Protocol) server that exposes vLLM's high-performance LLM inference capabilities through stdin/stdout JSON-RPC protocol.
+vLLM integration for FluidMCP using **OpenAI-compatible API endpoints**, not MCP JSON-RPC.
 
-## Overview
+---
 
-The vLLM MCP server runs vLLM directly in-process and communicates via the MCP protocol, allowing FluidMCP to orchestrate LLM inference alongside other MCP tools.
+## ⚠️ Architecture Change
 
-**This is a minimal initial implementation (PR #1)** focused on core functionality. Additional features like session management, chat templates, and advanced error handling will be added in subsequent PRs.
+**Previous approach** (Deprecated): Custom MCP wrapper with JSON-RPC
+**Current approach** (Recommended): Native vLLM OpenAI server with HTTP proxy
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.8 or higher (vLLM supports Python 3.8-3.11)
-- CUDA-capable GPU (optional but strongly recommended)
-- vLLM package installed: `pip install vllm>=0.6.0`
+- Python 3.8+ (vLLM supports Python 3.8-3.12)
+- CUDA-capable GPU (strongly recommended)
+- vLLM installed: `pip install vllm>=0.6.0`
 
 ### Installation
 
@@ -22,7 +25,7 @@ The vLLM MCP server runs vLLM directly in-process and communicates via the MCP p
 pip install vllm>=0.6.0
 ```
 
-For gated models (Llama, Mistral, etc.), set your Hugging Face token:
+For gated models (Llama, Mistral, etc.):
 ```bash
 export HUGGING_FACE_HUB_TOKEN="your_token_here"
 ```
@@ -33,308 +36,333 @@ export HUGGING_FACE_HUB_TOKEN="your_token_here"
 fluidmcp run examples/vllm-config.json --file --start-server
 ```
 
-The server will start on `http://localhost:8099`. Access the Swagger UI at `http://localhost:8099/docs`.
+### Testing
 
-### Testing the Server
-
-Test via FluidMCP's unified gateway:
+**OpenAI-compatible endpoint**:
 ```bash
-curl -X POST http://localhost:8099/vllm/mcp \
+curl -X POST http://localhost:8099/vllm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "chat_completion",
-      "arguments": {
-        "messages": [
-          {"role": "user", "content": "What is machine learning?"}
-        ],
-        "max_tokens": 100
-      }
-    }
+    "model": "facebook/opt-125m",
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "max_tokens": 100,
+    "temperature": 0.7
   }'
 ```
 
+---
+
 ## Configuration
 
-Configuration is done via environment variables in the config file.
+### New Structure (`llmModels` section)
 
-### Model Configuration
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VLLM_MODEL_NAME` | Hugging Face model name | `facebook/opt-125m` |
-| `VLLM_TENSOR_PARALLEL_SIZE` | Number of GPUs for tensor parallelism | `1` |
-| `VLLM_GPU_MEMORY_UTILIZATION` | GPU memory ratio (0.0-1.0) | `0.9` |
-| `VLLM_MAX_MODEL_LEN` | Maximum context length | Model's default |
-| `VLLM_DTYPE` | Data type: float16, bfloat16, float32 | `float16` |
-
-### Logging
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VLLM_LOG_LEVEL` | Log level: DEBUG, INFO, WARNING, ERROR | `INFO` |
-
-## API Reference
-
-### MCP Tools
-
-#### `chat_completion`
-
-Generate text completions using vLLM.
-
-**Parameters:**
-- `messages` (required): Array of message objects with `role` and `content`
-  - `role`: "system", "user", or "assistant"
-  - `content`: Message text (stripped of leading/trailing whitespace, must be non-empty)
-- `temperature` (optional): Sampling temperature (0.0 < temperature ≤ 2.0), default: 0.7. Must be greater than 0.0 to avoid division by zero in sampling.
-- `max_tokens` (optional): Maximum tokens to generate, default: 512
-- `top_p` (optional): Nucleus sampling parameter (0.0-1.0), default: 1.0
-
-**Example:**
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "chat_completion",
-    "arguments": {
-      "messages": [
-        {"role": "user", "content": "Explain quantum computing in simple terms"}
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port", "8001",
+        "--host", "0.0.0.0",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.9",
+        "--max-model-len", "2048",
+        "--dtype", "float16"
       ],
-      "temperature": 0.7,
-      "max_tokens": 200
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      }
     }
   }
 }
 ```
 
-**Response:**
+### vLLM CLI Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--port` | Port for vLLM server | `8001` |
+| `--host` | Host to bind to | `0.0.0.0` |
+| `--tensor-parallel-size` | Number of GPUs | `1` |
+| `--gpu-memory-utilization` | GPU memory ratio (0.0-1.0) | `0.9` |
+| `--max-model-len` | Maximum context length | Model default |
+| `--dtype` | Data type: float16, bfloat16, float32 | `float16` |
+
+---
+
+## API Reference
+
+### OpenAI-Compatible Endpoints
+
+FluidMCP proxies requests to vLLM's native OpenAI server:
+
+#### `POST /{model_id}/v1/chat/completions`
+
+**Request**:
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "Quantum computing is..."
-      }
-    ]
+  "model": "facebook/opt-125m",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Explain quantum computing"}
+  ],
+  "temperature": 0.7,
+  "max_tokens": 200,
+  "top_p": 1.0
+}
+```
+
+**Response**:
+```json
+{
+  "id": "cmpl-...",
+  "object": "chat.completion",
+  "created": 1234567890,
+  "model": "facebook/opt-125m",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Quantum computing is..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 50,
+    "total_tokens": 70
   }
 }
 ```
 
-## Prompt Formatting
+#### `POST /{model_id}/v1/completions`
 
-**Current implementation uses naive concatenation:**
+**Request**:
+```json
+{
+  "model": "facebook/opt-125m",
+  "prompt": "Once upon a time",
+  "max_tokens": 100,
+  "temperature": 0.8
+}
 ```
-role: content
-role: content
-```
 
-This works for base models like OPT and GPT-2. For chat-tuned models (Llama, Mistral, etc.), automatic chat template detection will be added in a future PR.
+#### `GET /{model_id}/v1/models`
 
-**Security Note**: The naive concatenation approach does NOT prevent prompt injection attacks. If you're exposing this server to untrusted user input in production, implement proper input validation and consider using model-specific chat templates via `tokenizer.apply_chat_template()`.
+List available models from vLLM server.
+
+---
 
 ## Examples
 
 ### Basic Chat Completion
 
 ```bash
-curl -X POST http://localhost:8099/vllm/mcp \
+curl -X POST http://localhost:8099/vllm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "chat_completion",
-      "arguments": {
-        "messages": [
-          {"role": "user", "content": "What is Python?"}
-        ],
-        "max_tokens": 100
-      }
-    }
+    "model": "facebook/opt-125m",
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
 
 ### With System Prompt
 
 ```bash
-curl -X POST http://localhost:8099/vllm/mcp \
+curl -X POST http://localhost:8099/vllm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "chat_completion",
-      "arguments": {
-        "messages": [
-          {"role": "system", "content": "You are a helpful coding assistant."},
-          {"role": "user", "content": "How do I sort a list in Python?"}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 200
-      }
-    }
+    "model": "facebook/opt-125m",
+    "messages": [
+      {"role": "system", "content": "You are a coding assistant."},
+      {"role": "user", "content": "How do I sort a list in Python?"}
+    ],
+    "temperature": 0.3,
+    "max_tokens": 200
   }'
 ```
 
-### Custom Sampling Parameters
+### Using OpenAI Python SDK
 
-```bash
-curl -X POST http://localhost:8099/vllm/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/call",
-    "params": {
-      "name": "chat_completion",
-      "arguments": {
-        "messages": [
-          {"role": "user", "content": "Write a creative story"}
-        ],
-        "temperature": 0.9,
-        "top_p": 0.95,
-        "max_tokens": 300
-      }
-    }
-  }'
+```python
+from openai import OpenAI
+
+# Point to FluidMCP gateway
+client = OpenAI(
+    base_url="http://localhost:8099/vllm/v1",
+    api_key="dummy"  # Not used, but required by SDK
+)
+
+response = client.chat.completions.create(
+    model="facebook/opt-125m",
+    messages=[
+        {"role": "user", "content": "What is Python?"}
+    ],
+    max_tokens=100
+)
+
+print(response.choices[0].message.content)
 ```
 
-## Development
-
-### Direct Testing (Without FluidMCP)
-
-Test the MCP server directly via stdin/stdout:
-
-```bash
-# Test initialize
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | python vllm_server.py
-
-# Test tools/list
-echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python vllm_server.py
-
-# Test chat completion
-echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chat_completion","arguments":{"messages":[{"role":"user","content":"Hello"}],"max_tokens":50}}}' | python vllm_server.py
-```
-
-### Debugging
-
-Enable DEBUG logging:
-```json
-{
-  "env": {
-    "VLLM_LOG_LEVEL": "DEBUG"
-  }
-}
-```
-
-Logs go to stderr (stdout is reserved for MCP protocol).
+---
 
 ## Architecture
 
 ### How It Works
 
 ```
-FluidMCP Gateway
-       ↓
-subprocess.Popen(["python", "vllm_server.py"])
-       ↓
-   stdin/stdout JSON-RPC
-       ↓
-vLLM MCP Server (vllm_server.py)
-       ↓
-  vLLM Python API (LLM, SamplingParams)
-       ↓
-    GPU Inference
+Client Request (OpenAI format)
+    ↓
+FluidMCP Gateway (port 8099)
+    ↓
+POST /vllm/v1/chat/completions
+    ↓
+HTTP Proxy (httpx)
+    ↓
+vLLM Native Server (port 8001)
+    ↓
+/v1/chat/completions
+    ↓
+Response (OpenAI format)
 ```
 
 ### Key Design Decisions
 
-1. **Native MCP Protocol**: Uses stdin/stdout JSON-RPC (no HTTP layer in vLLM server)
-2. **Direct vLLM Integration**: Runs vLLM Python API in-process
-3. **Sequential Processing**: One request at a time for simplicity
-4. **Minimal Core**: Focus on getting basic functionality working first
+1. **OpenAI Protocol**: Uses industry-standard OpenAI API, not custom JSON-RPC
+2. **Native vLLM Server**: Runs `vllm serve` command, no custom wrapper
+3. **HTTP Proxy**: Simple httpx forwarding, ~70 lines of code
+4. **Separate Section**: `llmModels` vs `mcpServers` for semantic clarity
+
+---
+
+## Why This Approach?
+
+### ✅ Benefits
+
+| Feature | Old (MCP wrapper) | New (OpenAI proxy) |
+|---------|-------------------|-------------------|
+| **Protocol** | Custom JSON-RPC | OpenAI standard |
+| **Streaming** | ❌ No | ✅ Yes (native SSE) |
+| **SDK Support** | ❌ None | ✅ All OpenAI SDKs |
+| **Glue Code** | 400 lines | 70 lines |
+| **Maintenance** | Custom protocol | Zero (uses vLLM native) |
+| **Ecosystem** | Isolated | LangChain, LiteLLM, etc. |
+
+### 🎯 Alignment with Industry
+
+- **OpenAI SDK**: Works out of box
+- **LangChain**: Full compatibility
+- **LiteLLM**: Unified interface
+- **Any tool expecting OpenAI API**: Just works
+
+---
 
 ## Troubleshooting
 
 ### Model Loading Fails
 
-**Error:**
-```
-Failed to initialize vLLM: <error details>
-```
+**Error**: `Failed to start LLM model 'vllm'`
 
-**Solutions:**
-1. Check if you have a CUDA-capable GPU: `nvidia-smi`
+**Solutions**:
+1. Check GPU availability: `nvidia-smi`
 2. Verify vLLM installation: `python -c "import vllm; print(vllm.__version__)"`
 3. For gated models, set `HUGGING_FACE_HUB_TOKEN`
-4. Check available GPU memory: `nvidia-smi`
-
-### Slow Inference (CPU Mode)
-
-vLLM is designed for GPU inference. CPU mode is extremely slow and may not work properly.
-
-**Solution:** Use a GPU-enabled environment.
+4. Check vLLM logs in stderr
 
 ### Server Not Responding
 
-**Check logs:**
-```bash
-# Logs go to stderr when running via FluidMCP
-# Check FluidMCP gateway logs for vLLM server output
-```
+**Issue**: Requests timeout or return 502
 
-**Common issues:**
-1. **Model still loading** - Large models can take 30s-10min to initialize depending on model size and hardware. Look for "Ready to accept MCP requests" in logs to confirm startup is complete.
-2. **Long-running request blocking queue** - Sequential processing means one slow request blocks all others.
-3. **Server crashed** - Check logs for errors during initialization or request processing.
+**Solutions**:
+1. Wait for model loading (30s-10min depending on model size)
+2. Check vLLM process is running: `ps aux | grep vllm`
+3. Verify port 8001 is not blocked: `curl http://localhost:8001/v1/models`
+4. Check FluidMCP logs for proxy errors
 
-**Note on Startup**: vLLM initialization is synchronous and blocking. There is no explicit health check endpoint. Monitor stderr logs for "Ready to accept MCP requests" to confirm the server is fully initialized.
+### CPU Mode Performance
 
-## Current Limitations
+vLLM is designed for GPUs. CPU mode is extremely slow.
 
-**This is v1.0 (PR #1) - minimal core functionality:**
+**Solution**: Use a GPU-enabled environment or consider Ollama for CPU inference.
 
-- ❌ **No Sessions**: Each request is independent, no conversation history
-- ❌ **No Chat Templates**: Uses naive prompt concatenation (works for base models only)
-- ❌ **No Advanced Error Handling**: Basic error messages only
-- ❌ **No Parallel Requests**: Sequential processing only
-- ❌ **No Model Introspection**: No model_info tool yet
-
-## Planned Features (Future PRs)
-
-- **PR #2**: Automatic chat template detection for chat-tuned models
-- **PR #3**: Session management with conversation history
-- **PR #4**: Advanced features (warm-up, model_info tool, CUDA OOM detection, graceful shutdown)
-- **PR #5**: Documentation and examples
+---
 
 ## Performance Tips
 
-1. **Use GPU**: vLLM requires GPU for good performance
-2. **Adjust Memory**: Tune `VLLM_GPU_MEMORY_UTILIZATION` based on model size
-3. **Model Choice**: Smaller models (125M-1.3B) are faster for testing
-4. **Context Length**: Reduce `VLLM_MAX_MODEL_LEN` if you don't need long contexts
+1. **Use GPU**: vLLM requires GPU for production performance
+2. **Adjust Memory**: Tune `--gpu-memory-utilization` (0.7-0.95)
+3. **Model Size**: Smaller models (125M-1.3B) faster for testing
+4. **Context Length**: Reduce `--max-model-len` if you don't need long contexts
+5. **Batch Size**: vLLM automatically batches concurrent requests
+
+---
+
+## Migration from Old Approach
+
+### Old Config (Deprecated)
+
+```json
+{
+  "mcpServers": {
+    "vllm": {
+      "command": "python",
+      "args": ["vllm_server.py"],
+      "env": {
+        "VLLM_MODEL_NAME": "facebook/opt-125m"
+      }
+    }
+  }
+}
+```
+
+### New Config (Current)
+
+```json
+{
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": ["serve", "facebook/opt-125m", "--port", "8001"],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      }
+    }
+  }
+}
+```
+
+### API Change
+
+**Old** (JSON-RPC):
+```bash
+POST /vllm/mcp
+{"jsonrpc": "2.0", "method": "tools/call", "params": {...}}
+```
+
+**New** (OpenAI):
+```bash
+POST /vllm/v1/chat/completions
+{"model": "...", "messages": [...]}
+```
+
+---
 
 ## Contributing
 
-Contributions are welcome! This is a minimal initial implementation - see "Planned Features" section for what's coming next.
+This is the recommended architecture for LLM integration in FluidMCP. Future LLM integrations (Ollama, LM Studio, etc.) should follow this same pattern.
 
-## License
-
-This project is licensed under the same terms as FluidMCP. See the LICENSE file in the repository root.
+---
 
 ## Support
 
-For issues and questions:
-- GitHub Issues: Please open an issue in the FluidMCP repository
-- Documentation: This README
-- FluidMCP Docs: See the main FluidMCP documentation
+- **GitHub Issues**: https://github.com/fluidai/fluidmcp/issues
+- **Documentation**: This README
+- **vLLM Docs**: https://docs.vllm.ai

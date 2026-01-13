@@ -14,6 +14,7 @@ from loguru import logger
 
 from fastapi import FastAPI
 import uvicorn
+import httpx
 
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
@@ -21,6 +22,7 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
+from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Depends
 from fastapi.responses import JSONResponse
@@ -35,6 +37,12 @@ client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
+
+# LLM process registry
+_llm_processes: Dict[str, LLMProcess] = {}
+
+# LLM endpoint configurations
+_llm_endpoints: Dict[str, Dict[str, str]] = {}
 
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
@@ -138,6 +146,27 @@ def run_servers(
         return
 
     logger.info(f"Successfully launched {launched_servers} MCP server(s)")
+
+    # Launch LLM models if configured
+    if config.llm_models:
+        logger.info(f"Launching {len(config.llm_models)} LLM model(s)...")
+        llm_processes = launch_llm_models(config.llm_models)
+        _llm_processes.update(llm_processes)
+
+        # Register LLM endpoints
+        for model_id, model_config in config.llm_models.items():
+            endpoints = model_config.get("endpoints", {})
+            base_url = endpoints.get("base_url", f"http://localhost:8001/v1")
+            _llm_endpoints[model_id] = {
+                "base_url": base_url,
+                "chat": endpoints.get("chat", "/chat/completions"),
+                "completions": endpoints.get("completions", "/completions"),
+                "models": endpoints.get("models", "/models"),
+            }
+            logger.info(f"Registered LLM endpoints for '{model_id}' at {base_url}")
+
+        # Add OpenAI proxy routes
+        _add_llm_proxy_routes(app)
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
@@ -257,6 +286,79 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
     except Exception as e:
         logger.error(f"Error querying tools from {server_name}: {e}")
         return (server_name, [], str(e))
+
+
+def _add_llm_proxy_routes(app: FastAPI) -> None:
+    """
+    Add OpenAI-compatible proxy routes for LLM models.
+
+    Creates endpoints:
+    - POST /{model_id}/v1/chat/completions
+    - POST /{model_id}/v1/completions
+    - GET /{model_id}/v1/models
+
+    Args:
+        app: FastAPI application instance
+    """
+    from fastapi import Request, HTTPException
+
+    @app.post("/{model_id}/v1/chat/completions", tags=["llm"])
+    async def proxy_chat_completions(model_id: str, request: Request):
+        """Proxy OpenAI chat completions to LLM backend."""
+        if model_id not in _llm_endpoints:
+            raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+        endpoint_config = _llm_endpoints[model_id]
+        url = f"{endpoint_config['base_url']}{endpoint_config['chat']}"
+        body = await request.json()
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            try:
+                response = await client.post(url, json=body)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                logger.error(f"LLM proxy error for {model_id}: {e}")
+                raise HTTPException(502, f"LLM backend error: {str(e)}")
+
+    @app.post("/{model_id}/v1/completions", tags=["llm"])
+    async def proxy_completions(model_id: str, request: Request):
+        """Proxy OpenAI completions to LLM backend."""
+        if model_id not in _llm_endpoints:
+            raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+        endpoint_config = _llm_endpoints[model_id]
+        url = f"{endpoint_config['base_url']}{endpoint_config['completions']}"
+        body = await request.json()
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            try:
+                response = await client.post(url, json=body)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                logger.error(f"LLM proxy error for {model_id}: {e}")
+                raise HTTPException(502, f"LLM backend error: {str(e)}")
+
+    @app.get("/{model_id}/v1/models", tags=["llm"])
+    async def proxy_models(model_id: str):
+        """Proxy models list endpoint to LLM backend."""
+        if model_id not in _llm_endpoints:
+            raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+        endpoint_config = _llm_endpoints[model_id]
+        url = f"{endpoint_config['base_url']}{endpoint_config['models']}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                logger.error(f"LLM proxy error for {model_id}: {e}")
+                raise HTTPException(502, f"LLM backend error: {str(e)}")
+
+    logger.info(f"Added OpenAI proxy routes for {len(_llm_endpoints)} LLM model(s)")
 
 
 def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
