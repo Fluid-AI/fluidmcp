@@ -52,8 +52,8 @@ class LLMProcess:
             self.process = subprocess.Popen(
                 full_command,
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
 
             logger.info(f"LLM model '{self.model_id}' started (PID: {self.process.pid})")
@@ -128,14 +128,16 @@ def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
         try:
             process = LLMProcess(model_id, config)
             process.start()
-            processes[model_id] = process
 
             # Small delay to allow process to start
             time.sleep(0.5)
 
             if not process.is_running():
                 logger.error(f"LLM model '{model_id}' failed to start")
+                # Don't add failed processes to the dictionary
             else:
+                # Only add successfully running processes
+                processes[model_id] = process
                 logger.info(f"✓ LLM model '{model_id}' is running")
 
         except Exception as e:

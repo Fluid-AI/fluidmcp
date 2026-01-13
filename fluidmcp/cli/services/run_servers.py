@@ -49,6 +49,13 @@ _llm_endpoints: Dict[str, Dict[str, str]] = {}
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 
+# Shared HTTP client for LLM proxy (connection pooling)
+_http_client: Optional[httpx.AsyncClient] = None
+
+# Cleanup synchronization
+_cleanup_lock = threading.Lock()
+_cleanup_done = False
+
 
 def run_servers(
     config: ServerConfig,
@@ -155,8 +162,9 @@ def run_servers(
         llm_processes = launch_llm_models(config.llm_models)
         _llm_processes.update(llm_processes)
 
-        # Register LLM endpoints
-        for model_id, model_config in config.llm_models.items():
+        # Register LLM endpoints only for successfully running processes
+        for model_id in llm_processes.keys():
+            model_config = config.llm_models[model_id]
             endpoints = model_config.get("endpoints", {})
             base_url = endpoints.get("base_url", f"http://localhost:8001/v1")
             _llm_endpoints[model_id] = {
@@ -167,8 +175,11 @@ def run_servers(
             }
             logger.info(f"Registered LLM endpoints for '{model_id}' at {base_url}")
 
-        # Add OpenAI proxy routes
-        _add_llm_proxy_routes(app)
+        # Add OpenAI proxy routes if any models started successfully
+        if _llm_endpoints:
+            _add_llm_proxy_routes(app)
+        else:
+            logger.warning("No LLM models started successfully - skipping proxy routes")
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
@@ -290,6 +301,70 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
         return (server_name, [], str(e))
 
 
+async def _get_http_client() -> httpx.AsyncClient:
+    """Get or create shared HTTP client for LLM proxy requests."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=120.0)
+    return _http_client
+
+
+async def _proxy_llm_request(
+    model_id: str,
+    endpoint_key: str,
+    method: str = "POST",
+    body: Optional[dict] = None
+) -> dict:
+    """
+    Common proxy logic for LLM requests.
+
+    Args:
+        model_id: LLM model identifier
+        endpoint_key: Key in endpoints config ('chat', 'completions', 'models')
+        method: HTTP method (POST or GET)
+        body: Request body for POST requests
+
+    Returns:
+        Response JSON from LLM backend
+
+    Raises:
+        HTTPException: Various HTTP errors based on backend response
+    """
+    from fastapi import HTTPException
+
+    if model_id not in _llm_endpoints:
+        raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+    # Check if process is still running
+    if model_id in _llm_processes and not _llm_processes[model_id].is_running():
+        raise HTTPException(503, f"LLM model '{model_id}' process is not running")
+
+    endpoint_config = _llm_endpoints[model_id]
+    url = f"{endpoint_config['base_url']}{endpoint_config[endpoint_key]}"
+
+    client = await _get_http_client()
+
+    try:
+        if method == "POST":
+            response = await client.post(url, json=body)
+        else:  # GET
+            response = await client.get(url)
+        response.raise_for_status()
+        return response.json()
+    except httpx.ConnectError as e:
+        logger.error(f"LLM connection error for {model_id}: {e}")
+        raise HTTPException(503, f"LLM backend not ready or unreachable. The model may still be loading.")
+    except httpx.TimeoutException as e:
+        logger.error(f"LLM timeout for {model_id}: {e}")
+        raise HTTPException(504, f"LLM backend timeout: {str(e)}")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"LLM HTTP error for {model_id}: {e}")
+        raise HTTPException(e.response.status_code, f"LLM backend error: {e.response.text}")
+    except httpx.HTTPError as e:
+        logger.error(f"LLM proxy error for {model_id}: {e}")
+        raise HTTPException(502, f"LLM backend error: {str(e)}")
+
+
 def _add_llm_proxy_routes(app: FastAPI) -> None:
     """
     Add OpenAI-compatible proxy routes for LLM models.
@@ -307,97 +382,19 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     @app.post("/{model_id}/v1/chat/completions", tags=["llm"])
     async def proxy_chat_completions(model_id: str, request: Request):
         """Proxy OpenAI chat completions to LLM backend."""
-        if model_id not in _llm_endpoints:
-            raise HTTPException(404, f"LLM model '{model_id}' not configured")
-
-        # Check if process is still running
-        if model_id in _llm_processes and not _llm_processes[model_id].is_running():
-            raise HTTPException(503, f"LLM model '{model_id}' process is not running")
-
-        endpoint_config = _llm_endpoints[model_id]
-        url = f"{endpoint_config['base_url']}{endpoint_config['chat']}"
         body = await request.json()
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            try:
-                response = await client.post(url, json=body)
-                response.raise_for_status()
-                return response.json()
-            except httpx.ConnectError as e:
-                logger.error(f"LLM connection error for {model_id}: {e}")
-                raise HTTPException(503, f"LLM backend not ready or unreachable. The model may still be loading.")
-            except httpx.TimeoutException as e:
-                logger.error(f"LLM timeout for {model_id}: {e}")
-                raise HTTPException(504, f"LLM backend timeout: {str(e)}")
-            except httpx.HTTPStatusError as e:
-                logger.error(f"LLM HTTP error for {model_id}: {e}")
-                raise HTTPException(e.response.status_code, f"LLM backend error: {e.response.text}")
-            except httpx.HTTPError as e:
-                logger.error(f"LLM proxy error for {model_id}: {e}")
-                raise HTTPException(502, f"LLM backend error: {str(e)}")
+        return await _proxy_llm_request(model_id, "chat", "POST", body)
 
     @app.post("/{model_id}/v1/completions", tags=["llm"])
     async def proxy_completions(model_id: str, request: Request):
         """Proxy OpenAI completions to LLM backend."""
-        if model_id not in _llm_endpoints:
-            raise HTTPException(404, f"LLM model '{model_id}' not configured")
-
-        # Check if process is still running
-        if model_id in _llm_processes and not _llm_processes[model_id].is_running():
-            raise HTTPException(503, f"LLM model '{model_id}' process is not running")
-
-        endpoint_config = _llm_endpoints[model_id]
-        url = f"{endpoint_config['base_url']}{endpoint_config['completions']}"
         body = await request.json()
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            try:
-                response = await client.post(url, json=body)
-                response.raise_for_status()
-                return response.json()
-            except httpx.ConnectError as e:
-                logger.error(f"LLM connection error for {model_id}: {e}")
-                raise HTTPException(503, f"LLM backend not ready or unreachable. The model may still be loading.")
-            except httpx.TimeoutException as e:
-                logger.error(f"LLM timeout for {model_id}: {e}")
-                raise HTTPException(504, f"LLM backend timeout: {str(e)}")
-            except httpx.HTTPStatusError as e:
-                logger.error(f"LLM HTTP error for {model_id}: {e}")
-                raise HTTPException(e.response.status_code, f"LLM backend error: {e.response.text}")
-            except httpx.HTTPError as e:
-                logger.error(f"LLM proxy error for {model_id}: {e}")
-                raise HTTPException(502, f"LLM backend error: {str(e)}")
+        return await _proxy_llm_request(model_id, "completions", "POST", body)
 
     @app.get("/{model_id}/v1/models", tags=["llm"])
     async def proxy_models(model_id: str):
         """Proxy models list endpoint to LLM backend."""
-        if model_id not in _llm_endpoints:
-            raise HTTPException(404, f"LLM model '{model_id}' not configured")
-
-        # Check if process is still running
-        if model_id in _llm_processes and not _llm_processes[model_id].is_running():
-            raise HTTPException(503, f"LLM model '{model_id}' process is not running")
-
-        endpoint_config = _llm_endpoints[model_id]
-        url = f"{endpoint_config['base_url']}{endpoint_config['models']}"
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.json()
-            except httpx.ConnectError as e:
-                logger.error(f"LLM connection error for {model_id}: {e}")
-                raise HTTPException(503, f"LLM backend not ready or unreachable. The model may still be loading.")
-            except httpx.TimeoutException as e:
-                logger.error(f"LLM timeout for {model_id}: {e}")
-                raise HTTPException(504, f"LLM backend timeout: {str(e)}")
-            except httpx.HTTPStatusError as e:
-                logger.error(f"LLM HTTP error for {model_id}: {e}")
-                raise HTTPException(e.response.status_code, f"LLM backend error: {e.response.text}")
-            except httpx.HTTPError as e:
-                logger.error(f"LLM proxy error for {model_id}: {e}")
-                raise HTTPException(502, f"LLM backend error: {str(e)}")
+        return await _proxy_llm_request(model_id, "models", "GET")
 
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():
@@ -649,11 +646,32 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
 
 
 def _cleanup_resources():
-    """Cleanup all LLM processes on shutdown."""
-    if _llm_processes:
-        logger.info("Shutting down LLM processes...")
-        stop_all_llm_models(_llm_processes)
-        _llm_processes.clear()
+    """Cleanup all LLM processes on shutdown (thread-safe, idempotent)."""
+    global _cleanup_done, _http_client
+
+    with _cleanup_lock:
+        if _cleanup_done:
+            return
+
+        if _llm_processes:
+            logger.info("Shutting down LLM processes...")
+            stop_all_llm_models(_llm_processes)
+            _llm_processes.clear()
+
+        # Close shared HTTP client
+        if _http_client is not None:
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(_http_client.aclose())
+                else:
+                    asyncio.run(_http_client.aclose())
+            except Exception as e:
+                logger.debug(f"Error closing HTTP client: {e}")
+            _http_client = None
+
+        _cleanup_done = True
 
 
 async def _serve_async(app: FastAPI, port: int) -> None:
@@ -742,10 +760,17 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
             )
             return
 
-    # Register cleanup handlers for graceful shutdown
+    # Register cleanup handlers for graceful shutdown (only once)
+    # atexit handlers can be registered multiple times safely - Python handles deduplication
     atexit.register(_cleanup_resources)
-    signal.signal(signal.SIGTERM, lambda signum, frame: _cleanup_resources())
-    signal.signal(signal.SIGINT, lambda signum, frame: _cleanup_resources())
+
+    # Signal handlers replace previous handlers, so this is safe to call multiple times
+    def signal_handler(signum, frame):
+        _cleanup_resources()
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
     logger.info(f"Swagger UI available at: http://localhost:{port}/docs")
     logger.info("Press Ctrl+C to stop the server")

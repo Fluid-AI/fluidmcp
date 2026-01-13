@@ -15,7 +15,7 @@ vLLM integration for FluidMCP using **OpenAI-compatible API endpoints**, not MCP
 
 ### Prerequisites
 
-- Python 3.8+ (vLLM supports Python 3.8-3.12)
+- Python 3.9+ (vLLM supports Python 3.9-3.12)
 - CUDA-capable GPU (strongly recommended)
 - vLLM installed: `pip install vllm>=0.6.0`
 
