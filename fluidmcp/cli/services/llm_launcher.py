@@ -11,6 +11,10 @@ import time
 from typing import Dict, Any, Optional
 from loguru import logger
 
+# Constants
+DEFAULT_SHUTDOWN_TIMEOUT = 10  # Default seconds to wait for graceful shutdown
+PROCESS_START_DELAY = 0.5  # Seconds to wait for process initialization before status check
+
 
 class LLMProcess:
     """Manages a single LLM inference server process."""
@@ -66,13 +70,17 @@ class LLMProcess:
             logger.error(f"Failed to start LLM model '{self.model_id}': {e}")
             raise
 
-    def stop(self, timeout: int = 10):
+    def stop(self, timeout: Optional[int] = None):
         """
         Stop the LLM server gracefully.
 
         Args:
-            timeout: Seconds to wait for graceful shutdown before force kill
+            timeout: Seconds to wait for graceful shutdown before force kill.
+                If None, uses model config 'shutdown_timeout' or DEFAULT_SHUTDOWN_TIMEOUT.
         """
+        # Determine effective timeout: explicit arg > model config > default
+        if timeout is None:
+            timeout = self.config.get("shutdown_timeout", DEFAULT_SHUTDOWN_TIMEOUT)
         if not self.process:
             logger.warning(f"LLM model '{self.model_id}' process not running")
             return
@@ -129,8 +137,8 @@ def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
             process = LLMProcess(model_id, config)
             process.start()
 
-            # Small delay to allow process to start
-            time.sleep(0.5)
+            # Brief delay to allow process to initialize before checking status
+            time.sleep(PROCESS_START_DELAY)
 
             if not process.is_running():
                 logger.error(f"LLM model '{model_id}' failed to start")

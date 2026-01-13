@@ -6,7 +6,6 @@ regardless of the configuration source.
 """
 import os
 import json
-import signal
 import atexit
 import asyncio
 import time
@@ -35,6 +34,11 @@ import threading
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
 client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"))
+
+# Constants for LLM operations
+MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
+HTTP_CLIENT_TIMEOUT = 120.0  # Timeout in seconds for LLM HTTP requests
+PROCESS_START_DELAY = 0.5  # Delay in seconds to allow LLM process to initialize
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -152,12 +156,13 @@ def run_servers(
         except Exception:
             logger.exception(f"Error launching server '{server_name}'")
 
-    logger.debug(f"Total servers launched: {launched_servers}")
-    if launched_servers == 0:
-        logger.warning("No servers were successfully launched")
+    logger.debug(f"Total MCP servers launched: {launched_servers}")
+    if launched_servers == 0 and not config.llm_models:
+        logger.warning("No servers or LLM models configured - nothing to launch")
         return
 
-    logger.info(f"Successfully launched {launched_servers} MCP server(s)")
+    if launched_servers > 0:
+        logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
     # Launch LLM models if configured
     if config.llm_models:
@@ -319,7 +324,7 @@ async def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         async with _http_client_lock:
             if _http_client is None:  # Double check after acquiring lock
-                _http_client = httpx.AsyncClient(timeout=120.0)
+                _http_client = httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT)
 
     return _http_client
 
@@ -347,20 +352,18 @@ async def _proxy_llm_request(
     """
     from fastapi import HTTPException
 
-    if model_id not in _llm_endpoints:
+    # Thread-safe snapshot of endpoint and process info
+    with _llm_registry_lock:
+        endpoint_config = _llm_endpoints.get(model_id)
+        process = _llm_processes.get(model_id)
+
+    if endpoint_config is None:
         raise HTTPException(404, f"LLM model '{model_id}' not configured")
 
-    # Check if process is still running (thread-safe read)
-    with _llm_registry_lock:
-        if model_id in _llm_processes:
-            process = _llm_processes[model_id]
-        else:
-            process = None
-
+    # Check if process is still running (if registered)
     if process is not None and not process.is_running():
         raise HTTPException(503, f"LLM model '{model_id}' process is not running")
 
-    endpoint_config = _llm_endpoints[model_id]
     url = f"{endpoint_config['base_url']}{endpoint_config[endpoint_key]}"
 
     client = await _get_http_client()
@@ -383,9 +386,8 @@ async def _proxy_llm_request(
         logger.error(f"LLM HTTP error for {model_id}: {e}. Status: {e.response.status_code}, Response: {response_text}")
 
         # Truncate large error messages to prevent response size issues
-        max_error_length = 1000
-        if len(response_text) > max_error_length:
-            truncated_text = response_text[:max_error_length] + "... [truncated]"
+        if len(response_text) > MAX_ERROR_MESSAGE_LENGTH:
+            truncated_text = response_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
         else:
             truncated_text = response_text
 
@@ -431,19 +433,19 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         """Get status of all configured LLM models."""
         status = {}
 
-        # Thread-safe read of LLM processes
+        # Thread-safe snapshot of registries to avoid race conditions
         with _llm_registry_lock:
-            processes_snapshot = {k: v for k, v in _llm_processes.items()}
+            endpoints_snapshot = dict(_llm_endpoints)
+            processes_snapshot = dict(_llm_processes)
 
-        for model_id in _llm_endpoints:
-            is_running = False
-            if model_id in processes_snapshot:
-                is_running = processes_snapshot[model_id].is_running()
+        for model_id, endpoint_cfg in endpoints_snapshot.items():
+            process = processes_snapshot.get(model_id)
+            is_running = process.is_running() if process is not None else False
 
             status[model_id] = {
                 "configured": True,
                 "running": is_running,
-                "base_url": _llm_endpoints[model_id]["base_url"]
+                "base_url": endpoint_cfg["base_url"]
             }
 
         return {
@@ -806,8 +808,9 @@ def _start_server(app: FastAPI, port: int, force_reload: bool) -> None:
             )
             return
 
-    # Register cleanup handlers for graceful shutdown (only once)
-    # atexit handlers can be registered multiple times safely - Python handles deduplication
+    # Register cleanup handler for graceful shutdown
+    # Note: Python's atexit does NOT deduplicate handlers; _cleanup_resources is idempotent,
+    # so registering it multiple times is safe even if _start_server is called repeatedly
     atexit.register(_cleanup_resources)
 
     # Let uvicorn handle SIGTERM/SIGINT for graceful shutdown
