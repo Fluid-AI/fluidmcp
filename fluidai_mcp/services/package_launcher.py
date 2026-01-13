@@ -37,20 +37,22 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     metadata_path = dest_dir / "metadata.json"
     try:
         if not metadata_path.exists():
-            logger.info(f":warning: No metadata.json found at {metadata_path}")
+            logger.info(f"⚠️  No metadata.json found at {metadata_path}")
             return None, None
-        print(f":blue_book: Reading metadata.json from {metadata_path}")
+        print(f"📖 Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
         print(pkg, servers)
     except Exception as e:
-        print(f":x: Error reading metadata.json: {e}")
+        print(f"❌ Error reading metadata.json: {e}")
         return None, None
     try:
         base_command = servers["command"]
         raw_args = servers["args"]
+        
+        # Resolve npm/npx paths
         if base_command == "npx" or base_command == "npm":
             npm_path = shutil.which("npm")
             npx_path = shutil.which("npx")
@@ -58,32 +60,59 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
                 base_command = npm_path
             elif npx_path and base_command == "npx":
                 base_command = npx_path
+                
         args = [arg.replace("<path to mcp-servers>", str(dest_dir)) for arg in raw_args]
         stdio_command = [base_command] + args
+
+        # Detect if this is a GitHub-cloned repo (has .git directory) vs registry package (no .git)
+        is_github_repo = (dest_dir / ".git").exists()
+
+        if is_github_repo:
+            # GitHub repo detected - different logic needed
+            if base_command in [npx_path, npm_path, "npx", "npm"] and "-y" in args:
+                # npx -y means published package online - use parent to avoid package.json conflict
+                working_dir = dest_dir.parent
+                print(f"📂 GitHub repo with npx -y detected - using parent directory: {working_dir}")
+            else:
+                # Source code execution (node, npm start, python, etc.) - needs repo files
+                working_dir = dest_dir
+                print(f"📂 GitHub repo with source code - using repo directory: {working_dir}")
+        else:
+            # Registry package - always use package directory (no conflicts)
+            working_dir = dest_dir
+            print(f"📂 Registry package - using package directory: {working_dir}")
+
+        print(f"🚀 Final command: {stdio_command}")
+        print(f"📂 Working directory: {working_dir}")
+
         env_vars = servers.get("env", {})
         env = {**dict(os.environ), **env_vars}
+        
+        # Use the calculated working_dir
         process = subprocess.Popen(
                 stdio_command,
-                cwd=dest_dir,
+                cwd=working_dir,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
-                text=True,  # ensure stdin/stdout is in text mode
+                text=True,
                 bufsize=1
             )
         
-        # NEW: Initialize MCP server
+        # Initialize MCP server
         if not initialize_mcp_server(process):
-            print(f"Warning: Failed to initialize MCP server for {pkg}")
+            print(f"⚠️  Warning: Failed to initialize MCP server for {pkg}")
                
         router = create_mcp_router(pkg, process)
         return pkg, router
     except FileNotFoundError as e:
-        print(f":x: Command not found: {e}")
+        print(f"❌ Command not found: {e}")
         return None, None
     except Exception as e:
-        print(f":x: Error launching MCP server: {e}")
+        print(f"❌ Error launching MCP server: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
     
 
