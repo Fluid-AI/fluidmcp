@@ -33,7 +33,7 @@ Whitespace Handling:
 """
 
 import pytest
-from fluidai_mcp.services.package_installer import parse_package_string
+from fluidmcp.cli.services.package_installer import parse_package_string
 
 
 class TestParsePackageString:
