@@ -21,12 +21,6 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 
 
-async def create_app(
-    db_manager: DatabaseManager,
-    server_manager: ServerManager,
-    secure_mode: bool = False,
-    token: str = None
-) -> FastAPI:
 def save_token_to_file(token: str) -> Path:
     """
     Save bearer token to secure file.
@@ -50,8 +44,7 @@ def save_token_to_file(token: str) -> Path:
     return token_file
 
 
-async def create_app(db_manager: DatabaseManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None) -> FastAPI:
-
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -114,19 +107,6 @@ async def create_app(db_manager: DatabaseManager, secure_mode: bool = False, tok
     app.include_router(mcp_router, tags=["mcp"])
     logger.info("Dynamic MCP router mounted")
 
-    # Add a health check endpoint
-    @app.get("/health")
-    async def health_check():
-        """Health check endpoint."""
-        running_servers = len([
-            name for name, proc in server_manager.processes.items()
-            if proc.poll() is None
-        ])
-
-        return {
-            "status": "healthy",
-            "database": "connected" if db_manager.client else "disconnected",
-            "servers_running": running_servers
     # Add a health check endpoint with actual connection verification
     @app.get("/health")
     async def health_check():
