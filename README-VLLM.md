@@ -40,7 +40,7 @@ fluidmcp run examples/vllm-config.json --file --start-server
 
 **OpenAI-compatible endpoint**:
 ```bash
-curl -X POST http://localhost:8099/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -101,7 +101,7 @@ curl -X POST http://localhost:8099/vllm/v1/chat/completions \
 
 FluidMCP proxies requests to vLLM's native OpenAI server:
 
-#### `POST /{model_id}/v1/chat/completions`
+#### `POST /llm/{model_id}/v1/chat/completions`
 
 **Request**:
 ```json
@@ -142,7 +142,7 @@ FluidMCP proxies requests to vLLM's native OpenAI server:
 }
 ```
 
-#### `POST /{model_id}/v1/completions`
+#### `POST /llm/{model_id}/v1/completions`
 
 **Request**:
 ```json
@@ -154,7 +154,7 @@ FluidMCP proxies requests to vLLM's native OpenAI server:
 }
 ```
 
-#### `GET /{model_id}/v1/models`
+#### `GET /llm/{model_id}/v1/models`
 
 List available models from vLLM server.
 
@@ -165,7 +165,7 @@ List available models from vLLM server.
 ### Basic Chat Completion
 
 ```bash
-curl -X POST http://localhost:8099/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -176,7 +176,7 @@ curl -X POST http://localhost:8099/vllm/v1/chat/completions \
 ### With System Prompt
 
 ```bash
-curl -X POST http://localhost:8099/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -196,7 +196,7 @@ from openai import OpenAI
 
 # Point to FluidMCP gateway
 client = OpenAI(
-    base_url="http://localhost:8099/vllm/v1",
+    base_url="http://localhost:8099/llm/vllm/v1",
     api_key="dummy"  # Not used, but required by SDK
 )
 
@@ -222,7 +222,7 @@ Client Request (OpenAI format)
     ↓
 FluidMCP Gateway (port 8099)
     ↓
-POST /vllm/v1/chat/completions
+POST /llm/vllm/v1/chat/completions
     ↓
 HTTP Proxy (httpx)
     ↓
@@ -349,7 +349,7 @@ POST /vllm/mcp
 
 **New** (OpenAI):
 ```bash
-POST /vllm/v1/chat/completions
+POST /llm/vllm/v1/chat/completions
 {"model": "...", "messages": [...]}
 ```
 
