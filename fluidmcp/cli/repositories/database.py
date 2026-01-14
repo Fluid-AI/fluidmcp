@@ -67,6 +67,53 @@ class DatabaseManager(PersistenceBackend):
         self._log_buffer = LogBuffer(max_size=100)
         self._retry_task: Optional[asyncio.Task] = None
 
+    @staticmethod
+    def _sanitize_mongodb_input(value: Any) -> Any:
+        """
+        Sanitize input to prevent MongoDB injection attacks.
+
+        Removes MongoDB operators ($, {, }) from string values and validates structure.
+
+        Args:
+            value: Input value to sanitize
+
+        Returns:
+            Sanitized value
+        """
+        if isinstance(value, str):
+            # Remove MongoDB operator prefixes
+            if value.startswith("$"):
+                logger.warning(f"Stripped MongoDB operator from input: {value}")
+                value = value.lstrip("$")
+            # Remove braces that could be part of injection attempts
+            value = value.replace("{", "").replace("}", "")
+        elif isinstance(value, dict):
+            # Recursively sanitize dictionary values
+            return {k: DatabaseManager._sanitize_mongodb_input(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            # Recursively sanitize list items
+            return [DatabaseManager._sanitize_mongodb_input(item) for item in value]
+        return value
+
+    @staticmethod
+    def _validate_field_names(fields: Dict[str, Any], allowed_fields: List[str]) -> None:
+        """
+        Validate that only whitelisted field names are used in queries.
+
+        Args:
+            fields: Dictionary of fields to validate
+            allowed_fields: List of allowed field names
+
+        Raises:
+            ValueError: If invalid field names are found
+        """
+        for field_name in fields.keys():
+            # Remove any MongoDB operators from field name for validation
+            clean_field = field_name.lstrip("$")
+
+            if clean_field not in allowed_fields and not field_name.startswith("$"):
+                raise ValueError(f"Invalid field name: {field_name}. Allowed fields: {allowed_fields}")
+
     async def connect(self) -> bool:
         """
         Establish MongoDB connection.

@@ -9,6 +9,8 @@ import asyncio
 import subprocess
 import json
 import time
+import signal
+import atexit
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -36,6 +38,74 @@ class ServerManager:
 
         # Event loop for async operations
         self._loop = None
+
+        # Register cleanup handlers
+        atexit.register(self._cleanup_on_exit)
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup all processes."""
+        self._cleanup_on_exit()
+        return False
+
+    def _cleanup_on_exit(self) -> None:
+        """
+        Cleanup handler called on process exit.
+        Terminates all running MCP server processes.
+        """
+        if not self.processes:
+            return
+
+        logger.info(f"Cleaning up {len(self.processes)} running server(s)...")
+
+        for server_id, process in list(self.processes.items()):
+            try:
+                if process.poll() is None:  # Process still running
+                    logger.info(f"Terminating server '{server_id}' (PID: {process.pid})")
+
+                    # Try graceful termination first (SIGTERM)
+                    process.terminate()
+
+                    # Wait up to 5 seconds for graceful shutdown
+                    try:
+                        process.wait(timeout=5)
+                        logger.info(f"Server '{server_id}' terminated gracefully")
+                    except subprocess.TimeoutExpired:
+                        # Force kill if graceful shutdown failed
+                        logger.warning(f"Server '{server_id}' did not terminate, forcing kill...")
+                        process.kill()
+                        process.wait(timeout=2)
+                        logger.info(f"Server '{server_id}' force killed")
+
+                    # Reap zombie process
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
+
+            except Exception as e:
+                logger.error(f"Error cleaning up server '{server_id}': {e}")
+
+        self.processes.clear()
+        logger.info("All servers cleaned up")
+
+    async def shutdown_all(self) -> None:
+        """
+        Async shutdown handler for graceful cleanup.
+        Should be called when the application is shutting down.
+        """
+        logger.info("Initiating graceful shutdown of all servers...")
+
+        for server_id in list(self.processes.keys()):
+            try:
+                await self.stop_server(server_id)
+            except Exception as e:
+                logger.error(f"Error stopping server '{server_id}' during shutdown: {e}")
+
+        logger.info("All servers shut down")
 
     # ==================== Server Lifecycle Methods ====================
 

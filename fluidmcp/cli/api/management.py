@@ -68,6 +68,33 @@ def get_server_manager(request: Request):
     return request.app.state.server_manager
 
 
+def sanitize_input(value: Any) -> Any:
+    """
+    Sanitize user input to prevent MongoDB injection attacks.
+
+    Removes MongoDB operators and special characters from input.
+
+    Args:
+        value: Input value to sanitize
+
+    Returns:
+        Sanitized value
+    """
+    if isinstance(value, str):
+        # Remove MongoDB operator prefixes
+        if value.startswith("$"):
+            value = value.lstrip("$")
+        # Remove braces that could be part of injection attempts
+        value = value.replace("{", "").replace("}", "")
+    elif isinstance(value, dict):
+        # Recursively sanitize dictionary values
+        return {k: sanitize_input(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        # Recursively sanitize list items
+        return [sanitize_input(item) for item in value]
+    return value
+
+
 def validate_server_config(config: Dict[str, Any]) -> None:
     """
     Validate server configuration to prevent command injection and ensure safety.
@@ -78,11 +105,27 @@ def validate_server_config(config: Dict[str, Any]) -> None:
     Raises:
         HTTPException: If validation fails
     """
+    import re
+
     # Validate required fields
     if "command" not in config:
         raise HTTPException(400, "Server configuration must include 'command' field")
 
     command = config["command"]
+
+    # Command path validation - reject absolute paths
+    if os.path.isabs(command):
+        raise HTTPException(
+            400,
+            f"Absolute paths not allowed in command field. Use command name only: {command}"
+        )
+
+    # Command must not contain path separators
+    if "/" in command or "\\" in command:
+        raise HTTPException(
+            400,
+            f"Command must be a simple command name without path separators: {command}"
+        )
 
     # Whitelist of allowed commands (can be extended via environment variable)
     allowed_commands_default = ["npx", "node", "python", "python3", "uvx", "docker"]
@@ -103,16 +146,45 @@ def validate_server_config(config: Dict[str, Any]) -> None:
         if not isinstance(args, list):
             raise HTTPException(400, "Server configuration 'args' must be a list")
 
-        # Check for shell injection patterns in args
-        dangerous_patterns = [";", "&", "|", "`", "$", "&&", "||", ">", "<", "$(", "${"]
+        # Enhanced argument validation
+        dangerous_patterns = [";", "&", "|", "`", "&&", "||", "$(", "${", "\n", "\r"]
+        # Shell metacharacters that should be rejected unless in specific contexts
+        shell_metacharacters = ["<", ">", ">>", "<<"]
+
         for arg in args:
             if not isinstance(arg, str):
                 raise HTTPException(400, "All arguments must be strings")
+
+            # Length validation - max 1000 chars per argument
+            if len(arg) > 1000:
+                raise HTTPException(
+                    400,
+                    f"Argument exceeds maximum length of 1000 characters: {arg[:50]}..."
+                )
+
+            # Check for dangerous shell patterns
             for pattern in dangerous_patterns:
                 if pattern in arg:
                     raise HTTPException(
                         400,
                         f"Argument contains potentially dangerous pattern '{pattern}': {arg}"
+                    )
+
+            # Check for shell metacharacters (with exceptions for flags)
+            for pattern in shell_metacharacters:
+                if pattern in arg:
+                    raise HTTPException(
+                        400,
+                        f"Argument contains shell metacharacter '{pattern}': {arg}"
+                    )
+
+            # Validate argument structure for flags
+            if arg.startswith("-"):
+                # Flags should match pattern: -x or --xxx or --xxx=value
+                if not re.match(r"^-[a-zA-Z0-9]$|^--[a-zA-Z0-9-]+(=.+)?$", arg):
+                    raise HTTPException(
+                        400,
+                        f"Invalid flag format: {arg}. Flags should be -x or --flag or --flag=value"
                     )
 
     # Validate env if present
@@ -121,10 +193,33 @@ def validate_server_config(config: Dict[str, Any]) -> None:
         if not isinstance(env, dict):
             raise HTTPException(400, "Server configuration 'env' must be a dictionary")
 
-        # Check env keys and values are strings
+        # Enhanced environment variable validation
         for key, value in env.items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise HTTPException(400, "Environment variable keys and values must be strings")
+
+            # Validate env var name (alphanumeric + underscore only)
+            if not re.match(r"^[A-Z_][A-Z0-9_]*$", key):
+                raise HTTPException(
+                    400,
+                    f"Invalid environment variable name '{key}'. Must be uppercase alphanumeric with underscores."
+                )
+
+            # Length validation - max 10,000 chars per value
+            if len(value) > 10000:
+                raise HTTPException(
+                    400,
+                    f"Environment variable '{key}' value exceeds maximum length of 10,000 characters"
+                )
+
+            # Check for shell metacharacters in env values
+            dangerous_env_patterns = [";", "&", "|", "`", "$(", "${", "\n", "\r", "&&", "||"]
+            for pattern in dangerous_env_patterns:
+                if pattern in value:
+                    raise HTTPException(
+                        400,
+                        f"Environment variable '{key}' contains dangerous pattern '{pattern}'"
+                    )
 
 
 # ==================== Configuration Management ====================
@@ -163,6 +258,9 @@ async def add_server(
         max_restarts (int): Maximum restart attempts
     """
     manager = get_server_manager(request)
+
+    # Sanitize input to prevent MongoDB injection
+    config = sanitize_input(config)
 
     # Validate required fields
     if "id" not in config:
@@ -281,6 +379,9 @@ async def update_server(
         Success message
     """
     manager = get_server_manager(request)
+
+    # Sanitize input to prevent MongoDB injection
+    config = sanitize_input(config)
 
     # Check if server exists (in-memory or database)
     existing = manager.configs.get(id)

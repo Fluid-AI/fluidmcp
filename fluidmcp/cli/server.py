@@ -246,15 +246,22 @@ async def main(args):
         allowed_origins=allowed_origins
     )
 
-    # 3. Setup graceful shutdown
+    # 3. Setup graceful shutdown with comprehensive signal handlers
     shutdown_event = asyncio.Event()
 
     def signal_handler(sig, frame):
-        logger.info("Shutdown signal received. Stopping server...")
+        """Handle shutdown signals (SIGINT, SIGTERM, SIGHUP)."""
+        signal_name = signal.Signals(sig).name
+        logger.info(f"Shutdown signal {signal_name} received. Stopping server...")
         shutdown_event.set()
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # Termination request
+
+    # Register SIGHUP on Unix systems only
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, signal_handler)  # Hangup (terminal closed)
 
     # 4. Run server
     config = Config(
@@ -276,14 +283,31 @@ async def main(args):
     # Wait for shutdown signal
     await shutdown_event.wait()
 
-    # Cleanup
-    logger.info("Stopping all MCP servers...")
-    await server_manager.stop_all_servers()
+    # Graceful cleanup
+    logger.info("Initiating graceful shutdown...")
 
-    logger.info("Closing database connection...")
-    await db_manager.close()
+    try:
+        # Stop all MCP servers with timeout
+        logger.info("Stopping all MCP servers...")
+        shutdown_task = asyncio.create_task(server_manager.shutdown_all())
+        await asyncio.wait_for(shutdown_task, timeout=10.0)
+        logger.info("All MCP servers stopped")
+    except asyncio.TimeoutError:
+        logger.warning("MCP server shutdown timed out, forcing cleanup...")
+        server_manager._cleanup_on_exit()
+    except Exception as e:
+        logger.error(f"Error during MCP server shutdown: {e}")
+        server_manager._cleanup_on_exit()
 
-    logger.info("Backend server stopped")
+    try:
+        # Close database connection
+        logger.info("Closing database connection...")
+        await persistence.disconnect()
+        logger.info("Database connection closed")
+    except Exception as e:
+        logger.error(f"Error closing database connection: {e}")
+
+    logger.info("Backend server stopped successfully")
 
 
 def run():
