@@ -41,7 +41,13 @@ MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to
 HTTP_CLIENT_TIMEOUT = 120.0  # Timeout in seconds for LLM HTTP requests
 # Streaming timeout: None means indefinite (allows variable generation times)
 # Set to a positive number (e.g., 300.0) to enforce a timeout in seconds
-STREAMING_TIMEOUT = float(os.getenv("LLM_STREAMING_TIMEOUT", "0")) or None  # 0 or unset = None (indefinite)
+_streaming_timeout_raw = os.getenv("LLM_STREAMING_TIMEOUT", "0")
+try:
+    _streaming_timeout_value = float(_streaming_timeout_raw)
+except ValueError:
+    logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_streaming_timeout_raw}', using indefinite timeout")
+    _streaming_timeout_value = 0.0
+STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # <=0 or invalid = None (indefinite)
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -450,7 +456,7 @@ async def _proxy_llm_request(
         raise HTTPException(502, f"LLM backend error: {str(e)}")
 
 
-def _validate_streaming_request(model_id: str) -> tuple:
+def _validate_streaming_request(model_id: str) -> None:
     """
     Validate that a model is available for streaming before starting SSE response.
 
@@ -459,9 +465,6 @@ def _validate_streaming_request(model_id: str) -> tuple:
 
     Args:
         model_id: LLM model identifier
-
-    Returns:
-        tuple: (endpoint_config, process) from registries
 
     Raises:
         HTTPException: 404 if model not configured, 503 if process not running
@@ -475,8 +478,6 @@ def _validate_streaming_request(model_id: str) -> tuple:
 
     if process is not None and not process.is_running():
         raise HTTPException(503, f"LLM model '{model_id}' process is not running")
-
-    return endpoint_config, process
 
 
 async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: dict):

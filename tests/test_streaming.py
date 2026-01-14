@@ -15,7 +15,14 @@ class TestStreamingValidation:
 
         app = FastAPI()
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"vllm": {"base_url": "http://localhost:8001/v1"}}):
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+            "vllm": {
+                "base_url": "http://localhost:8001/v1",
+                "chat": "/chat/completions",
+                "completions": "/completions",
+                "models": "/models"
+            }
+        }):
             with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
                 with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
@@ -44,7 +51,14 @@ class TestStreamingValidation:
 
         app = FastAPI()
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"vllm": {"base_url": "http://localhost:8001/v1"}}):
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+            "vllm": {
+                "base_url": "http://localhost:8001/v1",
+                "chat": "/chat/completions",
+                "completions": "/completions",
+                "models": "/models"
+            }
+        }):
             with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
                 with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
@@ -131,7 +145,14 @@ class TestStreamingValidation:
         mock_process = Mock(spec=LLMProcess)
         mock_process.is_running.return_value = False
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"vllm": {"base_url": "http://localhost:8001/v1"}}):
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+            "vllm": {
+                "base_url": "http://localhost:8001/v1",
+                "chat": "/chat/completions",
+                "completions": "/completions",
+                "models": "/models"
+            }
+        }):
             with patch('fluidmcp.cli.services.run_servers._llm_processes', {"vllm": mock_process}):
                 with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
@@ -164,7 +185,14 @@ class TestStreamingValidation:
         mock_process = Mock()
         mock_process.is_running.return_value = True
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"vllm": {"base_url": "http://localhost:8001/v1", "chat": "/chat/completions"}}):
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+            "vllm": {
+                "base_url": "http://localhost:8001/v1",
+                "chat": "/chat/completions",
+                "completions": "/completions",
+                "models": "/models"
+            }
+        }):
             with patch('fluidmcp.cli.services.run_servers._llm_processes', {"vllm": mock_process}):
                 with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
