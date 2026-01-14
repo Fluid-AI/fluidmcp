@@ -500,6 +500,9 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
         endpoint_config = _llm_endpoints.get(model_id)
 
     # Defensive check: endpoint could be removed between validation and here (rare race condition)
+    # NOTE: If this happens, we send an SSE error event instead of raising HTTPException
+    # because we cannot raise exceptions inside an async generator that's already been
+    # passed to StreamingResponse. This is the intended behavior for post-validation failures.
     if endpoint_config is None:
         logger.error(f"LLM endpoint removed for {model_id} after validation")
         error_data = {"error": {"message": "Model configuration was removed", "type": "model_unavailable"}}
@@ -507,6 +510,8 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
         return
 
     # Defensive check: ensure endpoint_key exists in config
+    # This should never happen in practice (endpoints are created at startup),
+    # but defensive programming prevents KeyError
     if endpoint_key not in endpoint_config:
         logger.error(f"Missing endpoint '{endpoint_key}' for model {model_id}")
         error_data = {"error": {"message": f"Endpoint '{endpoint_key}' not configured", "type": "configuration_error"}}
@@ -519,8 +524,10 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
 
     try:
         # Stream the request to vLLM backend with stream=true
-        # Use configurable timeout (default: None for indefinite, allowing variable generation times)
-        async with client.stream("POST", url, json=body, timeout=STREAMING_TIMEOUT) as response:
+        # Use configurable timeout (default: httpx.Timeout(None) for indefinite, allowing variable generation times)
+        # httpx requires httpx.Timeout(None) for true indefinite timeout, not just None
+        timeout = httpx.Timeout(None) if STREAMING_TIMEOUT is None else STREAMING_TIMEOUT
+        async with client.stream("POST", url, json=body, timeout=timeout) as response:
             response.raise_for_status()
 
             # Stream SSE chunks from backend to client
