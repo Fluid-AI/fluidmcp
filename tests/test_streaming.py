@@ -199,8 +199,9 @@ class TestStreamingValidation:
                         headers={"Content-Type": "application/json"}
                     )
 
-                    # FastAPI/Starlette returns 400 or 500 for JSON decode errors
-                    assert response.status_code in [400, 500]
+                    # Starlette wraps JSON decode errors in 500 Internal Server Error
+                    # This is middleware behavior - the endpoint never receives the request
+                    assert response.status_code == 500
 
     @pytest.mark.skip(
         reason="FastAPI TestClient cannot reliably consume async SSE generators; "

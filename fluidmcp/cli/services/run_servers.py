@@ -60,7 +60,7 @@ _SSE_ERROR_TEMPLATES = {
     "stream_not_set": json.dumps({"error": {"message": "Internal error: streaming function called for non-streaming request", "type": "internal_error"}}),
     "model_removed": json.dumps({"error": {"message": "Model configuration was removed", "type": "model_unavailable"}}),
     "endpoint_missing": json.dumps({"error": {"message": "Endpoint not configured", "type": "configuration_error"}}),
-    "connection_error": json.dumps({"error": {"message": "LLM backend not ready or unreachable", "type": "connection_error"}}),
+    "connection_error": json.dumps({"error": {"message": "LLM backend not ready or unreachable. The model may still be loading.", "type": "connection_error"}}),
 }
 
 # Explicit process registry for server tracking
