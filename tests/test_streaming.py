@@ -199,8 +199,7 @@ class TestStreamingValidation:
                         headers={"Content-Type": "application/json"}
                     )
 
-                    # Starlette wraps JSON decode errors in 500 Internal Server Error
-                    # This is middleware behavior - the endpoint never receives the request
+                    # Malformed JSON in the request body results in a 500 Internal Server Error
                     assert response.status_code == 500
 
     @pytest.mark.skip(

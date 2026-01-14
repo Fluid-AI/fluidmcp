@@ -41,11 +41,11 @@ MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to
 HTTP_CLIENT_TIMEOUT = 120.0  # Timeout in seconds for LLM HTTP requests
 # Streaming timeout: None means indefinite (allows variable generation times)
 # Set to a positive number (e.g., 300.0) to enforce a timeout in seconds
-_streaming_timeout_raw = os.getenv("LLM_STREAMING_TIMEOUT", "0")
+_timeout_env = os.getenv("LLM_STREAMING_TIMEOUT", "0")
 try:
-    _streaming_timeout_value = float(_streaming_timeout_raw)
+    _streaming_timeout_value = float(_timeout_env)
 except ValueError:
-    logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_streaming_timeout_raw}', using indefinite timeout")
+    logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_timeout_env}', using indefinite timeout")
     _streaming_timeout_value = 0.0
 STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # value > 0 = timeout in seconds, value <= 0 or invalid = None (indefinite)
 # Pre-create httpx.Timeout object to avoid recreating on each request
