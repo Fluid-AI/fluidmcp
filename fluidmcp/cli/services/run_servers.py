@@ -14,6 +14,7 @@ from typing import Optional, Tuple
 from loguru import logger
 
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 import uvicorn
 import httpx
 
@@ -448,6 +449,66 @@ async def _proxy_llm_request(
         raise HTTPException(502, f"LLM backend error: {str(e)}")
 
 
+async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: dict):
+    """
+    Proxy LLM streaming requests using Server-Sent Events (SSE).
+
+    Note: Model availability validation should be done BEFORE calling this function
+    to avoid errors after the streaming response has started.
+
+    Args:
+        model_id: LLM model identifier
+        endpoint_key: Key in endpoints config ('chat', 'completions')
+        body: Request body (must have stream=true)
+
+    Yields:
+        SSE-formatted chunks from LLM backend
+    """
+    # Get endpoint configuration (already validated by caller)
+    with _llm_registry_lock:
+        endpoint_config = _llm_endpoints.get(model_id)
+
+    url = f"{endpoint_config['base_url']}{endpoint_config[endpoint_key]}"
+
+    client = await _get_http_client()
+
+    try:
+        # Stream the request to vLLM backend with stream=true
+        async with client.stream("POST", url, json=body, timeout=None) as response:
+            response.raise_for_status()
+
+            # Stream SSE chunks from backend to client
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
+
+    except httpx.ConnectError as e:
+        logger.error(f"LLM streaming connection error for {model_id}: {e}")
+        # Send error as SSE event
+        error_data = {"error": {"message": "LLM backend not ready or unreachable", "type": "connection_error"}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+    except httpx.TimeoutException as e:
+        logger.error(f"LLM streaming timeout for {model_id}: {e}")
+        error_data = {"error": {"message": f"LLM backend timeout: {str(e)}", "type": "timeout_error"}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+    except httpx.HTTPStatusError as e:
+        response_text = e.response.text or ""
+        logger.error(f"LLM streaming HTTP error for {model_id}: {e}. Status: {e.response.status_code}")
+
+        # Truncate large error messages
+        if len(response_text) > MAX_ERROR_MESSAGE_LENGTH:
+            truncated_text = response_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+        else:
+            truncated_text = response_text
+
+        error_data = {"error": {"message": truncated_text, "type": "http_error", "status": e.response.status_code}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+    except httpx.HTTPError as e:
+        logger.error(f"LLM streaming proxy error for {model_id}: {e}")
+        error_data = {"error": {"message": str(e), "type": "proxy_error"}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+
+
 def _add_llm_proxy_routes(app: FastAPI) -> None:
     """
     Add OpenAI-compatible proxy routes for LLM models.
@@ -464,14 +525,54 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
 
     @app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
     async def proxy_chat_completions(model_id: str, request: Request):
-        """Proxy OpenAI chat completions to LLM backend."""
+        """Proxy OpenAI chat completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Check if streaming is requested
+        if body.get("stream", False):
+            # Validate model availability BEFORE starting stream
+            with _llm_registry_lock:
+                endpoint_config = _llm_endpoints.get(model_id)
+                process = _llm_processes.get(model_id)
+
+            if endpoint_config is None:
+                raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+            if process is not None and not process.is_running():
+                raise HTTPException(503, f"LLM model '{model_id}' process is not running")
+
+            return StreamingResponse(
+                _proxy_llm_request_streaming(model_id, "chat", body),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request
         return await _proxy_llm_request(model_id, "chat", "POST", body)
 
     @app.post("/llm/{model_id}/v1/completions", tags=["llm"])
     async def proxy_completions(model_id: str, request: Request):
-        """Proxy OpenAI completions to LLM backend."""
+        """Proxy OpenAI completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Check if streaming is requested
+        if body.get("stream", False):
+            # Validate model availability BEFORE starting stream
+            with _llm_registry_lock:
+                endpoint_config = _llm_endpoints.get(model_id)
+                process = _llm_processes.get(model_id)
+
+            if endpoint_config is None:
+                raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+            if process is not None and not process.is_running():
+                raise HTTPException(503, f"LLM model '{model_id}' process is not running")
+
+            return StreamingResponse(
+                _proxy_llm_request_streaming(model_id, "completions", body),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request
         return await _proxy_llm_request(model_id, "completions", "POST", body)
 
     @app.get("/llm/{model_id}/v1/models", tags=["llm"])
