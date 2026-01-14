@@ -378,6 +378,13 @@ export LLM_STREAMING_TIMEOUT=0
 
 **Note**: LLM token generation times are highly variable. For most use cases, the default indefinite timeout is recommended. Only set a timeout if you need to enforce maximum response times.
 
+**Important for Production**: When using reverse proxies (nginx, HAProxy, load balancers), you must configure their timeout settings separately:
+- **nginx**: `proxy_read_timeout 600s;` (or higher)
+- **HAProxy**: `timeout server 600s` (or higher)
+- **AWS ELB/ALB**: Set idle timeout to match your expected generation time
+
+The `LLM_STREAMING_TIMEOUT` only controls FluidMCP's connection to the vLLM backend, not client-to-proxy timeouts.
+
 ---
 
 ## Migration from Old Approach

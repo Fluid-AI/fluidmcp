@@ -11,12 +11,20 @@ This is NOT part of the automated test suite. Use pytest for automated tests:
 
 Usage:
     python tests/manual/integration_test_streaming.py
+
+Environment Variables:
+    FLUIDMCP_BASE_URL: Base URL for FluidMCP server (default: http://localhost:8099)
+    VLLM_MODEL_ID: vLLM model identifier (default: vllm)
 """
 import requests
 import json
 import sys
+import os
 
-BASE_URL = "http://localhost:8099/llm/vllm/v1"
+# Configurable via environment variables
+FLUIDMCP_BASE_URL = os.getenv("FLUIDMCP_BASE_URL", "http://localhost:8099")
+VLLM_MODEL_ID = os.getenv("VLLM_MODEL_ID", "vllm")
+BASE_URL = f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_ID}/v1"
 
 def test_non_streaming():
     """Test non-streaming chat completion"""
@@ -133,7 +141,7 @@ def test_status_endpoint():
     print("=" * 60)
 
     try:
-        response = requests.get("http://localhost:8099/api/llm/status", timeout=10)
+        response = requests.get(f"{FLUIDMCP_BASE_URL}/api/llm/status", timeout=10)
 
         if response.status_code == 200:
             result = response.json()
@@ -153,8 +161,12 @@ def main():
     print("\n" + "=" * 60)
     print("FluidMCP vLLM Streaming Tests")
     print("=" * 60)
+    print(f"\nConfiguration:")
+    print(f"  Base URL: {FLUIDMCP_BASE_URL}")
+    print(f"  Model ID: {VLLM_MODEL_ID}")
+    print(f"  Test URL: {BASE_URL}")
     print("\nPrerequisites:")
-    print("1. FluidMCP server running on http://localhost:8099")
+    print(f"1. FluidMCP server running on {FLUIDMCP_BASE_URL}")
     print("2. vLLM model configured and started")
     print("=" * 60 + "\n")
 

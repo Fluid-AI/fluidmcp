@@ -535,7 +535,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     # passed to StreamingResponse. This is the intended behavior for post-validation failures.
     # Mid-stream errors are part of SSE protocol - clients should handle error events gracefully.
     if endpoint_config is None:
-        logger.error(f"LLM endpoint removed for {model_id} after validation")
+        logger.warning(f"LLM endpoint removed for {model_id} after validation (race condition)")
         yield f"data: {_SSE_ERROR_TEMPLATES['model_removed']}\n\n".encode()
         return
 
@@ -543,7 +543,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     # This should never happen in practice (endpoints are created at startup),
     # but defensive programming prevents KeyError
     if endpoint_key not in endpoint_config:
-        logger.error(f"Missing endpoint '{endpoint_key}' for model {model_id}")
+        logger.warning(f"Missing endpoint '{endpoint_key}' for model {model_id} (should not happen)")
         yield f"data: {_SSE_ERROR_TEMPLATES['endpoint_missing']}\n\n".encode()
         return
 
