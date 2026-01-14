@@ -55,6 +55,14 @@ if STREAMING_TIMEOUT is None:
 else:
     STREAMING_TIMEOUT_CONFIG = httpx.Timeout(connect=30.0, read=STREAMING_TIMEOUT, write=30.0, pool=30.0)
 
+# Pre-constructed SSE error messages for better performance
+_SSE_ERROR_TEMPLATES = {
+    "stream_not_set": json.dumps({"error": {"message": "Internal error: streaming function called for non-streaming request", "type": "internal_error"}}),
+    "model_removed": json.dumps({"error": {"message": "Model configuration was removed", "type": "model_unavailable"}}),
+    "endpoint_missing": json.dumps({"error": {"message": "Endpoint not configured", "type": "configuration_error"}}),
+    "connection_error": json.dumps({"error": {"message": "LLM backend not ready or unreachable", "type": "connection_error"}}),
+}
+
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
 
@@ -391,7 +399,10 @@ async def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         async with _http_client_lock:
             if _http_client is None:  # Double check after acquiring lock
-                _http_client = httpx.AsyncClient(timeout=httpx.Timeout(HTTP_CLIENT_TIMEOUT))
+                # Use granular timeout: reasonable for connect/write/pool, longer for read (non-streaming)
+                _http_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=30.0, read=HTTP_CLIENT_TIMEOUT, write=30.0, pool=30.0)
+                )
 
     return _http_client
 
@@ -511,8 +522,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     # Defensive check: ensure stream parameter is set
     if not body.get("stream"):
         logger.error(f"_proxy_llm_request_streaming called without stream=true for {model_id}")
-        error_data = {"error": {"message": "Internal error: streaming function called for non-streaming request", "type": "internal_error"}}
-        yield f"data: {json.dumps(error_data)}\n\n".encode()
+        yield f"data: {_SSE_ERROR_TEMPLATES['stream_not_set']}\n\n".encode()
         return
 
     # Get endpoint configuration (already validated by caller)
@@ -523,10 +533,10 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     # NOTE: If this happens, we send an SSE error event instead of raising HTTPException
     # because we cannot raise exceptions inside an async generator that's already been
     # passed to StreamingResponse. This is the intended behavior for post-validation failures.
+    # Mid-stream errors are part of SSE protocol - clients should handle error events gracefully.
     if endpoint_config is None:
         logger.error(f"LLM endpoint removed for {model_id} after validation")
-        error_data = {"error": {"message": "Model configuration was removed", "type": "model_unavailable"}}
-        yield f"data: {json.dumps(error_data)}\n\n".encode()
+        yield f"data: {_SSE_ERROR_TEMPLATES['model_removed']}\n\n".encode()
         return
 
     # Defensive check: ensure endpoint_key exists in config
@@ -534,8 +544,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     # but defensive programming prevents KeyError
     if endpoint_key not in endpoint_config:
         logger.error(f"Missing endpoint '{endpoint_key}' for model {model_id}")
-        error_data = {"error": {"message": f"Endpoint '{endpoint_key}' not configured", "type": "configuration_error"}}
-        yield f"data: {json.dumps(error_data)}\n\n".encode()
+        yield f"data: {_SSE_ERROR_TEMPLATES['endpoint_missing']}\n\n".encode()
         return
 
     url = f"{endpoint_config['base_url']}{endpoint_config[endpoint_key]}"
@@ -556,8 +565,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     except httpx.ConnectError as e:
         logger.error(f"LLM streaming connection error for {model_id}: {e}")
         # Send error as SSE event
-        error_data = {"error": {"message": "LLM backend not ready or unreachable", "type": "connection_error"}}
-        yield f"data: {json.dumps(error_data)}\n\n".encode()
+        yield f"data: {_SSE_ERROR_TEMPLATES['connection_error']}\n\n".encode()
     except httpx.TimeoutException as e:
         logger.error(f"LLM streaming timeout for {model_id}: {e}")
         error_data = {"error": {"message": f"LLM backend timeout: {str(e)}", "type": "timeout_error"}}
