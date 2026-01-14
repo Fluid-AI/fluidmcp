@@ -526,7 +526,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
         # Stream the request to vLLM backend with stream=true
         # Use configurable timeout (default: httpx.Timeout(None) for indefinite, allowing variable generation times)
         # httpx requires httpx.Timeout(None) for true indefinite timeout, not just None
-        timeout = httpx.Timeout(None) if STREAMING_TIMEOUT is None else STREAMING_TIMEOUT
+        timeout = httpx.Timeout(None) if STREAMING_TIMEOUT is None else httpx.Timeout(STREAMING_TIMEOUT)
         async with client.stream("POST", url, json=body, timeout=timeout) as response:
             response.raise_for_status()
 
