@@ -172,6 +172,36 @@ class TestStreamingValidation:
                     assert response.status_code == 503
                     assert "not running" in response.json()["detail"]
 
+    def test_malformed_json_returns_error(self):
+        """Test that malformed JSON in request body is handled gracefully"""
+        from fluidmcp.cli.services.run_servers import _add_llm_proxy_routes
+
+        app = FastAPI()
+
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+            "vllm": {
+                "base_url": "http://localhost:8001/v1",
+                "chat": "/chat/completions",
+                "completions": "/completions",
+                "models": "/models"
+            }
+        }):
+            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
+                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+                    _add_llm_proxy_routes(app)
+
+                    client = TestClient(app, raise_server_exceptions=False)
+
+                    # Send malformed JSON
+                    response = client.post(
+                        "/llm/vllm/v1/chat/completions",
+                        data="invalid json {",
+                        headers={"Content-Type": "application/json"}
+                    )
+
+                    # FastAPI/Starlette returns 400 or 500 for JSON decode errors
+                    assert response.status_code in [400, 500]
+
     @pytest.mark.skip(
         reason="FastAPI TestClient cannot reliably consume async SSE generators; "
                "streaming behavior is validated via manual integration tests"

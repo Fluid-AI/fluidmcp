@@ -49,7 +49,11 @@ except ValueError:
     _streaming_timeout_value = 0.0
 STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # value > 0 = timeout in seconds, value <= 0 or invalid = None (indefinite)
 # Pre-create httpx.Timeout object to avoid recreating on each request
-STREAMING_TIMEOUT_CONFIG = httpx.Timeout(None) if STREAMING_TIMEOUT is None else httpx.Timeout(STREAMING_TIMEOUT)
+# Use granular timeouts: short for connect, indefinite/configurable for read (streaming data)
+if STREAMING_TIMEOUT is None:
+    STREAMING_TIMEOUT_CONFIG = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+else:
+    STREAMING_TIMEOUT_CONFIG = httpx.Timeout(connect=30.0, read=STREAMING_TIMEOUT, write=30.0, pool=30.0)
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -420,6 +424,9 @@ async def _proxy_llm_request(
 
     if endpoint_config is None:
         raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+    if endpoint_key not in endpoint_config:
+        raise HTTPException(404, f"Endpoint '{endpoint_key}' not configured for model '{model_id}'")
 
     # Check if process is still running (if registered)
     if process is not None and not process.is_running():
