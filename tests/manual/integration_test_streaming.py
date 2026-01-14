@@ -25,6 +25,7 @@ import os
 FLUIDMCP_BASE_URL = os.getenv("FLUIDMCP_BASE_URL", "http://localhost:8099")
 VLLM_MODEL_ID = os.getenv("VLLM_MODEL_ID", "vllm")
 BASE_URL = f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_ID}/v1"
+TEST_MODEL = "facebook/opt-125m"  # Model name used in test requests
 
 def test_non_streaming():
     """Test non-streaming chat completion"""
@@ -36,7 +37,7 @@ def test_non_streaming():
         response = requests.post(
             f"{BASE_URL}/chat/completions",
             json={
-                "model": "facebook/opt-125m",
+                "model": TEST_MODEL,
                 "messages": [
                     {"role": "user", "content": "Say hello in one word"}
                 ],
@@ -71,7 +72,7 @@ def test_streaming():
         response = requests.post(
             f"{BASE_URL}/chat/completions",
             json={
-                "model": "facebook/opt-125m",
+                "model": TEST_MODEL,
                 "messages": [
                     {"role": "user", "content": "Count from 1 to 3"}
                 ],
