@@ -38,6 +38,35 @@ class TestStreamingValidation:
                         assert response.status_code == 200
                         mock_proxy.assert_called_once()
 
+    def test_non_streaming_completions_works(self):
+        """Test that non-streaming completions endpoint works"""
+        from fluidmcp.cli.services.run_servers import _add_llm_proxy_routes
+
+        app = FastAPI()
+
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"vllm": {"base_url": "http://localhost:8001/v1"}}):
+            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
+                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+                    _add_llm_proxy_routes(app)
+
+                    client = TestClient(app)
+
+                    # Mock the actual proxy request
+                    with patch('fluidmcp.cli.services.run_servers._proxy_llm_request', new_callable=AsyncMock) as mock_proxy:
+                        mock_proxy.return_value = {"id": "test", "choices": []}
+
+                        response = client.post(
+                            "/llm/vllm/v1/completions",
+                            json={
+                                "model": "test",
+                                "prompt": "Hello",
+                                "stream": False
+                            }
+                        )
+
+                        assert response.status_code == 200
+                        mock_proxy.assert_called_once()
+
     def test_streaming_validates_before_response(self):
         """Test that streaming validates model availability before starting stream"""
         from fluidmcp.cli.services.run_servers import _add_llm_proxy_routes
@@ -57,6 +86,33 @@ class TestStreamingValidation:
                         json={
                             "model": "test",
                             "messages": [{"role": "user", "content": "Hello"}],
+                            "stream": True
+                        }
+                    )
+
+                    # Should return 404 BEFORE trying to stream
+                    assert response.status_code == 404
+                    assert "not configured" in response.json()["detail"]
+
+    def test_streaming_completions_validates_before_response(self):
+        """Test that streaming validates model availability for completions endpoint"""
+        from fluidmcp.cli.services.run_servers import _add_llm_proxy_routes
+
+        app = FastAPI()
+
+        # Model not in registry
+        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {}):
+            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
+                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+                    _add_llm_proxy_routes(app)
+
+                    client = TestClient(app)
+
+                    response = client.post(
+                        "/llm/vllm/v1/completions",
+                        json={
+                            "model": "test",
+                            "prompt": "Hello",
                             "stream": True
                         }
                     )
