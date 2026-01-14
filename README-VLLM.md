@@ -369,7 +369,7 @@ export LLM_STREAMING_TIMEOUT=0
 # or omit the variable entirely
 ```
 
-**Default**: None (indefinite timeout)
+**Default**: Indefinite timeout (when variable is not set or set to 0)
 
 **Behavior**:
 - Positive number (> 0): Timeout in seconds

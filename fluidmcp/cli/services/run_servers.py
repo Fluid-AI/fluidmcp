@@ -48,6 +48,8 @@ except ValueError:
     logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_streaming_timeout_raw}', using indefinite timeout")
     _streaming_timeout_value = 0.0
 STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # value > 0 = timeout in seconds, value <= 0 or invalid = None (indefinite)
+# Pre-create httpx.Timeout object to avoid recreating on each request
+STREAMING_TIMEOUT_CONFIG = httpx.Timeout(None) if STREAMING_TIMEOUT is None else httpx.Timeout(STREAMING_TIMEOUT)
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -535,10 +537,8 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
 
     try:
         # Stream the request to vLLM backend with stream=true
-        # Use configurable timeout (default: httpx.Timeout(None) for indefinite, allowing variable generation times)
-        # httpx requires httpx.Timeout(None) for true indefinite timeout, not just None
-        timeout = httpx.Timeout(None) if STREAMING_TIMEOUT is None else httpx.Timeout(STREAMING_TIMEOUT)
-        async with client.stream("POST", url, json=body, timeout=timeout) as response:
+        # Use pre-configured timeout object (created at module init to avoid recreation on each request)
+        async with client.stream("POST", url, json=body, timeout=STREAMING_TIMEOUT_CONFIG) as response:
             response.raise_for_status()
 
             # Stream SSE chunks from backend to client
