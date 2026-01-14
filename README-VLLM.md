@@ -372,8 +372,8 @@ export LLM_STREAMING_TIMEOUT=0
 **Default**: None (indefinite timeout)
 
 **Behavior**:
-- Positive number: Timeout in seconds
-- Zero or negative: Indefinite timeout (allows variable generation times)
+- Positive number (> 0): Timeout in seconds
+- Zero or negative (≤ 0): Indefinite timeout (allows variable generation times)
 - Invalid value: Indefinite timeout (warning logged)
 
 **Note**: LLM token generation times are highly variable. For most use cases, the default indefinite timeout is recommended. Only set a timeout if you need to enforce maximum response times.

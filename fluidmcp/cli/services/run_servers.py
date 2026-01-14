@@ -47,7 +47,7 @@ try:
 except ValueError:
     logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_streaming_timeout_raw}', using indefinite timeout")
     _streaming_timeout_value = 0.0
-STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # <=0 or invalid = None (indefinite)
+STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # value > 0 = timeout in seconds, value <= 0 or invalid = None (indefinite)
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -385,7 +385,7 @@ async def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         async with _http_client_lock:
             if _http_client is None:  # Double check after acquiring lock
-                _http_client = httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT)
+                _http_client = httpx.AsyncClient(timeout=httpx.Timeout(HTTP_CLIENT_TIMEOUT))
 
     return _http_client
 
@@ -456,7 +456,7 @@ async def _proxy_llm_request(
         raise HTTPException(502, f"LLM backend error: {str(e)}")
 
 
-def _validate_streaming_request(model_id: str) -> None:
+def _validate_streaming_request(model_id: str, endpoint_key: str) -> None:
     """
     Validate that a model is available for streaming before starting SSE response.
 
@@ -465,9 +465,10 @@ def _validate_streaming_request(model_id: str) -> None:
 
     Args:
         model_id: LLM model identifier
+        endpoint_key: Key in endpoints config ('chat', 'completions')
 
     Raises:
-        HTTPException: 404 if model not configured, 503 if process not running
+        HTTPException: 404 if model not configured or endpoint key invalid, 503 if process not running
     """
     with _llm_registry_lock:
         endpoint_config = _llm_endpoints.get(model_id)
@@ -475,6 +476,9 @@ def _validate_streaming_request(model_id: str) -> None:
 
     if endpoint_config is None:
         raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+    if endpoint_key not in endpoint_config:
+        raise HTTPException(404, f"Endpoint '{endpoint_key}' not configured for model '{model_id}'")
 
     if process is not None and not process.is_running():
         raise HTTPException(503, f"LLM model '{model_id}' process is not running")
@@ -495,6 +499,13 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
     Yields:
         SSE-formatted chunks from LLM backend
     """
+    # Defensive check: ensure stream parameter is set
+    if not body.get("stream"):
+        logger.error(f"_proxy_llm_request_streaming called without stream=true for {model_id}")
+        error_data = {"error": {"message": "Internal error: streaming function called for non-streaming request", "type": "internal_error"}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+        return
+
     # Get endpoint configuration (already validated by caller)
     with _llm_registry_lock:
         endpoint_config = _llm_endpoints.get(model_id)
@@ -550,7 +561,7 @@ async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: d
         # Try to get response text, handling cases where it's unavailable in streaming context
         try:
             response_text = e.response.text or ""
-        except Exception as text_error:
+        except (AttributeError, RuntimeError) as text_error:
             logger.debug(f"Failed to read error response text for {model_id}: {text_error}")
             response_text = f"HTTP {e.response.status_code}"
 
@@ -588,7 +599,7 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Check if streaming is requested
         if body.get("stream", False):
             # Validate model availability BEFORE starting stream
-            _validate_streaming_request(model_id)
+            _validate_streaming_request(model_id, "chat")
 
             return StreamingResponse(
                 _proxy_llm_request_streaming(model_id, "chat", body),
@@ -606,7 +617,7 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Check if streaming is requested
         if body.get("stream", False):
             # Validate model availability BEFORE starting stream
-            _validate_streaming_request(model_id)
+            _validate_streaming_request(model_id, "completions")
 
             return StreamingResponse(
                 _proxy_llm_request_streaming(model_id, "completions", body),

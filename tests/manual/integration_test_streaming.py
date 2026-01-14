@@ -10,7 +10,7 @@ This is NOT part of the automated test suite. Use pytest for automated tests:
     pytest tests/test_streaming.py
 
 Usage:
-    python manual_integration_test_streaming.py
+    python tests/manual/integration_test_streaming.py
 """
 import requests
 import json
