@@ -639,6 +639,10 @@ def main():
                               help="Explicitly allow running without authentication (NOT RECOMMENDED)")
     serve_parser.add_argument("--token", type=str,
                               help="Bearer token for secure mode (will be generated if not provided)")
+    serve_parser.add_argument("--persistence-mode", choices=['mongodb', 'memory'], default='mongodb',
+                              help="Persistence backend: 'mongodb' (default) or 'memory' (in-memory, data lost on restart)")
+    serve_parser.add_argument("--in-memory", action="store_true",
+                              help="Use in-memory persistence (shorthand for --persistence-mode memory)")
     serve_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # validate comand

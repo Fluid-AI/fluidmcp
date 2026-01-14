@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
-from .services.database import DatabaseManager
+from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
@@ -64,7 +64,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         version="2.0.0"
     )
 
-        # CORS setup - secure by default
+    # CORS setup - secure by default
     if allowed_origins is None:
         # Default to localhost only for security
         allowed_origins = [
@@ -211,28 +211,35 @@ async def main(args):
         if origins_str:
             allowed_origins = [origin.strip() for origin in origins_str.split(",")]
 
-    # 1. Initialize MongoDB connection
-    logger.info(f"Connecting to MongoDB at {args.mongodb_uri}")
-    db_manager = DatabaseManager(
-        mongodb_uri=args.mongodb_uri,
-        database_name=args.database
-    )
+    # 1. Choose persistence backend
+    persistence_mode = getattr(args, 'persistence_mode', 'mongodb')
+    in_memory = getattr(args, 'in_memory', False)
 
-    # Connect with retry and configurable requirement
-    require_persistence = getattr(args, 'require_persistence', False)
-    db_connected = await connect_with_retry(
-        db_manager,
-        max_retries=3,
-        require_persistence=require_persistence
-    )
+    if in_memory or persistence_mode == 'memory':
+        logger.info("Using in-memory persistence backend")
+        persistence: PersistenceBackend = InMemoryBackend()
+        db_connected = await persistence.connect()
+    else:  # mongodb (default)
+        logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
+        persistence: PersistenceBackend = DatabaseManager(
+            mongodb_uri=args.mongodb_uri,
+            database_name=args.database
+        )
+        # Connect with retry and configurable requirement
+        require_persistence = getattr(args, 'require_persistence', False)
+        db_connected = await connect_with_retry(
+            persistence,
+            max_retries=3,
+            require_persistence=require_persistence
+        )
 
     # 2. Create ServerManager
     logger.info("Creating ServerManager...")
-    server_manager = ServerManager(db_manager)
+    server_manager = ServerManager(persistence)
 
     # 3. Create FastAPI app (without MCP servers)
     app = await create_app(
-        db_manager=db_manager,
+        db_manager=persistence,
         server_manager=server_manager,
         secure_mode=args.secure,
         token=args.token,
@@ -335,7 +342,6 @@ def run():
 
     # Generate and save token if secure mode enabled but no token provided
     if args.secure and not args.token:
-        import secrets
         args.token = secrets.token_urlsafe(32)
         logger.info(f"Generated bearer token: {args.token}")
 

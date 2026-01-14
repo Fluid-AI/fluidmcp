@@ -5,8 +5,6 @@ This module provides async database operations using motor (async MongoDB driver
 for storing server configurations, runtime instances, and logs.
 """
 import os
-import certifi
-from typing import Optional, Dict, Any, List
 from typing import Optional, Dict, Any, List, Deque
 from datetime import datetime
 from collections import deque
@@ -14,6 +12,7 @@ import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
 from loguru import logger
+from .base import PersistenceBackend
 
 
 class LogBuffer:
@@ -49,7 +48,7 @@ class LogBuffer:
         }
 
 
-class DatabaseManager:
+class DatabaseManager(PersistenceBackend):
     """Manages MongoDB connection and operations for FluidMCP state."""
 
     def __init__(self, mongodb_uri: Optional[str] = None, database_name: str = "fluidmcp"):
@@ -136,9 +135,42 @@ class DatabaseManager:
             logger.error(f"Unexpected error connecting to MongoDB: {e}")
             return False
 
+    async def _migrate_collection_names(self) -> None:
+        """
+        Auto-migrate old collection names to new fluidmcp_* prefixed names.
+
+        Provides dual-read support: reads from both old and new names, writes only to new names.
+        Automatically renames collections if old names exist but new names don't.
+        """
+        try:
+            collections = await self.db.list_collection_names()
+
+            migrations = [
+                ("servers", "fluidmcp_servers"),
+                ("server_instances", "fluidmcp_server_instances"),
+                ("server_logs", "fluidmcp_server_logs")
+            ]
+
+            for old_name, new_name in migrations:
+                if old_name in collections and new_name not in collections:
+                    logger.warning(f"⚠️  Old collection '{old_name}' found. Please backup your data.")
+                    logger.info(f"Migrating collection '{old_name}' to '{new_name}'...")
+                    await self.db[old_name].rename(new_name)
+                    logger.info(f"✓ Successfully migrated '{old_name}' to '{new_name}'")
+                elif old_name in collections and new_name in collections:
+                    logger.warning(
+                        f"⚠️  Both old ('{old_name}') and new ('{new_name}') collections exist. "
+                        f"Using new collection. Consider manually removing '{old_name}' after verification."
+                    )
+        except Exception as e:
+            logger.error(f"Error during collection migration: {e}")
+            # Don't fail initialization if migration fails - let it continue with new names
+
     async def init_db(self) -> bool:
         """
         Initialize database with collections and indexes.
+
+        Includes auto-migration from old collection names to new fluidmcp_* prefixed names.
 
         Returns:
             True if initialization successful
@@ -147,29 +179,32 @@ class DatabaseManager:
             return False
 
         try:
-            # Create indexes on servers collection
-            await self.db.servers.create_index("id", unique=True)
-            logger.info("Created unique index on servers.id")
+            # Auto-migrate old collection names to new fluidmcp_* names
+            await self._migrate_collection_names()
 
-            # Create indexes on server_instances collection
-            await self.db.server_instances.create_index("server_id")
-            logger.info("Created index on server_instances.server_id")
+            # Create indexes on fluidmcp_servers collection
+            await self.db.fluidmcp_servers.create_index("id", unique=True)
+            logger.info("Created unique index on fluidmcp_servers.id")
 
-            # Create compound index on server_logs for efficient queries
-            await self.db.server_logs.create_index([("server_name", 1), ("timestamp", -1)])
-            logger.info("Created compound index on server_logs")
+            # Create indexes on fluidmcp_server_instances collection
+            await self.db.fluidmcp_server_instances.create_index("server_id")
+            logger.info("Created index on fluidmcp_server_instances.server_id")
+
+            # Create compound index on fluidmcp_server_logs for efficient queries
+            await self.db.fluidmcp_server_logs.create_index([("server_name", 1), ("timestamp", -1)])
+            logger.info("Created compound index on fluidmcp_server_logs")
 
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:
                 # Check if collection exists
                 collections = await self.db.list_collection_names()
-                if "server_logs" not in collections:
+                if "fluidmcp_server_logs" not in collections:
                     await self.db.create_collection(
-                        "server_logs",
+                        "fluidmcp_server_logs",
                         capped=True,
                         size=104857600  # 100MB
                     )
-                    logger.info("Created capped collection for server_logs")
+                    logger.info("Created capped collection for fluidmcp_server_logs")
             except Exception as e:
                 logger.warning(f"Could not create capped collection (may already exist): {e}")
 
@@ -287,7 +322,7 @@ class DatabaseManager:
             update_config = {k: v for k, v in config.items() if k != "created_at"}
 
             # Upsert: update if exists, insert if not
-            result = await self.db.servers.update_one(
+            result = await self.db.fluidmcp_servers.update_one(
                 {"id": config["id"]},
                 {
                     "$set": update_config,
@@ -317,7 +352,7 @@ class DatabaseManager:
             Server config dict in flat format (for backend compatibility)
         """
         try:
-            config = await self.db.servers.find_one({"id": id}, {"_id": 0})  # Exclude MongoDB _id
+            config = await self.db.fluidmcp_servers.find_one({"id": id}, {"_id": 0})  # Exclude MongoDB _id
 
             # Convert nested MongoDB format to flat format for backend
             if config:
@@ -340,7 +375,7 @@ class DatabaseManager:
         """
         try:
             filter_dict = filter_dict or {}
-            cursor = self.db.servers.find(filter_dict, {"_id": 0})  # Exclude MongoDB _id
+            cursor = self.db.fluidmcp_servers.find(filter_dict, {"_id": 0})  # Exclude MongoDB _id
             configs = await cursor.to_list(length=None)
 
             # Convert all configs from nested to flat format for backend
@@ -362,7 +397,7 @@ class DatabaseManager:
             True if deleted successfully
         """
         try:
-            result = await self.db.servers.delete_one({"id": id})
+            result = await self.db.fluidmcp_servers.delete_one({"id": id})
             return result.deleted_count > 0
         except Exception as e:
             logger.error(f"Error deleting server config: {e}")
@@ -397,7 +432,7 @@ class DatabaseManager:
             # Support both server_id (new) and server_name (old) for backward compatibility
             server_key = instance.get("server_id", instance.get("server_name"))
 
-            result = await self.db.server_instances.update_one(
+            result = await self.db.fluidmcp_server_instances.update_one(
                 {"server_id": server_key},
                 {"$set": instance},
                 upsert=True
@@ -422,7 +457,7 @@ class DatabaseManager:
         """
         try:
             # Support both server_id (new) and server_name (old) for backward compatibility
-            instance = await self.db.server_instances.find_one(
+            instance = await self.db.fluidmcp_server_instances.find_one(
                 {"$or": [{"server_id": server_id}, {"server_name": server_id}]},
                 {"_id": 0}  # Exclude MongoDB _id
             )
@@ -442,7 +477,7 @@ class DatabaseManager:
             List of instance dicts
         """
         try:
-            cursor = self.db.server_instances.find({"state": state})
+            cursor = self.db.fluidmcp_server_instances.find({"state": state})
             instances = await cursor.to_list(length=None)
             return instances
         except Exception as e:
@@ -471,7 +506,7 @@ class DatabaseManager:
         }
 
         try:
-            await self.db.server_logs.insert_one(log_entry)
+            await self.db.fluidmcp_server_logs.insert_one(log_entry)
             self._log_buffer.success_count += 1
             return True
 
@@ -501,7 +536,7 @@ class DatabaseManager:
 
         for entry in entries:
             try:
-                await self.db.server_logs.insert_one(entry)
+                await self.db.fluidmcp_server_logs.insert_one(entry)
                 self._log_buffer.success_count += 1
             except Exception as e:
                 logger.warning(f"Retry failed for log entry: {e}")
@@ -553,7 +588,7 @@ class DatabaseManager:
                 filter_dict["timestamp"] = {"$gte": since}
 
             # Sort by timestamp descending, limit to N lines
-            cursor = self.db.server_logs.find(filter_dict).sort("timestamp", -1).limit(lines)
+            cursor = self.db.fluidmcp_server_logs.find(filter_dict).sort("timestamp", -1).limit(lines)
             logs = await cursor.to_list(length=lines)
 
             # Reverse to get chronological order

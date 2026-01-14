@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from loguru import logger
 
-from .database import DatabaseManager
+from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 
 
