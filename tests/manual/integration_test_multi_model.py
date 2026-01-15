@@ -236,7 +236,7 @@ def test_streaming_model_1():
                             if delta.get('content'):
                                 chunk_count += 1
                     except json.JSONDecodeError:
-                        # Some streaming lines may be non-JSON or partial; ignore and continue
+                        # Ignore lines that are not valid JSON (SSE comments, empty lines, keep-alive, or malformed chunks)
                         pass
 
         print(f"✓ SUCCESS - Received {chunk_count} chunks")

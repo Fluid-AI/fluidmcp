@@ -148,7 +148,7 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 
 **Key Points**:
 - Each model runs on a separate port (8001, 8002, etc.)
-- Adjust `--gpu-memory-utilization` so total doesn't exceed 1.0 (e.g., 0.45 + 0.45 = 0.9)
+- Adjust `--gpu-memory-utilization` so total doesn't exceed 1.0 (e.g., 0.45 + 0.45 = 0.9); exceeding 1.0 can lead to GPU out-of-memory errors
 - Access via different model IDs: `/llm/vllm-opt/v1/...` and `/llm/vllm-gpt2/v1/...`
 - Models run independently and can handle concurrent requests
 - See `examples/vllm-multi-model-config.json` for complete example
