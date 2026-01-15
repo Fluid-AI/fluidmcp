@@ -6,8 +6,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from fluidmcp.services.config_resolver import ServerConfig
-from fluidmcp.services.run_servers import (
+from fluidmcp.cli.services.config_resolver import ServerConfig
+from fluidmcp.cli.services.run_servers import (
     run_servers,
     _install_packages_from_config,
     _update_env_from_common_env,

@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 from argparse import Namespace
 
-from fluidmcp.services.config_resolver import (
+from fluidmcp.cli.services.config_resolver import (
     ServerConfig,
     resolve_config,
     resolve_from_package,

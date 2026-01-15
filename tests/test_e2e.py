@@ -536,7 +536,7 @@ class TestE2EConfigFileFlow:
 
     def test_invalid_json_file_rejected(self, tmp_path):
         """Test that invalid JSON syntax is properly rejected by resolve_from_file"""
-        from fluidmcp.services.config_resolver import resolve_from_file
+        from fluidmcp.cli.services.config_resolver import resolve_from_file
 
         invalid_config = tmp_path / "invalid.json"
         invalid_config.write_text("not valid json{")
@@ -546,7 +546,7 @@ class TestE2EConfigFileFlow:
 
     def test_missing_file_rejected(self, tmp_path):
         """Test that non-existent file raises FileNotFoundError"""
-        from fluidmcp.services.config_resolver import resolve_from_file
+        from fluidmcp.cli.services.config_resolver import resolve_from_file
 
         with pytest.raises(FileNotFoundError):
             resolve_from_file(str(tmp_path / "nonexistent.json"))
@@ -565,7 +565,7 @@ class TestE2EConfigFileFlow:
         config_path = tmp_path / "valid.json"
         config_path.write_text(json.dumps(config))
 
-        from fluidmcp.services.config_resolver import resolve_from_file
+        from fluidmcp.cli.services.config_resolver import resolve_from_file
 
         server_config = resolve_from_file(str(config_path))
 
@@ -588,7 +588,7 @@ class TestE2EConfigFileFlow:
         config_path = tmp_path / "packages.json"
         config_path.write_text(json.dumps(config))
 
-        from fluidmcp.services.config_resolver import resolve_from_file
+        from fluidmcp.cli.services.config_resolver import resolve_from_file
 
         try:
             server_config = resolve_from_file(str(config_path))

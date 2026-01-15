@@ -5,7 +5,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from fluidmcp.services.github_utils import (
+from fluidmcp.cli.services.github_utils import (
     extract_json_from_readme,
     normalize_github_repo,
     validate_mcp_metadata,
