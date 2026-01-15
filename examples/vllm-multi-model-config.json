@@ -1,0 +1,38 @@
+{
+  "llmModels": {
+    "vllm-opt": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port", "8001",
+        "--host", "0.0.0.0",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.45",
+        "--max-model-len", "2048",
+        "--dtype", "float16"
+      ],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      }
+    },
+    "vllm-gpt2": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "gpt2",
+        "--port", "8002",
+        "--host", "0.0.0.0",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.45",
+        "--max-model-len", "1024",
+        "--dtype": "float16"
+      ],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8002/v1"
+      }
+    }
+  }
+}
