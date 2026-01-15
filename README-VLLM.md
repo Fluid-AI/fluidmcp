@@ -101,6 +101,77 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 | `--max-model-len` | Maximum context length | Model default |
 | `--dtype` | Data type: float16, bfloat16, float32 | `float16` |
 
+### Multi-Model Configuration
+
+**NEW**: Run multiple vLLM models simultaneously on the same FluidMCP instance.
+
+```json
+{
+  "llmModels": {
+    "vllm-opt": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port", "8001",
+        "--host", "0.0.0.0",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.45",
+        "--max-model-len", "2048",
+        "--dtype", "float16"
+      ],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      }
+    },
+    "vllm-gpt2": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "gpt2",
+        "--port", "8002",
+        "--host", "0.0.0.0",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.45",
+        "--max-model-len", "1024",
+        "--dtype": "float16"
+      ],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8002/v1"
+      }
+    }
+  }
+}
+```
+
+**Key Points**:
+- Each model runs on a separate port (8001, 8002, etc.)
+- Adjust `--gpu-memory-utilization` so total doesn't exceed 1.0 (e.g., 0.45 + 0.45 = 0.9)
+- Access via different model IDs: `/llm/vllm-opt/v1/...` and `/llm/vllm-gpt2/v1/...`
+- Models run independently and can handle concurrent requests
+- See `examples/vllm-multi-model-config.json` for complete example
+
+**Usage**:
+```bash
+# Start multi-model setup
+fluidmcp run examples/vllm-multi-model-config.json --file --start-server
+
+# Query first model
+curl -X POST http://localhost:8099/llm/vllm-opt/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "facebook/opt-125m", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Query second model
+curl -X POST http://localhost:8099/llm/vllm-gpt2/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt2", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Check status of all models
+curl http://localhost:8099/api/llm/status
+```
+
 ---
 
 ## API Reference
