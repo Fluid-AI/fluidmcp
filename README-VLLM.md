@@ -291,12 +291,17 @@ Configure timeouts for different request types:
 ```json
 {
   "timeouts": {
-    "startup": 300,         // Seconds to wait for model loading
-    "streaming": null,      // null = indefinite (recommended for streaming)
-    "non_streaming": 120    // Seconds for non-streaming requests
+    "startup": 300,
+    "streaming": null,
+    "non_streaming": 120
   }
 }
 ```
+
+**Timeout Values**:
+- `startup`: 300 - Seconds to wait for model loading
+- `streaming`: null - Indefinite timeout (recommended for streaming)
+- `non_streaming`: 120 - Seconds for non-streaming requests
 
 **Important**:
 - **Streaming requests** should use `null` (indefinite) because generation time is unpredictable

@@ -125,16 +125,15 @@ def _extract_arg_value(args: List[str], arg_name: str, converter=str, default=No
             try:
                 return converter(args[i + 1])
             except (ValueError, TypeError):
-                if default is not None:
-                    logger.warning(f"Invalid {arg_name} value: {args[i + 1]}, using default: {default}")
+                logger.warning(f"Invalid {arg_name} value: {args[i + 1]}, using default: {default}")
                 return default
         # Format: --arg-name=value
         elif arg.startswith(f"{arg_name}="):
             try:
-                return converter(arg.split("=")[1])
+                # Split only on first '=' to handle values containing '=' (e.g., --arg=key=value)
+                return converter(arg.split("=", 1)[1])
             except (ValueError, IndexError, TypeError):
-                if default is not None:
-                    logger.warning(f"Invalid {arg_name} format: {arg}, using default: {default}")
+                logger.warning(f"Invalid {arg_name} format: {arg}, using default: {default}")
                 return default
     return default
 
