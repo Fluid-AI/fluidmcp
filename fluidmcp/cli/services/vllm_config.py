@@ -201,12 +201,21 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     cfg = config["config"]
 
     # Validate gpu_memory_utilization
-    # Note: 0.0 is valid (vLLM interprets it as "use all available memory dynamically")
+    # Note: 0.0 is allowed by vLLM, but its exact behavior is backend-defined
     if "gpu_memory_utilization" in cfg:
         mem = cfg["gpu_memory_utilization"]
         if not isinstance(mem, (int, float)) or mem < 0 or mem > 1.0:
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem}"
+            )
+
+        # Warn about edge case value
+        if mem == 0.0:
+            logger.warning(
+                "gpu_memory_utilization is set to 0.0. This is an advanced setting whose "
+                "exact semantics are determined by vLLM and may not be suitable for "
+                "production. Consider using a value > 0.0 (e.g., 0.5-0.9) for more "
+                "predictable behavior."
             )
 
     # Validate dtype
