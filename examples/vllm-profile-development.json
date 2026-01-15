@@ -1,0 +1,10 @@
+{
+  "llmModels": {
+    "vllm": {
+      "model": "TEST_MODEL",
+      "port": 8001,
+      "profile": "development",
+      "env": {}
+    }
+  }
+}

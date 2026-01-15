@@ -1,0 +1,24 @@
+{
+  "llmModels": {
+    "vllm-model-1": {
+      "model": "TEST_MODEL_1",
+      "port": 8001,
+      "profile": "production",
+      "config": {
+        "gpu_memory_utilization": 0.45,
+        "max_model_len": 2048
+      },
+      "env": {}
+    },
+    "vllm-model-2": {
+      "model": "TEST_MODEL_2",
+      "port": 8002,
+      "profile": "production",
+      "config": {
+        "gpu_memory_utilization": 0.45,
+        "max_model_len": 1024
+      },
+      "env": {}
+    }
+  }
+}
