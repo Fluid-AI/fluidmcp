@@ -176,7 +176,7 @@ curl http://localhost:8099/api/llm/status
 
 ## Advanced Configuration
 
-**NEW in PR #5**: High-level configuration with validation, profiles, and production-safe defaults.
+**NEW in PR #4**: High-level configuration with validation, profiles, and production-safe defaults.
 
 ### High-Level Config Format
 

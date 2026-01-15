@@ -10,7 +10,6 @@ This module provides high-level configuration schema for vLLM models with:
 
 from typing import Dict, Any, List, Optional, Tuple
 from loguru import logger
-import os
 
 
 # Configuration profiles with production-safe defaults
@@ -241,12 +240,15 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
     """
     Apply a configuration profile to a model config.
 
+    NOTE: This function mutates the input config dictionary in-place by adding
+    profile defaults to config["config"]. User-specified values are not overridden.
+
     Args:
-        config: Model configuration dictionary
+        config: Model configuration dictionary (modified in-place)
         profile_name: Name of profile to apply (development/production/high-throughput)
 
     Returns:
-        Updated config with profile defaults applied
+        The modified config dictionary (same object as input)
 
     Raises:
         VLLMConfigError: If profile name is invalid

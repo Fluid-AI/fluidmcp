@@ -17,7 +17,6 @@ Usage:
     python tests/manual/test_advanced_config.py
 """
 
-import os
 import sys
 import json
 from pathlib import Path
@@ -29,8 +28,6 @@ sys.path.insert(0, str(project_root))
 from fluidmcp.cli.services.vllm_config import (
     validate_and_transform_llm_config,
     VLLMConfigError,
-    validate_gpu_memory,
-    validate_port_conflicts,
     apply_profile,
     VLLM_PROFILES,
 )
