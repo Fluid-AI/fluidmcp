@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 from loguru import logger
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 import uvicorn
 import httpx
 
@@ -39,6 +40,30 @@ client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"
 # Constants for LLM operations
 MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
 HTTP_CLIENT_TIMEOUT = 120.0  # Timeout in seconds for LLM HTTP requests
+# Streaming timeout: None means indefinite (allows variable generation times)
+# Set to a positive number (e.g., 300.0) to enforce a timeout in seconds
+_timeout_env = os.getenv("LLM_STREAMING_TIMEOUT", "0")
+try:
+    _streaming_timeout_value = float(_timeout_env)
+except ValueError:
+    logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_timeout_env}', using indefinite timeout")
+    _streaming_timeout_value = 0.0  # Normalize invalid values to 0.0
+# Convert to None for indefinite timeout: value > 0 = timeout in seconds; value <= 0 (including normalized invalid values) = None (indefinite)
+STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None
+# Pre-create httpx.Timeout object to avoid recreating on each request
+# Use granular timeouts: short for connect, indefinite/configurable for read (streaming data)
+if STREAMING_TIMEOUT is None:
+    STREAMING_TIMEOUT_CONFIG = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+else:
+    STREAMING_TIMEOUT_CONFIG = httpx.Timeout(connect=30.0, read=STREAMING_TIMEOUT, write=30.0, pool=30.0)
+
+# Pre-constructed SSE error messages for better performance
+_SSE_ERROR_TEMPLATES = {
+    "stream_not_set": json.dumps({"error": {"message": "Internal error: streaming function called for non-streaming request", "type": "internal_error"}}),
+    "model_removed": json.dumps({"error": {"message": "Model configuration was removed", "type": "model_unavailable"}}),
+    "endpoint_missing": json.dumps({"error": {"message": "Endpoint not configured", "type": "configuration_error"}}),
+    "connection_error": json.dumps({"error": {"message": "LLM backend is not ready or unreachable. The model server may still be starting up. Please verify: (1) the vLLM process is running, (2) the configured port is accessible, and (3) check logs for details.", "type": "connection_error"}}),
+}
 
 # Explicit process registry for server tracking
 _server_processes: Dict[str, subprocess.Popen] = {}
@@ -386,7 +411,10 @@ async def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         async with _http_client_lock:
             if _http_client is None:  # Double check after acquiring lock
-                _http_client = httpx.AsyncClient(timeout=HTTP_CLIENT_TIMEOUT)
+                # Use granular timeout: reasonable for connect/write/pool, longer for read (non-streaming)
+                _http_client = httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=30.0, read=HTTP_CLIENT_TIMEOUT, write=30.0, pool=30.0)
+                )
 
     return _http_client
 
@@ -412,8 +440,6 @@ async def _proxy_llm_request(
     Raises:
         HTTPException: Various HTTP errors based on backend response
     """
-    from fastapi import HTTPException
-
     # Thread-safe snapshot of endpoint and process info
     with _llm_registry_lock:
         endpoint_config = _llm_endpoints.get(model_id)
@@ -421,6 +447,9 @@ async def _proxy_llm_request(
 
     if endpoint_config is None:
         raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+    if endpoint_key not in endpoint_config:
+        raise HTTPException(404, f"Endpoint '{endpoint_key}' not configured for model '{model_id}'")
 
     # Check if process is still running (if registered)
     if process is not None and not process.is_running():
@@ -459,6 +488,124 @@ async def _proxy_llm_request(
         raise HTTPException(502, f"LLM backend error: {str(e)}")
 
 
+def _validate_streaming_request(model_id: str, endpoint_key: str) -> None:
+    """
+    Validate that a model is available for streaming before starting SSE response.
+
+    This MUST be called before creating a StreamingResponse, as FastAPI cannot
+    raise HTTPException after the response has started.
+
+    Args:
+        model_id: LLM model identifier
+        endpoint_key: Key in endpoints config ('chat', 'completions')
+
+    Raises:
+        HTTPException: 404 if model not configured or endpoint key invalid, 503 if process not running
+    """
+    with _llm_registry_lock:
+        endpoint_config = _llm_endpoints.get(model_id)
+        process = _llm_processes.get(model_id)
+
+    if endpoint_config is None:
+        raise HTTPException(404, f"LLM model '{model_id}' not configured")
+
+    if endpoint_key not in endpoint_config:
+        raise HTTPException(404, f"Endpoint '{endpoint_key}' not configured for model '{model_id}'")
+
+    if process is not None and not process.is_running():
+        raise HTTPException(503, f"LLM model '{model_id}' process is not running")
+
+
+async def _proxy_llm_request_streaming(model_id: str, endpoint_key: str, body: dict):
+    """
+    Proxy LLM streaming requests using Server-Sent Events (SSE).
+
+    Note: Model availability validation should be done BEFORE calling this function
+    to avoid errors after the streaming response has started.
+
+    Args:
+        model_id: LLM model identifier
+        endpoint_key: Key in endpoints config ('chat', 'completions')
+        body: Request body (must have stream=true)
+
+    Yields:
+        SSE-formatted chunks from LLM backend
+    """
+    # Defensive check: ensure stream parameter is set
+    if not body.get("stream"):
+        logger.error(f"_proxy_llm_request_streaming called without stream=true for {model_id}")
+        yield f"data: {_SSE_ERROR_TEMPLATES['stream_not_set']}\n\n".encode()
+        return
+
+    # Get endpoint configuration (already validated by caller)
+    with _llm_registry_lock:
+        endpoint_config = _llm_endpoints.get(model_id)
+
+    # Defensive check: endpoint could be removed between validation and here (rare race condition)
+    # NOTE: If this happens, we send an SSE error event instead of raising HTTPException
+    # because we cannot raise exceptions inside an async generator that's already been
+    # passed to StreamingResponse. This is the intended behavior for post-validation failures.
+    # Mid-stream errors are part of SSE protocol - clients should handle error events gracefully.
+    if endpoint_config is None:
+        logger.warning(f"LLM endpoint removed for {model_id} after validation (race condition)")
+        yield f"data: {_SSE_ERROR_TEMPLATES['model_removed']}\n\n".encode()
+        return
+
+    # Defensive check: ensure endpoint_key exists in config
+    # This should never happen in practice (endpoints are created at startup),
+    # but defensive programming prevents KeyError
+    if endpoint_key not in endpoint_config:
+        logger.warning(f"Missing endpoint '{endpoint_key}' for model {model_id} (should not happen)")
+        yield f"data: {_SSE_ERROR_TEMPLATES['endpoint_missing']}\n\n".encode()
+        return
+
+    url = f"{endpoint_config['base_url']}{endpoint_config[endpoint_key]}"
+
+    client = await _get_http_client()
+
+    try:
+        # Stream the request to vLLM backend with stream=true
+        # Use pre-configured timeout object (created at module init to avoid recreation on each request)
+        async with client.stream("POST", url, json=body, timeout=STREAMING_TIMEOUT_CONFIG) as response:
+            response.raise_for_status()
+
+            # Stream SSE chunks from backend to client
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
+
+    except httpx.ConnectError as e:
+        logger.error(f"LLM streaming connection error for {model_id}: {e}")
+        # Send error as SSE event
+        yield f"data: {_SSE_ERROR_TEMPLATES['connection_error']}\n\n".encode()
+    except httpx.TimeoutException as e:
+        logger.error(f"LLM streaming timeout for {model_id}: {e}")
+        error_data = {"error": {"message": f"LLM backend timeout: {str(e)}", "type": "timeout_error"}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"LLM streaming HTTP error for {model_id}: {e}. Status: {e.response.status_code}")
+
+        # Try to get response text, handling cases where it's unavailable in streaming context
+        try:
+            response_text = e.response.text or ""
+        except (AttributeError, RuntimeError) as text_error:
+            logger.debug(f"Failed to read error response text for {model_id}: {text_error}")
+            response_text = f"HTTP {e.response.status_code}"
+
+        # Truncate large error messages
+        if len(response_text) > MAX_ERROR_MESSAGE_LENGTH:
+            truncated_text = response_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+        else:
+            truncated_text = response_text
+
+        error_data = {"error": {"message": truncated_text, "type": "http_error", "status": e.response.status_code}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+    except httpx.HTTPError as e:
+        logger.error(f"LLM streaming proxy error for {model_id}: {e}")
+        error_data = {"error": {"message": str(e), "type": "proxy_error"}}
+        yield f"data: {json.dumps(error_data)}\n\n".encode()
+
+
 def _add_llm_proxy_routes(app: FastAPI) -> None:
     """
     Add OpenAI-compatible proxy routes for LLM models.
@@ -471,18 +618,40 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     Args:
         app: FastAPI application instance
     """
-    from fastapi import Request, HTTPException
-
     @app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
     async def proxy_chat_completions(model_id: str, request: Request):
-        """Proxy OpenAI chat completions to LLM backend."""
+        """Proxy OpenAI chat completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Check if streaming is requested
+        if body.get("stream", False):
+            # Validate model availability BEFORE starting stream
+            _validate_streaming_request(model_id, "chat")
+
+            return StreamingResponse(
+                _proxy_llm_request_streaming(model_id, "chat", body),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request
         return await _proxy_llm_request(model_id, "chat", "POST", body)
 
     @app.post("/llm/{model_id}/v1/completions", tags=["llm"])
     async def proxy_completions(model_id: str, request: Request):
-        """Proxy OpenAI completions to LLM backend."""
+        """Proxy OpenAI completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Check if streaming is requested
+        if body.get("stream", False):
+            # Validate model availability BEFORE starting stream
+            _validate_streaming_request(model_id, "completions")
+
+            return StreamingResponse(
+                _proxy_llm_request_streaming(model_id, "completions", body),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request
         return await _proxy_llm_request(model_id, "completions", "POST", body)
 
     @app.get("/llm/{model_id}/v1/models", tags=["llm"])
