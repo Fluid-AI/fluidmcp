@@ -2,6 +2,14 @@
 
 vLLM integration for FluidMCP using **OpenAI-compatible API endpoints**, not MCP JSON-RPC.
 
+## ✨ Features
+
+- **Streaming Support**: Real-time token generation using Server-Sent Events (SSE)
+- **OpenAI-Compatible**: Drop-in replacement for OpenAI API
+- **Multi-Model Support**: Run multiple LLM models simultaneously
+- **Smart Port Detection**: Automatically infers endpoints from vLLM configuration
+- **Process Management**: Automatic lifecycle management and health monitoring
+
 ---
 
 ## ⚠️ Architecture Change
@@ -189,6 +197,34 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
   }'
 ```
 
+### Streaming Chat Completion
+
+**NEW**: Real-time token streaming using Server-Sent Events (SSE):
+
+```bash
+curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "facebook/opt-125m",
+    "messages": [{"role": "user", "content": "Write a short poem about AI"}],
+    "stream": true,
+    "max_tokens": 100
+  }'
+```
+
+**Response** (Server-Sent Events):
+```
+data: {"id":"cmpl-...","object":"chat.completion.chunk","created":1234567890,"model":"facebook/opt-125m","choices":[{"index":0,"delta":{"role":"assistant","content":"In"},"finish_reason":null}]}
+
+data: {"id":"cmpl-...","object":"chat.completion.chunk","created":1234567890,"model":"facebook/opt-125m","choices":[{"index":0,"delta":{"content":" silicon"},"finish_reason":null}]}
+
+data: {"id":"cmpl-...","object":"chat.completion.chunk","created":1234567890,"model":"facebook/opt-125m","choices":[{"index":0,"delta":{"content":" dreams"},"finish_reason":null}]}
+
+...
+
+data: [DONE]
+```
+
 ### Using OpenAI Python SDK
 
 ```python
@@ -200,6 +236,7 @@ client = OpenAI(
     api_key="dummy"  # Not used, but required by SDK
 )
 
+# Non-streaming request
 response = client.chat.completions.create(
     model="facebook/opt-125m",
     messages=[
@@ -207,8 +244,21 @@ response = client.chat.completions.create(
     ],
     max_tokens=100
 )
-
 print(response.choices[0].message.content)
+
+# Streaming request
+stream = client.chat.completions.create(
+    model="facebook/opt-125m",
+    messages=[
+        {"role": "user", "content": "Write a short story about robots"}
+    ],
+    stream=True,
+    max_tokens=200
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
 ```
 
 ---
@@ -301,6 +351,39 @@ vLLM is designed for GPUs. CPU mode is extremely slow.
 3. **Model Size**: Smaller models (125M-1.3B) faster for testing
 4. **Context Length**: Reduce `--max-model-len` if you don't need long contexts
 5. **Batch Size**: vLLM automatically batches concurrent requests
+
+---
+
+## Environment Variables
+
+### LLM_STREAMING_TIMEOUT
+
+Controls the timeout for streaming requests.
+
+```bash
+# Set timeout in seconds (e.g., 5 minutes)
+export LLM_STREAMING_TIMEOUT=300
+
+# Or use indefinite timeout (default)
+export LLM_STREAMING_TIMEOUT=0
+# or omit the variable entirely
+```
+
+**Default**: Indefinite timeout (when variable is not set or set to 0)
+
+**Behavior**:
+- Positive number (> 0): Timeout in seconds
+- Zero or negative (≤ 0): Indefinite timeout (allows variable generation times)
+- Invalid value: Indefinite timeout (warning logged)
+
+**Note**: LLM token generation times are highly variable. For most use cases, the default indefinite timeout is recommended. Only set a timeout if you need to enforce maximum response times.
+
+**Important for Production**: When using reverse proxies (nginx, HAProxy, load balancers), you must configure their timeout settings separately:
+- **nginx**: `proxy_read_timeout 600s;` (or higher)
+- **HAProxy**: `timeout server 600s` (or higher)
+- **AWS ELB/ALB**: Set idle timeout to match your expected generation time
+
+The `LLM_STREAMING_TIMEOUT` only controls FluidMCP's connection to the vLLM backend, not client-to-proxy timeouts.
 
 ---
 
