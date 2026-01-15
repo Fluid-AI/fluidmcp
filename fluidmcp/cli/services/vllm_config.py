@@ -142,14 +142,14 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
     for model_id, config in llm_models.items():
         # Check if high-level config exists
         if "config" in config:
-            port = config.get("port") or config["config"].get("port")
+            port = config.get("port") if "port" in config else config["config"].get("port")
         # Fall back to parsing args
         elif "args" in config:
             port = _extract_port_from_args(config["args"])
         else:
             port = None
 
-        if port:
+        if port is not None:
             if port in port_to_models:
                 raise VLLMConfigError(
                     f"Port conflict: Models '{port_to_models[port]}' and '{model_id}' "
@@ -192,9 +192,9 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     # Validate gpu_memory_utilization
     if "gpu_memory_utilization" in cfg:
         mem = cfg["gpu_memory_utilization"]
-        if not isinstance(mem, (int, float)) or mem <= 0 or mem > 1.0:
+        if not isinstance(mem, (int, float)) or mem < 0 or mem > 1.0:
             raise VLLMConfigError(
-                f"gpu_memory_utilization must be between 0.0 and 1.0, got {mem}"
+                f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem}"
             )
 
     # Validate dtype
@@ -292,13 +292,13 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
     Raises:
         VLLMConfigError: If config is invalid
     """
-    # Backward compatibility: if already has raw args, return as-is
-    if "command" in config and "args" in config and "config" not in config:
+    # Determine config style: high-level config takes precedence when present
+    if "config" in config:
+        logger.debug("Using high-level config format")
+    elif "command" in config and "args" in config:
         logger.debug("Using raw args format (backward compatibility)")
         return config
-
-    # High-level config transformation
-    if "config" not in config:
+    else:
         raise VLLMConfigError(
             "Config must have either 'config' (high-level) or 'command'+'args' (raw format)"
         )
@@ -379,9 +379,9 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
     # Step 1: Apply profiles and validate individual configs
     for model_id, config in llm_models.items():
         try:
-            # Apply profile if specified
+            # Apply profile if specified (mutates config in-place)
             if "profile" in config:
-                config = apply_profile(config, config["profile"])
+                apply_profile(config, config["profile"])
 
             # Validate config values
             validate_config_values(config)
