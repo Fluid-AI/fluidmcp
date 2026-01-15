@@ -46,8 +46,9 @@ try:
     _streaming_timeout_value = float(_timeout_env)
 except ValueError:
     logger.warning(f"Invalid LLM_STREAMING_TIMEOUT value '{_timeout_env}', using indefinite timeout")
-    _streaming_timeout_value = 0.0
-STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None  # value > 0 = timeout in seconds, value <= 0 or invalid = None (indefinite)
+    _streaming_timeout_value = 0.0  # Normalize invalid values to 0.0
+# Convert to None for indefinite timeout: value > 0 = timeout in seconds; value <= 0 (including normalized invalid values) = None (indefinite)
+STREAMING_TIMEOUT = _streaming_timeout_value if _streaming_timeout_value > 0 else None
 # Pre-create httpx.Timeout object to avoid recreating on each request
 # Use granular timeouts: short for connect, indefinite/configurable for read (streaming data)
 if STREAMING_TIMEOUT is None:
@@ -60,7 +61,7 @@ _SSE_ERROR_TEMPLATES = {
     "stream_not_set": json.dumps({"error": {"message": "Internal error: streaming function called for non-streaming request", "type": "internal_error"}}),
     "model_removed": json.dumps({"error": {"message": "Model configuration was removed", "type": "model_unavailable"}}),
     "endpoint_missing": json.dumps({"error": {"message": "Endpoint not configured", "type": "configuration_error"}}),
-    "connection_error": json.dumps({"error": {"message": "LLM backend not ready or unreachable. The model may still be loading.", "type": "connection_error"}}),
+    "connection_error": json.dumps({"error": {"message": "LLM backend is not ready or unreachable. The model server may still be starting up. Please verify: (1) the vLLM process is running, (2) the configured port is accessible, and (3) check logs for details.", "type": "connection_error"}}),
 }
 
 # Explicit process registry for server tracking
