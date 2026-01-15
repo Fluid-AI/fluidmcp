@@ -142,7 +142,18 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
     for model_id, config in llm_models.items():
         # Check if high-level config exists
         if "config" in config:
-            port = config.get("port") if "port" in config else config["config"].get("port")
+            # Port can be specified at top-level or inside "config"
+            # Top-level takes precedence if both are present
+            top_level_port = config.get("port")
+            nested_port = config["config"].get("port")
+
+            if top_level_port is not None and nested_port is not None and top_level_port != nested_port:
+                logger.warning(
+                    f"Model '{model_id}' specifies 'port' both at top-level ({top_level_port}) "
+                    f"and inside 'config' ({nested_port}). Using top-level value."
+                )
+
+            port = top_level_port if top_level_port is not None else nested_port
         # Fall back to parsing args
         elif "args" in config:
             port = _extract_port_from_args(config["args"])
@@ -190,6 +201,7 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     cfg = config["config"]
 
     # Validate gpu_memory_utilization
+    # Note: 0.0 is valid (vLLM interprets it as "use all available memory dynamically")
     if "gpu_memory_utilization" in cfg:
         mem = cfg["gpu_memory_utilization"]
         if not isinstance(mem, (int, float)) or mem < 0 or mem > 1.0:
@@ -240,11 +252,12 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
     """
     Apply a configuration profile to a model config.
 
-    NOTE: This function mutates the input config dictionary in-place by adding
-    profile defaults to config["config"]. User-specified values are not overridden.
+    WARNING: This function has side effects! It mutates the input config dictionary
+    in-place by adding profile defaults to config["config"]. If you need the original
+    config preserved, pass a copy: apply_profile(config.copy(), profile_name).
 
     Args:
-        config: Model configuration dictionary (modified in-place)
+        config: Model configuration dictionary (WILL BE MODIFIED IN-PLACE)
         profile_name: Name of profile to apply (development/production/high-throughput)
 
     Returns:
@@ -252,6 +265,10 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
 
     Raises:
         VLLMConfigError: If profile name is invalid
+
+    Side Effects:
+        - Adds profile default values to config["config"] (only for keys not already present)
+        - Does NOT override user-specified values
     """
     if profile_name not in VLLM_PROFILES:
         raise VLLMConfigError(
