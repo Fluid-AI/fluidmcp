@@ -38,7 +38,7 @@ import subprocess
 import sys
 import os
 import select
-from fluidai_mcp.services.network_utils import (
+from fluidmcp.cli.services.network_utils import (
     is_port_in_use,
     find_free_port,
     get_pid_on_port,
