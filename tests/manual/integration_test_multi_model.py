@@ -25,8 +25,8 @@ import os
 FLUIDMCP_BASE_URL = os.getenv("FLUIDMCP_BASE_URL", "http://localhost:8099")
 VLLM_MODEL_1_ID = os.getenv("VLLM_MODEL_1_ID", "vllm-opt")
 VLLM_MODEL_2_ID = os.getenv("VLLM_MODEL_2_ID", "vllm-gpt2")
-TEST_MODEL_1 = "facebook/opt-125m"  # Model name for first vLLM instance
-TEST_MODEL_2 = "gpt2"  # Model name for second vLLM instance
+TEST_MODEL_1 = os.getenv("TEST_MODEL_1_NAME", "facebook/opt-125m")  # Model name for first vLLM instance
+TEST_MODEL_2 = os.getenv("TEST_MODEL_2_NAME", "gpt2")  # Model name for second vLLM instance
 
 
 def test_status_endpoint():
@@ -236,6 +236,7 @@ def test_streaming_model_1():
                             if delta.get('content'):
                                 chunk_count += 1
                     except json.JSONDecodeError:
+                        # Some streaming lines may be non-JSON or partial; ignore and continue
                         pass
 
         print(f"✓ SUCCESS - Received {chunk_count} chunks")
