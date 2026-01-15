@@ -43,11 +43,6 @@ class VLLMConfigError(Exception):
     pass
 
 
-class VLLMConfigWarning(UserWarning):
-    """Warning for risky but valid vLLM configurations."""
-    pass
-
-
 def validate_gpu_memory(
     llm_models: Dict[str, Dict[str, Any]],
     fail_on_exceed: bool = True
@@ -109,22 +104,44 @@ def validate_gpu_memory(
     return total_memory, memory_breakdown
 
 
+def _extract_arg_value(args: List[str], arg_name: str, converter=str, default=None):
+    """
+    Extract argument value from CLI args list.
+
+    Handles both formats: --arg-name value and --arg-name=value
+
+    Args:
+        args: List of CLI arguments
+        arg_name: Name of argument (e.g., "--port", "--gpu-memory-utilization")
+        converter: Function to convert string value (e.g., int, float)
+        default: Default value if argument not found or conversion fails
+
+    Returns:
+        Extracted and converted value, or default if not found/invalid
+    """
+    for i, arg in enumerate(args):
+        # Format: --arg-name value
+        if arg == arg_name and i + 1 < len(args):
+            try:
+                return converter(args[i + 1])
+            except (ValueError, TypeError):
+                if default is not None:
+                    logger.warning(f"Invalid {arg_name} value: {args[i + 1]}, using default: {default}")
+                return default
+        # Format: --arg-name=value
+        elif arg.startswith(f"{arg_name}="):
+            try:
+                return converter(arg.split("=")[1])
+            except (ValueError, IndexError, TypeError):
+                if default is not None:
+                    logger.warning(f"Invalid {arg_name} format: {arg}, using default: {default}")
+                return default
+    return default
+
+
 def _extract_gpu_memory_from_args(args: List[str]) -> float:
     """Extract --gpu-memory-utilization value from CLI args."""
-    for i, arg in enumerate(args):
-        if arg == "--gpu-memory-utilization" and i + 1 < len(args):
-            try:
-                return float(args[i + 1])
-            except ValueError:
-                logger.warning(f"Invalid --gpu-memory-utilization value: {args[i + 1]}")
-                return 0.9
-        elif arg.startswith("--gpu-memory-utilization="):
-            try:
-                return float(arg.split("=")[1])
-            except (ValueError, IndexError):
-                logger.warning(f"Invalid --gpu-memory-utilization format: {arg}")
-                return 0.9
-    return 0.9  # vLLM default
+    return _extract_arg_value(args, "--gpu-memory-utilization", float, 0.9)
 
 
 def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
@@ -171,18 +188,7 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
 
 def _extract_port_from_args(args: List[str]) -> Optional[int]:
     """Extract --port value from CLI args."""
-    for i, arg in enumerate(args):
-        if arg == "--port" and i + 1 < len(args):
-            try:
-                return int(args[i + 1])
-            except ValueError:
-                return None
-        elif arg.startswith("--port="):
-            try:
-                return int(arg.split("=")[1])
-            except (ValueError, IndexError):
-                return None
-    return None
+    return _extract_arg_value(args, "--port", int, None)
 
 
 def validate_config_values(config: Dict[str, Any]) -> None:
