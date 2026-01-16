@@ -8,6 +8,7 @@ This module provides high-level configuration schema for vLLM models with:
 - Backward compatibility with raw args format
 """
 
+import copy
 from typing import Dict, Any, List, Optional, Tuple
 from loguru import logger
 
@@ -240,7 +241,8 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     # Validate tensor_parallel_size
     if "tensor_parallel_size" in cfg:
         tps = cfg["tensor_parallel_size"]
-        if not isinstance(tps, int) or tps < 1:
+        # Accept only positive integers, but explicitly reject bools (subclass of int)
+        if not isinstance(tps, int) or isinstance(tps, bool) or tps < 1:
             raise VLLMConfigError(
                 f"tensor_parallel_size must be a positive integer, got {tps}"
             )
@@ -249,7 +251,8 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     for field in ["max_num_seqs", "max_num_batched_tokens", "max_model_len"]:
         if field in cfg:
             val = cfg[field]
-            if not isinstance(val, int) or val <= 0:
+            # Accept only positive integers, but explicitly reject bools (subclass of int)
+            if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
                 raise VLLMConfigError(
                     f"{field} must be a positive integer, got {val}"
                 )
@@ -274,7 +277,9 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
 
     WARNING: This function has side effects! It mutates the input config dictionary
     in-place by adding profile defaults to config["config"]. If you need the original
-    config preserved, pass a copy: apply_profile(config.copy(), profile_name).
+    config preserved, pass a deep copy:
+        import copy
+        apply_profile(copy.deepcopy(config), profile_name)
 
     Args:
         config: Model configuration dictionary (WILL BE MODIFIED IN-PLACE)
@@ -289,6 +294,10 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
     Side Effects:
         - Adds profile default values to config["config"] (only for keys not already present)
         - Does NOT override user-specified values
+
+    Note:
+        validate_and_transform_llm_config() makes a deep copy before calling this function,
+        so external callers don't experience mutation side effects.
     """
     if profile_name not in VLLM_PROFILES:
         raise VLLMConfigError(
@@ -394,11 +403,12 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
     Main entry point: validate and transform all LLM model configurations.
 
     This function:
-    1. Applies profiles if specified
-    2. Validates individual configs (individual model values)
-    3. Validates cross-model constraints (GPU memory, port conflicts)
-    4. Transforms high-level configs to vLLM CLI args
-    5. Maintains backward compatibility with raw args format
+    1. Makes a deep copy to avoid mutating caller's data
+    2. Applies profiles if specified
+    3. Validates individual configs (individual model values)
+    4. Validates cross-model constraints (GPU memory, port conflicts)
+    5. Transforms high-level configs to vLLM CLI args
+    6. Maintains backward compatibility with raw args format
 
     Args:
         llm_models: Dictionary of LLM model configurations from JSON
@@ -408,9 +418,16 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
 
     Raises:
         VLLMConfigError: If validation fails
+
+    Note:
+        This function does NOT mutate the input llm_models dictionary. A deep copy
+        is made internally to prevent side effects on the caller's data.
     """
     if not llm_models:
         return {}
+
+    # Make a deep copy to avoid mutating the caller's config
+    llm_models = copy.deepcopy(llm_models)
 
     # Step 1: Apply profiles and validate individual configs
     for model_id, config in llm_models.items():
