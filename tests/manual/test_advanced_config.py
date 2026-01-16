@@ -73,6 +73,7 @@ def test_profile_application():
 
     for profile_name in ["development", "production", "high-throughput"]:
         print(f"\nTesting profile: {profile_name}")
+        # Create fresh config for each iteration to avoid mutation issues
         config = {
             "model": "TEST_MODEL",
             "port": 8001,
@@ -80,7 +81,7 @@ def test_profile_application():
         }
 
         try:
-            result = apply_profile(config, profile_name)
+            result = apply_profile(config.copy(), profile_name)
             print(f"✓ Profile '{profile_name}' applied")
             print(f"  Config: {result['config']}")
 

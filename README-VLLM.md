@@ -313,7 +313,7 @@ Configure timeouts for different request types:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `model` | string | Yes | HuggingFace model name or local path |
-| `port` | integer | Yes | Port for vLLM server |
+| `port` | integer | No | Port for vLLM server (default: 8001) |
 | `profile` | string | No | Profile name (development/production/high-throughput) |
 | `config` | object | No | vLLM configuration parameters |
 | `config.gpu_memory_utilization` | float | No | GPU memory fraction (0.0-1.0) |

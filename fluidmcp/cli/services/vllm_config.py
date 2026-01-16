@@ -91,9 +91,10 @@ def validate_gpu_memory(
             logger.info(f"  - {model_id}: {mem:.2f}")
         logger.info(f"Total: {total_memory:.2f}")
         if has_tensor_parallelism:
-            logger.info(
-                "Note: Tensor parallelism detected. This validation assumes single-GPU setup. "
-                "With tensor_parallel_size > 1, models use memory across multiple GPUs."
+            logger.warning(
+                "Tensor parallelism detected (tensor_parallel_size > 1). "
+                "GPU memory validation is simplified and may not accurately reflect multi-GPU setups. "
+                "Ensure your GPU resources can accommodate all models with their tensor parallel configurations."
             )
 
     # Validation: Fail on exceeded memory
@@ -144,7 +145,11 @@ def _extract_arg_value(args: List[str], arg_name: str, converter=str, default=No
         elif arg.startswith(f"{arg_name}="):
             try:
                 # Split only on first '=' to handle values containing '=' (e.g., --arg=key=value)
-                return converter(arg.split("=", 1)[1])
+                value = arg.split("=", 1)[1]
+                if value == "":
+                    logger.warning(f"Empty {arg_name} value in argument: {arg}, using default: {default}")
+                    return default
+                return converter(value)
             except (ValueError, IndexError, TypeError):
                 logger.warning(f"Invalid {arg_name} format: {arg}, using default: {default}")
                 return default
@@ -191,6 +196,13 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
             port = None
 
         if port is not None:
+            # Validate port range
+            if not isinstance(port, int) or port < 1 or port > 65535:
+                raise VLLMConfigError(
+                    f"Model '{model_id}' has invalid port {port}. "
+                    f"Port must be an integer between 1 and 65535."
+                )
+            # Check for conflicts
             if port in port_to_models:
                 raise VLLMConfigError(
                     f"Port conflict: Models '{port_to_models[port]}' and '{model_id}' "
@@ -395,7 +407,13 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
     Raises:
         VLLMConfigError: If config is invalid
     """
-    # Determine config style: high-level config takes precedence when present
+    # Determine config style and detect ambiguous configurations
+    if "config" in config and "command" in config and "args" in config:
+        raise VLLMConfigError(
+            "Config contains both high-level format ('config') and raw format ('command'+'args'). "
+            "Please use only one format."
+        )
+
     if "config" in config:
         logger.debug("Using high-level config format")
     elif "command" in config and "args" in config:
@@ -415,8 +433,8 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
     nested_port = cfg.get("port")
     port = top_level_port if top_level_port is not None else (nested_port if nested_port is not None else 8001)
 
-    if not model:
-        raise VLLMConfigError("'model' field is required for high-level config")
+    if not model or (isinstance(model, str) and not model.strip()):
+        raise VLLMConfigError("'model' field is required and cannot be empty for high-level config")
 
     # Build vLLM CLI args
     args = [
@@ -491,12 +509,19 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
     # Make a deep copy to avoid mutating the caller's config
     llm_models = copy.deepcopy(llm_models)
 
-    # Step 1: Apply profiles and validate individual configs
+    # Step 1: Apply profiles, set defaults, and validate individual configs
     for model_id, config in llm_models.items():
         try:
             # Apply profile if specified (mutates config in-place)
             if "profile" in config:
                 apply_profile(config, config["profile"])
+
+            # Apply default port if not specified (for proper conflict detection)
+            if "config" in config:
+                top_level_port = config.get("port")
+                nested_port = config["config"].get("port")
+                if top_level_port is None and nested_port is None:
+                    config["port"] = 8001  # Apply default for validation
 
             # Validate config values
             validate_config_values(config)
