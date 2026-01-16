@@ -186,7 +186,7 @@ def test_config_value_validation():
         "vllm": {
             "model": "TEST_MODEL",
             "port": 8001,
-            "config": {"gpu_memory_utilization": 1.5}  # > 1.0
+            "config": {"gpu_memory_utilization": 1.5}  # invalid: exceeds maximum 1.0
         }
     }
 

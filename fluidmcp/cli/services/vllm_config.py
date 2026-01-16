@@ -40,6 +40,15 @@ VLLM_PROFILES = {
     },
 }
 
+# Recommended GPU memory utilization range for production use
+# Values outside this range are allowed but may have trade-offs:
+# - Below 0.5: Underutilizes GPU, wastes resources
+# - 0.5-0.9: Recommended range balancing performance and stability
+# - Above 0.9: Higher risk of OOM errors, less memory headroom for spikes
+# - 1.0: Maximum utilization, highest OOM risk, not recommended for production
+RECOMMENDED_GPU_MEMORY_MIN = 0.5
+RECOMMENDED_GPU_MEMORY_MAX = 0.9
+
 
 class VLLMConfigError(Exception):
     """Raised when vLLM configuration is invalid."""
@@ -66,6 +75,7 @@ def validate_gpu_memory(
     memory_breakdown = {}
     total_memory = 0.0
     has_tensor_parallelism = False
+    tensor_parallel_models = []
 
     for model_id, config in llm_models.items():
         # Check if high-level config exists
@@ -80,23 +90,31 @@ def validate_gpu_memory(
             gpu_mem = 0.9  # vLLM default
             tensor_parallel_size = 1
 
+        # Track models with tensor parallelism separately
         if tensor_parallel_size > 1:
             has_tensor_parallelism = True
-
-        memory_breakdown[model_id] = gpu_mem
-        total_memory += gpu_mem
+            tensor_parallel_models.append(model_id)
+            memory_breakdown[model_id] = f"{gpu_mem:.2f} (tensor_parallel_size={tensor_parallel_size}, excluded from total)"
+            logger.debug(f"Excluding {model_id} from GPU memory total (uses tensor parallelism)")
+        else:
+            memory_breakdown[model_id] = gpu_mem
+            total_memory += gpu_mem
 
     # Log memory breakdown
     if memory_breakdown:
         logger.info("GPU Memory Allocation:")
         for model_id, mem in memory_breakdown.items():
-            logger.info(f"  - {model_id}: {mem:.2f}")
-        logger.info(f"Total: {total_memory:.2f}")
+            # mem might be a string for tensor parallel models
+            if isinstance(mem, str):
+                logger.info(f"  - {model_id}: {mem}")
+            else:
+                logger.info(f"  - {model_id}: {mem:.2f}")
+        logger.info(f"Total (single-GPU models only): {total_memory:.2f}")
         if has_tensor_parallelism:
             logger.warning(
-                "Tensor parallelism detected (tensor_parallel_size > 1). "
-                "GPU memory validation is simplified and may not accurately reflect multi-GPU setups. "
-                "Ensure your GPU resources can accommodate all models with their tensor parallel configurations."
+                f"Tensor parallelism detected in models: {tensor_parallel_models}. "
+                f"These models are excluded from GPU memory validation as they use multiple GPUs. "
+                f"You must manually ensure your multi-GPU setup has sufficient resources for these models."
             )
 
     # Validation: Fail on exceeded memory
@@ -148,7 +166,8 @@ def _extract_arg_value(args: List[str], arg_name: str, converter=str, default=No
             try:
                 # Split only on first '=' to handle values containing '=' (e.g., --arg=key=value)
                 value = arg.split("=", 1)[1]
-                if value == "":
+                # Treat empty and whitespace-only values as empty
+                if not value.strip():
                     logger.warning(f"Empty {arg_name} value in argument: {arg}, using default: {default}")
                     return default
                 return converter(value)
@@ -174,6 +193,7 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
         VLLMConfigError: If port conflicts are detected
     """
     port_to_models = {}
+    models_with_no_port = []
 
     for model_id, config in llm_models.items():
         # Check if high-level config exists
@@ -211,6 +231,16 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
                     f"both use port {port}"
                 )
             port_to_models[port] = model_id
+        else:
+            models_with_no_port.append(model_id)
+
+    # Warn if multiple models have no explicit port
+    if len(models_with_no_port) > 1:
+        logger.warning(
+            f"Multiple models have no explicit port configured: {models_with_no_port}. "
+            f"They will use vLLM's default ports which may cause runtime conflicts. "
+            f"Please specify unique ports for each model to avoid issues."
+        )
 
 
 def _extract_port_from_args(args: List[str]) -> Optional[int]:
@@ -289,11 +319,24 @@ def validate_config_values(config: Dict[str, Any]) -> None:
 
     Raises:
         VLLMConfigError: If configuration values are invalid
+
+    Notes:
+        gpu_memory_utilization:
+        - Valid range: 0.0 to 1.0 (inclusive)
+        - Recommended range: 0.5 to 0.9 for production
+        - Values outside recommended range trigger warnings but are not rejected
+        - See RECOMMENDED_GPU_MEMORY_MIN and RECOMMENDED_GPU_MEMORY_MAX constants
     """
     if "config" not in config:
         return  # Skip validation for raw args format
 
     cfg = config["config"]
+
+    # Validate that config is a dictionary
+    if not isinstance(cfg, dict):
+        raise VLLMConfigError(
+            f"'config' field must be a dictionary, got {type(cfg).__name__}: {cfg!r}"
+        )
 
     # Validate gpu_memory_utilization
     # Note: 0.0 is allowed by vLLM, but its exact behavior is backend-defined
@@ -303,31 +346,47 @@ def validate_config_values(config: Dict[str, Any]) -> None:
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be a number between 0.0 and 1.0 (inclusive), got {mem!r}"
             )
-        # Normalize to float for vLLM and assign back
-        mem = float(mem)
-        cfg["gpu_memory_utilization"] = mem
 
-        if mem > 1.0:
+        # Validate range (convert to float for comparison only)
+        mem_float = float(mem)
+        if mem_float > 1.0:
             raise VLLMConfigError(
-                f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem}"
+                f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem_float}"
             )
 
-        # Warn about edge case value
-        if mem == 0.0:
+        # Warn about edge case values
+        if mem_float == 0.0:
             logger.warning(
                 "gpu_memory_utilization is set to 0.0. With this value, vLLM will use its "
                 "internal heuristics to determine GPU memory allocation, which varies by backend "
                 "and model. This can lead to unpredictable memory usage and may cause OOM errors. "
-                "For production use, explicitly set a value between 0.5 and 0.9 to ensure "
-                "deterministic memory allocation."
+                f"For production use, explicitly set a value between {RECOMMENDED_GPU_MEMORY_MIN} "
+                f"and {RECOMMENDED_GPU_MEMORY_MAX} to ensure deterministic memory allocation."
+            )
+        elif mem_float > RECOMMENDED_GPU_MEMORY_MAX:
+            logger.warning(
+                f"gpu_memory_utilization is set to {mem_float}, which exceeds the recommended maximum "
+                f"of {RECOMMENDED_GPU_MEMORY_MAX}. While values up to 1.0 are technically allowed, "
+                f"higher values leave less memory headroom for allocation spikes and increase the "
+                f"risk of OOM errors. Consider using a value between {RECOMMENDED_GPU_MEMORY_MIN} "
+                f"and {RECOMMENDED_GPU_MEMORY_MAX} for better stability in production."
             )
 
     # Validate dtype
     if "dtype" in cfg:
+        dtype = cfg["dtype"]
         valid_dtypes = ["float16", "bfloat16", "float32", "auto"]
-        if cfg["dtype"] not in valid_dtypes:
+
+        # Validate type first
+        if not isinstance(dtype, str):
             raise VLLMConfigError(
-                f"dtype must be one of {valid_dtypes}, got '{cfg['dtype']}'"
+                f"dtype must be a string, got {type(dtype).__name__}: {dtype!r}"
+            )
+
+        # Then validate value
+        if dtype not in valid_dtypes:
+            raise VLLMConfigError(
+                f"dtype must be one of {valid_dtypes}, got '{dtype}'"
             )
 
     # Validate tensor_parallel_size
@@ -435,6 +494,11 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
 
     if "config" in config:
         logger.debug("Using high-level config format")
+        # Validate that config is a dictionary
+        if not isinstance(config["config"], dict):
+            raise VLLMConfigError(
+                f"'config' field must be a dictionary, got {type(config['config']).__name__}: {config['config']!r}"
+            )
     elif "command" in config and "args" in config:
         logger.debug("Using raw args format (backward compatibility)")
         return config
@@ -451,6 +515,12 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
     top_level_port = config.get("port")
     nested_port = cfg.get("port")
     port = top_level_port if top_level_port is not None else (nested_port if nested_port is not None else 8001)
+
+    # Validate port type and range
+    if not validate_port_number(port):
+        raise VLLMConfigError(
+            f"Invalid port {port!r}. Port must be an integer between 1 and 65535."
+        )
 
     if not isinstance(model, str) or not model.strip():
         raise VLLMConfigError(
@@ -477,7 +547,7 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--max-model-len", str(cfg["max_model_len"])])
 
     if "dtype" in cfg:
-        args.extend(["--dtype", cfg["dtype"]])
+        args.extend(["--dtype", str(cfg["dtype"])])
 
     if "max_num_seqs" in cfg:
         args.extend(["--max-num-seqs", str(cfg["max_num_seqs"])])
@@ -485,17 +555,44 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
     if "max_num_batched_tokens" in cfg:
         args.extend(["--max-num-batched-tokens", str(cfg["max_num_batched_tokens"])])
 
+    # Validate optional fields
+    env = config.get("env", {})
+    if not isinstance(env, dict):
+        raise VLLMConfigError(
+            f"'env' field must be a dictionary, got {type(env).__name__}: {env!r}"
+        )
+
+    endpoints = config.get("endpoints", {"base_url": f"http://localhost:{port}/v1"})
+    if not isinstance(endpoints, dict):
+        raise VLLMConfigError(
+            f"'endpoints' field must be a dictionary, got {type(endpoints).__name__}: {endpoints!r}"
+        )
+
     # Construct transformed config
     transformed = {
         "command": "vllm",
         "args": args,
-        "env": config.get("env", {}),
-        "endpoints": config.get("endpoints", {"base_url": f"http://localhost:{port}/v1"}),
+        "env": env,
+        "endpoints": endpoints,
     }
 
     # Add timeout configuration if present
     if "timeouts" in config:
-        transformed["timeouts"] = config["timeouts"]
+        timeouts = config["timeouts"]
+        if not isinstance(timeouts, dict):
+            raise VLLMConfigError(
+                f"'timeouts' field must be a dictionary, got {type(timeouts).__name__}: {timeouts!r}"
+            )
+
+        # Validate timeout values
+        for key, value in timeouts.items():
+            if value is not None:  # None is allowed (means no timeout)
+                if not isinstance(value, (int, float)) or value < 0:
+                    raise VLLMConfigError(
+                        f"Timeout '{key}' must be a non-negative number or null, got {type(value).__name__}: {value!r}"
+                    )
+
+        transformed["timeouts"] = timeouts
 
     return transformed
 
