@@ -82,7 +82,7 @@ rule_files:
 #           severity: warning
 #         annotations:
 #           summary: "High GPU memory utilization"
-#           description: "GPU memory utilization is {{ $value | humanizePercentage }} on {{ $labels.server_id }}"
+#           description: "GPU memory utilization ratio is {{ printf \"%.2f\" $value }} on {{ $labels.server_id }}"
 #
 #       # Alert if request latency p95 exceeds threshold
 #       - alert: HighLatency

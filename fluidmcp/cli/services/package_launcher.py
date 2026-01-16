@@ -520,18 +520,16 @@ def create_dynamic_router(server_manager):
         collector = MetricsCollector(server_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics (includes pre-validation errors)
+        # Track request with metrics (RequestTimer automatically records all errors)
         with RequestTimer(collector, method):
             # Check if server exists
             if server_name not in server_manager.processes:
-                collector.record_error("server_not_found")
                 raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
             process = server_manager.processes[server_name]
 
             # Check if process is alive
             if process.poll() is not None:
-                collector.record_error("process_dead")
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
             try:
@@ -541,7 +539,6 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
-                    collector.record_error("broken_pipe")
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
                 # Read response (non-blocking with asyncio.to_thread)
@@ -551,7 +548,6 @@ def create_dynamic_router(server_manager):
             except HTTPException:
                 raise
             except Exception as e:
-                collector.record_error("communication_error")
                 logger.error(f"Error proxying request to '{server_name}': {e}")
                 raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
@@ -567,29 +563,26 @@ def create_dynamic_router(server_manager):
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
+        # Pre-validation (errors not tracked - occurs before streaming)
         if server_name not in server_manager.processes:
-            collector.record_error("server_not_found")
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
         process = server_manager.processes[server_name]
 
         if process.poll() is not None:
-            collector.record_error("process_dead")
             raise HTTPException(503, f"Server '{server_name}' is not running")
-
-        # Track streaming session
-        collector.increment_active_streams()
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
             try:
+                # Track streaming session when generator starts executing
+                collector.increment_active_streams()
                 msg = json.dumps(request)
                 try:
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
                     completion_status = "broken_pipe"
-                    collector.record_error("broken_pipe")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
 
@@ -613,7 +606,6 @@ def create_dynamic_router(server_manager):
 
             except Exception as e:
                 completion_status = "error"
-                collector.record_error("stream_error")
                 logger.exception(f"Error in event generator for '{server_name}': {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:

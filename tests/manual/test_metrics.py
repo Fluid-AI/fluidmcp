@@ -156,7 +156,7 @@ def test_generate_traffic_and_verify():
                 try:
                     baseline_count += float(line.split()[-1])
                 except ValueError:
-                    # Skip malformed lines (e.g., HELP/TYPE comments)
+                    # Skip lines with invalid numeric values
                     pass
 
         print(f"  Baseline request count: {baseline_count}")
@@ -180,7 +180,7 @@ def test_generate_traffic_and_verify():
                 try:
                     new_count += float(line.split()[-1])
                 except ValueError:
-                    # Skip malformed lines (e.g., HELP/TYPE comments)
+                    # Skip lines with invalid numeric values
                     pass
 
         print(f"  New request count: {new_count}")
@@ -251,7 +251,7 @@ def test_counter_monotonicity():
                 try:
                     counters1[line.rsplit(None, 1)[0]] = float(line.split()[-1])
                 except (ValueError, IndexError):
-                    # Skip malformed lines that can't be parsed
+                    # Skip lines that can't be parsed (invalid format or non-numeric values)
                     pass
 
         # Generate more traffic

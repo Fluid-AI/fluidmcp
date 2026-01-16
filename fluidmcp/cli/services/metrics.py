@@ -142,15 +142,24 @@ class Histogram(Metric):
         key = self._get_label_key(label_values)
 
         with self._lock:
+            # Initialize histogram entry if it doesn't exist (thread-safe)
+            if key not in self.histograms:
+                self.histograms[key] = {
+                    "sum": 0.0,
+                    "count": 0,
+                    "buckets": {bucket: 0 for bucket in self.buckets}
+                }
+
             hist = self.histograms[key]
             hist["sum"] += value
             hist["count"] += 1
 
-            # Update bucket counts efficiently - increment all buckets >= value
-            # This maintains cumulative histogram semantics while being more efficient
+            # Update bucket counts: increment only the smallest matching bucket.
+            # Cumulative counts are computed during render().
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1
+                    break
 
     def render(self) -> str:
         """Render histogram in Prometheus format."""
@@ -458,7 +467,7 @@ class RequestTimer:
             return 'network_error'
 
         # I/O errors
-        if 'IO' in exc_name or 'File' in exc_name or 'Pipe' in exc_name:
+        if 'IO' in exc_name or 'OS' in exc_name or 'File' in exc_name or 'Pipe' in exc_name:
             return 'io_error'
 
         # Value/Type errors (client errors)
