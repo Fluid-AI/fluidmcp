@@ -156,6 +156,7 @@ class Histogram(Metric):
 
             # Update bucket counts: increment only the smallest matching bucket.
             # Cumulative counts are computed during render().
+            # Note: Values exceeding all buckets are tracked in +Inf bucket via hist["count"]
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1
@@ -460,22 +461,55 @@ class RequestTimer:
     @staticmethod
     def _categorize_error(exc_type) -> str:
         """Map exception types to fixed error categories to limit metric cardinality."""
+        # Defensive: ensure exc_type is actually an exception class
+        try:
+            if not isinstance(exc_type, type) or not issubclass(exc_type, BaseException):
+                return 'server_error'
+        except TypeError:
+            # exc_type is not a class
+            return 'server_error'
+
+        # Use issubclass for standard exception hierarchy checks (more robust)
+        # IMPORTANT: Check specific exceptions before their base classes
+        # Python exception hierarchy: BaseException → Exception → OSError → (PermissionError, ConnectionError, etc.)
+
+        # Network errors (TimeoutError and ConnectionError before OSError)
+        try:
+            if issubclass(exc_type, (TimeoutError, ConnectionError)) and not issubclass(exc_type, BrokenPipeError):
+                return 'network_error'
+        except TypeError:
+            pass
+
+        # Auth errors (PermissionError before OSError)
+        try:
+            if issubclass(exc_type, PermissionError):
+                return 'auth_error'
+        except TypeError:
+            pass
+
+        # I/O errors (OSError and its remaining subclasses)
+        try:
+            if issubclass(exc_type, (OSError, IOError)):
+                return 'io_error'
+        except TypeError:
+            pass
+
+        # Client errors (value/type errors)
+        try:
+            if issubclass(exc_type, (ValueError, TypeError, KeyError, AttributeError)):
+                return 'client_error'
+        except TypeError:
+            pass
+
+        # Fallback to name-based matching for non-stdlib exceptions
         exc_name = exc_type.__name__
 
-        # HTTP/Network errors
-        if 'HTTP' in exc_name or 'Connection' in exc_name or 'Timeout' in exc_name:
+        # HTTP-related exceptions (often from external libraries)
+        if exc_name in ('HTTPError', 'RequestException', 'ConnectionTimeout', 'HTTPException'):
             return 'network_error'
 
-        # I/O errors
-        if 'IO' in exc_name or 'OS' in exc_name or 'File' in exc_name or 'Pipe' in exc_name:
-            return 'io_error'
-
-        # Value/Type errors (client errors)
-        if exc_name in ('ValueError', 'TypeError', 'KeyError', 'AttributeError'):
-            return 'client_error'
-
-        # Other specific errors
-        if exc_name in ('PermissionError', 'AuthenticationError', 'Unauthorized'):
+        # Auth exceptions from external libraries
+        if exc_name in ('AuthenticationError', 'Unauthorized', 'Forbidden'):
             return 'auth_error'
 
         # Default category for unknown exceptions

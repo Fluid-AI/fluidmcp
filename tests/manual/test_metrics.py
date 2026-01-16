@@ -24,6 +24,53 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
+def parse_metric_count(text: str, metric_name: str) -> float:
+    """
+    Extract total count from a Prometheus metric across all label combinations.
+
+    Args:
+        text: Prometheus exposition format text
+        metric_name: Metric name to extract (e.g., "fluidmcp_requests_total")
+
+    Returns:
+        Sum of all metric values for the given metric name
+    """
+    total = 0.0
+    for line in text.split("\n"):
+        if line.startswith(f"{metric_name}{{"):
+            try:
+                total += float(line.split()[-1])
+            except ValueError:
+                # Skip lines with invalid numeric values
+                pass
+    return total
+
+
+def parse_metric_values(text: str, metric_name: str) -> dict:
+    """
+    Extract metric values with their label combinations.
+
+    Args:
+        text: Prometheus exposition format text
+        metric_name: Metric name to extract
+
+    Returns:
+        Dictionary mapping label combinations to values
+    """
+    values = {}
+    for line in text.split("\n"):
+        if line.startswith(f"{metric_name}{{"):
+            try:
+                # Split on last whitespace to separate labels from value
+                label_part = line.rsplit(None, 1)[0]
+                value = float(line.split()[-1])
+                values[label_part] = value
+            except (ValueError, IndexError):
+                # Skip lines that can't be parsed (invalid format or non-numeric values)
+                pass
+    return values
+
+
 def test_metrics_endpoint():
     """Test that /metrics endpoint is accessible."""
     print("\n=== Test 1: Metrics Endpoint Accessibility ===")
@@ -146,19 +193,7 @@ def test_generate_traffic_and_verify():
         # Get baseline metrics
         print("\nGetting baseline metrics...")
         response1 = requests.get("http://localhost:8099/metrics", timeout=5)
-        text1 = response1.text
-
-        # Extract baseline request count
-        baseline_count = 0
-        for line in text1.split("\n"):
-            if line.startswith("fluidmcp_requests_total{"):
-                # Extract value (last number on the line)
-                try:
-                    baseline_count += float(line.split()[-1])
-                except ValueError:
-                    # Skip lines with invalid numeric values
-                    pass
-
+        baseline_count = parse_metric_count(response1.text, "fluidmcp_requests_total")
         print(f"  Baseline request count: {baseline_count}")
 
         # Generate traffic by making a request to health endpoint
@@ -171,18 +206,7 @@ def test_generate_traffic_and_verify():
         # Get updated metrics
         print("\nGetting updated metrics...")
         response2 = requests.get("http://localhost:8099/metrics", timeout=5)
-        text2 = response2.text
-
-        # Extract new request count
-        new_count = 0
-        for line in text2.split("\n"):
-            if line.startswith("fluidmcp_requests_total{"):
-                try:
-                    new_count += float(line.split()[-1])
-                except ValueError:
-                    # Skip lines with invalid numeric values
-                    pass
-
+        new_count = parse_metric_count(response2.text, "fluidmcp_requests_total")
         print(f"  New request count: {new_count}")
 
         # Check if count increased (note: /metrics and /health calls also count)
@@ -242,17 +266,7 @@ def test_counter_monotonicity():
     try:
         # Get first snapshot
         response1 = requests.get("http://localhost:8099/metrics", timeout=5)
-        text1 = response1.text
-
-        # Extract counter values
-        counters1 = {}
-        for line in text1.split("\n"):
-            if line.startswith("fluidmcp_requests_total{"):
-                try:
-                    counters1[line.rsplit(None, 1)[0]] = float(line.split()[-1])
-                except (ValueError, IndexError):
-                    # Skip lines that can't be parsed (invalid format or non-numeric values)
-                    pass
+        counters1 = parse_metric_values(response1.text, "fluidmcp_requests_total")
 
         # Generate more traffic
         for _ in range(3):
@@ -261,17 +275,7 @@ def test_counter_monotonicity():
 
         # Get second snapshot
         response2 = requests.get("http://localhost:8099/metrics", timeout=5)
-        text2 = response2.text
-
-        # Extract counter values again
-        counters2 = {}
-        for line in text2.split("\n"):
-            if line.startswith("fluidmcp_requests_total{"):
-                try:
-                    counters2[line.rsplit(None, 1)[0]] = float(line.split()[-1])
-                except (ValueError, IndexError):
-                    # Skip malformed lines that can't be parsed
-                    pass
+        counters2 = parse_metric_values(response2.text, "fluidmcp_requests_total")
 
         # Verify monotonicity
         all_monotonic = True
