@@ -207,8 +207,9 @@ def test_generate_traffic_and_verify():
         print(f"  Baseline request count: {baseline_count}")
 
         # Generate traffic by making a request to health endpoint
-        # Note: /health endpoint itself is not instrumented with RequestTimer,
-        # but the /metrics calls we make will increment the request count.
+        # Note: Neither /health nor /metrics endpoints are instrumented with RequestTimer.
+        # This test validates that the metrics system works by checking if the count
+        # increased from any baseline traffic (e.g., from server startup or other requests).
         print("\nGenerating traffic (health check request)...")
         requests.get("http://localhost:8099/health", timeout=5)
 
