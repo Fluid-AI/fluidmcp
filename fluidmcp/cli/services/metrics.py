@@ -143,6 +143,9 @@ class Histogram(Metric):
 
         with self._lock:
             # Initialize histogram entry if it doesn't exist (thread-safe)
+            # Note: Explicit initialization is required despite defaultdict. While defaultdict
+            # creates entries lazily, we must ensure we're modifying the SAME dict instance
+            # across multiple observe() calls, not creating new ones on each access.
             if key not in self.histograms:
                 self.histograms[key] = {
                     "sum": 0.0,
@@ -393,24 +396,50 @@ class MetricsCollector:
 
     def set_uptime(self, uptime_seconds: float):
         """
-        Set server uptime.
+        Set server uptime in seconds.
 
-        Note: This should be calculated on-demand during metrics export (e.g., from
-        server start_time) rather than set once at startup. The server_manager should
-        update this metric periodically or compute it dynamically when /metrics is accessed.
+        Args:
+            uptime_seconds: Current server uptime in seconds
+
+        Current Limitation:
+            This is currently set once at server startup and never updated. For accurate
+            uptime tracking, the caller should either:
+            1. Call this method periodically (e.g., every metrics scrape), or
+            2. Compute uptime dynamically from server start_time when /metrics is accessed
+
+        TODO: Implement dynamic uptime calculation (tracked in Round 5 review)
         """
         uptime = self.registry.get_metric("fluidmcp_server_uptime_seconds")
         if uptime:
             uptime.set(uptime_seconds, {"server_id": self.server_id})
 
     def set_gpu_memory(self, gpu_index: int, memory_bytes: float):
-        """Set GPU memory usage."""
+        """
+        Set GPU memory usage in bytes.
+
+        Args:
+            gpu_index: GPU device index (0, 1, 2, ...)
+            memory_bytes: Memory usage in bytes
+
+        Note: This method is currently not called automatically. To enable GPU monitoring,
+        integrate with a GPU monitoring library (e.g., pynvml, GPUtil) and call this method
+        periodically or during metrics export.
+        """
         gpu_mem = self.registry.get_metric("fluidmcp_gpu_memory_bytes")
         if gpu_mem:
             gpu_mem.set(memory_bytes, {"server_id": self.server_id, "gpu_index": str(gpu_index)})
 
     def set_gpu_utilization(self, utilization: float):
-        """Set GPU memory utilization ratio."""
+        """
+        Set GPU memory utilization ratio.
+
+        Args:
+            utilization: Utilization ratio between 0.0 (empty) and 1.0 (full)
+
+        Note: This method is currently not called automatically. To enable GPU monitoring,
+        integrate with a GPU monitoring library (e.g., pynvml, GPUtil) and call this method
+        periodically or during metrics export.
+        """
         gpu_util = self.registry.get_metric("fluidmcp_gpu_memory_utilization_ratio")
         if gpu_util:
             gpu_util.set(utilization, {"server_id": self.server_id})
@@ -476,8 +505,23 @@ class RequestTimer:
 
     @staticmethod
     def _categorize_error(exc_type) -> str:
-        """Map exception types to fixed error categories to limit metric cardinality."""
+        """
+        Map exception types to fixed error categories to limit metric cardinality.
+
+        Args:
+            exc_type: Exception class (typically from __exit__ context manager)
+
+        Returns:
+            Error category string for metrics labeling
+        """
         # Defensive: ensure exc_type is actually an exception class
+        # Note: While __exit__ guarantees exc_type is None or an exception class,
+        # this defensive check protects against:
+        # 1. Future refactoring that might call this method from other contexts
+        # 2. Potential bugs in calling code
+        # 3. Edge cases in exception handling
+        # Performance overhead is negligible (single isinstance check).
+        # (Discussed and intentionally kept in Round 8 review)
         try:
             if not isinstance(exc_type, type) or not issubclass(exc_type, BaseException):
                 return 'server_error'
