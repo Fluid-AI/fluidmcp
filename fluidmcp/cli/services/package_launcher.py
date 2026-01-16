@@ -602,6 +602,8 @@ def create_dynamic_router(server_manager):
                     # scoped for different troubleshooting workflows: global error rates versus
                     # per-stream termination reasons.
                     completion_status = "broken_pipe"
+                    # Record in global error metric for monitoring
+                    collector.record_error("io_error")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
 

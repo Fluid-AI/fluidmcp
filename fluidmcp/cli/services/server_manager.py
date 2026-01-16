@@ -122,8 +122,10 @@ class ServerManager:
         Returns:
             True if started successfully, False otherwise
         """
-        # Initialize name early for exception handler
+        # Initialize name and collector early for exception handler
         name = id
+        collector = MetricsCollector(id)
+
         try:
             # Check if already running
             if id in self.processes:
@@ -172,8 +174,7 @@ class ServerManager:
             })
 
             # Update metrics - server is now running (status code: 2)
-            # Note: Moved after database save to ensure state consistency
-            collector = MetricsCollector(id)
+            # Note: Metrics update after database save to ensure state consistency
             collector.set_server_status(2)  # 2 = running
             # TODO: Uptime is only set once at startup and never updated.
             # Consider implementing periodic updates or dynamic calculation during /metrics export.
@@ -185,7 +186,6 @@ class ServerManager:
             logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
 
             # Update metrics - server failed to start (status code: 3)
-            collector = MetricsCollector(id)
             collector.set_server_status(3)  # 3 = error
             collector.record_error("start_failed")
 

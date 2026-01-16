@@ -310,10 +310,15 @@ class MetricsRegistry:
         """Render all metrics in Prometheus exposition format."""
         lines = []
 
+        # Take a snapshot of metrics under lock to avoid holding the registry lock
+        # while rendering each metric (which also acquires its own lock)
         with self._lock:
-            for metric in sorted(self.metrics.values(), key=lambda m: m.name):
-                lines.append(metric.render())
-                lines.append("")  # Blank line between metrics
+            metrics_snapshot = sorted(self.metrics.values(), key=lambda m: m.name)
+
+        # Render each metric without holding the registry lock
+        for metric in metrics_snapshot:
+            lines.append(metric.render())
+            lines.append("")  # Blank line between metrics
 
         return "\n".join(lines)
 
@@ -474,9 +479,18 @@ class RequestTimer:
         # IMPORTANT: Check specific exceptions before their base classes
         # Python exception hierarchy: BaseException → Exception → OSError → (PermissionError, ConnectionError, etc.)
 
-        # Network errors (TimeoutError and ConnectionError before OSError)
+        # BrokenPipeError: Explicit check first to clarify intent
+        # (subclass of both ConnectionError and OSError, but categorized as io_error)
         try:
-            if issubclass(exc_type, (TimeoutError, ConnectionError)) and not issubclass(exc_type, BrokenPipeError):
+            if issubclass(exc_type, BrokenPipeError):
+                return 'io_error'
+        except TypeError:
+            # issubclass() raised TypeError - exc_type is not a valid class
+            pass
+
+        # Network errors (TimeoutError and ConnectionError, but not BrokenPipeError)
+        try:
+            if issubclass(exc_type, (TimeoutError, ConnectionError)):
                 return 'network_error'
         except TypeError:
             # issubclass() raised TypeError - exc_type is not a valid class
