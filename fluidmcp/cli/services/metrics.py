@@ -142,19 +142,16 @@ class Histogram(Metric):
         key = self._get_label_key(label_values)
 
         with self._lock:
-            # Initialize histogram entry if it doesn't exist (thread-safe)
+            # Initialize histogram entry if it doesn't exist (thread-safe).
             #
-            # Note: While defaultdict would lazily create the entry on first access,
-            # explicit initialization provides several benefits:
-            # 1. Code clarity: Makes initialization explicit and easier to understand
-            # 2. Avoids repeated lambda calls: defaultdict lambda would be called on
-            #    every "if key in self.histograms" check or first access
-            # 3. Type safety: Ensures the dict structure is correct from the start
-            # 4. Performance: Single initialization vs. repeated lambda evaluations
+            # Note: self.histograms may be a defaultdict that can create entries on
+            # demand, but we keep this explicit initialization to make the expected
+            # structure of each histogram entry clear at the point of first use.
             #
-            # CORRECTION (Round 12): Previous comments incorrectly claimed defaultdict
-            # doesn't persist modifications. Copilot was right - defaultdict DOES work
-            # correctly. The explicit check is kept for clarity and performance.
+            # CORRECTION (Round 13): The lambda is only called ONCE per key when the
+            # key is first accessed (not on every check). The "in" operator doesn't
+            # trigger the default factory at all. Explicit initialization is kept
+            # purely for code clarity, not performance.
             if key not in self.histograms:
                 self.histograms[key] = {
                     "sum": 0.0,
@@ -410,13 +407,10 @@ class MetricsCollector:
         Args:
             uptime_seconds: Current server uptime in seconds
 
-        Current Limitation:
-            This is currently set once at server startup and never updated. For accurate
-            uptime tracking, the caller should either:
-            1. Call this method periodically (e.g., every metrics scrape), or
-            2. Compute uptime dynamically from server start_time when /metrics is accessed
-
-        TODO: Implement dynamic uptime calculation (tracked in Round 5 review)
+        Note:
+            As of Round 13, uptime is dynamically calculated on every /metrics request
+            by storing server start_time in ServerManager and computing elapsed time.
+            This method is called from the /metrics endpoint with the current uptime value.
         """
         uptime = self.registry.get_metric("fluidmcp_server_uptime_seconds")
         if uptime:
@@ -430,9 +424,17 @@ class MetricsCollector:
             gpu_index: GPU device index (0, 1, 2, ...)
             memory_bytes: Memory usage in bytes
 
-        Note: This method is currently not called automatically. To enable GPU monitoring,
-        integrate with a GPU monitoring library (e.g., pynvml, GPUtil) and call this method
-        periodically or during metrics export.
+        Note: GPU monitoring is opt-in and NOT integrated by default.
+
+        This method provides the metrics infrastructure for GPU monitoring but does not
+        automatically collect GPU data. To enable GPU monitoring:
+        1. Integrate with a GPU monitoring library (e.g., pynvml, GPUtil)
+        2. Call this method periodically or during /metrics export
+        3. If not implemented, fluidmcp_gpu_memory_bytes metric will remain empty
+           and related dashboard panels will show no data
+
+        The metrics and dashboard are provided as a convenience for users who want
+        to add GPU monitoring to their deployment.
         """
         gpu_mem = self.registry.get_metric("fluidmcp_gpu_memory_bytes")
         if gpu_mem:
@@ -445,9 +447,17 @@ class MetricsCollector:
         Args:
             utilization: Utilization ratio between 0.0 (empty) and 1.0 (full)
 
-        Note: This method is currently not called automatically. To enable GPU monitoring,
-        integrate with a GPU monitoring library (e.g., pynvml, GPUtil) and call this method
-        periodically or during metrics export.
+        Note: GPU monitoring is opt-in and NOT integrated by default.
+
+        This method provides the metrics infrastructure for GPU monitoring but does not
+        automatically collect GPU data. To enable GPU monitoring:
+        1. Integrate with a GPU monitoring library (e.g., pynvml, GPUtil)
+        2. Call this method periodically or during /metrics export
+        3. If not implemented, fluidmcp_gpu_memory_utilization_ratio metric will remain
+           empty and related dashboard panels/alerts will show no data
+
+        The metrics and dashboard are provided as a convenience for users who want
+        to add GPU monitoring to their deployment.
         """
         gpu_util = self.registry.get_metric("fluidmcp_gpu_memory_utilization_ratio")
         if gpu_util:
@@ -616,19 +626,24 @@ class ToolTimer:
     """
     Context manager for timing tool executions.
 
-    Note: This class is currently not used in the codebase. To enable tool-level
-    monitoring, integrate ToolTimer into the tool execution path where MCP tool
-    calls are processed. Once integrated, tool metrics (fluidmcp_tool_calls_total
-    and fluidmcp_tool_execution_seconds) will be populated.
+    This utility is provided for MCP hosts that want per-tool execution metrics.
+    It is **not** integrated into the default tool execution path in this
+    package, and will only emit metrics if the host application explicitly
+    wraps its tool calls with `ToolTimer` (or calls
+    `MetricsCollector.record_tool_call` directly).
 
-    Usage example:
+    When used, the following Prometheus metrics are populated:
+      - fluidmcp_tool_calls_total
+      - fluidmcp_tool_execution_seconds
+
+    If `ToolTimer` is not wired into your tool invocation code, these metrics
+    will remain empty and any associated dashboard panels will show no data.
+
+    Usage example (opt-in integration):
         collector = MetricsCollector("server_id")
         with ToolTimer(collector, "tool_name"):
             # Execute tool code here
             pass
-
-    TODO: Integrate ToolTimer into MCP tool call processing
-    (Identified in Round 12 Copilot review)
     """
 
     def __init__(self, collector: MetricsCollector, tool_name: str):

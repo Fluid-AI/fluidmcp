@@ -521,6 +521,8 @@ def create_dynamic_router(server_manager):
         method = request.get("method", "unknown")
 
         # Track request with metrics (RequestTimer automatically records all errors)
+        # HTTPExceptions raised within this context are tracked as error_type="network_error"
+        # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
             # Check if server exists
             if server_name not in server_manager.processes:
@@ -563,12 +565,24 @@ def create_dynamic_router(server_manager):
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
-        # Pre-validation (errors not tracked - occurs before streaming begins)
-        # Note: These HTTPExceptions represent client/infrastructure errors (404/503),
-        # not streaming failures. They happen at the HTTP layer before MCP protocol interaction.
-        # TODO: Consider tracking these errors for complete observability. Would require:
-        #   - New metric: fluidmcp_http_errors_total{endpoint, status_code}
-        #   - Or: Record as error_type="server_not_found" via collector.record_error()
+        # Pre-validation (errors NOT tracked - occurs before streaming begins)
+        #
+        # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
+        # in RequestTimer because they represent pre-flight validation failures that occur
+        # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
+        #
+        # These errors are observable through:
+        # 1. FastAPI's built-in HTTP error logs
+        # 2. HTTP status code monitoring at the load balancer/proxy level
+        # 3. Application logs (logged by FastAPI middleware)
+        #
+        # If you need metrics for these specific errors, consider:
+        # - Option 1: New metric fluidmcp_http_errors_total{endpoint, status_code}
+        # - Option 2: Manual tracking via collector.record_error("server_not_found")
+        # - Option 3: Wrap these checks in a lightweight context manager
+        #
+        # Current implementation prioritizes clarity by separating HTTP validation from
+        # MCP protocol errors tracked via RequestTimer.
         if server_name not in server_manager.processes:
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
