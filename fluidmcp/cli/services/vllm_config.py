@@ -63,16 +63,23 @@ def validate_gpu_memory(
     """
     memory_breakdown = {}
     total_memory = 0.0
+    has_tensor_parallelism = False
 
     for model_id, config in llm_models.items():
         # Check if high-level config exists
         if "config" in config:
             gpu_mem = config["config"].get("gpu_memory_utilization", 0.9)
+            tensor_parallel_size = config["config"].get("tensor_parallel_size", 1)
         # Fall back to parsing args for backward compatibility
         elif "args" in config:
             gpu_mem = _extract_gpu_memory_from_args(config["args"])
+            tensor_parallel_size = 1  # Can't easily parse from args, assume 1
         else:
             gpu_mem = 0.9  # vLLM default
+            tensor_parallel_size = 1
+
+        if tensor_parallel_size > 1:
+            has_tensor_parallelism = True
 
         memory_breakdown[model_id] = gpu_mem
         total_memory += gpu_mem
@@ -83,6 +90,11 @@ def validate_gpu_memory(
         for model_id, mem in memory_breakdown.items():
             logger.info(f"  - {model_id}: {mem:.2f}")
         logger.info(f"Total: {total_memory:.2f}")
+        if has_tensor_parallelism:
+            logger.info(
+                "Note: Tensor parallelism detected. This validation assumes single-GPU setup. "
+                "With tensor_parallel_size > 1, models use memory across multiple GPUs."
+            )
 
     # Validation: Fail on exceeded memory
     if total_memory > 1.0:
@@ -396,7 +408,12 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
 
     cfg = config["config"]
     model = config.get("model")
-    port = config.get("port", 8001)
+
+    # Port can be at top-level or inside config, with top-level taking precedence
+    # This matches the logic in validate_port_conflicts()
+    top_level_port = config.get("port")
+    nested_port = cfg.get("port")
+    port = top_level_port if top_level_port is not None else (nested_port if nested_port is not None else 8001)
 
     if not model:
         raise VLLMConfigError("'model' field is required for high-level config")
