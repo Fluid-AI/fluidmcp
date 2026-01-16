@@ -532,15 +532,18 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
             if "profile" in config:
                 llm_models[model_id] = apply_profile(config, config["profile"])
 
+            # Use updated config after profile application
+            current_config = llm_models[model_id]
+
             # Apply default port if not specified (for proper conflict detection)
-            if "config" in config:
-                top_level_port = config.get("port")
-                nested_port = config["config"].get("port")
+            if "config" in current_config:
+                top_level_port = current_config.get("port")
+                nested_port = current_config["config"].get("port")
                 if top_level_port is None and nested_port is None:
-                    config["port"] = 8001  # Apply default for validation
+                    current_config["port"] = 8001  # Apply default for validation
 
             # Validate config values
-            validate_config_values(config)
+            validate_config_values(current_config)
 
         except VLLMConfigError as e:
             logger.error(f"Config error for model '{model_id}': {e}")
