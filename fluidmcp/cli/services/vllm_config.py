@@ -74,8 +74,7 @@ def validate_gpu_memory(
     """
     memory_breakdown = {}
     total_memory = 0.0
-    has_tensor_parallelism = False
-    tensor_parallel_models = []
+    tensor_parallel_models = {}
 
     for model_id, config in llm_models.items():
         # Check if high-level config exists
@@ -92,27 +91,23 @@ def validate_gpu_memory(
 
         # Track models with tensor parallelism separately
         if tensor_parallel_size > 1:
-            has_tensor_parallelism = True
-            tensor_parallel_models.append(model_id)
-            memory_breakdown[model_id] = f"{gpu_mem:.2f} (tensor_parallel_size={tensor_parallel_size}, excluded from total)"
+            tensor_parallel_models[model_id] = (gpu_mem, tensor_parallel_size)
             logger.debug(f"Excluding {model_id} from GPU memory total (uses tensor parallelism)")
         else:
             memory_breakdown[model_id] = gpu_mem
             total_memory += gpu_mem
 
     # Log memory breakdown
-    if memory_breakdown:
+    if memory_breakdown or tensor_parallel_models:
         logger.info("GPU Memory Allocation:")
         for model_id, mem in memory_breakdown.items():
-            # mem might be a string for tensor parallel models
-            if isinstance(mem, str):
-                logger.info(f"  - {model_id}: {mem}")
-            else:
-                logger.info(f"  - {model_id}: {mem:.2f}")
+            logger.info(f"  - {model_id}: {mem:.2f}")
+        for model_id, (mem, tps) in tensor_parallel_models.items():
+            logger.info(f"  - {model_id}: {mem:.2f} (tensor_parallel_size={tps}, excluded from total)")
         logger.info(f"Total (single-GPU models only): {total_memory:.2f}")
-        if has_tensor_parallelism:
+        if tensor_parallel_models:
             logger.warning(
-                f"Tensor parallelism detected in models: {tensor_parallel_models}. "
+                f"Tensor parallelism detected in models: {list(tensor_parallel_models.keys())}. "
                 f"These models are excluded from GPU memory validation as they use multiple GPUs. "
                 f"You must manually ensure your multi-GPU setup has sufficient resources for these models."
             )
@@ -363,6 +358,14 @@ def validate_config_values(config: Dict[str, Any]) -> None:
                 f"For production use, explicitly set a value between {RECOMMENDED_GPU_MEMORY_MIN} "
                 f"and {RECOMMENDED_GPU_MEMORY_MAX} to ensure deterministic memory allocation."
             )
+        elif 0.0 < mem_float < RECOMMENDED_GPU_MEMORY_MIN:
+            logger.warning(
+                f"gpu_memory_utilization is set to {mem_float}, which is below the recommended minimum "
+                f"of {RECOMMENDED_GPU_MEMORY_MIN}. While this is technically allowed, such low values "
+                f"can underutilize the GPU and waste resources. Consider using a value between "
+                f"{RECOMMENDED_GPU_MEMORY_MIN} and {RECOMMENDED_GPU_MEMORY_MAX} for more efficient "
+                f"GPU utilization in production."
+            )
         elif mem_float > RECOMMENDED_GPU_MEMORY_MAX:
             logger.warning(
                 f"gpu_memory_utilization is set to {mem_float}, which exceeds the recommended maximum "
@@ -587,7 +590,8 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
         # Validate timeout values
         for key, value in timeouts.items():
             if value is not None:  # None is allowed (means no timeout)
-                if not isinstance(value, (int, float)) or value < 0:
+                # Explicitly reject booleans; only allow non-negative int/float
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                     raise VLLMConfigError(
                         f"Timeout '{key}' must be a non-negative number or null, got {type(value).__name__}: {value!r}"
                     )

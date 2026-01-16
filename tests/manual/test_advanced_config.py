@@ -73,7 +73,7 @@ def test_profile_application():
 
     for profile_name in ["development", "production", "high-throughput"]:
         print(f"\nTesting profile: {profile_name}")
-        # Create fresh config for each iteration to avoid mutation issues
+        # Create fresh config for each iteration to ensure test independence
         config = {
             "model": "TEST_MODEL",
             "port": 8001,
