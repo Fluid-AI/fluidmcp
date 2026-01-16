@@ -156,6 +156,16 @@ class Histogram(Metric):
 
             # Update bucket counts: increment only the smallest matching bucket.
             # Cumulative counts are computed during render().
+            #
+            # Implementation Note: This is the CORRECT approach for Prometheus histograms.
+            # We store individual (non-cumulative) bucket counts and compute cumulative
+            # counts during export. This is more efficient (O(1) write vs O(n) write)
+            # and follows the pattern used by many Prometheus client libraries.
+            #
+            # Example: value=3 with buckets [1, 5, 10]
+            #   - observe(3): increments bucket[5] only (breaks after first match)
+            #   - render(): outputs cumulative counts: bucket[1]=0, bucket[5]=1, bucket[10]=1
+            #
             # Note: Values exceeding all buckets don't increment any specific bucket counter.
             # The +Inf bucket (rendered in render()) shows hist["count"], which includes all observations.
             for bucket in self.buckets:
