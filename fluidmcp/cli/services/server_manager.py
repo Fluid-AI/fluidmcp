@@ -36,6 +36,7 @@ class ServerManager:
         # Process registry (in-memory)
         self.processes: Dict[str, subprocess.Popen] = {}
         self.configs: Dict[str, Dict[str, Any]] = {}
+        self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
 
         # Event loop for async operations
         self._loop = None
@@ -176,8 +177,9 @@ class ServerManager:
             # Update metrics - server is now running (status code: 2)
             # Note: Metrics update after database save to ensure state consistency
             collector.set_server_status(2)  # 2 = running
-            # TODO: Uptime is only set once at startup and never updated.
-            # Consider implementing periodic updates or dynamic calculation during /metrics export.
+
+            # Store start time for dynamic uptime calculation
+            self.start_times[id] = time.monotonic()
             collector.set_uptime(0.0)  # Just started
 
             return True
@@ -618,6 +620,8 @@ class ServerManager:
         # Remove from registry
         if id in self.processes:
             del self.processes[id]
+        if id in self.start_times:
+            del self.start_times[id]
 
         # Update database
         await self.db.save_instance_state({
@@ -629,6 +633,20 @@ class ServerManager:
         })
 
         logger.info(f"Cleaned up server '{id}'")
+
+    def get_uptime(self, server_id: str) -> Optional[float]:
+        """
+        Get current uptime for a server in seconds.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Uptime in seconds since server start, or None if server not running
+        """
+        if server_id not in self.start_times:
+            return None
+        return time.monotonic() - self.start_times[server_id]
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:

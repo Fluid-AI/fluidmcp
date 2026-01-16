@@ -142,12 +142,21 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
-        - Server status and uptime
+        - Server status and uptime (dynamically calculated)
         - GPU memory utilization
         - Tool execution metrics
         - Streaming request metrics
         """
         from fastapi.responses import PlainTextResponse
+        from .services.metrics import MetricsCollector
+
+        # Update uptime for all running servers before rendering metrics
+        for server_id in server_manager.processes.keys():
+            uptime = server_manager.get_uptime(server_id)
+            if uptime is not None:
+                collector = MetricsCollector(server_id)
+                collector.set_uptime(uptime)
+
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
         return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4; charset=utf-8")
