@@ -32,7 +32,7 @@ VLLM_PROFILES = {
         "dtype": "float16",
     },
     "high-throughput": {
-        "gpu_memory_utilization": 0.9,
+        "gpu_memory_utilization": 0.88,
         "max_num_seqs": 128,
         "max_num_batched_tokens": 16384,
         "max_model_len": 2048,
@@ -594,6 +594,13 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                     raise VLLMConfigError(
                         f"Timeout '{key}' must be a non-negative number or null, got {type(value).__name__}: {value!r}"
+                    )
+                # Warn about timeout=0 which may have special behavior
+                if value == 0:
+                    logger.warning(
+                        f"Timeout '{key}' is set to 0, which may have special semantics (immediate timeout, "
+                        f"poll-only, or infinite timeout depending on the implementation). "
+                        f"Consider using null for no timeout or a small positive value for testing."
                     )
 
         transformed["timeouts"] = timeouts

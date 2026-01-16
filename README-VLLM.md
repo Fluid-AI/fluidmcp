@@ -184,13 +184,13 @@ FluidMCP now supports a simplified, high-level configuration format that automat
 
 **Example**: [examples/vllm-advanced-config.json](examples/vllm-advanced-config.json)
 
-**Note**: Replace `TEST_MODEL` in examples below with your actual model name (e.g., `facebook/opt-125m`, `gpt2`, etc.).
+**Note**: Replace `facebook/opt-125m` in examples below with your actual model name (e.g., `facebook/opt-125m`, `gpt2`, etc.).
 
 ```json
 {
   "llmModels": {
     "vllm": {
-      "model": "TEST_MODEL",
+      "model": "facebook/opt-125m",
       "port": 8001,
       "profile": "production",
       "config": {
@@ -228,14 +228,14 @@ Profiles provide production-tested defaults for common scenarios:
 |---------|----------|------------|----------|----------------|-----------|
 | **development** | Testing, small loads | 0.5 | 16 | 2048 | 2048 |
 | **production** | Production workloads | 0.85 | 64 | 8192 | 4096 |
-| **high-throughput** | Maximum concurrency | 0.9 | 128 | 16384 | 2048 |
+| **high-throughput** | Maximum concurrency | 0.88 | 128 | 16384 | 2048 |
 
 **Usage**:
 ```json
 {
   "llmModels": {
     "vllm": {
-      "model": "TEST_MODEL",
+      "model": "facebook/opt-125m",
       "port": 8001,
       "profile": "production",
       "env": {}
@@ -256,12 +256,12 @@ FluidMCP automatically validates GPU memory allocation to prevent out-of-memory 
 {
   "llmModels": {
     "vllm-model-1": {
-      "model": "TEST_MODEL_1",
+      "model": "facebook/opt-125m",
       "port": 8001,
       "config": {"gpu_memory_utilization": 0.45}
     },
     "vllm-model-2": {
-      "model": "TEST_MODEL_2",
+      "model": "gpt2",
       "port": 8002,
       "config": {"gpu_memory_utilization": 0.45}
     }
@@ -366,7 +366,7 @@ The old raw args format continues to work without changes:
       "command": "vllm",
       "args": [
         "serve",
-        "TEST_MODEL",
+        "facebook/opt-125m",
         "--port", "8001",
         "--gpu-memory-utilization", "0.9"
       ],
