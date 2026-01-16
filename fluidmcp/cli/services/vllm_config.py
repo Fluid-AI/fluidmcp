@@ -12,6 +12,8 @@ import copy
 from typing import Dict, Any, List, Optional, Tuple
 from loguru import logger
 
+from .validators import validate_port_number
+
 
 # Configuration profiles with production-safe defaults
 VLLM_PROFILES = {
@@ -196,8 +198,8 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
             port = None
 
         if port is not None:
-            # Validate port range
-            if not isinstance(port, int) or port < 1 or port > 65535:
+            # Validate port range using shared validator
+            if not validate_port_number(port):
                 raise VLLMConfigError(
                     f"Model '{model_id}' has invalid port {port}. "
                     f"Port must be an integer between 1 and 65535."
@@ -216,6 +218,22 @@ def _extract_port_from_args(args: List[str]) -> Optional[int]:
     return _extract_arg_value(args, "--port", int, None)
 
 
+def _is_bool_type(value: Any) -> bool:
+    """
+    Check if value is a boolean type.
+
+    Helper function to explicitly reject booleans in numeric validation,
+    since bool is a subclass of int in Python (True==1, False==0).
+
+    Args:
+        value: Value to check
+
+    Returns:
+        True if value is a bool, False otherwise
+    """
+    return isinstance(value, bool)
+
+
 def _is_valid_number(value: Any, allow_zero: bool = True, allow_negative: bool = False) -> bool:
     """
     Check if value is a valid numeric type (int or float, but not bool).
@@ -231,7 +249,7 @@ def _is_valid_number(value: Any, allow_zero: bool = True, allow_negative: bool =
     Note:
         Explicitly rejects booleans because bool is a subclass of int in Python (True==1, False==0)
     """
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    if _is_bool_type(value) or not isinstance(value, (int, float)):
         return False
 
     if not allow_negative and value < 0:
@@ -256,7 +274,7 @@ def _is_valid_positive_int(value: Any) -> bool:
     Note:
         Explicitly rejects booleans because bool is a subclass of int in Python (True==1, False==0)
     """
-    if not isinstance(value, int) or isinstance(value, bool):
+    if _is_bool_type(value) or not isinstance(value, int):
         return False
 
     return value > 0
@@ -294,10 +312,11 @@ def validate_config_values(config: Dict[str, Any]) -> None:
         # Warn about edge case value
         if mem == 0.0:
             logger.warning(
-                "gpu_memory_utilization is set to 0.0. This is an advanced setting whose "
-                "exact semantics are determined by vLLM and may not be suitable for "
-                "production. Consider using a value > 0.0 (e.g., 0.5-0.9) for more "
-                "predictable behavior."
+                "gpu_memory_utilization is set to 0.0. With this value, vLLM will use its "
+                "internal heuristics to determine GPU memory allocation, which varies by backend "
+                "and model. This can lead to unpredictable memory usage and may cause OOM errors. "
+                "For production use, explicitly set a value between 0.5 and 0.9 to ensure "
+                "deterministic memory allocation."
             )
 
     # Validate dtype
@@ -343,30 +362,24 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
     """
     Apply a configuration profile to a model config.
 
-    WARNING: This function has side effects! It mutates the input config dictionary
-    in-place by adding profile defaults to config["config"].
+    This function is now immutable - it creates and returns a new dictionary
+    instead of modifying the input config in-place.
 
     Args:
-        config: Model configuration dictionary (WILL BE MODIFIED IN-PLACE)
+        config: Model configuration dictionary (will NOT be modified)
         profile_name: Name of profile to apply (development/production/high-throughput)
 
     Returns:
-        The modified config dictionary (same object as input)
+        New config dictionary with profile defaults applied
 
     Raises:
         VLLMConfigError: If profile name is invalid
 
-    Side Effects:
-        - Adds profile default values to config["config"] (only for keys not already present)
+    Behavior:
+        - Creates a deep copy of the input config
+        - Adds profile default values to the copy's config["config"]
         - Does NOT override user-specified values
-
-    Usage Notes:
-        - validate_and_transform_llm_config() makes a deep copy at the module boundary,
-          so callers of that function don't experience mutation side effects.
-        - If calling this function directly outside of validate_and_transform_llm_config(),
-          pass a deep copy if you need to preserve the original:
-              import copy
-              result = apply_profile(copy.deepcopy(config), profile_name)
+        - Returns the new config without modifying the original
     """
     if profile_name not in VLLM_PROFILES:
         raise VLLMConfigError(
@@ -374,20 +387,23 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
             f"Valid profiles: {list(VLLM_PROFILES.keys())}"
         )
 
+    # Make a deep copy to avoid mutating the input
+    result = copy.deepcopy(config)
+
     profile = VLLM_PROFILES[profile_name]
 
     # Initialize config dict if not present
-    if "config" not in config:
-        config["config"] = {}
+    if "config" not in result:
+        result["config"] = {}
 
     # Apply profile defaults (don't override user-specified values)
     for key, value in profile.items():
-        if key not in config["config"]:
-            config["config"][key] = value
+        if key not in result["config"]:
+            result["config"][key] = value
 
     logger.info(f"Using profile: {profile_name} (override any field to customize)")
 
-    return config
+    return result
 
 
 def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -512,9 +528,9 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
     # Step 1: Apply profiles, set defaults, and validate individual configs
     for model_id, config in llm_models.items():
         try:
-            # Apply profile if specified (mutates config in-place)
+            # Apply profile if specified (returns new config without mutation)
             if "profile" in config:
-                apply_profile(config, config["profile"])
+                llm_models[model_id] = apply_profile(config, config["profile"])
 
             # Apply default port if not specified (for proper conflict detection)
             if "config" in config:

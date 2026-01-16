@@ -81,7 +81,7 @@ def test_profile_application():
         }
 
         try:
-            result = apply_profile(config.copy(), profile_name)
+            result = apply_profile(config, profile_name)
             print(f"✓ Profile '{profile_name}' applied")
             print(f"  Config: {result['config']}")
 
@@ -140,7 +140,7 @@ def test_gpu_memory_validation():
     }
 
     try:
-        result = validate_and_transform_llm_config(config)
+        validate_and_transform_llm_config(config)
         print(f"✗ Should have failed but didn't")
         return False
     except VLLMConfigError as e:
@@ -167,7 +167,7 @@ def test_port_conflict_detection():
     }
 
     try:
-        result = validate_and_transform_llm_config(config)
+        validate_and_transform_llm_config(config)
         print(f"✗ Should have detected port conflict")
         return False
     except VLLMConfigError as e:
@@ -191,7 +191,7 @@ def test_config_value_validation():
     }
 
     try:
-        result = validate_and_transform_llm_config(config)
+        validate_and_transform_llm_config(config)
         print(f"✗ Should have rejected invalid value")
         return False
     except VLLMConfigError as e:
@@ -208,7 +208,7 @@ def test_config_value_validation():
     }
 
     try:
-        result = validate_and_transform_llm_config(config)
+        validate_and_transform_llm_config(config)
         print(f"✗ Should have rejected invalid dtype")
         return False
     except VLLMConfigError as e:

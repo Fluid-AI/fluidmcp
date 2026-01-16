@@ -246,7 +246,9 @@ def run_servers(
             if launched_servers > 0:
                 logger.warning(
                     f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
-                    "These servers remain running. Stop them manually if needed."
+                    "These servers remain running and must be stopped manually. "
+                    "Use 'ps aux | grep mcp' (Unix) or Task Manager (Windows) to locate processes, "
+                    "then terminate with 'kill'/'pkill' (Unix) or Task Manager/'taskkill' (Windows)."
                 )
             return
 
