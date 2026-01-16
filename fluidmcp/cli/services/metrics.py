@@ -478,6 +478,7 @@ class RequestTimer:
             if issubclass(exc_type, (TimeoutError, ConnectionError)) and not issubclass(exc_type, BrokenPipeError):
                 return 'network_error'
         except TypeError:
+            # issubclass() raised TypeError - exc_type is not a valid class
             pass
 
         # Auth errors (PermissionError before OSError)
@@ -485,6 +486,7 @@ class RequestTimer:
             if issubclass(exc_type, PermissionError):
                 return 'auth_error'
         except TypeError:
+            # issubclass() raised TypeError - exc_type is not a valid class
             pass
 
         # I/O errors (OSError and its remaining subclasses)
@@ -492,6 +494,7 @@ class RequestTimer:
             if issubclass(exc_type, (OSError, IOError)):
                 return 'io_error'
         except TypeError:
+            # issubclass() raised TypeError - exc_type is not a valid class
             pass
 
         # Client errors (value/type errors)
@@ -499,6 +502,7 @@ class RequestTimer:
             if issubclass(exc_type, (ValueError, TypeError, KeyError, AttributeError)):
                 return 'client_error'
         except TypeError:
+            # issubclass() raised TypeError - exc_type is not a valid class
             pass
 
         # Fallback to name-based matching for non-stdlib exceptions

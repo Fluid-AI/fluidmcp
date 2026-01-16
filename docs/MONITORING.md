@@ -265,7 +265,7 @@ Total number of errors encountered.
 
 Labels:
 - `server_id` - Server identifier
-- `error_type` - Error classification (e.g., "server_not_found", "broken_pipe", "timeout")
+- `error_type` - Error classification (e.g., "network_error", "io_error", "auth_error", "client_error", "server_error")
 
 #### `fluidmcp_server_restarts_total`
 Total number of server restarts.
