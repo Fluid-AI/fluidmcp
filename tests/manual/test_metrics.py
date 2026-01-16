@@ -4,7 +4,10 @@ Manual test for metrics collection system.
 This script tests the Prometheus-compatible metrics exposed by FluidMCP.
 
 Prerequisites:
-- FluidMCP server running: fluidmcp run examples/sample-config.json --file --start-server
+- FluidMCP server running with any valid config:
+  fluidmcp run examples/vllm-config.json --file --start-server
+  OR
+  fluidmcp run your-config.json --file --start-server
 - Server accessible at http://localhost:8099
 
 Usage:
@@ -153,6 +156,7 @@ def test_generate_traffic_and_verify():
                 try:
                     baseline_count += float(line.split()[-1])
                 except ValueError:
+                    # Skip malformed lines (e.g., HELP/TYPE comments)
                     pass
 
         print(f"  Baseline request count: {baseline_count}")
@@ -176,6 +180,7 @@ def test_generate_traffic_and_verify():
                 try:
                     new_count += float(line.split()[-1])
                 except ValueError:
+                    # Skip malformed lines (e.g., HELP/TYPE comments)
                     pass
 
         print(f"  New request count: {new_count}")
@@ -246,6 +251,7 @@ def test_counter_monotonicity():
                 try:
                     counters1[line.rsplit(None, 1)[0]] = float(line.split()[-1])
                 except (ValueError, IndexError):
+                    # Skip malformed lines that can't be parsed
                     pass
 
         # Generate more traffic
@@ -264,6 +270,7 @@ def test_counter_monotonicity():
                 try:
                     counters2[line.rsplit(None, 1)[0]] = float(line.split()[-1])
                 except (ValueError, IndexError):
+                    # Skip malformed lines that can't be parsed
                     pass
 
         # Verify monotonicity

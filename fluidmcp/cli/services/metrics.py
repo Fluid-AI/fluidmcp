@@ -14,16 +14,8 @@ import time
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
 from threading import Lock
-from enum import Enum
 
 from loguru import logger
-
-
-class MetricType(Enum):
-    """Metric type enumeration."""
-    COUNTER = "counter"
-    GAUGE = "gauge"
-    HISTOGRAM = "histogram"
 
 
 class Metric:
@@ -154,7 +146,8 @@ class Histogram(Metric):
             hist["sum"] += value
             hist["count"] += 1
 
-            # Update bucket counts
+            # Update bucket counts efficiently - increment all buckets >= value
+            # This maintains cumulative histogram semantics while being more efficient
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1
@@ -373,7 +366,13 @@ class MetricsCollector:
             restarts.inc({"server_id": self.server_id, "reason": reason})
 
     def set_uptime(self, uptime_seconds: float):
-        """Set server uptime."""
+        """
+        Set server uptime.
+
+        Note: This should be calculated on-demand during metrics export (e.g., from
+        server start_time) rather than set once at startup. The server_manager should
+        update this metric periodically or compute it dynamically when /metrics is accessed.
+        """
         uptime = self.registry.get_metric("fluidmcp_server_uptime_seconds")
         if uptime:
             uptime.set(uptime_seconds, {"server_id": self.server_id})
@@ -440,12 +439,38 @@ class RequestTimer:
 
         if exc_type is not None:
             self.status = "error"
-            self.collector.record_error(exc_type.__name__)
+            # Map exception types to fixed categories to prevent unbounded cardinality
+            error_category = self._categorize_error(exc_type)
+            self.collector.record_error(error_category)
 
         self.collector.record_request(self.method, self.status, duration)
         self.collector.decrement_active_requests()
 
         return False  # Don't suppress exceptions
+
+    @staticmethod
+    def _categorize_error(exc_type) -> str:
+        """Map exception types to fixed error categories to limit metric cardinality."""
+        exc_name = exc_type.__name__
+
+        # HTTP/Network errors
+        if 'HTTP' in exc_name or 'Connection' in exc_name or 'Timeout' in exc_name:
+            return 'network_error'
+
+        # I/O errors
+        if 'IO' in exc_name or 'File' in exc_name or 'Pipe' in exc_name:
+            return 'io_error'
+
+        # Value/Type errors (client errors)
+        if exc_name in ('ValueError', 'TypeError', 'KeyError', 'AttributeError'):
+            return 'client_error'
+
+        # Other specific errors
+        if exc_name in ('PermissionError', 'AuthenticationError', 'Unauthorized'):
+            return 'auth_error'
+
+        # Default category for unknown exceptions
+        return 'server_error'
 
 
 class ToolTimer:

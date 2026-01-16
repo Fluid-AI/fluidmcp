@@ -520,20 +520,20 @@ def create_dynamic_router(server_manager):
         collector = MetricsCollector(server_name)
         method = request.get("method", "unknown")
 
-        # Check if server exists
-        if server_name not in server_manager.processes:
-            collector.record_error("server_not_found")
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
-
-        process = server_manager.processes[server_name]
-
-        # Check if process is alive
-        if process.poll() is not None:
-            collector.record_error("process_dead")
-            raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
-
-        # Track request with metrics
+        # Track request with metrics (includes pre-validation errors)
         with RequestTimer(collector, method):
+            # Check if server exists
+            if server_name not in server_manager.processes:
+                collector.record_error("server_not_found")
+                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+
+            process = server_manager.processes[server_name]
+
+            # Check if process is alive
+            if process.poll() is not None:
+                collector.record_error("process_dead")
+                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
             try:
                 # Send request to MCP server
                 msg = json.dumps(request)
