@@ -1,7 +1,7 @@
 {
   "llmModels": {
     "vllm": {
-      "model": "TEST_MODEL",
+      "model": "facebook/opt-125m",
       "port": 8001,
       "profile": "development",
       "env": {}

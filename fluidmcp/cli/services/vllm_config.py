@@ -303,7 +303,10 @@ def validate_config_values(config: Dict[str, Any]) -> None:
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be a number between 0.0 and 1.0 (inclusive), got {mem!r}"
             )
-        mem = float(mem)  # Normalize to float for vLLM
+        # Normalize to float for vLLM and assign back
+        mem = float(mem)
+        cfg["gpu_memory_utilization"] = mem
+
         if mem > 1.0:
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem}"

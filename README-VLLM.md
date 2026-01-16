@@ -184,6 +184,8 @@ FluidMCP now supports a simplified, high-level configuration format that automat
 
 **Example**: [examples/vllm-advanced-config.json](examples/vllm-advanced-config.json)
 
+**Note**: Replace `TEST_MODEL` in examples below with your actual model name (e.g., `facebook/opt-125m`, `gpt2`, etc.).
+
 ```json
 {
   "llmModels": {
@@ -209,8 +211,6 @@ FluidMCP now supports a simplified, high-level configuration format that automat
   }
 }
 ```
-
-**Note**: Replace `TEST_MODEL` with your actual model name (e.g., `facebook/opt-125m`, `gpt2`, etc.).
 
 **Benefits**:
 - ✅ Automatic validation before launch
