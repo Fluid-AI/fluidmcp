@@ -4,24 +4,11 @@ Manual test for metrics collection system.
 This script tests the Prometheus-compatible metrics exposed by FluidMCP.
 
 Prerequisites:
-- FluidMCP server running with any valid config:
-  fluidmcp run examples/sample-config.json --file --start-server
-  OR
-  fluidmcp run your-config.json --file --start-server
+- FluidMCP server running: fluidmcp run examples/sample-config.json --file --start-server
 - Server accessible at http://localhost:8099
 
 Usage:
     python tests/manual/test_metrics.py
-
-TODO: Add automated unit tests
-    The metrics system currently relies on manual integration tests. For better
-    test coverage, consider adding unit tests for:
-    - Counter, Gauge, Histogram metric classes (increment, set, observe)
-    - MetricsCollector methods (record_request, record_error, etc.)
-    - RequestTimer and ToolTimer context managers
-    - Error categorization logic
-    - Thread safety under concurrent access
-    (Identified in Round 11 Copilot review)
 """
 
 import sys
@@ -32,53 +19,6 @@ from pathlib import Path
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
-
-
-def parse_metric_count(text: str, metric_name: str) -> float:
-    """
-    Extract total count from a Prometheus metric across all label combinations.
-
-    Args:
-        text: Prometheus exposition format text
-        metric_name: Metric name to extract (e.g., "fluidmcp_requests_total")
-
-    Returns:
-        Sum of all metric values for the given metric name
-    """
-    total = 0.0
-    for line in text.split("\n"):
-        if line.startswith(f"{metric_name}{{"):
-            try:
-                total += float(line.split()[-1])
-            except ValueError:
-                # Skip lines with invalid numeric values
-                pass
-    return total
-
-
-def parse_metric_values(text: str, metric_name: str) -> dict:
-    """
-    Extract metric values with their label combinations.
-
-    Args:
-        text: Prometheus exposition format text
-        metric_name: Metric name to extract
-
-    Returns:
-        Dictionary mapping label combinations to values
-    """
-    values = {}
-    for line in text.split("\n"):
-        if line.startswith(f"{metric_name}{{"):
-            try:
-                # Split on last whitespace to separate labels from value
-                label_part = line.rsplit(None, 1)[0]
-                value = float(line.split()[-1])
-                values[label_part] = value
-            except (ValueError, IndexError):
-                # Skip lines that can't be parsed (invalid format or non-numeric values)
-                pass
-    return values
 
 
 def test_metrics_endpoint():
@@ -203,15 +143,22 @@ def test_generate_traffic_and_verify():
         # Get baseline metrics
         print("\nGetting baseline metrics...")
         response1 = requests.get("http://localhost:8099/metrics", timeout=5)
-        baseline_count = parse_metric_count(response1.text, "fluidmcp_requests_total")
+        text1 = response1.text
+
+        # Extract baseline request count
+        baseline_count = 0
+        for line in text1.split("\n"):
+            if line.startswith("fluidmcp_requests_total{"):
+                # Extract value (last number on the line)
+                try:
+                    baseline_count += float(line.split()[-1])
+                except ValueError:
+                    pass
+
         print(f"  Baseline request count: {baseline_count}")
 
         # Generate traffic by making a request to health endpoint
-        # Note: The /health endpoint itself is NOT instrumented with RequestTimer, but
-        # calling /metrics multiple times DOES increment fluidmcp_requests_total because
-        # the /metrics endpoint is instrumented. This test validates that the metrics
-        # system works by checking if the baseline count increased from our own /metrics calls.
-        print("\nGenerating traffic (health check request for reference)...")
+        print("\nGenerating traffic (health check request)...")
         requests.get("http://localhost:8099/health", timeout=5)
 
         # Small delay to allow metrics to update
@@ -220,10 +167,20 @@ def test_generate_traffic_and_verify():
         # Get updated metrics
         print("\nGetting updated metrics...")
         response2 = requests.get("http://localhost:8099/metrics", timeout=5)
-        new_count = parse_metric_count(response2.text, "fluidmcp_requests_total")
+        text2 = response2.text
+
+        # Extract new request count
+        new_count = 0
+        for line in text2.split("\n"):
+            if line.startswith("fluidmcp_requests_total{"):
+                try:
+                    new_count += float(line.split()[-1])
+                except ValueError:
+                    pass
+
         print(f"  New request count: {new_count}")
 
-        # Check if count increased (note: our own /metrics calls are counted)
+        # Check if count increased (note: /metrics and /health calls also count)
         if new_count >= baseline_count:
             print("✓ Metrics updated after traffic")
             print(f"  Increase: {new_count - baseline_count} requests")
@@ -263,16 +220,7 @@ def test_histogram_buckets():
                     le_end = line.index('"', le_start)
                     le_values.add(line[le_start:le_end])
 
-            # Safe sorting function for bucket boundaries
-            def safe_float_key(x):
-                if x == '+Inf':
-                    return float('inf')
-                try:
-                    return float(x)
-                except ValueError:
-                    return float('inf')  # Treat invalid values as infinity
-
-            print(f"  Bucket boundaries: {sorted(le_values, key=safe_float_key)}")
+            print(f"  Bucket boundaries: {sorted(le_values, key=lambda x: float(x) if x != '+Inf' else float('inf'))}")
             return True
         else:
             print("⚠ No histogram buckets found (may not have request data yet)")
@@ -289,7 +237,16 @@ def test_counter_monotonicity():
     try:
         # Get first snapshot
         response1 = requests.get("http://localhost:8099/metrics", timeout=5)
-        counters1 = parse_metric_values(response1.text, "fluidmcp_requests_total")
+        text1 = response1.text
+
+        # Extract counter values
+        counters1 = {}
+        for line in text1.split("\n"):
+            if line.startswith("fluidmcp_requests_total{"):
+                try:
+                    counters1[line.rsplit(None, 1)[0]] = float(line.split()[-1])
+                except (ValueError, IndexError):
+                    pass
 
         # Generate more traffic
         for _ in range(3):
@@ -298,7 +255,16 @@ def test_counter_monotonicity():
 
         # Get second snapshot
         response2 = requests.get("http://localhost:8099/metrics", timeout=5)
-        counters2 = parse_metric_values(response2.text, "fluidmcp_requests_total")
+        text2 = response2.text
+
+        # Extract counter values again
+        counters2 = {}
+        for line in text2.split("\n"):
+            if line.startswith("fluidmcp_requests_total{"):
+                try:
+                    counters2[line.rsplit(None, 1)[0]] = float(line.split()[-1])
+                except (ValueError, IndexError):
+                    pass
 
         # Verify monotonicity
         all_monotonic = True

@@ -4,16 +4,17 @@ import subprocess
 import shutil
 import asyncio
 import time
+import sys
 import threading
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
-from ..auth import get_token
-
+security = HTTPBearer(auto_error=False)
 
 def is_placeholder_value(value: str) -> bool:
     """
@@ -45,14 +46,23 @@ def is_placeholder_value(value: str) -> bool:
 
     return any(placeholder_indicators)
 
+def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Validate bearer token if secure mode is enabled"""
+    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+    
+    if not secure_mode:
+        return None
+    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
+    return credentials.credentials
 
-def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: threading.Lock = None):
+def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
     """
     Launch an MCP server and create a FastAPI router for it.
 
     Args:
         dest_dir: Path to the package installation directory
-        process_lock: Optional threading lock for process communication
 
     Returns:
         Tuple of (package_name, router, process) or (None, None, None) on failure
@@ -174,7 +184,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
                 )
             logger.warning(error_msg)
 
-        router = create_mcp_router(pkg, process, process_lock)
+        router = create_mcp_router(pkg, process)
         logger.debug(f"Created router for package: {pkg}")
         return pkg, router, process  # Return process for explicit registry
 
@@ -306,12 +316,8 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
             stderr_output = process.stderr.read() if process.stderr else None
             if stderr_output:
                 logger.error(f"Process stderr: {stderr_output[:500]}")
-        except (OSError, ValueError) as e:
-            # Expected: stderr read can fail if process terminated or pipe is closed - safe to ignore
-            logger.debug(f"Failed to read process stderr after initialization timeout (expected): {e}")
         except Exception:
-            # Unexpected error while reading stderr - log for debugging
-            logger.exception("Unexpected error while reading process stderr after initialization timeout")
+            pass
 
         return False
     except Exception:
@@ -319,13 +325,7 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
         return False
     
 
-def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock: threading.Lock = None) -> APIRouter:
-    from .metrics import MetricsCollector, RequestTimer
-
-    # Create a lock if not provided
-    if process_lock is None:
-        process_lock = threading.Lock()
-
+def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter:
     router = APIRouter()
 
     @router.post(f"/{package_name}/mcp", tags=[package_name])
@@ -340,70 +340,15 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             }
         ), token: str = Depends(get_token)
     ):
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-        method = request.get("method", "unknown")
-
-        # Track request with metrics
-        with RequestTimer(collector, method):
-            try:
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    # Check if process is alive before attempting communication
-                    if process.poll() is not None:
-                        error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
-                        logger.error(error_msg)
-                        collector.record_error("process_dead")
-                        return JSONResponse(
-                            status_code=503,
-                            content={"error": error_msg, "type": "process_dead"}
-                        )
-
-                    msg = json.dumps(request)
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        error_msg = f"Failed to write to MCP server stdin: {e}"
-                        logger.error(error_msg)
-                        collector.record_error("broken_pipe_write")
-                        return JSONResponse(
-                            status_code=503,
-                            content={"error": error_msg, "type": "broken_pipe"}
-                        )
-
-                    try:
-                        response_line = process.stdout.readline()
-                        if not response_line:
-                            error_msg = "MCP server returned empty response (pipe may be closed)"
-                            logger.error(error_msg)
-                            collector.record_error("empty_response")
-                            return JSONResponse(
-                                status_code=503,
-                                content={"error": error_msg, "type": "empty_response"}
-                            )
-                    except (BrokenPipeError, OSError) as e:
-                        error_msg = f"Failed to read from MCP server stdout: {e}"
-                        logger.error(error_msg)
-                        collector.record_error("broken_pipe_read")
-                        return JSONResponse(
-                            status_code=503,
-                            content={"error": error_msg, "type": "broken_pipe"}
-                        )
-
-                return JSONResponse(content=json.loads(response_line))
-            except json.JSONDecodeError as e:
-                error_msg = f"Invalid JSON response from MCP server: {e}"
-                logger.error(error_msg)
-                collector.record_error("invalid_json")
-                return JSONResponse(
-                    status_code=502,
-                    content={"error": error_msg, "type": "invalid_json"}
-                )
-            except Exception as e:
-                logger.exception(f"Unexpected error in MCP proxy: {e}")
-                collector.record_error("unknown")
-                return JSONResponse(status_code=500, content={"error": str(e)})
+        try:
+            # Convert dict to JSON string
+            msg = json.dumps(request)
+            process.stdin.write(msg + "\n")
+            process.stdin.flush()
+            response_line = process.stdout.readline()
+            return JSONResponse(content=json.loads(response_line))
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
     @router.post(f"/{package_name}/sse", tags=[package_name])
@@ -418,88 +363,39 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             }
         ), token: str = Depends(get_token)
     ):
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-
         async def event_generator() -> Iterator[str]:
-            completion_status = "success"
-            should_continue = True
             try:
-                # Track streaming session when generator starts
-                collector.increment_active_streams()
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    # Check if process is alive before attempting communication
-                    if process.poll() is not None:
-                        error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
-                        logger.error(error_msg)
-                        collector.record_error("process_dead")
-                        completion_status = "error"
-                        yield f"data: {json.dumps({'error': error_msg, 'type': 'process_dead'})}\n\n"
-                        should_continue = False  # Signal to skip remaining logic
-
-                    if should_continue:
-                        # Convert dict to JSON string and send to MCP server
-                        msg = json.dumps(request)
-                        try:
-                            process.stdin.write(msg + "\n")
-                            process.stdin.flush()
-                        except (BrokenPipeError, OSError) as e:
-                            error_msg = f"Failed to write to MCP server stdin: {e}"
-                            logger.error(error_msg)
-                            collector.record_error("broken_pipe_write")
-                            completion_status = "error"
-                            yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
-                            should_continue = False
-
-                    # Read from stdout and stream as SSE events (only if no early errors)
-                    if should_continue:
-                        while True:
-                            try:
-                                response_line = process.stdout.readline()
-                                if not response_line:
-                                    break
-                            except (BrokenPipeError, OSError) as e:
-                                error_msg = f"Failed to read from MCP server stdout: {e}"
-                                logger.error(error_msg)
-                                collector.record_error("broken_pipe_read")
-                                completion_status = "error"
-                                yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
-                                break
-
-                            # Add logging
-                            logger.debug(f"Received from MCP: {response_line.strip()}")
-
-                            # Format as SSE event
-                            yield f"data: {response_line.strip()}\n\n"
-
-                            # Check if response contains "result" which indicates completion
-                            try:
-                                response_data = json.loads(response_line)
-                                if "result" in response_data:
-                                    # If it's a final result, we can stop the stream
-                                    break
-                            except json.JSONDecodeError:
-                                # If it's not valid JSON, just stream it as-is
-                                pass
-
-            except (BrokenPipeError, OSError) as e:
-                completion_status = "broken_pipe"
-                collector.record_error("io_error")
-                yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                # Convert dict to JSON string and send to MCP server
+                msg = json.dumps(request)
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+                
+                # Read from stdout and stream as SSE events
+                while True:
+                    response_line = process.stdout.readline()
+                    if not response_line:
+                        break
+                    
+                    # Add logging
+                    logger.debug(f"Received from MCP: {response_line.strip()}")
+                    
+                    # Format as SSE event
+                    yield f"data: {response_line.strip()}\n\n"
+                    
+                    # Check if response contains "result" which indicates completion
+                    try:
+                        response_data = json.loads(response_line)
+                        if "result" in response_data:
+                            # If it's a final result, we can stop the stream
+                            break
+                    except json.JSONDecodeError:
+                        # If it's not valid JSON, just stream it as-is
+                        pass
+                    
             except Exception as e:
-                completion_status = "error"
                 # Send error as SSE event
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            finally:
-                # Record streaming metrics (with error handling to prevent gauge drift)
-                try:
-                    collector.record_streaming_request(completion_status)
-                    collector.decrement_active_streams()
-                except Exception as e:
-                    logger.error(f"Failed to record streaming metrics: {e}")
-
+        
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream"
@@ -507,31 +403,27 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         
     @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
     async def list_tools(token: str = Depends(get_token)):
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-
-        # Track request with metrics
-        with RequestTimer(collector, "tools/list"):
-            try:
-                # Pre-filled JSON-RPC request for tools/list
-                request_payload = {
-                    "id": 1,
-                    "jsonrpc": "2.0",
-                    "method": "tools/list"
-                }
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    msg = json.dumps(request_payload)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                    response_line = process.stdout.readline()
-
-                response_data = json.loads(response_line)
-                return JSONResponse(content=response_data)
-
-            except Exception as e:
-                return JSONResponse(status_code=500, content={"error": str(e)})
+        try:
+            # Pre-filled JSON-RPC request for tools/list
+            request_payload = {
+                "id": 1,
+                "jsonrpc": "2.0",
+                "method": "tools/list"
+            }
+            
+            # Convert to JSON string and send to MCP server
+            msg = json.dumps(request_payload)
+            process.stdin.write(msg + "\n")
+            process.stdin.flush()
+            
+            # Read response from MCP server
+            response_line = process.stdout.readline()
+            response_data = json.loads(response_line)
+            
+            return JSONResponse(content=response_data)
+            
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": str(e)})
         
     
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
@@ -539,54 +431,49 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         ...,
         alias="params",
         example={
-            "name": "",
+            "name": "", 
         }
     ), token: str = Depends(get_token)
-):
+):      
         params = request_body
 
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-        tool_name = params.get("name", "unknown")
-
-        # Track request with metrics
-        with RequestTimer(collector, f"tools/call:{tool_name}"):
-            try:
-                # Validate required fields
-                if "name" not in params:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "Tool name is required"}
-                    )
-
-                # Construct complete JSON-RPC request
-                request_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": params
-                }
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    msg = json.dumps(request_payload)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                    response_line = process.stdout.readline()
-
-                response_data = json.loads(response_line)
-                return JSONResponse(content=response_data)
-
-            except json.JSONDecodeError:
+        try:
+            # Validate required fields
+            if "name" not in params:
                 return JSONResponse(
-                    status_code=400,
-                    content={"error": "Invalid JSON in request body"}
+                    status_code=400, 
+                    content={"error": "Tool name is required"}
                 )
-            except Exception as e:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": str(e)}
-                )
+            
+            # Construct complete JSON-RPC request
+            request_payload = {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": params
+            }
+            
+            # Send to MCP server
+            msg = json.dumps(request_payload)
+            process.stdin.write(msg + "\n")
+            process.stdin.flush()
+            
+            # Read response
+            response_line = process.stdout.readline()
+            response_data = json.loads(response_line)
+            
+            return JSONResponse(content=response_data)
+            
+        except json.JSONDecodeError:
+            return JSONResponse(
+                status_code=400, 
+                content={"error": "Invalid JSON in request body"}
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=500, 
+                content={"error": str(e)}
+            )
     return router
 
 def create_dynamic_router(server_manager):
@@ -602,6 +489,10 @@ def create_dynamic_router(server_manager):
     Returns:
         APIRouter with dynamic dispatch endpoints
     """
+    from fastapi import HTTPException
+    from typing import Iterator
+    from .metrics import MetricsCollector, RequestTimer
+
     router = APIRouter()
 
     @router.post("/{server_name}/mcp", tags=["mcp"])
@@ -629,20 +520,20 @@ def create_dynamic_router(server_manager):
         collector = MetricsCollector(server_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics (RequestTimer automatically records all errors)
-        # HTTPExceptions raised within this context are tracked as error_type="network_error"
-        # via RequestTimer.__exit__ → _categorize_error() → name-based matching
+        # Check if server exists
+        if server_name not in server_manager.processes:
+            collector.record_error("server_not_found")
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+
+        process = server_manager.processes[server_name]
+
+        # Check if process is alive
+        if process.poll() is not None:
+            collector.record_error("process_dead")
+            raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
+        # Track request with metrics
         with RequestTimer(collector, method):
-            # Check if server exists
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
-
-            process = server_manager.processes[server_name]
-
-            # Check if process is alive
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
-
             try:
                 # Send request to MCP server
                 msg = json.dumps(request)
@@ -650,6 +541,7 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
+                    collector.record_error("broken_pipe")
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
                 # Read response (non-blocking with asyncio.to_thread)
@@ -659,6 +551,7 @@ def create_dynamic_router(server_manager):
             except HTTPException:
                 raise
             except Exception as e:
+                collector.record_error("communication_error")
                 logger.error(f"Error proxying request to '{server_name}': {e}")
                 raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
@@ -674,36 +567,33 @@ def create_dynamic_router(server_manager):
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
-        # Pre-flight HTTP validation: not tracked by RequestTimer since these occur
-        # before MCP protocol interaction. HTTP errors are observable via FastAPI logs.
         if server_name not in server_manager.processes:
+            collector.record_error("server_not_found")
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
         process = server_manager.processes[server_name]
 
         if process.poll() is not None:
+            collector.record_error("process_dead")
             raise HTTPException(503, f"Server '{server_name}' is not running")
+
+        # Track streaming session
+        collector.increment_active_streams()
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
-            should_continue = True
             try:
-                # Track streaming session when generator starts executing
-                collector.increment_active_streams()
                 msg = json.dumps(request)
                 try:
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
-                    # Use specific completion_status ("broken_pipe") for stream tracking,
-                    # while recording a global error_type of "io_error" for service-wide monitoring.
                     completion_status = "broken_pipe"
-                    collector.record_error("io_error")
+                    collector.record_error("broken_pipe")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                    should_continue = False  # Signal to skip remaining logic
+                    return
 
-                # Only continue streaming if no early errors
-                while should_continue:
+                while True:
                     # Non-blocking I/O with asyncio.to_thread
                     response_line = await asyncio.to_thread(process.stdout.readline)
                     if not response_line:
@@ -723,15 +613,13 @@ def create_dynamic_router(server_manager):
 
             except Exception as e:
                 completion_status = "error"
+                collector.record_error("stream_error")
                 logger.exception(f"Error in event generator for '{server_name}': {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics (with error handling to prevent gauge drift)
-                try:
-                    collector.record_streaming_request(completion_status)
-                    collector.decrement_active_streams()
-                except Exception as e:
-                    logger.error(f"Failed to record streaming metrics: {e}")
+                # Record streaming metrics
+                collector.record_streaming_request(completion_status)
+                collector.decrement_active_streams()
 
         return StreamingResponse(
             event_generator(),
@@ -746,44 +634,39 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
-        # Initialize metrics collector
-        collector = MetricsCollector(server_name)
+        if server_name not in server_manager.processes:
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
-        # Track request with metrics
-        with RequestTimer(collector, "tools/list"):
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        process = server_manager.processes[server_name]
 
-            process = server_manager.processes[server_name]
+        if process.poll() is not None:
+            raise HTTPException(503, f"Server '{server_name}' is not running")
 
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running")
+        try:
+            request_payload = {
+                "id": 1,
+                "jsonrpc": "2.0",
+                "method": "tools/list"
+            }
 
+            msg = json.dumps(request_payload)
             try:
-                request_payload = {
-                    "id": 1,
-                    "jsonrpc": "2.0",
-                    "method": "tools/list"
-                }
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                msg = json.dumps(request_payload)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            # Non-blocking I/O with asyncio.to_thread
+            response_line = await asyncio.to_thread(process.stdout.readline)
+            response_data = json.loads(response_line)
 
-                # Non-blocking I/O with asyncio.to_thread
-                response_line = await asyncio.to_thread(process.stdout.readline)
-                response_data = json.loads(response_line)
+            return JSONResponse(content=response_data)
 
-                return JSONResponse(content=response_data)
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Error listing tools for '{server_name}': {e}")
-                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error listing tools for '{server_name}': {e}")
+            raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/mcp/tools/call", tags=["mcp"])
     async def call_tool(
@@ -800,49 +683,43 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
-        # Initialize metrics collector
-        collector = MetricsCollector(server_name)
-        tool_name = request_body.get("name", "unknown")
+        if server_name not in server_manager.processes:
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
-        # Track request with metrics
-        with RequestTimer(collector, f"tools/call:{tool_name}"):
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        process = server_manager.processes[server_name]
 
-            process = server_manager.processes[server_name]
+        if process.poll() is not None:
+            raise HTTPException(503, f"Server '{server_name}' is not running")
 
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running")
+        try:
+            if "name" not in request_body:
+                raise HTTPException(400, "Tool name is required")
 
+            request_payload = {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": request_body
+            }
+
+            msg = json.dumps(request_payload)
             try:
-                if "name" not in request_body:
-                    raise HTTPException(400, "Tool name is required")
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as e:
+                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                request_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": request_body
-                }
+            # Non-blocking I/O with asyncio.to_thread
+            response_line = await asyncio.to_thread(process.stdout.readline)
+            response_data = json.loads(response_line)
 
-                msg = json.dumps(request_payload)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            return JSONResponse(content=response_data)
 
-                # Non-blocking I/O with asyncio.to_thread
-                response_line = await asyncio.to_thread(process.stdout.readline)
-                response_data = json.loads(response_line)
-
-                return JSONResponse(content=response_data)
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Error calling tool on '{server_name}': {e}")
-                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error calling tool on '{server_name}': {e}")
+            raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     return router
 
