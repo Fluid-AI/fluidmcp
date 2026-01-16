@@ -452,8 +452,11 @@ def transform_to_vllm_args(config: Dict[str, Any]) -> Dict[str, Any]:
     nested_port = cfg.get("port")
     port = top_level_port if top_level_port is not None else (nested_port if nested_port is not None else 8001)
 
-    if not model or (isinstance(model, str) and not model.strip()):
-        raise VLLMConfigError("'model' field is required and cannot be empty for high-level config")
+    if not isinstance(model, str) or not model.strip():
+        raise VLLMConfigError(
+            "'model' field must be a non-empty string for high-level config, "
+            f"got {type(model).__name__}: {model!r}"
+        )
 
     # Build vLLM CLI args
     args = [
