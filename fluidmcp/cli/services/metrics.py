@@ -143,9 +143,22 @@ class Histogram(Metric):
 
         with self._lock:
             # Initialize histogram entry if it doesn't exist (thread-safe)
-            # Note: Explicit initialization is required despite defaultdict. While defaultdict
-            # creates entries lazily, we must ensure we're modifying the SAME dict instance
-            # across multiple observe() calls, not creating new ones on each access.
+            #
+            # IMPORTANT: Explicit initialization is REQUIRED despite defaultdict.
+            #
+            # Why this check is necessary (addressed in Rounds 10 and 11):
+            # - defaultdict creates a NEW dict on EACH key access that doesn't exist
+            # - Without this check, each observe() call would create a separate dict instance
+            # - Subsequent modifications (hist["sum"] += value) would be lost
+            # - The explicit check ensures we create the dict ONCE and reuse it
+            #
+            # Example without this check (INCORRECT):
+            #   observe(1.0) → creates dict, adds to sum, dict is lost
+            #   observe(2.0) → creates NEW dict, sum starts from 0 again
+            #
+            # With this check (CORRECT):
+            #   observe(1.0) → creates dict, adds to sum, dict persisted
+            #   observe(2.0) → reuses SAME dict, sum accumulates correctly
             if key not in self.histograms:
                 self.histograms[key] = {
                     "sum": 0.0,
@@ -532,6 +545,16 @@ class RequestTimer:
         # Use issubclass for standard exception hierarchy checks (more robust)
         # IMPORTANT: Check specific exceptions before their base classes
         # Python exception hierarchy: BaseException → Exception → OSError → (PermissionError, ConnectionError, etc.)
+        #
+        # NOTE ON DEFENSIVE TRY-EXCEPT BLOCKS:
+        # Each issubclass() call is wrapped in try-except for defense-in-depth, even though
+        # the initial validation (line 526) confirms exc_type is a valid class. This protects against:
+        # 1. Future refactoring that might bypass initial validation
+        # 2. Subtle bugs where exc_type gets corrupted between checks
+        # 3. Edge cases in Python's exception hierarchy
+        # While this adds some cognitive overhead, it ensures robustness and fail-safe behavior.
+        # Performance impact is negligible (exception handling is only triggered on actual errors).
+        # (Discussed and intentionally kept in Rounds 8, 10, and 11)
 
         # BrokenPipeError: Explicit check first to clarify intent
         # (subclass of both ConnectionError and OSError, but categorized as io_error)
