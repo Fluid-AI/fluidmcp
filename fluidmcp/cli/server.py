@@ -145,7 +145,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         """
         from fastapi.responses import PlainTextResponse
         registry = get_registry()
-        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4")
+        # Standard Prometheus exposition format media type (not OpenMetrics)
+        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; charset=utf-8")
 
     @app.get("/")
     async def root():

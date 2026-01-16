@@ -584,6 +584,9 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
+                    # Set streaming-specific completion_status label (tracks how stream ended)
+                    # Note: This is semantically different from error_type labels in fluidmcp_errors_total
+                    # (BrokenPipeError categorized as io_error there, "broken_pipe" here)
                     completion_status = "broken_pipe"
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
