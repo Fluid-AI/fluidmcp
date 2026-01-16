@@ -639,6 +639,12 @@ def main():
                               help="Explicitly allow running without authentication (NOT RECOMMENDED)")
     serve_parser.add_argument("--token", type=str,
                               help="Bearer token for secure mode (will be generated if not provided)")
+    serve_parser.add_argument("--allowed-origins", type=str,
+                              help="Comma-separated list of allowed CORS origins")
+    serve_parser.add_argument("--allow-all-origins", action="store_true",
+                              help="Allow all CORS origins (SECURITY RISK - development only)")
+    serve_parser.add_argument("--require-persistence", action="store_true",
+                              help="Fail if MongoDB connection fails (default: continue without persistence)")
     serve_parser.add_argument("--persistence-mode", choices=['mongodb', 'memory'], default='mongodb',
                               help="Persistence backend: 'mongodb' (default) or 'memory' (in-memory, data lost on restart)")
     serve_parser.add_argument("--in-memory", action="store_true",
