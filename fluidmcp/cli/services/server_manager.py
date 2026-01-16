@@ -206,6 +206,10 @@ class ServerManager:
         Returns:
             True if stopped successfully, False otherwise
         """
+        # Initialize metrics collector early for consistent error tracking
+        from .metrics import MetricsCollector
+        collector = MetricsCollector(id)
+
         try:
             # Check if server exists
             if id not in self.processes:
@@ -250,14 +254,12 @@ class ServerManager:
             await self._cleanup_server(id, exit_code)
 
             # Update metrics - server is now stopped (status code: 0)
-            collector = MetricsCollector(id)
             collector.set_server_status(0)  # 0 = stopped
 
             return True
 
         except Exception as e:
             logger.exception(f"Error stopping server '{id}': {e}")
-            collector = MetricsCollector(id)
             collector.record_error("stop_failed")
             return False
 

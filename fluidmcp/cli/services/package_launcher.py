@@ -563,7 +563,9 @@ def create_dynamic_router(server_manager):
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
-        # Pre-validation (errors not tracked - occurs before streaming)
+        # Pre-validation (errors not tracked - occurs before streaming begins)
+        # Note: These HTTPExceptions represent client/infrastructure errors (404/503),
+        # not streaming failures. Tracking them would require endpoint-level error metrics.
         if server_name not in server_manager.processes:
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 

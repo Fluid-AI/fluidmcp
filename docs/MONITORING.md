@@ -81,8 +81,8 @@ FluidMCP exposes the following metric categories:
 brew install prometheus
 
 # Linux
-# Visit https://github.com/prometheus/prometheus/releases for latest version
-VERSION=2.51.2  # Replace with latest version
+# Visit https://github.com/prometheus/prometheus/releases and set VERSION to the latest release
+VERSION="2.51.2"  # Example version - check releases page for latest
 wget "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/prometheus-${VERSION}.linux-amd64.tar.gz"
 tar xvfz "prometheus-${VERSION}.linux-amd64.tar.gz"
 cd "prometheus-${VERSION}.linux-amd64"
