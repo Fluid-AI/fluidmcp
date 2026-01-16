@@ -5,7 +5,7 @@ This script tests the Prometheus-compatible metrics exposed by FluidMCP.
 
 Prerequisites:
 - FluidMCP server running with any valid config:
-  fluidmcp run examples/vllm-config.json --file --start-server
+  fluidmcp run examples/sample-config.json --file --start-server
   OR
   fluidmcp run your-config.json --file --start-server
 - Server accessible at http://localhost:8099

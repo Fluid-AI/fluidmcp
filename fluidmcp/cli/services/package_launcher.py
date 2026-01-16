@@ -565,7 +565,10 @@ def create_dynamic_router(server_manager):
 
         # Pre-validation (errors not tracked - occurs before streaming begins)
         # Note: These HTTPExceptions represent client/infrastructure errors (404/503),
-        # not streaming failures. Tracking them would require endpoint-level error metrics.
+        # not streaming failures. They happen at the HTTP layer before MCP protocol interaction.
+        # TODO: Consider tracking these errors for complete observability. Would require:
+        #   - New metric: fluidmcp_http_errors_total{endpoint, status_code}
+        #   - Or: Record as error_type="server_not_found" via collector.record_error()
         if server_name not in server_manager.processes:
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
@@ -584,9 +587,20 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how stream ended)
-                    # Note: This is semantically different from error_type labels in fluidmcp_errors_total
-                    # (BrokenPipeError categorized as io_error there, "broken_pipe" here)
+                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                    #
+                    # IMPORTANT: This intentionally differs from the error_type used in
+                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                    # Here we use "broken_pipe" so operators can:
+                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                    #     overall rate of I/O-related failures across the service, and
+                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                    #     why individual streaming sessions terminated (client disconnects,
+                    #     broken pipes, etc.).
+                    #
+                    # In other words, both labels refer to the same underlying condition but are
+                    # scoped for different troubleshooting workflows: global error rates versus
+                    # per-stream termination reasons.
                     completion_status = "broken_pipe"
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
