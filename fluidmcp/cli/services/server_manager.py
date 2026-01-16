@@ -18,6 +18,7 @@ from loguru import logger
 
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
+from .metrics import MetricsCollector
 
 
 class ServerManager:
@@ -156,6 +157,11 @@ class ServerManager:
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
+            # Update metrics - server is now running (status code: 2)
+            collector = MetricsCollector(id)
+            collector.set_server_status(2)  # 2 = running
+            collector.set_uptime(0.0)  # Just started
+
             # Save state to database with user tracking
             await self.db.save_instance_state({
                 "server_id": id,
@@ -174,6 +180,11 @@ class ServerManager:
 
         except Exception as e:
             logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
+
+            # Update metrics - server failed to start (status code: 3)
+            collector = MetricsCollector(id)
+            collector.set_server_status(3)  # 3 = error
+            collector.record_error("start_failed")
 
             # Save error to instance state (PDF spec: last_error field)
             await self.db.save_instance_state({
@@ -237,10 +248,17 @@ class ServerManager:
 
             # Cleanup
             await self._cleanup_server(id, exit_code)
+
+            # Update metrics - server is now stopped (status code: 0)
+            collector = MetricsCollector(id)
+            collector.set_server_status(0)  # 0 = stopped
+
             return True
 
         except Exception as e:
             logger.exception(f"Error stopping server '{id}': {e}")
+            collector = MetricsCollector(id)
+            collector.record_error("stop_failed")
             return False
 
     async def restart_server(self, id: str) -> bool:
@@ -283,6 +301,11 @@ class ServerManager:
                 "server_id": id,
                 "restart_count": restart_count + 1
             })
+
+            # Record restart in metrics
+            collector = MetricsCollector(id)
+            collector.record_restart("manual_restart")
+            collector.set_server_status(4)  # 4 = restarting (temporary state)
 
         return success
 

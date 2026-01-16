@@ -19,6 +19,7 @@ from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
+from .services.metrics import get_registry
 
 
 def save_token_to_file(token: str) -> Path:
@@ -130,6 +131,22 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "persistence_enabled": db_status == "connected"
         }
 
+    @app.get("/metrics")
+    async def metrics():
+        """
+        Prometheus-compatible metrics endpoint.
+
+        Exposes metrics in Prometheus exposition format:
+        - Request counters and histograms
+        - Server status and uptime
+        - GPU memory utilization
+        - Tool execution metrics
+        - Streaming request metrics
+        """
+        from fastapi.responses import PlainTextResponse
+        registry = get_registry()
+        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4")
+
     @app.get("/")
     async def root():
         """Root endpoint with API information."""
@@ -138,6 +155,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "version": "2.0.0",
             "docs": "/docs",
             "health": "/health",
+            "metrics": "/metrics",
             "api": {
                 "management": "/api/servers",
                 "mcp": "/{server_name}/mcp"

@@ -1,0 +1,98 @@
+# Prometheus scrape configuration for FluidMCP
+#
+# This file shows how to configure Prometheus to scrape metrics from FluidMCP.
+#
+# Usage:
+#   1. Add this job to your prometheus.yml:
+#      scrape_configs:
+#        - job_name: 'fluidmcp'
+#          static_configs:
+#            - targets: ['localhost:8099']
+#
+#   2. Restart Prometheus
+#   3. Access Prometheus at http://localhost:9090
+#   4. Query metrics like: fluidmcp_requests_total
+
+global:
+  scrape_interval: 15s  # Scrape targets every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+
+scrape_configs:
+  # FluidMCP Gateway metrics
+  - job_name: 'fluidmcp'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['localhost:8099']
+        labels:
+          environment: 'production'
+          service: 'fluidmcp-gateway'
+
+    # Optional: Add basic auth if FluidMCP is secured
+    # basic_auth:
+    #   username: 'admin'
+    #   password: 'your_password'
+
+    # Optional: Add bearer token if FluidMCP uses token auth
+    # bearer_token: 'your_bearer_token'
+
+    # Scrape interval override for high-frequency monitoring
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+# Alert rules (optional)
+# Create a file 'alerts.yml' with these rules and reference it in prometheus.yml
+rule_files:
+  # - "alerts.yml"
+
+# Example alert rules (save to alerts.yml):
+# groups:
+#   - name: fluidmcp_alerts
+#     interval: 30s
+#     rules:
+#       # Alert if error rate exceeds 5% over 5 minutes
+#       - alert: HighErrorRate
+#         expr: |
+#           (
+#             sum(rate(fluidmcp_errors_total[5m]))
+#             /
+#             sum(rate(fluidmcp_requests_total[5m]))
+#           ) > 0.05
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High error rate detected"
+#           description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+#
+#       # Alert if server is down
+#       - alert: ServerDown
+#         expr: fluidmcp_server_status == 0
+#         for: 1m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "Server {{ $labels.server_id }} is down"
+#           description: "Server has been down for more than 1 minute"
+#
+#       # Alert if GPU memory utilization is too high
+#       - alert: HighGPUMemory
+#         expr: fluidmcp_gpu_memory_utilization_ratio > 0.95
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High GPU memory utilization"
+#           description: "GPU memory utilization is {{ $value | humanizePercentage }} on {{ $labels.server_id }}"
+#
+#       # Alert if request latency p95 exceeds threshold
+#       - alert: HighLatency
+#         expr: |
+#           histogram_quantile(0.95,
+#             sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le, server_id)
+#           ) > 5
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High request latency detected"
+#           description: "P95 latency is {{ $value }}s on {{ $labels.server_id }}"
