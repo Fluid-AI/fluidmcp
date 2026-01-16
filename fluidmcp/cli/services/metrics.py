@@ -506,7 +506,7 @@ class RequestTimer:
 
         # I/O errors (OSError and its remaining subclasses)
         try:
-            if issubclass(exc_type, (OSError, IOError)):
+            if issubclass(exc_type, OSError):
                 return 'io_error'
         except TypeError:
             # issubclass() raised TypeError - exc_type is not a valid class
