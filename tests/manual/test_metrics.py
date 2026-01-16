@@ -197,6 +197,8 @@ def test_generate_traffic_and_verify():
         print(f"  Baseline request count: {baseline_count}")
 
         # Generate traffic by making a request to health endpoint
+        # Note: /health endpoint itself is not instrumented with RequestTimer,
+        # but the /metrics calls we make will increment the request count.
         print("\nGenerating traffic (health check request)...")
         requests.get("http://localhost:8099/health", timeout=5)
 
@@ -209,7 +211,7 @@ def test_generate_traffic_and_verify():
         new_count = parse_metric_count(response2.text, "fluidmcp_requests_total")
         print(f"  New request count: {new_count}")
 
-        # Check if count increased (note: /metrics and /health calls also count)
+        # Check if count increased (note: our own /metrics calls are counted)
         if new_count >= baseline_count:
             print("✓ Metrics updated after traffic")
             print(f"  Increase: {new_count - baseline_count} requests")
