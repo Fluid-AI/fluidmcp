@@ -11,7 +11,7 @@ This script tests:
 
 Prerequisites:
 - vLLM installed: pip install vllm>=0.6.0
-- GPU available (recommended)
+- GPU available (not required for these validation tests)
 
 Usage:
     python tests/manual/test_advanced_config.py
@@ -117,7 +117,7 @@ def test_gpu_memory_validation():
     }
 
     try:
-        result = validate_and_transform_llm_config(config)
+        validate_and_transform_llm_config(config)
         print(f"✓ Valid config accepted (total = 0.90)")
     except Exception as e:
         print(f"✗ Failed: {e}")

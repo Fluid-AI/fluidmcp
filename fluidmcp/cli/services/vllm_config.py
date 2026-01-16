@@ -209,7 +209,13 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     # Note: 0.0 is allowed by vLLM, but its exact behavior is backend-defined
     if "gpu_memory_utilization" in cfg:
         mem = cfg["gpu_memory_utilization"]
-        if not isinstance(mem, (int, float)) or mem < 0 or mem > 1.0:
+        # Accept ints and floats for convenience, but explicitly reject bools (subclass of int)
+        if not isinstance(mem, (int, float)) or isinstance(mem, bool):
+            raise VLLMConfigError(
+                f"gpu_memory_utilization must be a number between 0.0 and 1.0 (inclusive), got {mem!r}"
+            )
+        mem = float(mem)  # Normalize to float for vLLM
+        if mem < 0.0 or mem > 1.0:
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem}"
             )
@@ -389,9 +395,10 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
 
     This function:
     1. Applies profiles if specified
-    2. Validates all configs (GPU memory, ports, values)
-    3. Transforms high-level configs to vLLM CLI args
-    4. Maintains backward compatibility with raw args format
+    2. Validates individual configs (individual model values)
+    3. Validates cross-model constraints (GPU memory, port conflicts)
+    4. Transforms high-level configs to vLLM CLI args
+    5. Maintains backward compatibility with raw args format
 
     Args:
         llm_models: Dictionary of LLM model configurations from JSON
@@ -405,8 +412,6 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
     if not llm_models:
         return {}
 
-    transformed = {}
-
     # Step 1: Apply profiles and validate individual configs
     for model_id, config in llm_models.items():
         try:
@@ -417,15 +422,21 @@ def validate_and_transform_llm_config(llm_models: Dict[str, Any]) -> Dict[str, A
             # Validate config values
             validate_config_values(config)
 
-            # Transform to vLLM args format
-            transformed[model_id] = transform_to_vllm_args(config)
-
         except VLLMConfigError as e:
             logger.error(f"Config error for model '{model_id}': {e}")
             raise
 
-    # Step 2: Cross-model validation
-    validate_port_conflicts(transformed)
-    validate_gpu_memory(transformed)
+    # Step 2: Cross-model validation (before transformation to avoid re-parsing)
+    validate_port_conflicts(llm_models)
+    validate_gpu_memory(llm_models)
+
+    # Step 3: Transform to vLLM args format
+    transformed = {}
+    for model_id, config in llm_models.items():
+        try:
+            transformed[model_id] = transform_to_vllm_args(config)
+        except VLLMConfigError as e:
+            logger.error(f"Transformation error for model '{model_id}': {e}")
+            raise
 
     return transformed
