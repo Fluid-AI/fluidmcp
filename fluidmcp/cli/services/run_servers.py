@@ -243,6 +243,11 @@ def run_servers(
         except VLLMConfigError as e:
             logger.error(f"LLM configuration validation failed: {e}")
             logger.error("Fix the configuration errors and try again")
+            if launched_servers > 0:
+                logger.warning(
+                    f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
+                    "These servers remain running. Stop them manually if needed."
+                )
             return
 
         logger.info(f"Launching {len(validated_llm_config)} LLM model(s)...")

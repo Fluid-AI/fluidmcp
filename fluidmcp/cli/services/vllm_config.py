@@ -165,9 +165,10 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
             nested_port = config["config"].get("port")
 
             if top_level_port is not None and nested_port is not None and top_level_port != nested_port:
-                logger.warning(
-                    f"Model '{model_id}' specifies 'port' both at top-level ({top_level_port}) "
-                    f"and inside 'config' ({nested_port}). Using top-level value."
+                raise VLLMConfigError(
+                    f"Model '{model_id}' specifies conflicting 'port' values: "
+                    f"top-level={top_level_port}, config.port={nested_port}. "
+                    "Please specify 'port' in a single location or ensure the values match."
                 )
 
             port = top_level_port if top_level_port is not None else nested_port
@@ -191,6 +192,52 @@ def _extract_port_from_args(args: List[str]) -> Optional[int]:
     return _extract_arg_value(args, "--port", int, None)
 
 
+def _is_valid_number(value: Any, allow_zero: bool = True, allow_negative: bool = False) -> bool:
+    """
+    Check if value is a valid numeric type (int or float, but not bool).
+
+    Args:
+        value: Value to check
+        allow_zero: Whether 0 is valid
+        allow_negative: Whether negative values are valid
+
+    Returns:
+        True if valid number, False otherwise
+
+    Note:
+        Explicitly rejects booleans because bool is a subclass of int in Python (True==1, False==0)
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+
+    if not allow_negative and value < 0:
+        return False
+
+    if not allow_zero and value == 0:
+        return False
+
+    return True
+
+
+def _is_valid_positive_int(value: Any) -> bool:
+    """
+    Check if value is a valid positive integer (not bool, not zero, not negative).
+
+    Args:
+        value: Value to check
+
+    Returns:
+        True if valid positive integer, False otherwise
+
+    Note:
+        Explicitly rejects booleans because bool is a subclass of int in Python (True==1, False==0)
+    """
+    if not isinstance(value, int) or isinstance(value, bool):
+        return False
+
+    return value > 0
+
+
 def validate_config_values(config: Dict[str, Any]) -> None:
     """
     Validate individual configuration values.
@@ -210,13 +257,12 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     # Note: 0.0 is allowed by vLLM, but its exact behavior is backend-defined
     if "gpu_memory_utilization" in cfg:
         mem = cfg["gpu_memory_utilization"]
-        # Accept ints and floats for convenience, but explicitly reject bools (subclass of int)
-        if not isinstance(mem, (int, float)) or isinstance(mem, bool):
+        if not _is_valid_number(mem, allow_zero=True, allow_negative=False):
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be a number between 0.0 and 1.0 (inclusive), got {mem!r}"
             )
         mem = float(mem)  # Normalize to float for vLLM
-        if mem < 0.0 or mem > 1.0:
+        if mem > 1.0:
             raise VLLMConfigError(
                 f"gpu_memory_utilization must be between 0.0 and 1.0 (inclusive), got {mem}"
             )
@@ -241,8 +287,7 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     # Validate tensor_parallel_size
     if "tensor_parallel_size" in cfg:
         tps = cfg["tensor_parallel_size"]
-        # Accept only positive integers, but explicitly reject bools (subclass of int)
-        if not isinstance(tps, int) or isinstance(tps, bool) or tps < 1:
+        if not _is_valid_positive_int(tps):
             raise VLLMConfigError(
                 f"tensor_parallel_size must be a positive integer, got {tps}"
             )
@@ -251,8 +296,7 @@ def validate_config_values(config: Dict[str, Any]) -> None:
     for field in ["max_num_seqs", "max_num_batched_tokens", "max_model_len"]:
         if field in cfg:
             val = cfg[field]
-            # Accept only positive integers, but explicitly reject bools (subclass of int)
-            if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+            if not _is_valid_positive_int(val):
                 raise VLLMConfigError(
                     f"{field} must be a positive integer, got {val}"
                 )
@@ -276,10 +320,7 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
     Apply a configuration profile to a model config.
 
     WARNING: This function has side effects! It mutates the input config dictionary
-    in-place by adding profile defaults to config["config"]. If you need the original
-    config preserved, pass a deep copy:
-        import copy
-        apply_profile(copy.deepcopy(config), profile_name)
+    in-place by adding profile defaults to config["config"].
 
     Args:
         config: Model configuration dictionary (WILL BE MODIFIED IN-PLACE)
@@ -295,9 +336,13 @@ def apply_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
         - Adds profile default values to config["config"] (only for keys not already present)
         - Does NOT override user-specified values
 
-    Note:
-        validate_and_transform_llm_config() makes a deep copy before calling this function,
-        so external callers don't experience mutation side effects.
+    Usage Notes:
+        - validate_and_transform_llm_config() makes a deep copy at the module boundary,
+          so callers of that function don't experience mutation side effects.
+        - If calling this function directly outside of validate_and_transform_llm_config(),
+          pass a deep copy if you need to preserve the original:
+              import copy
+              result = apply_profile(copy.deepcopy(config), profile_name)
     """
     if profile_name not in VLLM_PROFILES:
         raise VLLMConfigError(
