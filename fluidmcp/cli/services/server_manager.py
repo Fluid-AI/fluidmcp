@@ -18,6 +18,7 @@ from loguru import logger
 
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
+from .metrics import MetricsCollector
 
 
 class ServerManager:
@@ -35,6 +36,7 @@ class ServerManager:
         # Process registry (in-memory)
         self.processes: Dict[str, subprocess.Popen] = {}
         self.configs: Dict[str, Dict[str, Any]] = {}
+        self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
 
         # Event loop for async operations
         self._loop = None
@@ -121,8 +123,10 @@ class ServerManager:
         Returns:
             True if started successfully, False otherwise
         """
-        # Initialize name early for exception handler
+        # Initialize name and collector early for exception handler
         name = id
+        collector = MetricsCollector(id)
+
         try:
             # Check if already running
             if id in self.processes:
@@ -170,10 +174,22 @@ class ServerManager:
                 "started_by": user_id  # Track who started this instance
             })
 
+            # Update metrics - server is now running (status code: 2)
+            # Note: Metrics update after database save to ensure state consistency
+            collector.set_server_status(2)  # 2 = running
+
+            # Store start time for dynamic uptime calculation
+            self.start_times[id] = time.monotonic()
+            collector.set_uptime(0.0)  # Just started
+
             return True
 
         except Exception as e:
             logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
+
+            # Update metrics - server failed to start (status code: 3)
+            collector.set_server_status(3)  # 3 = error
+            collector.record_error("start_failed")
 
             # Save error to instance state (PDF spec: last_error field)
             await self.db.save_instance_state({
@@ -195,6 +211,9 @@ class ServerManager:
         Returns:
             True if stopped successfully, False otherwise
         """
+        # Initialize metrics collector early for consistent error tracking
+        collector = MetricsCollector(id)
+
         try:
             # Check if server exists
             if id not in self.processes:
@@ -237,10 +256,15 @@ class ServerManager:
 
             # Cleanup
             await self._cleanup_server(id, exit_code)
+
+            # Update metrics - server is now stopped (status code: 0)
+            collector.set_server_status(0)  # 0 = stopped
+
             return True
 
         except Exception as e:
             logger.exception(f"Error stopping server '{id}': {e}")
+            collector.record_error("stop_failed")
             return False
 
     async def restart_server(self, id: str) -> bool:
@@ -283,6 +307,11 @@ class ServerManager:
                 "server_id": id,
                 "restart_count": restart_count + 1
             })
+
+            # Record restart in metrics
+            collector = MetricsCollector(id)
+            collector.record_restart("manual_restart")
+            # Note: Status already set to 2 (running) by start_server() - no need to override
 
         return success
 
@@ -591,6 +620,8 @@ class ServerManager:
         # Remove from registry
         if id in self.processes:
             del self.processes[id]
+        if id in self.start_times:
+            del self.start_times[id]
 
         # Update database
         await self.db.save_instance_state({
@@ -602,6 +633,20 @@ class ServerManager:
         })
 
         logger.info(f"Cleaned up server '{id}'")
+
+    def get_uptime(self, server_id: str) -> Optional[float]:
+        """
+        Get current uptime for a server in seconds.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Uptime in seconds since server start, or None if server not running
+        """
+        if server_id not in self.start_times:
+            return None
+        return time.monotonic() - self.start_times[server_id]
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:

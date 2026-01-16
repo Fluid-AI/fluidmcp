@@ -491,6 +491,7 @@ def create_dynamic_router(server_manager):
     """
     from fastapi import HTTPException
     from typing import Iterator
+    from .metrics import MetricsCollector, RequestTimer
 
     router = APIRouter()
 
@@ -515,34 +516,42 @@ def create_dynamic_router(server_manager):
             server_name: Name of the target server
             request: JSON-RPC request payload
         """
-        # Check if server exists
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        # Initialize metrics collector
+        collector = MetricsCollector(server_name)
+        method = request.get("method", "unknown")
 
-        process = server_manager.processes[server_name]
+        # Track request with metrics (RequestTimer automatically records all errors)
+        # HTTPExceptions raised within this context are tracked as error_type="network_error"
+        # via RequestTimer.__exit__ → _categorize_error() → name-based matching
+        with RequestTimer(collector, method):
+            # Check if server exists
+            if server_name not in server_manager.processes:
+                raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
-        # Check if process is alive
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+            process = server_manager.processes[server_name]
 
-        try:
-            # Send request to MCP server
-            msg = json.dumps(request)
+            # Check if process is alive
+            if process.poll() is not None:
+                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
             try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                # Send request to MCP server
+                msg = json.dumps(request)
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Read response (non-blocking with asyncio.to_thread)
-            response_line = await asyncio.to_thread(process.stdout.readline)
-            return JSONResponse(content=json.loads(response_line))
+                # Read response (non-blocking with asyncio.to_thread)
+                response_line = await asyncio.to_thread(process.stdout.readline)
+                return JSONResponse(content=json.loads(response_line))
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error proxying request to '{server_name}': {e}")
-            raise HTTPException(500, f"Error communicating with server: {str(e)}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error proxying request to '{server_name}': {e}")
+                raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/sse", tags=["mcp"])
     async def sse_stream(
@@ -553,6 +562,27 @@ def create_dynamic_router(server_manager):
         """
         Server-Sent Events streaming endpoint for long-running MCP operations.
         """
+        # Initialize metrics collector
+        collector = MetricsCollector(server_name)
+
+        # Pre-validation (errors NOT tracked - occurs before streaming begins)
+        #
+        # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
+        # in RequestTimer because they represent pre-flight validation failures that occur
+        # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
+        #
+        # These errors are observable through:
+        # 1. FastAPI's built-in HTTP error logs
+        # 2. HTTP status code monitoring at the load balancer/proxy level
+        # 3. Application logs (logged by FastAPI middleware)
+        #
+        # If you need metrics for these specific errors, consider:
+        # - Option 1: New metric fluidmcp_http_errors_total{endpoint, status_code}
+        # - Option 2: Manual tracking via collector.record_error("server_not_found")
+        # - Option 3: Wrap these checks in a lightweight context manager
+        #
+        # Current implementation prioritizes clarity by separating HTTP validation from
+        # MCP protocol errors tracked via RequestTimer.
         if server_name not in server_manager.processes:
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
@@ -562,12 +592,32 @@ def create_dynamic_router(server_manager):
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
         async def event_generator() -> AsyncIterator[str]:
+            completion_status = "success"
             try:
+                # Track streaming session when generator starts executing
+                collector.increment_active_streams()
                 msg = json.dumps(request)
                 try:
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
+                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                    #
+                    # IMPORTANT: This intentionally differs from the error_type used in
+                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                    # Here we use "broken_pipe" so operators can:
+                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                    #     overall rate of I/O-related failures across the service, and
+                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                    #     why individual streaming sessions terminated (client disconnects,
+                    #     broken pipes, etc.).
+                    #
+                    # In other words, both labels refer to the same underlying condition but are
+                    # scoped for different troubleshooting workflows: global error rates versus
+                    # per-stream termination reasons.
+                    completion_status = "broken_pipe"
+                    # Record in global error metric for monitoring
+                    collector.record_error("io_error")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
 
@@ -590,8 +640,13 @@ def create_dynamic_router(server_manager):
                         logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
 
             except Exception as e:
+                completion_status = "error"
                 logger.exception(f"Error in event generator for '{server_name}': {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            finally:
+                # Record streaming metrics
+                collector.record_streaming_request(completion_status)
+                collector.decrement_active_streams()
 
         return StreamingResponse(
             event_generator(),
