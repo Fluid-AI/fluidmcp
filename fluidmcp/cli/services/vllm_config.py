@@ -233,8 +233,9 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
     if len(models_with_no_port) > 1:
         logger.warning(
             f"Multiple models have no explicit port configured: {models_with_no_port}. "
-            f"Each model will attempt to use vLLM's single default port (8000 or 8001), "
-            f"which WILL cause guaranteed runtime port conflicts and startup failures. "
+            f"Each model will attempt to use this application's default port (8001). "
+            f"Note: upstream vLLM defaults to port 8000, but FluidMCP uses 8001. "
+            f"This WILL cause guaranteed runtime port conflicts and startup failures. "
             f"Please specify a unique port for each model to avoid this issue."
         )
 
