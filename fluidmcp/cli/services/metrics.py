@@ -156,7 +156,8 @@ class Histogram(Metric):
 
             # Update bucket counts: increment only the smallest matching bucket.
             # Cumulative counts are computed during render().
-            # Note: Values exceeding all buckets are tracked in +Inf bucket via hist["count"]
+            # Note: Values exceeding all buckets don't increment any specific bucket counter.
+            # The +Inf bucket (rendered in render()) shows hist["count"], which includes all observations.
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1

@@ -175,6 +175,8 @@ class ServerManager:
             # Note: Moved after database save to ensure state consistency
             collector = MetricsCollector(id)
             collector.set_server_status(2)  # 2 = running
+            # TODO: Uptime is only set once at startup and never updated.
+            # Consider implementing periodic updates or dynamic calculation during /metrics export.
             collector.set_uptime(0.0)  # Just started
 
             return True
@@ -208,7 +210,6 @@ class ServerManager:
             True if stopped successfully, False otherwise
         """
         # Initialize metrics collector early for consistent error tracking
-        from .metrics import MetricsCollector
         collector = MetricsCollector(id)
 
         try:
