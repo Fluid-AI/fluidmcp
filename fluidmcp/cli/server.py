@@ -109,6 +109,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     logger.info("Dynamic MCP router mounted")
 
     # Add a health check endpoint with actual connection verification
+    # NOTE: /health is intentionally NOT instrumented with RequestTimer to avoid
+    # high-cardinality metric pollution from frequent load balancer health checks.
+    # Only business logic endpoints (MCP requests) are instrumented.
     @app.get("/health")
     async def health_check():
         """Health check endpoint with database connection status."""
