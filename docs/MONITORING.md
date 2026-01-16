@@ -61,12 +61,16 @@ FluidMCP exposes the following metric categories:
 - **Uptime** - Time since last start
 
 ### Resource Metrics
-- **GPU memory usage** - Bytes allocated per GPU
-- **GPU memory utilization** - Utilization ratio (0.0-1.0)
+- **GPU memory usage** - Bytes allocated per GPU _(opt-in, empty by default)_
+- **GPU memory utilization** - Utilization ratio (0.0-1.0) _(opt-in, empty by default)_
+
+**Note**: GPU metrics require manual integration with a GPU monitoring library (e.g., pynvml, GPUtil). Without integration, GPU panels in the Grafana dashboard will display "No data". See [GPU Monitoring Integration](#gpu-monitoring-integration) for setup instructions.
 
 ### Tool Execution Metrics
-- **Tool call counts** - Calls by tool name and status
-- **Tool execution latency** - Execution time distribution
+- **Tool call counts** - Calls by tool name and status _(opt-in, empty by default)_
+- **Tool execution latency** - Execution time distribution _(opt-in, empty by default)_
+
+**Note**: Tool execution metrics require wrapping tool calls with `ToolTimer`. Without integration, tool panels in the Grafana dashboard will display "No data". See metrics.py documentation for integration examples.
 
 ### Streaming Metrics
 - **Streaming request counts** - Total streaming requests by completion status
@@ -361,6 +365,119 @@ Labels:
 
 Buckets: Same as `request_duration_seconds`
 
+## GPU Monitoring Integration
+
+GPU metrics (`fluidmcp_gpu_memory_bytes` and `fluidmcp_gpu_memory_utilization_ratio`) are **opt-in** and not populated by default. The Grafana dashboard includes GPU panels, but they will display "No data" until you integrate GPU monitoring.
+
+### Why Opt-In?
+
+GPU monitoring requires:
+- GPU hardware presence (not all deployments use GPUs)
+- Additional dependencies (pynvml, GPUtil)
+- Platform-specific setup (NVIDIA CUDA, ROCm, etc.)
+
+FluidMCP provides the metrics infrastructure, but you must implement data collection.
+
+### Integration Steps
+
+**Option 1: Using pynvml (NVIDIA GPUs)**
+
+```python
+import pynvml
+from fluidmcp.cli.services.metrics import MetricsCollector
+
+# Initialize NVIDIA Management Library
+pynvml.nvmlInit()
+
+def update_gpu_metrics(collector: MetricsCollector):
+    """Update GPU metrics for all devices."""
+    device_count = pynvml.nvmlDeviceGetCount()
+
+    total_memory = 0
+    total_capacity = 0
+
+    for i in range(device_count):
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+
+        # Update per-GPU memory
+        collector.set_gpu_memory(i, mem_info.used)
+
+        total_memory += mem_info.used
+        total_capacity += mem_info.total
+
+    # Update overall utilization ratio
+    if total_capacity > 0:
+        utilization = total_memory / total_capacity
+        collector.set_gpu_utilization(utilization)
+
+# Call this function periodically or during /metrics export
+# Example: Add to /metrics endpoint in server.py
+```
+
+**Option 2: Call in /metrics endpoint**
+
+Integrate GPU updates into the `/metrics` endpoint (recommended):
+
+```python
+# In fluidmcp/cli/server.py, update the /metrics endpoint:
+
+@app.get("/metrics")
+async def metrics():
+    from fastapi.responses import PlainTextResponse
+    from .services.metrics import MetricsCollector
+
+    # Update uptime for all running servers
+    for server_id in server_manager.processes.keys():
+        uptime = server_manager.get_uptime(server_id)
+        if uptime is not None:
+            collector = MetricsCollector(server_id)
+            collector.set_uptime(uptime)
+
+            # ADD GPU MONITORING HERE
+            try:
+                update_gpu_metrics(collector)  # Your GPU function
+            except Exception as e:
+                logger.warning(f"Failed to update GPU metrics: {e}")
+
+    registry = get_registry()
+    return PlainTextResponse(content=registry.render_all(),
+                            media_type="text/plain; version=0.0.4; charset=utf-8")
+```
+
+**Option 3: Background polling**
+
+Poll GPU metrics periodically in a background task:
+
+```python
+import asyncio
+
+async def gpu_metrics_poller(server_id: str):
+    """Background task to poll GPU metrics every 10 seconds."""
+    collector = MetricsCollector(server_id)
+
+    while True:
+        try:
+            update_gpu_metrics(collector)
+        except Exception as e:
+            logger.error(f"GPU metrics error: {e}")
+
+        await asyncio.sleep(10)
+
+# Start background task in server startup
+asyncio.create_task(gpu_metrics_poller("your_server_id"))
+```
+
+### Without GPU Integration
+
+If you don't implement GPU monitoring:
+- GPU metrics will remain at zero or empty
+- Grafana GPU panel (ID 6) will show "No data"
+- GPU alerts in `alerts.yml` will never fire
+- This is expected and won't affect other metrics
+
+You can safely ignore GPU metrics if your deployment doesn't use GPUs.
+
 ## Best Practices
 
 ### 1. Monitoring Strategy
@@ -438,6 +555,43 @@ histogram_quantile(0.95,
 histogram_quantile(0.50, sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le))
 histogram_quantile(0.95, sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le))
 ```
+
+**Error Analysis: error_type vs completion_status**
+
+FluidMCP uses two label dimensions for error tracking:
+- `error_type` - Category-level classification (io_error, network_error, auth_error, client_error, server_error)
+- `completion_status` - Concrete per-stream termination reason (success, error, broken_pipe)
+
+**When to use each:**
+
+```promql
+# Overall I/O error rate (all causes, all endpoints)
+# Use for: Global reliability views, alerting on error budgets
+sum by (error_type) (rate(fluidmcp_errors_total{error_type="io_error"}[5m]))
+
+# Streaming sessions ending due to client disconnect / broken pipe
+# Use for: Understanding how and why individual SSE streams end
+sum by (server_name) (
+  rate(fluidmcp_streaming_requests_total{completion_status="broken_pipe"}[5m])
+)
+
+# Compare I/O errors vs streaming terminations in a dashboard
+# Panel A: Global I/O errors (includes broken pipes, network issues, file I/O)
+fluidmcp_errors_total{error_type="io_error", server_name="your-server"}
+
+# Panel B: Streaming-specific terminations (only SSE endpoint)
+fluidmcp_streaming_requests_total{completion_status!="success", server_name="your-server"}
+```
+
+**Example: BrokenPipeError appears in both dimensions**
+
+When a client disconnects during streaming:
+- `fluidmcp_errors_total{error_type="io_error"}` increments (global error accounting)
+- `fluidmcp_streaming_requests_total{completion_status="broken_pipe"}` increments (stream-specific reason)
+
+Both labels refer to the same underlying condition but serve different troubleshooting workflows:
+- `error_type="io_error"` → SLO tracking and global error rate alerting
+- `completion_status="broken_pipe"` → Understanding streaming behavior and client disconnect patterns
 
 **Memory Issues:**
 ```promql

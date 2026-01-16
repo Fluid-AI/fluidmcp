@@ -151,6 +151,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         from .services.metrics import MetricsCollector
 
         # Update uptime for all running servers before rendering metrics
+        # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
+        # Creating N instances per scrape is acceptable given low overhead.
+        # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
         for server_id in server_manager.processes.keys():
             uptime = server_manager.get_uptime(server_id)
             if uptime is not None:
