@@ -12,6 +12,16 @@ Prerequisites:
 
 Usage:
     python tests/manual/test_metrics.py
+
+TODO: Add automated unit tests
+    The metrics system currently relies on manual integration tests. For better
+    test coverage, consider adding unit tests for:
+    - Counter, Gauge, Histogram metric classes (increment, set, observe)
+    - MetricsCollector methods (record_request, record_error, etc.)
+    - RequestTimer and ToolTimer context managers
+    - Error categorization logic
+    - Thread safety under concurrent access
+    (Identified in Round 11 Copilot review)
 """
 
 import sys
