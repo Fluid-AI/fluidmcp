@@ -109,9 +109,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     logger.info("Dynamic MCP router mounted")
 
     # Add a health check endpoint with actual connection verification
-    # NOTE: /health is intentionally NOT instrumented with RequestTimer to avoid
-    # high-cardinality metric pollution from frequent load balancer health checks.
-    # Only business logic endpoints (MCP requests) are instrumented.
+    # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
+    # RequestTimer to avoid high-cardinality metric pollution from frequent load
+    # balancer health checks and Prometheus scrapes. Only business logic endpoints
+    # (MCP requests) are instrumented and counted in fluidmcp_requests_total.
     @app.get("/health")
     async def health_check():
         """Health check endpoint with database connection status."""
@@ -148,8 +149,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         """
         from fastapi.responses import PlainTextResponse
         registry = get_registry()
-        # Standard Prometheus exposition format media type (not OpenMetrics)
-        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; charset=utf-8")
+        # Prometheus text exposition format v0.0.4 (not OpenMetrics)
+        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     @app.get("/")
     async def root():
