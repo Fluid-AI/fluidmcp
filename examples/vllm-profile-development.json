@@ -1,0 +1,10 @@
+{
+  "llmModels": {
+    "vllm": {
+      "model": "facebook/opt-125m",
+      "port": 8001,
+      "profile": "development",
+      "env": {}
+    }
+  }
+}

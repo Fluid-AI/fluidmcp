@@ -25,6 +25,7 @@ from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
+from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Depends
 from fastapi.responses import JSONResponse
@@ -234,8 +235,25 @@ def run_servers(
 
     # Launch LLM models if configured
     if config.llm_models:
-        logger.info(f"Launching {len(config.llm_models)} LLM model(s)...")
-        llm_processes = launch_llm_models(config.llm_models)
+        logger.info(f"Validating and transforming {len(config.llm_models)} LLM model config(s)...")
+        try:
+            # Validate and transform high-level configs to vLLM args
+            validated_llm_config = validate_and_transform_llm_config(config.llm_models)
+            logger.info(f"✓ LLM configuration validated successfully")
+        except VLLMConfigError as e:
+            logger.error(f"LLM configuration validation failed: {e}")
+            logger.error("Fix the configuration errors and try again")
+            if launched_servers > 0:
+                logger.warning(
+                    f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
+                    "These servers remain running and must be stopped manually. "
+                    "Use 'ps aux | grep mcp' (Unix) or Task Manager (Windows) to locate processes, "
+                    "then terminate with 'kill'/'pkill' (Unix) or Task Manager/'taskkill' (Windows)."
+                )
+            return
+
+        logger.info(f"Launching {len(validated_llm_config)} LLM model(s)...")
+        llm_processes = launch_llm_models(validated_llm_config)
 
         # Thread-safe update of LLM registries
         with _llm_registry_lock:
@@ -243,7 +261,7 @@ def run_servers(
 
             # Register LLM endpoints only for successfully running processes
             for model_id in llm_processes.keys():
-                model_config = config.llm_models[model_id]
+                model_config = validated_llm_config[model_id]
                 endpoints = model_config.get("endpoints", {})
 
                 # Determine base_url with smart port extraction

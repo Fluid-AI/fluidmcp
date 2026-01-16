@@ -174,6 +174,213 @@ curl http://localhost:8099/api/llm/status
 
 ---
 
+## Advanced Configuration
+
+**NEW in PR #4**: High-level configuration with validation, profiles, and production-safe defaults.
+
+### High-Level Config Format
+
+FluidMCP now supports a simplified, high-level configuration format that automatically generates vLLM CLI arguments and validates your configuration for common mistakes.
+
+**Example**: [examples/vllm-advanced-config.json](examples/vllm-advanced-config.json)
+
+**Note**: Replace `facebook/opt-125m` in examples below with your actual model name (e.g., `facebook/opt-125m`, `gpt2`, etc.).
+
+```json
+{
+  "llmModels": {
+    "vllm": {
+      "model": "facebook/opt-125m",
+      "port": 8001,
+      "profile": "production",
+      "config": {
+        "gpu_memory_utilization": 0.9,
+        "max_num_seqs": 64,
+        "max_num_batched_tokens": 8192,
+        "max_model_len": 4096,
+        "dtype": "float16",
+        "tensor_parallel_size": 1
+      },
+      "timeouts": {
+        "startup": 300,
+        "streaming": null,
+        "non_streaming": 120
+      },
+      "env": {}
+    }
+  }
+}
+```
+
+**Benefits**:
+- ✅ Automatic validation before launch
+- ✅ Clear error messages for invalid configs
+- ✅ GPU memory validation across all models
+- ✅ Port conflict detection
+- ✅ Production-safe defaults via profiles
+- ✅ Fully backward compatible with raw args format
+
+### Configuration Profiles
+
+Profiles provide production-tested defaults for common scenarios:
+
+| Profile | Use Case | GPU Memory | Max Seqs | Batched Tokens | Model Len |
+|---------|----------|------------|----------|----------------|-----------|
+| **development** | Testing, small loads | 0.5 | 16 | 2048 | 2048 |
+| **production** | Production workloads | 0.85 | 64 | 8192 | 4096 |
+| **high-throughput** | Maximum concurrency | 0.88 | 128 | 16384 | 2048 |
+
+**Usage**:
+```json
+{
+  "llmModels": {
+    "vllm": {
+      "model": "facebook/opt-125m",
+      "port": 8001,
+      "profile": "production",
+      "env": {}
+    }
+  }
+}
+```
+
+All profile defaults can be overridden by specifying values in `"config"`.
+
+**Example**: [examples/vllm-profile-development.json](examples/vllm-profile-development.json)
+
+### GPU Memory Validation
+
+FluidMCP automatically validates GPU memory allocation to prevent out-of-memory errors:
+
+```json
+{
+  "llmModels": {
+    "vllm-model-1": {
+      "model": "facebook/opt-125m",
+      "port": 8001,
+      "config": {"gpu_memory_utilization": 0.45}
+    },
+    "vllm-model-2": {
+      "model": "gpt2",
+      "port": 8002,
+      "config": {"gpu_memory_utilization": 0.45}
+    }
+  }
+}
+```
+
+**Validation output**:
+```
+GPU Memory Allocation:
+  - vllm-model-1: 0.45
+  - vllm-model-2: 0.45
+Total: 0.90 (OK)
+```
+
+**Validation Rules**:
+- ❌ **FAIL**: Total GPU memory > 1.0
+- ⚠️ **WARN**: Total GPU memory > 0.95 (close to limit)
+- ✅ **PASS**: Total GPU memory ≤ 0.95
+
+**Example**: [examples/vllm-multi-model-advanced.json](examples/vllm-multi-model-advanced.json)
+
+### Timeout Configuration
+
+Configure timeouts for different request types:
+
+```json
+{
+  "timeouts": {
+    "startup": 300,
+    "streaming": null,
+    "non_streaming": 120
+  }
+}
+```
+
+**Timeout Values**:
+- `startup`: 300 - Seconds to wait for model loading
+- `streaming`: null - Indefinite timeout (recommended for streaming)
+- `non_streaming`: 120 - Seconds for non-streaming requests
+
+**Important**:
+- **Streaming requests** should use `null` (indefinite) because generation time is unpredictable
+- **Non-streaming requests** can have bounded timeouts
+- **Startup timeout** depends on model size (30s-10min)
+
+### Config Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `model` | string | Yes | HuggingFace model name or local path |
+| `port` | integer | No | Port for vLLM server (default: 8001) |
+| `profile` | string | No | Profile name (development/production/high-throughput) |
+| `config` | object | No | vLLM configuration parameters |
+| `config.gpu_memory_utilization` | float | No | GPU memory fraction (0.0-1.0) |
+| `config.max_num_seqs` | integer | No | Max concurrent sequences |
+| `config.max_num_batched_tokens` | integer | No | Max tokens in a batch |
+| `config.max_model_len` | integer | No | Maximum context length |
+| `config.dtype` | string | No | Data type (float16/bfloat16/float32/auto) |
+| `config.tensor_parallel_size` | integer | No | Number of GPUs for tensor parallelism |
+| `timeouts` | object | No | Timeout configuration |
+| `env` | object | No | Environment variables |
+
+### Validation Features
+
+FluidMCP validates your configuration and provides clear error messages:
+
+**Port Conflicts**:
+```
+❌ Port conflict: Models 'vllm-model-1' and 'vllm-model-2' both use port 8001
+```
+
+**GPU Memory Exceeded**:
+```
+❌ GPU memory allocation exceeds 1.0 (total: 1.20).
+   This will cause out-of-memory errors.
+   Breakdown: {'vllm-model-1': 0.6, 'vllm-model-2': 0.6}
+```
+
+**Invalid Values**:
+```
+❌ gpu_memory_utilization must be between 0.0 and 1.0, got 1.5
+❌ dtype must be one of ['float16', 'bfloat16', 'float32', 'auto'], got 'invalid'
+```
+
+**Risky Configurations** (warnings):
+```
+⚠️ GPU memory allocation is 0.98 (very close to 1.0).
+   Consider reducing to avoid potential OOM errors.
+⚠️ max_model_len is very high (65536).
+   This may cause memory issues or slow performance.
+```
+
+### Backward Compatibility
+
+The old raw args format continues to work without changes:
+
+```json
+{
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port", "8001",
+        "--gpu-memory-utilization", "0.9"
+      ],
+      "env": {},
+      "endpoints": {"base_url": "http://localhost:8001/v1"}
+    }
+  }
+}
+```
+
+**Note**: High-level config is optional and additive. Existing configs require no changes.
+
+---
+
 ## API Reference
 
 ### OpenAI-Compatible Endpoints
