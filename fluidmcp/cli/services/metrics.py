@@ -554,7 +554,7 @@ class RequestTimer:
         #
         # NOTE ON DEFENSIVE TRY-EXCEPT BLOCKS:
         # Each issubclass() call is wrapped in try-except for defense-in-depth, even though
-        # the initial validation (line 526) confirms exc_type is a valid class. This protects against:
+        # the initial validation (line 545) confirms exc_type is a valid class. This protects against:
         # 1. Future refactoring that might bypass initial validation
         # 2. Subtle bugs where exc_type gets corrupted between checks
         # 3. Edge cases in Python's exception hierarchy
@@ -564,7 +564,11 @@ class RequestTimer:
         #
         # DESIGN DECISION: Code prioritizes extreme defensiveness and production safety over
         # readability. This pattern prevents catastrophic failures in edge cases that "cannot occur."
-        # (Discussed and intentionally kept in Rounds 8, 10, 11, and 12 - Copilot disagrees)
+        # (Discussed and intentionally kept in Rounds 8, 10, 11, 12, 13, and 14 - Copilot disagrees)
+        #
+        # This is a conscious trade-off: 36 extra lines of defensive code for guaranteed safety
+        # in production. The alternative (removing try-except blocks) would be more readable but
+        # less robust. This code runs in the error handling path, so safety > readability.
 
         # BrokenPipeError: Explicit check first to clarify intent
         # (subclass of both ConnectionError and OSError, but categorized as io_error)
