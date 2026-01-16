@@ -161,8 +161,8 @@ def _extract_arg_value(args: List[str], arg_name: str, converter=str, default=No
             try:
                 # Split only on first '=' to handle values containing '=' (e.g., --arg=key=value)
                 value = arg.split("=", 1)[1]
-                # Treat empty and whitespace-only values as empty
-                if not value.strip():
+                # Treat empty and whitespace-only values as empty (value is always a string from split)
+                if isinstance(value, str) and not value.strip():
                     logger.warning(f"Empty {arg_name} value in argument: {arg}, using default: {default}")
                     return default
                 return converter(value)
@@ -233,8 +233,9 @@ def validate_port_conflicts(llm_models: Dict[str, Dict[str, Any]]) -> None:
     if len(models_with_no_port) > 1:
         logger.warning(
             f"Multiple models have no explicit port configured: {models_with_no_port}. "
-            f"They will use vLLM's default ports which may cause runtime conflicts. "
-            f"Please specify unique ports for each model to avoid issues."
+            f"Each model will attempt to use vLLM's single default port (8000 or 8001), "
+            f"which WILL cause guaranteed runtime port conflicts and startup failures. "
+            f"Please specify a unique port for each model to avoid this issue."
         )
 
 
