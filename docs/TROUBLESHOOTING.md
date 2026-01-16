@@ -261,6 +261,43 @@ Understanding these failure modes will help users debug issues quickly and confi
     6. Retry after fixing the issue
 
 
-9. Final Note
+9. GitHub Codespaces: Port Forwarding Issues
+
+    ERROR: Invalid HTTP request received (502 Bad Gateway)
+
+        Cause
+        - GitHub Codespaces port forwarding tunnel is stuck or corrupted
+        - The Codespaces proxy has cached invalid routing rules for the port
+        - HTTP protocol negotiation failure between proxy (HTTP/2) and Uvicorn (HTTP/1.1)
+
+        Symptoms
+        - Backend logs show repeated "Invalid HTTP request received" warnings
+        - External URL returns HTTP 502 Bad Gateway
+        - Local connections (localhost) work fine
+        - Port visibility is set to "Public" but still fails
+
+        How to Fix
+        1. Try a different port:
+            fluidmcp serve --allow-insecure --allow-all-origins --port 8100
+
+        2. Update frontend configuration:
+            Edit fluidmcp/frontend/.env
+            VITE_API_BASE_URL=https://<codespace-name>-8100.app.github.dev
+
+        3. Make port 8100 Public in VS Code PORTS panel
+
+        Alternative Solutions
+        - Wait 1-2 hours for the Codespaces cache to expire
+        - Fully restart the Codespace (stop and start from GitHub)
+        - In PORTS panel: Right-click port → "Stop Forwarding Port" → Re-access URL
+
+        Important Notes
+        - This is a GitHub Codespaces infrastructure issue, not a FluidMCP bug
+        - The issue occurs when port visibility is changed multiple times
+        - Once a port is "stuck", switching to a fresh port number resolves it
+        - Port 8099 vs 8100 makes no functional difference - use whichever works
+
+
+10. Final Note
     Most FluidMCP issues fall into configuration errors or missing prerequisites.
     Once those are resolved, server startup is typically smooth.

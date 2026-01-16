@@ -647,8 +647,12 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error retrieving logs: {e}")
             return []
 
-    async def close(self):
-        """Close MongoDB connection."""
+    async def disconnect(self):
+        """Disconnect from MongoDB and cleanup resources."""
         if self.client:
             self.client.close()
             logger.info("Closed MongoDB connection")
+
+    async def close(self):
+        """Close MongoDB connection (alias for disconnect)."""
+        await self.disconnect()
