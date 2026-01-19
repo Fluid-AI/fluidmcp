@@ -30,7 +30,7 @@ Configure restart behavior in your FluidMCP configuration:
 
 ```json
 {
-  "llm": {
+  "llmModels": {
     "vllm": {
       "command": "vllm",
       "args": ["serve", "facebook/opt-125m", "--port", "8001"],
@@ -68,7 +68,7 @@ Health checks are automatically configured based on the `endpoints.base_url` set
 
 ```json
 {
-  "llm": {
+  "llmModels": {
     "vllm": {
       "endpoints": {
         "base_url": "http://localhost:8001/v1"
@@ -85,7 +85,7 @@ If `base_url` is not provided, health checks will only verify process status (no
 ### List All LLM Models
 
 ```bash
-GET /llm/models
+GET /api/llm/models
 ```
 
 **Response:**
@@ -113,7 +113,7 @@ GET /llm/models
 ### Get Model Status
 
 ```bash
-GET /llm/models/{model_id}
+GET /api/llm/models/{model_id}
 ```
 
 **Response:**
@@ -138,7 +138,7 @@ GET /llm/models/{model_id}
 ### Restart Model
 
 ```bash
-POST /llm/models/{model_id}/restart
+POST /api/llm/models/{model_id}/restart
 ```
 
 **Response (Success):**
@@ -160,7 +160,7 @@ POST /llm/models/{model_id}/restart
 ### Stop Model
 
 ```bash
-POST /llm/models/{model_id}/stop?force=false
+POST /api/llm/models/{model_id}/stop?force=false
 ```
 
 **Query Parameters:**
@@ -176,7 +176,7 @@ POST /llm/models/{model_id}/stop?force=false
 ### Get Model Logs
 
 ```bash
-GET /llm/models/{model_id}/logs?lines=100
+GET /api/llm/models/{model_id}/logs?lines=100
 ```
 
 **Query Parameters:**
@@ -199,7 +199,7 @@ GET /llm/models/{model_id}/logs?lines=100
 ### Trigger Health Check
 
 ```bash
-POST /llm/models/{model_id}/health-check
+POST /api/llm/models/{model_id}/health-check
 ```
 
 **Response:**
@@ -279,7 +279,7 @@ curl http://localhost:8099/llm/models/vllm
 ```
 
 If `restart_count >= max_restarts`:
-1. Check logs for root cause: `GET /llm/models/vllm/logs?lines=500`
+1. Check logs for root cause: `GET /api/llm/models/vllm/logs?lines=500`
 2. Fix underlying issue (CUDA OOM, port conflict, etc.)
 3. Update configuration if needed
 4. Restart FluidMCP server to reset restart count

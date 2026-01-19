@@ -226,31 +226,77 @@ class LLMProcess:
 
     def check_for_cuda_oom(self) -> bool:
         """
-        Check stderr log for CUDA Out of Memory errors.
+        Check stderr log for CUDA Out of Memory errors with caching.
+
+        Uses caching (60s TTL) and efficient backwards file reading to minimize I/O overhead.
 
         Returns:
             True if CUDA OOM detected, False otherwise
         """
         log_path = self.get_stderr_log_path()
+        now = time.time()
 
+        # If log file doesn't exist, cache and return False
         if not os.path.exists(log_path):
+            self._cuda_oom_cache = (False, now, None)
             return False
 
+        # Get current modification time for cache validation
         try:
-            # Read last 1000 lines to check for recent errors
-            with open(log_path, 'r') as f:
-                lines = f.readlines()
-                recent_lines = lines[-1000:] if len(lines) > 1000 else lines
+            current_mtime = os.path.getmtime(log_path)
+        except OSError:
+            current_mtime = None
 
-                for line in recent_lines:
-                    if any(error in line.lower() for error in [
-                        "cuda out of memory",
-                        "cudaerror",
-                        "out of memory"
-                    ]):
-                        return True
+        # Check cache: reuse recent result if file hasn't changed and TTL not expired
+        cache = getattr(self, "_cuda_oom_cache", None)
+        CACHE_TTL_SECONDS = 60.0
+
+        if cache is not None:
+            cached_result, cached_time, cached_mtime = cache
+            if (now - cached_time) < CACHE_TTL_SECONDS and cached_mtime == current_mtime:
+                return cached_result
+
+        try:
+            # Efficiently read only the last ~1000 lines by seeking backwards
+            max_lines = 1000
+            block_size = 8192
+            buffer = b""
+            newline_count = 0
+
+            with open(log_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                file_size = f.tell()
+                position = file_size
+
+                while position > 0 and newline_count <= max_lines:
+                    read_size = block_size if position >= block_size else position
+                    position -= read_size
+                    f.seek(position)
+                    data = f.read(read_size)
+                    buffer = data + buffer
+                    newline_count = buffer.count(b"\n")
+
+            # Decode and split into lines, then take only the last max_lines
+            text = buffer.decode("utf-8", errors="ignore")
+            all_lines = text.splitlines()
+            recent_lines = all_lines[-max_lines:] if len(all_lines) > max_lines else all_lines
+
+            for line in recent_lines:
+                lower_line = line.lower()
+                if any(error in lower_line for error in [
+                    "cuda out of memory",
+                    "cudaerror",
+                    "out of memory"
+                ]):
+                    self._cuda_oom_cache = (True, now, current_mtime)
+                    return True
+
+            # No CUDA OOM found; cache negative result
+            self._cuda_oom_cache = (False, now, current_mtime)
         except Exception as e:
             logger.debug(f"Error reading stderr log for {self.model_id}: {e}")
+            # On error, cache a negative result briefly to avoid repeated I/O failures
+            self._cuda_oom_cache = (False, now, current_mtime)
 
         return False
 
@@ -346,13 +392,14 @@ class LLMProcess:
         # Attempt restart
         try:
             self.start()
-            self.restart_count += 1
-            self.last_restart_time = time.time()
 
             # Wait for process to stabilize
             await asyncio.sleep(2)
 
             if self.is_running():
+                # Only increment counter after confirming success
+                self.restart_count += 1
+                self.last_restart_time = time.time()
                 logger.info(f"LLM model '{self.model_id}' restarted successfully")
                 return True
             else:
@@ -461,8 +508,8 @@ class LLMHealthMonitor:
 
         while self._running:
             try:
-                # Check health of all processes
-                for model_id, process in self.processes.items():
+                # Check health of all processes (snapshot to avoid race condition)
+                for model_id, process in list(self.processes.items()):
                     try:
                         # Skip if no restart policy configured
                         if process.restart_policy == "no":
@@ -506,6 +553,7 @@ class LLMHealthMonitor:
                 await asyncio.sleep(self.check_interval)
 
             except asyncio.CancelledError:
+                # Task cancellation is expected during shutdown; ignore to allow clean stop
                 logger.info("Health monitor cancelled")
                 break
             except Exception as e:
@@ -537,6 +585,7 @@ class LLMHealthMonitor:
             try:
                 await self._monitor_task
             except asyncio.CancelledError:
+                # Task cancellation is expected during shutdown; ignore to allow clean stop
                 pass
 
         logger.info("Health monitor stopped")
