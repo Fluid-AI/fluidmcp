@@ -155,9 +155,9 @@ async def _start_llm_health_monitor_async():
         logger.info("Stopping existing LLM health monitor...")
         await _llm_health_monitor.stop()
 
-    # Create and start new health monitor
+    # Create and start new health monitor (only monitor processes with restart policies)
     logger.info(f"Starting health monitor for {len(processes_with_restart)} LLM process(es) with restart policies")
-    _llm_health_monitor = LLMHealthMonitor(_llm_processes)
+    _llm_health_monitor = LLMHealthMonitor(processes_with_restart)
     _llm_health_monitor.start()
 
 
