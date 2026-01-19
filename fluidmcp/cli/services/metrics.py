@@ -197,10 +197,12 @@ class Histogram(Metric):
 
                 # Emit bucket counts
                 cumulative = 0
+                bucket_lines = []
                 for bucket in self.buckets:
                     cumulative += hist["buckets"][bucket]
                     labels = f"{base_labels},le=\"{bucket}\"" if base_labels else f"le=\"{bucket}\""
-                    lines.append(f"{self.name}_bucket{{{labels}}} {cumulative}")
+                    bucket_lines.append(f"{self.name}_bucket{{{labels}}} {cumulative}")
+                lines.extend(bucket_lines)
 
                 # Emit +Inf bucket
                 labels = f"{base_labels},le=\"+Inf\"" if base_labels else "le=\"+Inf\""

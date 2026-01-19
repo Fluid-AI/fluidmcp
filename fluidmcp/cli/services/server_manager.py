@@ -9,7 +9,6 @@ import asyncio
 import subprocess
 import json
 import time
-import signal
 import atexit
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -86,6 +85,7 @@ class ServerManager:
                     try:
                         process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
+                        # Intentional: timeout during cleanup is acceptable - process will be reaped by OS
                         pass
 
             except Exception as e:

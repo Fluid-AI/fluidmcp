@@ -899,7 +899,7 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
         app: FastAPI application instance
     """
     from fastapi.responses import PlainTextResponse
-    from .metrics import get_registry, MetricsCollector
+    from .metrics import get_registry
 
     @app.get("/metrics", tags=["monitoring"])
     async def metrics():
