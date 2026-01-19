@@ -88,6 +88,35 @@ _http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async u
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
 
+# Server start times for uptime tracking (server_name -> start timestamp)
+_server_start_times: Dict[str, float] = {}
+_server_start_times_lock = threading.Lock()
+
+
+def _initialize_server_metrics(server_name: str) -> None:
+    """
+    Initialize metrics for a newly launched server.
+
+    Args:
+        server_name: Name of the server to initialize metrics for
+    """
+    from .metrics import MetricsCollector
+
+    # Record server start time for uptime calculation
+    with _server_start_times_lock:
+        _server_start_times[server_name] = time.monotonic()
+
+    # Initialize metrics collector
+    collector = MetricsCollector(server_name)
+
+    # Set initial server status to running (2)
+    collector.set_server_status(2)
+
+    # Set initial uptime to 0
+    collector.set_uptime(0.0)
+
+    logger.debug(f"Initialized metrics for server: {server_name}")
+
 
 def _extract_port_from_args(args) -> int:
     """
@@ -216,6 +245,10 @@ def run_servers(
             if router and process:
                 app.include_router(router, tags=[server_name])
                 _register_server_process(server_name, process)  # Register in explicit registry
+
+                # Initialize metrics for the server
+                _initialize_server_metrics(server_name)
+
                 logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
                 logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
@@ -804,7 +837,7 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
         app: FastAPI application instance
     """
     from fastapi.responses import PlainTextResponse
-    from .metrics import get_registry
+    from .metrics import get_registry, MetricsCollector
 
     @app.get("/metrics", tags=["monitoring"])
     async def metrics():
@@ -813,11 +846,19 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
-        - Server status and uptime
+        - Server status and uptime (dynamically calculated)
         - GPU memory utilization
         - Tool execution metrics
         - Streaming request metrics
         """
+        # Update uptime for all running servers before rendering metrics
+        with _server_start_times_lock:
+            current_time = time.monotonic()
+            for server_name, start_time in _server_start_times.items():
+                uptime = current_time - start_time
+                collector = MetricsCollector(server_name)
+                collector.set_uptime(uptime)
+
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
         return PlainTextResponse(

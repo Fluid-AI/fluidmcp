@@ -661,39 +661,44 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        # Initialize metrics collector
+        collector = MetricsCollector(server_name)
 
-        process = server_manager.processes[server_name]
+        # Track request with metrics
+        with RequestTimer(collector, "tools/list"):
+            if server_name not in server_manager.processes:
+                raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+            process = server_manager.processes[server_name]
 
-        try:
-            request_payload = {
-                "id": 1,
-                "jsonrpc": "2.0",
-                "method": "tools/list"
-            }
+            if process.poll() is not None:
+                raise HTTPException(503, f"Server '{server_name}' is not running")
 
-            msg = json.dumps(request_payload)
             try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                request_payload = {
+                    "id": 1,
+                    "jsonrpc": "2.0",
+                    "method": "tools/list"
+                }
 
-            # Non-blocking I/O with asyncio.to_thread
-            response_line = await asyncio.to_thread(process.stdout.readline)
-            response_data = json.loads(response_line)
+                msg = json.dumps(request_payload)
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            return JSONResponse(content=response_data)
+                # Non-blocking I/O with asyncio.to_thread
+                response_line = await asyncio.to_thread(process.stdout.readline)
+                response_data = json.loads(response_line)
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error listing tools for '{server_name}': {e}")
-            raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                return JSONResponse(content=response_data)
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error listing tools for '{server_name}': {e}")
+                raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/mcp/tools/call", tags=["mcp"])
     async def call_tool(
@@ -710,43 +715,49 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        # Initialize metrics collector
+        collector = MetricsCollector(server_name)
+        tool_name = request_body.get("name", "unknown")
 
-        process = server_manager.processes[server_name]
+        # Track request with metrics
+        with RequestTimer(collector, f"tools/call:{tool_name}"):
+            if server_name not in server_manager.processes:
+                raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+            process = server_manager.processes[server_name]
 
-        try:
-            if "name" not in request_body:
-                raise HTTPException(400, "Tool name is required")
+            if process.poll() is not None:
+                raise HTTPException(503, f"Server '{server_name}' is not running")
 
-            request_payload = {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": request_body
-            }
-
-            msg = json.dumps(request_payload)
             try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                if "name" not in request_body:
+                    raise HTTPException(400, "Tool name is required")
 
-            # Non-blocking I/O with asyncio.to_thread
-            response_line = await asyncio.to_thread(process.stdout.readline)
-            response_data = json.loads(response_line)
+                request_payload = {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": request_body
+                }
 
-            return JSONResponse(content=response_data)
+                msg = json.dumps(request_payload)
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error calling tool on '{server_name}': {e}")
-            raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                # Non-blocking I/O with asyncio.to_thread
+                response_line = await asyncio.to_thread(process.stdout.readline)
+                response_data = json.loads(response_line)
+
+                return JSONResponse(content=response_data)
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error calling tool on '{server_name}': {e}")
+                raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     return router
 
