@@ -1,5 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
-
 export interface ToolExecution {
   id: string;
   serverId: string;
@@ -14,7 +12,20 @@ export interface ToolExecution {
 }
 
 const STORAGE_KEY = 'fluidmcp_tool_history';
+// Global cap: 500 executions across all tools
+// Per-tool cap: 50 executions per specific tool
 const MAX_EXECUTIONS_PER_TOOL = 50;
+
+/**
+ * Generate a unique ID using crypto.randomUUID() with fallback
+ */
+function generateId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback for environments without crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+}
 
 class ToolHistoryService {
   /**
@@ -23,7 +34,7 @@ class ToolHistoryService {
   saveExecution(execution: Omit<ToolExecution, 'id' | 'timestamp'>): ToolExecution {
     const newExecution: ToolExecution = {
       ...execution,
-      id: uuidv4(),
+      id: generateId(),
       timestamp: new Date().toISOString(),
     };
 

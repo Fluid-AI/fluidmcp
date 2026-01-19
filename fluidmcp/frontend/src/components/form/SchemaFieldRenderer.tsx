@@ -1,5 +1,5 @@
 import React from 'react';
-import { JsonSchemaProperty } from '../../types/server';
+import type { JsonSchemaProperty } from '../../types/server';
 import { StringInput } from './StringInput';
 import { NumberInput } from './NumberInput';
 import { BooleanInput } from './BooleanInput';

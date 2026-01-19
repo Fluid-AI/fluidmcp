@@ -1,5 +1,5 @@
 import React from 'react';
-import { JsonSchemaProperty } from '../../types/server';
+import type { JsonSchemaProperty } from '../../types/server';
 
 interface NumberInputProps {
   name: string;

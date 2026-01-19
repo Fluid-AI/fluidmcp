@@ -1,4 +1,4 @@
-import { JsonSchemaProperty } from '../../types/server';
+import type { JsonSchemaProperty } from '../../types/server';
 
 export interface ValidationError {
   field: string;

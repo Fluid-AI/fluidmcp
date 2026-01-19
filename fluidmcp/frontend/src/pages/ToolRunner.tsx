@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { apiClient } from '../services/api';
 import { useToolRunner } from '../hooks/useToolRunner';
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
-import { Server, Tool } from '../types/server';
+import type { Server, Tool } from '../types/server';
 import './ToolRunner.css';
 
 export const ToolRunner: React.FC = () => {
@@ -35,33 +35,53 @@ export const ToolRunner: React.FC = () => {
       return;
     }
 
+    let isMounted = true;
+
     const loadServerAndTool = async () => {
       try {
-        setLoadingServer(true);
-        setLoadingError(null);
+        if (isMounted) {
+          setLoadingServer(true);
+          setLoadingError(null);
+        }
 
         // Fetch server details
         const serverDetails = await apiClient.getServerDetails(serverId);
+
+        if (!isMounted) return;
         setServer(serverDetails as Server);
 
         // Fetch tools for this server
-        const toolsResponse = await apiClient.getTools(serverId);
+        const toolsResponse = await apiClient.getServerTools(serverId);
+
+        if (!isMounted) return;
         const foundTool = toolsResponse.tools.find((t) => t.name === toolName);
 
         if (!foundTool) {
-          setLoadingError(`Tool "${toolName}" not found on server "${serverDetails.name}"`);
+          if (isMounted) {
+            setLoadingError(`Tool "${toolName}" not found on server "${serverDetails.name}"`);
+          }
           return;
         }
 
-        setTool(foundTool);
+        if (isMounted) {
+          setTool(foundTool);
+        }
       } catch (err: any) {
-        setLoadingError(err.message || 'Failed to load server or tool details');
+        if (isMounted) {
+          setLoadingError(err.message || 'Failed to load server or tool details');
+        }
       } finally {
-        setLoadingServer(false);
+        if (isMounted) {
+          setLoadingServer(false);
+        }
       }
     };
 
     loadServerAndTool();
+
+    return () => {
+      isMounted = false;
+    };
   }, [serverId, toolName]);
 
   const handleSubmit = async (values: Record<string, any>) => {

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiClient } from '../services/api';
-import { toolHistoryService, ToolExecution } from '../services/toolHistory';
+import { toolHistoryService } from '../services/toolHistory';
+import type { ToolExecution } from '../services/toolHistory';
 
 interface UseToolRunnerResult {
   execute: (args: Record<string, any>) => Promise<void>;
@@ -24,22 +25,37 @@ export function useToolRunner(
   const [executionTime, setExecutionTime] = useState<number | null>(null);
   const [history, setHistory] = useState<ToolExecution[]>([]);
 
-  // Load history on mount and when tool changes
+  // Track mount status to prevent state updates on unmounted component
+  const isMountedRef = useRef(true);
+
   useEffect(() => {
-    loadHistory();
-  }, [serverId, toolName]);
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const loadHistory = useCallback(() => {
     const toolHistory = toolHistoryService.getHistory(serverId, toolName);
-    setHistory(toolHistory);
+    if (isMountedRef.current) {
+      setHistory(toolHistory);
+    }
   }, [serverId, toolName]);
+
+  // Load history on mount and when tool changes
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
 
   const execute = useCallback(
     async (args: Record<string, any>) => {
-      setLoading(true);
-      setError(null);
-      setResult(null);
-      setExecutionTime(null);
+      // NOTE: Execution cancellation will be added in a follow-up PR
+      if (isMountedRef.current) {
+        setLoading(true);
+        setError(null);
+        setResult(null);
+        setExecutionTime(null);
+      }
 
       const startTime = performance.now();
 
@@ -48,8 +64,10 @@ export function useToolRunner(
         const endTime = performance.now();
         const duration = (endTime - startTime) / 1000; // Convert to seconds
 
-        setResult(response.result);
-        setExecutionTime(duration);
+        if (isMountedRef.current) {
+          setResult(response.result);
+          setExecutionTime(duration);
+        }
 
         // Save successful execution to history
         toolHistoryService.saveExecution({
@@ -69,8 +87,11 @@ export function useToolRunner(
         const duration = (endTime - startTime) / 1000;
 
         const errorMessage = err.message || 'Failed to execute tool';
-        setError(errorMessage);
-        setExecutionTime(duration);
+
+        if (isMountedRef.current) {
+          setError(errorMessage);
+          setExecutionTime(duration);
+        }
 
         // Save failed execution to history
         toolHistoryService.saveExecution({
@@ -87,7 +108,9 @@ export function useToolRunner(
         // Reload history
         loadHistory();
       } finally {
-        setLoading(false);
+        if (isMountedRef.current) {
+          setLoading(false);
+        }
       }
     },
     [serverId, serverName, toolName, loadHistory]
@@ -99,9 +122,11 @@ export function useToolRunner(
       if (!execution) return null;
 
       // Set result and execution time from history
-      setResult(execution.result);
-      setError(execution.error || null);
-      setExecutionTime(execution.executionTime || null);
+      if (isMountedRef.current) {
+        setResult(execution.result);
+        setError(execution.error || null);
+        setExecutionTime(execution.executionTime || null);
+      }
 
       return execution.arguments;
     },
@@ -110,7 +135,9 @@ export function useToolRunner(
 
   const clearHistory = useCallback(() => {
     toolHistoryService.clearHistory(serverId, toolName);
-    setHistory([]);
+    if (isMountedRef.current) {
+      setHistory([]);
+    }
   }, [serverId, toolName]);
 
   return {
