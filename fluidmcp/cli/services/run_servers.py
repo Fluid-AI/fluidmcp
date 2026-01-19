@@ -289,6 +289,9 @@ def run_servers(
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
 
+    # Add Prometheus metrics endpoint
+    _add_metrics_endpoint(app)
+
     # Start FastAPI server if requested
     if start_server:
         _start_server(app, port, force_reload)
@@ -791,6 +794,36 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
 
         return JSONResponse(content=response)
+
+
+def _add_metrics_endpoint(app: FastAPI) -> None:
+    """
+    Add GET /metrics endpoint for Prometheus-compatible metrics.
+
+    Args:
+        app: FastAPI application instance
+    """
+    from fastapi.responses import PlainTextResponse
+    from .metrics import get_registry
+
+    @app.get("/metrics", tags=["monitoring"])
+    async def metrics():
+        """
+        Prometheus-compatible metrics endpoint.
+
+        Exposes metrics in Prometheus exposition format:
+        - Request counters and histograms
+        - Server status and uptime
+        - GPU memory utilization
+        - Tool execution metrics
+        - Streaming request metrics
+        """
+        registry = get_registry()
+        # Prometheus text exposition format v0.0.4 (not OpenMetrics)
+        return PlainTextResponse(
+            content=registry.render_all(),
+            media_type="text/plain; version=0.0.4; charset=utf-8"
+        )
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:
