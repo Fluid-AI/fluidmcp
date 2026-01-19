@@ -875,7 +875,7 @@ async def list_llm_models(
     Returns:
         List of LLM models with status information
     """
-    llm_processes = get_llm_processes(request)
+    llm_processes = get_llm_processes()
 
     models = []
     for model_id, process in llm_processes.items():
@@ -915,7 +915,7 @@ async def get_llm_model_status(
     Returns:
         Detailed model status
     """
-    llm_processes = get_llm_processes(request)
+    llm_processes = get_llm_processes()
 
     if model_id not in llm_processes:
         raise HTTPException(404, f"LLM model '{model_id}' not found")
@@ -955,7 +955,7 @@ async def restart_llm_model(
     Returns:
         Restart result
     """
-    llm_processes = get_llm_processes(request)
+    llm_processes = get_llm_processes()
 
     if model_id not in llm_processes:
         raise HTTPException(404, f"LLM model '{model_id}' not found")
@@ -1046,7 +1046,7 @@ async def get_llm_model_logs(
     Returns:
         Log lines
     """
-    llm_processes = get_llm_processes(request)
+    llm_processes = get_llm_processes()
 
     if model_id not in llm_processes:
         raise HTTPException(404, f"LLM model '{model_id}' not found")
@@ -1118,7 +1118,7 @@ async def trigger_health_check(
     Returns:
         Health check result
     """
-    llm_processes = get_llm_processes(request)
+    llm_processes = get_llm_processes()
 
     if model_id not in llm_processes:
         raise HTTPException(404, f"LLM model '{model_id}' not found")
