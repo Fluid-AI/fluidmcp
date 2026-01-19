@@ -24,7 +24,7 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
-from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
+from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Depends
@@ -74,6 +74,18 @@ _llm_processes: Dict[str, LLMProcess] = {}
 # LLM endpoint configurations
 _llm_endpoints: Dict[str, Dict[str, str]] = {}
 
+# LLM health monitor
+_llm_health_monitor: Optional[LLMHealthMonitor] = None
+
+# Getter functions for management API (avoids circular import issues)
+def get_llm_processes() -> Dict[str, LLMProcess]:
+    """Get the LLM processes registry. Used by management API."""
+    return _llm_processes
+
+def get_llm_health_monitor() -> Optional[LLMHealthMonitor]:
+    """Get the LLM health monitor instance. Used by management API."""
+    return _llm_health_monitor
+
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 
@@ -116,6 +128,37 @@ def _initialize_server_metrics(server_name: str) -> None:
     collector.set_uptime(0.0)
 
     logger.debug(f"Initialized metrics for server: {server_name}")
+
+
+async def _start_llm_health_monitor_async():
+    """
+    Start background health monitor for LLM processes (async version).
+
+    Only starts if there are LLM processes with restart policies enabled.
+    This is called during FastAPI startup event when event loop is running.
+    """
+    global _llm_health_monitor
+
+    # Check if there are any processes with restart policies
+    processes_with_restart = {
+        model_id: process
+        for model_id, process in _llm_processes.items()
+        if process.restart_policy != "no"
+    }
+
+    if not processes_with_restart:
+        logger.info("No LLM processes with restart policies, health monitor not started")
+        return
+
+    # Stop existing monitor if running
+    if _llm_health_monitor and _llm_health_monitor.is_running():
+        logger.info("Stopping existing LLM health monitor...")
+        await _llm_health_monitor.stop()
+
+    # Create and start new health monitor
+    logger.info(f"Starting health monitor for {len(processes_with_restart)} LLM process(es) with restart policies")
+    _llm_health_monitor = LLMHealthMonitor(_llm_processes)
+    _llm_health_monitor.start()
 
 
 def _extract_port_from_args(args) -> int:
@@ -240,7 +283,15 @@ def run_servers(
 
         try:
             logger.info(f"Launching server '{server_name}' from: {install_path}")
-            package_name, router, process = launch_mcp_using_fastapi_proxy(install_path)
+
+            # Create or get lock for this server
+            if server_name not in _process_locks:
+                _process_locks[server_name] = threading.Lock()
+
+            package_name, router, process = launch_mcp_using_fastapi_proxy(
+                install_path,
+                _process_locks[server_name]
+            )
 
             if router and process:
                 app.include_router(router, tags=[server_name])
@@ -319,11 +370,22 @@ def run_servers(
         else:
             logger.warning("No LLM models started successfully - skipping proxy routes")
 
+        # Register startup event to start health monitor after event loop is running
+        @app.on_event("startup")
+        async def startup_health_monitor():
+            """Start LLM health monitor when FastAPI server starts."""
+            await _start_llm_health_monitor_async()
+
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
 
     # Add Prometheus metrics endpoint
     _add_metrics_endpoint(app)
+
+    # Add management API endpoints
+    from ..api.management import router as management_router
+    app.include_router(management_router, prefix="/api", tags=["management"])
+    logger.debug("Management API endpoints added")
 
     # Start FastAPI server if requested
     if start_server:
@@ -996,11 +1058,30 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
 
 def _cleanup_resources():
     """Cleanup all LLM processes on shutdown (thread-safe, idempotent)."""
-    global _cleanup_done, _http_client
+    global _cleanup_done, _http_client, _llm_health_monitor
 
     with _cleanup_lock:
         if _cleanup_done:
             return
+
+        # Stop health monitor if running
+        if _llm_health_monitor and _llm_health_monitor.is_running():
+            logger.info("Stopping LLM health monitor...")
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(_llm_health_monitor.stop())
+                    logger.info("Health monitor stopped successfully")
+                except Exception as e:
+                    logger.warning(f"Error stopping health monitor: {e}")
+                finally:
+                    try:
+                        loop.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing event loop: {e}")
+            finally:
+                _llm_health_monitor = None
 
         if _llm_processes:
             logger.info("Shutting down LLM processes...")

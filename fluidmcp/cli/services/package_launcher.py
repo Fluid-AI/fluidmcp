@@ -57,12 +57,13 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
     return credentials.credentials
 
-def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
+def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: threading.Lock = None):
     """
     Launch an MCP server and create a FastAPI router for it.
 
     Args:
         dest_dir: Path to the package installation directory
+        process_lock: Optional threading lock for process communication
 
     Returns:
         Tuple of (package_name, router, process) or (None, None, None) on failure
@@ -184,7 +185,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path]):
                 )
             logger.warning(error_msg)
 
-        router = create_mcp_router(pkg, process)
+        router = create_mcp_router(pkg, process, process_lock)
         logger.debug(f"Created router for package: {pkg}")
         return pkg, router, process  # Return process for explicit registry
 
@@ -325,8 +326,12 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
         return False
     
 
-def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter:
+def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock: threading.Lock = None) -> APIRouter:
     from .metrics import MetricsCollector, RequestTimer
+
+    # Create a lock if not provided
+    if process_lock is None:
+        process_lock = threading.Lock()
 
     router = APIRouter()
 
@@ -349,11 +354,12 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
         # Track request with metrics
         with RequestTimer(collector, method):
             try:
-                # Convert dict to JSON string
-                msg = json.dumps(request)
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-                response_line = process.stdout.readline()
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    msg = json.dumps(request)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                    response_line = process.stdout.readline()
                 return JSONResponse(content=json.loads(response_line))
             except Exception as e:
                 return JSONResponse(status_code=500, content={"error": str(e)})
@@ -380,32 +386,34 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 # Track streaming session when generator starts
                 collector.increment_active_streams()
 
-                # Convert dict to JSON string and send to MCP server
-                msg = json.dumps(request)
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    # Convert dict to JSON string and send to MCP server
+                    msg = json.dumps(request)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
 
-                # Read from stdout and stream as SSE events
-                while True:
-                    response_line = process.stdout.readline()
-                    if not response_line:
-                        break
-
-                    # Add logging
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
-
-                    # Format as SSE event
-                    yield f"data: {response_line.strip()}\n\n"
-
-                    # Check if response contains "result" which indicates completion
-                    try:
-                        response_data = json.loads(response_line)
-                        if "result" in response_data:
-                            # If it's a final result, we can stop the stream
+                    # Read from stdout and stream as SSE events
+                    while True:
+                        response_line = process.stdout.readline()
+                        if not response_line:
                             break
-                    except json.JSONDecodeError:
-                        # If it's not valid JSON, just stream it as-is
-                        pass
+
+                        # Add logging
+                        logger.debug(f"Received from MCP: {response_line.strip()}")
+
+                        # Format as SSE event
+                        yield f"data: {response_line.strip()}\n\n"
+
+                        # Check if response contains "result" which indicates completion
+                        try:
+                            response_data = json.loads(response_line)
+                            if "result" in response_data:
+                                # If it's a final result, we can stop the stream
+                                break
+                        except json.JSONDecodeError:
+                            # If it's not valid JSON, just stream it as-is
+                            pass
 
             except (BrokenPipeError, OSError) as e:
                 completion_status = "broken_pipe"
@@ -440,15 +448,14 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                     "method": "tools/list"
                 }
 
-                # Convert to JSON string and send to MCP server
-                msg = json.dumps(request_payload)
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    msg = json.dumps(request_payload)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                    response_line = process.stdout.readline()
 
-                # Read response from MCP server
-                response_line = process.stdout.readline()
                 response_data = json.loads(response_line)
-
                 return JSONResponse(content=response_data)
 
             except Exception as e:
@@ -488,15 +495,14 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                     "params": params
                 }
 
-                # Send to MCP server
-                msg = json.dumps(request_payload)
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    msg = json.dumps(request_payload)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                    response_line = process.stdout.readline()
 
-                # Read response
-                response_line = process.stdout.readline()
                 response_data = json.loads(response_line)
-
                 return JSONResponse(content=response_data)
 
             except json.JSONDecodeError:
