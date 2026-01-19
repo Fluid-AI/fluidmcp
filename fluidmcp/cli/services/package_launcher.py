@@ -326,6 +326,8 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
     
 
 def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter:
+    from .metrics import MetricsCollector, RequestTimer
+
     router = APIRouter()
 
     @router.post(f"/{package_name}/mcp", tags=[package_name])
@@ -340,15 +342,21 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
             }
         ), token: str = Depends(get_token)
     ):
-        try:
-            # Convert dict to JSON string
-            msg = json.dumps(request)
-            process.stdin.write(msg + "\n")
-            process.stdin.flush()
-            response_line = process.stdout.readline()
-            return JSONResponse(content=json.loads(response_line))
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+        method = request.get("method", "unknown")
+
+        # Track request with metrics
+        with RequestTimer(collector, method):
+            try:
+                # Convert dict to JSON string
+                msg = json.dumps(request)
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+                response_line = process.stdout.readline()
+                return JSONResponse(content=json.loads(response_line))
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
     @router.post(f"/{package_name}/sse", tags=[package_name])
@@ -403,27 +411,32 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
         
     @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
     async def list_tools(token: str = Depends(get_token)):
-        try:
-            # Pre-filled JSON-RPC request for tools/list
-            request_payload = {
-                "id": 1,
-                "jsonrpc": "2.0",
-                "method": "tools/list"
-            }
-            
-            # Convert to JSON string and send to MCP server
-            msg = json.dumps(request_payload)
-            process.stdin.write(msg + "\n")
-            process.stdin.flush()
-            
-            # Read response from MCP server
-            response_line = process.stdout.readline()
-            response_data = json.loads(response_line)
-            
-            return JSONResponse(content=response_data)
-            
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+
+        # Track request with metrics
+        with RequestTimer(collector, "tools/list"):
+            try:
+                # Pre-filled JSON-RPC request for tools/list
+                request_payload = {
+                    "id": 1,
+                    "jsonrpc": "2.0",
+                    "method": "tools/list"
+                }
+
+                # Convert to JSON string and send to MCP server
+                msg = json.dumps(request_payload)
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+
+                # Read response from MCP server
+                response_line = process.stdout.readline()
+                response_data = json.loads(response_line)
+
+                return JSONResponse(content=response_data)
+
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"error": str(e)})
         
     
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
@@ -431,49 +444,55 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
         ...,
         alias="params",
         example={
-            "name": "", 
+            "name": "",
         }
     ), token: str = Depends(get_token)
-):      
+):
         params = request_body
 
-        try:
-            # Validate required fields
-            if "name" not in params:
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+        tool_name = params.get("name", "unknown")
+
+        # Track request with metrics
+        with RequestTimer(collector, f"tools/call:{tool_name}"):
+            try:
+                # Validate required fields
+                if "name" not in params:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Tool name is required"}
+                    )
+
+                # Construct complete JSON-RPC request
+                request_payload = {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": params
+                }
+
+                # Send to MCP server
+                msg = json.dumps(request_payload)
+                process.stdin.write(msg + "\n")
+                process.stdin.flush()
+
+                # Read response
+                response_line = process.stdout.readline()
+                response_data = json.loads(response_line)
+
+                return JSONResponse(content=response_data)
+
+            except json.JSONDecodeError:
                 return JSONResponse(
-                    status_code=400, 
-                    content={"error": "Tool name is required"}
+                    status_code=400,
+                    content={"error": "Invalid JSON in request body"}
                 )
-            
-            # Construct complete JSON-RPC request
-            request_payload = {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": params
-            }
-            
-            # Send to MCP server
-            msg = json.dumps(request_payload)
-            process.stdin.write(msg + "\n")
-            process.stdin.flush()
-            
-            # Read response
-            response_line = process.stdout.readline()
-            response_data = json.loads(response_line)
-            
-            return JSONResponse(content=response_data)
-            
-        except json.JSONDecodeError:
-            return JSONResponse(
-                status_code=400, 
-                content={"error": "Invalid JSON in request body"}
-            )
-        except Exception as e:
-            return JSONResponse(
-                status_code=500, 
-                content={"error": str(e)}
-            )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": str(e)}
+                )
     return router
 
 def create_dynamic_router(server_manager):
