@@ -22,24 +22,26 @@ export const BooleanInput: React.FC<BooleanInputProps> = ({
 
   return (
     <div className="form-field">
-      <label className="checkbox-label">
-        <input
-          type="checkbox"
-          id={name}
-          name={name}
-          checked={value}
-          onChange={(e) => onChange(e.target.checked)}
-          className={error ? 'error' : ''}
-        />
-        <span>
-          {label}
-          {required && <span className="required">*</span>}
-        </span>
-      </label>
+      <div className="checkbox-wrapper">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            id={name}
+            name={name}
+            checked={value}
+            onChange={(e) => onChange(e.target.checked)}
+            className={error ? 'error' : ''}
+          />
+          <span>
+            {label}
+            {required && <span className="required">*</span>}
+          </span>
+        </label>
 
-      {schema.description && (
-        <p className="field-description">{schema.description}</p>
-      )}
+        {schema.description && (
+          <p className="field-description">{schema.description}</p>
+        )}
+      </div>
 
       {error && <span className="error-message">{error}</span>}
     </div>

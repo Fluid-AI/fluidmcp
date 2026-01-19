@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { JsonSchemaProperty } from '../../types/server';
 import { SchemaFieldRenderer } from './SchemaFieldRenderer';
-import { validateForm, initializeFormValues, ValidationError } from './FormValidation';
+import { validateForm, initializeFormValues } from './FormValidation';
 
 interface JsonSchemaFormProps {
   schema: {

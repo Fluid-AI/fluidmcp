@@ -12,9 +12,9 @@ export interface ToolExecution {
 }
 
 const STORAGE_KEY = 'fluidmcp_tool_history';
-// Global cap: 500 executions across all tools
-// Per-tool cap: 50 executions per specific tool
-const MAX_EXECUTIONS_PER_TOOL = 50;
+// Global cap: 250 executions across all tools
+// Per-tool cap: 25 executions per specific tool
+const MAX_EXECUTIONS_PER_TOOL = 25;
 
 /**
  * Generate a unique ID using crypto.randomUUID() with fallback
@@ -41,8 +41,8 @@ class ToolHistoryService {
     const history = this.getAllHistory();
     history.unshift(newExecution);
 
-    // Limit total history size (keep last 500 executions across all tools)
-    const trimmedHistory = history.slice(0, 500);
+    // Limit total history size (keep last 250 executions across all tools)
+    const trimmedHistory = history.slice(0, 250);
 
     this._saveToStorage(trimmedHistory);
     return newExecution;
@@ -151,7 +151,7 @@ class ToolHistoryService {
           new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
       );
 
-      this._saveToStorage(unique.slice(0, 500));
+      this._saveToStorage(unique.slice(0, 250));
     } catch (error) {
       console.error('Failed to import tool history:', error);
       throw new Error('Invalid history format');

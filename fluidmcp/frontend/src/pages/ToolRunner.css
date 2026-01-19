@@ -73,6 +73,7 @@
   font-size: 1.25rem;
   font-weight: 600;
   margin: 0 0 1rem 0;
+  color: #111827;
 }
 
 .section-header {
@@ -145,15 +146,33 @@
   font-size: 0.75rem;
 }
 
+/* Checkbox Styles */
+.checkbox-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .checkbox-label {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: #374151;
 }
 
 .checkbox-label input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
   cursor: pointer;
+  margin: 0;
+}
+
+.checkbox-wrapper .field-description {
+  margin-left: 1.5rem;
+  margin-top: 0;
 }
 
 /* Array Input */
@@ -172,6 +191,13 @@
 
 .array-item-content {
   flex: 1;
+  min-width: 0;
+}
+
+.array-item-content input,
+.array-item-content textarea {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .btn-remove {
@@ -181,6 +207,7 @@
   border: none;
   border-radius: 4px;
   font-size: 0.75rem;
+  flex-shrink: 0;
   cursor: pointer;
   white-space: nowrap;
 }
