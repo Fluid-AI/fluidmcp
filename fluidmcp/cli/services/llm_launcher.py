@@ -255,10 +255,8 @@ class LLMProcess:
             current_mtime = None
 
         # Check cache: reuse recent result if file hasn't changed and TTL not expired
-        cache = getattr(self, "_cuda_oom_cache", None)
-
-        if cache is not None:
-            cached_result, cached_time, cached_mtime = cache
+        if self._cuda_oom_cache is not None:
+            cached_result, cached_time, cached_mtime = self._cuda_oom_cache
             if (now - cached_time) < CUDA_OOM_CACHE_TTL and cached_mtime == current_mtime:
                 return cached_result
 

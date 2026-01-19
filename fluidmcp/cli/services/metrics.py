@@ -164,7 +164,7 @@ class Histogram(Metric):
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1
-                    break
+                    break  # intentional: only increment the first matching bucket; cumulative counts are computed in render()
 
     def render(self) -> str:
         """Render histogram in Prometheus format."""
