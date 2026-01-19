@@ -371,25 +371,32 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
             }
         ), token: str = Depends(get_token)
     ):
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+
         async def event_generator() -> Iterator[str]:
+            completion_status = "success"
             try:
+                # Track streaming session when generator starts
+                collector.increment_active_streams()
+
                 # Convert dict to JSON string and send to MCP server
                 msg = json.dumps(request)
                 process.stdin.write(msg + "\n")
                 process.stdin.flush()
-                
+
                 # Read from stdout and stream as SSE events
                 while True:
                     response_line = process.stdout.readline()
                     if not response_line:
                         break
-                    
+
                     # Add logging
                     logger.debug(f"Received from MCP: {response_line.strip()}")
-                    
+
                     # Format as SSE event
                     yield f"data: {response_line.strip()}\n\n"
-                    
+
                     # Check if response contains "result" which indicates completion
                     try:
                         response_data = json.loads(response_line)
@@ -399,11 +406,20 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                     except json.JSONDecodeError:
                         # If it's not valid JSON, just stream it as-is
                         pass
-                    
+
+            except (BrokenPipeError, OSError) as e:
+                completion_status = "broken_pipe"
+                collector.record_error("io_error")
+                yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
             except Exception as e:
+                completion_status = "error"
                 # Send error as SSE event
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        
+            finally:
+                # Record streaming metrics
+                collector.record_streaming_request(completion_status)
+                collector.decrement_active_streams()
+
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream"
