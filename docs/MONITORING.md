@@ -86,7 +86,7 @@ brew install prometheus
 
 # Linux
 # Visit https://github.com/prometheus/prometheus/releases and set VERSION to the latest release
-VERSION="2.51.2"  # Example version - check releases page for latest
+VERSION="<LATEST_VERSION>"  # Replace with the latest Prometheus version from the releases page
 wget "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/prometheus-${VERSION}.linux-amd64.tar.gz"
 tar xvfz "prometheus-${VERSION}.linux-amd64.tar.gz"
 cd "prometheus-${VERSION}.linux-amd64"

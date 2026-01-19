@@ -291,8 +291,7 @@ class LLMProcess:
                 lower_line = line.lower()
                 if any(error in lower_line for error in [
                     "cuda out of memory",
-                    "cudaerror",
-                    "out of memory"
+                    "cudaerror"
                 ]):
                     self._cuda_oom_cache = (True, now, current_mtime)
                     return True
