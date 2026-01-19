@@ -142,23 +142,7 @@ class Histogram(Metric):
         key = self._get_label_key(label_values)
 
         with self._lock:
-            # Initialize histogram entry if it doesn't exist (thread-safe).
-            #
-            # Note: self.histograms may be a defaultdict that can create entries on
-            # demand, but we keep this explicit initialization to make the expected
-            # structure of each histogram entry clear at the point of first use.
-            #
-            # CORRECTION (Round 13): The lambda is only called ONCE per key when the
-            # key is first accessed (not on every check). The "in" operator doesn't
-            # trigger the default factory at all. Explicit initialization is kept
-            # purely for code clarity, not performance.
-            if key not in self.histograms:
-                self.histograms[key] = {
-                    "sum": 0.0,
-                    "count": 0,
-                    "buckets": {bucket: 0 for bucket in self.buckets}
-                }
-
+            # Use defaultdict factory to initialize histogram entry on first access
             hist = self.histograms[key]
             hist["sum"] += value
             hist["count"] += 1

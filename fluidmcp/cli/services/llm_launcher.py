@@ -24,6 +24,7 @@ DEFAULT_RESTART_DELAY = 5  # Default base delay between restarts (seconds)
 MAX_BACKOFF_EXPONENT = 5  # Maximum exponential backoff exponent (caps at 2^5 = 32x base delay)
 HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
+CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
 
 class LLMProcess:
@@ -55,6 +56,9 @@ class LLMProcess:
         # Health check tracking
         self.consecutive_health_failures = 0
         self.last_health_check_time: Optional[float] = None
+
+        # CUDA OOM detection cache: (result, timestamp, file_mtime)
+        self._cuda_oom_cache: Optional[Tuple[bool, float, Optional[float]]] = None
 
     def start(self) -> subprocess.Popen:
         """
@@ -214,6 +218,9 @@ class LLMProcess:
                         self.consecutive_health_failures = 0
                         return True, None
                 except Exception as e:
+                    logger.debug(
+                        f"Health check request to '{endpoint}' for model '{self.model_id}' failed: {e}"
+                    )
                     continue
 
         self.consecutive_health_failures += 1
@@ -249,11 +256,10 @@ class LLMProcess:
 
         # Check cache: reuse recent result if file hasn't changed and TTL not expired
         cache = getattr(self, "_cuda_oom_cache", None)
-        CACHE_TTL_SECONDS = 60.0
 
         if cache is not None:
             cached_result, cached_time, cached_mtime = cache
-            if (now - cached_time) < CACHE_TTL_SECONDS and cached_mtime == current_mtime:
+            if (now - cached_time) < CUDA_OOM_CACHE_TTL and cached_mtime == current_mtime:
                 return cached_result
 
         try:

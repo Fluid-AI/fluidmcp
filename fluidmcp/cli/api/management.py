@@ -857,7 +857,7 @@ async def run_tool(
 
 # ==================== LLM Management ====================
 
-def get_llm_processes(request: Request):
+def get_llm_processes():
     """Get LLM processes from run_servers module."""
     # Import here to avoid circular dependency
     from ..services import get_llm_processes as _get_llm_processes
@@ -1063,15 +1063,39 @@ async def get_llm_model_logs(
         }
 
     try:
-        with open(log_path, 'r') as f:
-            all_lines = f.readlines()
-            recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        # Efficiently read only the last N lines using backwards seeking
+        # This avoids loading large log files entirely into memory
+        block_size = 8192
+        buffer = b""
+        newline_count = 0
+
+        with open(log_path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            position = file_size
+
+            # Read backwards until we have enough lines or reach start of file
+            while position > 0 and newline_count <= lines:
+                read_size = block_size if position >= block_size else position
+                position -= read_size
+                f.seek(position)
+                data = f.read(read_size)
+                buffer = data + buffer
+                newline_count = buffer.count(b"\n")
+
+        # Decode and split into lines
+        text = buffer.decode("utf-8", errors="ignore")
+        all_lines_read = text.splitlines(keepends=True)
+        recent_lines = all_lines_read[-lines:] if len(all_lines_read) > lines else all_lines_read
+
+        # Note: total_lines is approximate when file is larger than what we read
+        total_lines_approx = len(all_lines_read)
 
         return {
             "model_id": model_id,
             "log_path": log_path,
             "lines": recent_lines,
-            "total_lines": len(all_lines),
+            "total_lines": total_lines_approx,
             "returned_lines": len(recent_lines)
         }
     except Exception as e:
