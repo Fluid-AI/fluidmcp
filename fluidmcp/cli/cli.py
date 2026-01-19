@@ -728,7 +728,6 @@ def main():
 
         # Generate token if secure mode enabled but no token provided
         if secure_mode and not token:
-            import secrets
             token = secrets.token_urlsafe(32)
             logger.info(f"Generated bearer token: {token}")
 
