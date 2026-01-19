@@ -1005,7 +1005,7 @@ async def stop_llm_model(
     Returns:
         Stop result
     """
-    llm_processes = get_llm_processes(request)
+    llm_processes = get_llm_processes()
 
     if model_id not in llm_processes:
         raise HTTPException(404, f"LLM model '{model_id}' not found")
