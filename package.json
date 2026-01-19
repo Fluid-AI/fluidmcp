@@ -1,5 +1,5 @@
 {
-  "name": "fluidmcp-dev-orchestrator",
+  "name": "fluidmcp",
   "private": true,
   "scripts": {
     "airbnb-dev": "concurrently -n MCP,Frontend \"fmcp run Airbnb/airbnb@0.1.0 --start-server\" \"npm run dev --prefix fluidmcp/frontend\""
