@@ -4,7 +4,6 @@ import subprocess
 import shutil
 import asyncio
 import time
-import sys
 import threading
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
@@ -318,6 +317,7 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
             if stderr_output:
                 logger.error(f"Process stderr: {stderr_output[:500]}")
         except Exception:
+            # Intentional: stderr read can fail if process terminated - safe to ignore
             pass
 
         return False
@@ -530,10 +530,6 @@ def create_dynamic_router(server_manager):
     Returns:
         APIRouter with dynamic dispatch endpoints
     """
-    from fastapi import HTTPException
-    from typing import Iterator
-    from .metrics import MetricsCollector, RequestTimer
-
     router = APIRouter()
 
     @router.post("/{server_name}/mcp", tags=["mcp"])

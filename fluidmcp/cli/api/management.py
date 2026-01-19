@@ -1046,8 +1046,6 @@ async def get_llm_model_logs(
     Returns:
         Log lines
     """
-    import os
-
     llm_processes = get_llm_processes(request)
 
     if model_id not in llm_processes:
