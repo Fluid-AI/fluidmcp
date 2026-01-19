@@ -21,6 +21,45 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 
 
+def mask_mongodb_uri(uri: str) -> str:
+    """
+    Mask sensitive information in MongoDB URI for logging.
+
+    Examples:
+        mongodb://user:pass@host:27017/db -> mongodb://***:***@host:27017/db
+        mongodb+srv://user:pass@cluster.net -> mongodb+srv://***:***@cluster.net
+
+    Args:
+        uri: MongoDB connection URI
+
+    Returns:
+        Masked URI safe for logging
+    """
+    if not uri or '@' not in uri:
+        return uri
+
+    try:
+        # Split by @ to separate credentials from host
+        parts = uri.split('@')
+        if len(parts) != 2:
+            return uri
+
+        prefix_with_creds = parts[0]
+        host_and_path = parts[1]
+
+        # Split prefix to get protocol and credentials
+        if '://' in prefix_with_creds:
+            protocol, creds = prefix_with_creds.split('://', 1)
+            # Mask credentials completely
+            masked = f"{protocol}://***:***@{host_and_path}"
+            return masked
+
+        return uri
+    except Exception:
+        # If anything goes wrong, return a safe default
+        return "mongodb://***:***@[masked]"
+
+
 def save_token_to_file(token: str) -> Path:
     """
     Save bearer token to secure file.
@@ -247,7 +286,7 @@ async def main(args):
         persistence: PersistenceBackend = InMemoryBackend()
         db_connected = await persistence.connect()
     else:  # mongodb (default)
-        logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
+        logger.info(f"Using MongoDB persistence backend at {mask_mongodb_uri(args.mongodb_uri)}")
         persistence: PersistenceBackend = DatabaseManager(
             mongodb_uri=args.mongodb_uri,
             database_name=args.database

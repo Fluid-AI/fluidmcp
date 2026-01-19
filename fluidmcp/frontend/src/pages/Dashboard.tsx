@@ -8,44 +8,54 @@ import { useServers } from "../hooks/useServers";
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer, stopServer, restartServer } = useServers();
-  const [startingServerId, setStartingServerId] = useState<string | null>(null);
-  const [actionServerId, setActionServerId] = useState<string | null>(null);
-  const [actionType, setActionType] = useState<'stop' | 'restart' | null>(null);
+
+  const [actionState, setActionState] = useState<{
+    serverId: string | null;
+    type: 'starting' | 'stopping' | 'restarting' | null;
+  }>({ serverId: null, type: null });
 
   const handleStartServer = async (serverId: string) => {
-    setStartingServerId(serverId);
+    // Silent guard - prevent concurrent operations
+    if (actionState.type !== null) return;
+
+    setActionState({ serverId, type: 'starting' });
+
     try {
       await startServer(serverId);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to start server');
     } finally {
-      setStartingServerId(null);
+      setActionState({ serverId: null, type: null });
     }
   };
 
   const handleStopServer = async (serverId: string) => {
-    setActionServerId(serverId);
-    setActionType('stop');
+    // Silent guard - prevent concurrent operations
+    if (actionState.type !== null) return;
+
+    setActionState({ serverId, type: 'stopping' });
+
     try {
       await stopServer(serverId);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to stop server');
     } finally {
-      setActionServerId(null);
-      setActionType(null);
+      setActionState({ serverId: null, type: null });
     }
   };
 
   const handleRestartServer = async (serverId: string) => {
-    setActionServerId(serverId);
-    setActionType('restart');
+    // Silent guard - prevent concurrent operations
+    if (actionState.type !== null) return;
+
+    setActionState({ serverId, type: 'restarting' });
+
     try {
       await restartServer(serverId);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to restart server');
     } finally {
-      setActionServerId(null);
-      setActionType(null);
+      setActionState({ serverId: null, type: null });
     }
   };
 
@@ -105,7 +115,7 @@ export default function Dashboard() {
                 server={server}
                 onStart={() => handleStartServer(server.id)}
                 onViewDetails={() => navigate(`/servers/${server.id}`)}
-                isStarting={startingServerId === server.id}
+                isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
               />
             ))}
           </div>
@@ -135,16 +145,16 @@ export default function Dashboard() {
                     <button
                       className="stop-btn"
                       onClick={() => handleStopServer(server.id)}
-                      disabled={actionServerId === server.id && actionType === 'stop'}
+                      disabled={actionState.serverId === server.id && actionState.type === 'stopping'}
                     >
-                      {actionServerId === server.id && actionType === 'stop' ? 'Stopping...' : 'Stop'}
+                      {actionState.serverId === server.id && actionState.type === 'stopping' ? 'Stopping...' : 'Stop'}
                     </button>
                     <button
                       className="restart-btn"
                       onClick={() => handleRestartServer(server.id)}
-                      disabled={actionServerId === server.id && actionType === 'restart'}
+                      disabled={actionState.serverId === server.id && actionState.type === 'restarting'}
                     >
-                      {actionServerId === server.id && actionType === 'restart' ? 'Restarting...' : 'Restart'}
+                      {actionState.serverId === server.id && actionState.type === 'restarting' ? 'Restarting...' : 'Restart'}
                     </button>
                     <button
                       className="details-btn"
