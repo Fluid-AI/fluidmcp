@@ -48,16 +48,54 @@ class LLMProcess:
         self.last_restart_time: Optional[float] = None
         self.start_time: Optional[float] = None
 
-        # Get restart policy from config
-        self.restart_policy = config.get("restart_policy", "no")  # no, on-failure, always
-        self.max_restarts = config.get("max_restarts", DEFAULT_MAX_RESTARTS)
-        self.restart_delay = config.get("restart_delay", DEFAULT_RESTART_DELAY)
+        # Get and validate restart policy from config
+        restart_policy = config.get("restart_policy", "no")
+        if restart_policy not in ("no", "on-failure", "always"):
+            raise ValueError(
+                f"Invalid restart_policy '{restart_policy}' for model '{model_id}'. "
+                f"Must be one of: 'no', 'on-failure', 'always'"
+            )
+        self.restart_policy = restart_policy
+
+        # Validate max_restarts
+        max_restarts = config.get("max_restarts", DEFAULT_MAX_RESTARTS)
+        if not isinstance(max_restarts, int) or max_restarts < 0:
+            raise ValueError(
+                f"Invalid max_restarts {max_restarts!r} for model '{model_id}'. "
+                f"Must be a non-negative integer"
+            )
+        self.max_restarts = max_restarts
+
+        # Validate restart_delay
+        restart_delay = config.get("restart_delay", DEFAULT_RESTART_DELAY)
+        if not isinstance(restart_delay, (int, float)) or restart_delay < 0:
+            raise ValueError(
+                f"Invalid restart_delay {restart_delay!r} for model '{model_id}'. "
+                f"Must be a non-negative number"
+            )
+        self.restart_delay = restart_delay
 
         # Health check tracking and configuration
         self.consecutive_health_failures = 0
         self.last_health_check_time: Optional[float] = None
-        self.health_check_timeout = config.get("health_check_timeout", HEALTH_CHECK_TIMEOUT)
-        self.health_check_interval = config.get("health_check_interval", HEALTH_CHECK_INTERVAL)
+
+        # Validate health_check_timeout
+        health_check_timeout = config.get("health_check_timeout", HEALTH_CHECK_TIMEOUT)
+        if not isinstance(health_check_timeout, (int, float)) or health_check_timeout <= 0:
+            raise ValueError(
+                f"Invalid health_check_timeout {health_check_timeout!r} for model '{model_id}'. "
+                f"Must be a positive number"
+            )
+        self.health_check_timeout = health_check_timeout
+
+        # Validate health_check_interval
+        health_check_interval = config.get("health_check_interval", HEALTH_CHECK_INTERVAL)
+        if not isinstance(health_check_interval, (int, float)) or health_check_interval <= 0:
+            raise ValueError(
+                f"Invalid health_check_interval {health_check_interval!r} for model '{model_id}'. "
+                f"Must be a positive number"
+            )
+        self.health_check_interval = health_check_interval
 
         # CUDA OOM detection cache: (result, timestamp, file_mtime)
         self._cuda_oom_cache: Optional[Tuple[bool, float, Optional[float]]] = None
@@ -296,9 +334,11 @@ class LLMProcess:
 
             for line in recent_lines:
                 lower_line = line.lower()
+                # Check for specific CUDA OOM patterns to avoid false positives
                 if any(error in lower_line for error in [
                     "cuda out of memory",
-                    "cudaerror"
+                    "cudaerror: out of memory",
+                    "cuda error: out of memory"
                 ]):
                     self._cuda_oom_cache = (True, now, current_mtime)
                     return True
@@ -580,9 +620,13 @@ class LLMHealthMonitor:
             logger.warning("Health monitor already running")
             return
 
-        self._running = True
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
-        logger.info("Health monitor task created")
+        try:
+            self._monitor_task = asyncio.create_task(self._monitor_loop())
+            self._running = True
+            logger.info("Health monitor task created")
+        except RuntimeError as e:
+            logger.error(f"Failed to create health monitor task (no event loop): {e}")
+            raise
 
     async def stop(self):
         """Stop the background health monitor."""
