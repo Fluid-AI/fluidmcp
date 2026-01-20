@@ -1,0 +1,24 @@
+import React from 'react';
+
+interface ResultActionsProps {
+  result: any;
+  onCopy: () => void;
+  onDownload: () => void;
+}
+
+export const ResultActions: React.FC<ResultActionsProps> = ({
+  result,
+  onCopy,
+  onDownload,
+}) => {
+  return (
+    <div className="result-actions">
+      <button onClick={onCopy} className="btn-text">
+        Copy
+      </button>
+      <button onClick={onDownload} className="btn-text">
+        Download JSON
+      </button>
+    </div>
+  );
+};
