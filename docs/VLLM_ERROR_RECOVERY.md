@@ -62,6 +62,16 @@ Configure restart behavior in your FluidMCP configuration:
 - Actual delay uses exponential backoff: `delay * (2 ^ attempt)`
 - Example: 5s, 10s, 20s, 40s, 80s, 160s
 
+**`health_check_timeout`** (float, default: `10.0`)
+- Timeout in seconds for health check HTTP requests
+- Increase for large models with slow startup times
+- Recommended: 10-30 seconds depending on model size
+
+**`health_check_interval`** (integer, default: `30`)
+- Interval in seconds between health checks
+- Only applies when health monitoring is enabled
+- Recommended: 30-60 seconds for production
+
 ### Health Check Configuration
 
 Health checks are automatically configured based on the `endpoints.base_url` setting:
@@ -72,7 +82,28 @@ Health checks are automatically configured based on the `endpoints.base_url` set
     "vllm": {
       "endpoints": {
         "base_url": "http://localhost:8001/v1"
-      }
+      },
+      "health_check_timeout": 30.0,
+      "health_check_interval": 60
+    }
+  }
+}
+```
+
+**Configuration for Large Models:**
+```json
+{
+  "llmModels": {
+    "llama-70b": {
+      "command": "vllm",
+      "args": ["serve", "meta-llama/Llama-2-70b-hf", "--port", "8002"],
+      "endpoints": {
+        "base_url": "http://localhost:8002/v1"
+      },
+      "restart_policy": "on-failure",
+      "max_restarts": 3,
+      "health_check_timeout": 30.0,
+      "health_check_interval": 60
     }
   }
 }

@@ -51,11 +51,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return "anonymous"
 
     # For now, use token as user ID (simple approach)
-    # In production, decode JWT and extract user_id/email claim
+    # TODO: Implement proper JWT authentication with role claims
+    # Current implementation uses first 8 chars of token (~33 bits entropy)
+    # which is insufficient for production security. Replace with JWT decode
+    # to extract user_id/email/role claims.
     token = credentials.credentials
 
     # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users
+    # This ensures different tokens = different users but provides weak security
     user_id = f"user_{token[:8]}"
 
     return user_id
@@ -450,12 +453,15 @@ async def delete_server(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Authorization: Only allow in anonymous mode for now
-    # In production, check if user has admin role
+    # Authorization: Only allow in anonymous mode (no authentication) for now
+    # This is intentionally restrictive - deletion is a destructive operation.
+    # TODO: Implement proper role-based access control (RBAC) with admin roles
+    # when JWT authentication with role claims is added. Current token-based
+    # auth (user_id = first 8 chars of token) is too weak for delete permissions.
     if user_id != "anonymous":
         raise HTTPException(
             403,
-            "Forbidden: Only administrators can delete server configurations. Contact your admin."
+            "Server deletion requires administrator privileges"
         )
 
     # Stop server if running
@@ -849,10 +855,11 @@ async def run_tool(
     except asyncio.TimeoutError:
         raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"Failed to parse tool response: {str(e)}")
+        logger.error(f"Failed to parse tool response for '{tool_name}' on '{id}': {e}")
+        raise HTTPException(500, "Failed to parse tool response")
     except Exception as e:
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
-        raise HTTPException(500, f"Tool execution failed: {str(e)}")
+        raise HTTPException(500, "Tool execution failed")
 
 
 # ==================== LLM Management ====================
@@ -866,7 +873,6 @@ def get_llm_processes():
 
 @router.get("/llm/models")
 async def list_llm_models(
-    request: Request,
     token: str = Depends(get_token)
 ):
     """
@@ -902,7 +908,6 @@ async def list_llm_models(
 
 @router.get("/llm/models/{model_id}")
 async def get_llm_model_status(
-    request: Request,
     model_id: str,
     token: str = Depends(get_token)
 ):
@@ -1025,12 +1030,11 @@ async def stop_llm_model(
             return {"message": f"LLM model '{model_id}' stopped gracefully"}
     except Exception as e:
         logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to stop LLM model: {str(e)}")
+        raise HTTPException(500, "Failed to stop LLM model")
 
 
 @router.get("/llm/models/{model_id}/logs")
 async def get_llm_model_logs(
-    request: Request,
     model_id: str,
     lines: int = Query(100, description="Number of recent lines to retrieve", ge=1, le=10000),
     token: str = Depends(get_token)
@@ -1064,6 +1068,7 @@ async def get_llm_model_logs(
     try:
         # Efficiently read only the last N lines using backwards seeking
         # This avoids loading large log files entirely into memory
+        # TODO: For very large files (>100MB), consider mmap for better performance
         block_size = 8192
         buffer = b""
         newline_count = 0
@@ -1098,7 +1103,7 @@ async def get_llm_model_logs(
         }
     except Exception as e:
         logger.error(f"Error reading logs for '{model_id}': {e}", exc_info=True)
-        raise HTTPException(500, f"Failed to read logs: {str(e)}")
+        raise HTTPException(500, "Failed to read logs")
 
 
 @router.post("/llm/models/{model_id}/health-check")

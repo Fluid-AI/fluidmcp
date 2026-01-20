@@ -53,9 +53,11 @@ class LLMProcess:
         self.max_restarts = config.get("max_restarts", DEFAULT_MAX_RESTARTS)
         self.restart_delay = config.get("restart_delay", DEFAULT_RESTART_DELAY)
 
-        # Health check tracking
+        # Health check tracking and configuration
         self.consecutive_health_failures = 0
         self.last_health_check_time: Optional[float] = None
+        self.health_check_timeout = config.get("health_check_timeout", HEALTH_CHECK_TIMEOUT)
+        self.health_check_interval = config.get("health_check_interval", HEALTH_CHECK_INTERVAL)
 
         # CUDA OOM detection cache: (result, timestamp, file_mtime)
         self._cuda_oom_cache: Optional[Tuple[bool, float, Optional[float]]] = None
@@ -86,6 +88,7 @@ class LLMProcess:
         os.makedirs(log_dir, exist_ok=True)
         stderr_log_path = os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
 
+        stderr_log = None
         try:
             # Open stderr log file for capturing process errors
             stderr_log = open(stderr_log_path, "a")
@@ -108,9 +111,15 @@ class LLMProcess:
             return self.process
 
         except FileNotFoundError:
+            # Close file handle if Popen failed before it could take ownership
+            if stderr_log and not self._stderr_log:
+                stderr_log.close()
             logger.error(f"Command '{command}' not found. Is {command} installed?")
             raise
         except Exception as e:
+            # Close file handle if Popen failed before it could take ownership
+            if stderr_log and not self._stderr_log:
+                stderr_log.close()
             logger.error(f"Failed to start LLM model '{self.model_id}': {e}")
             raise
 
@@ -210,7 +219,7 @@ class LLMProcess:
             f"{base_url}/v1/models",
         ]
 
-        async with httpx.AsyncClient(timeout=HEALTH_CHECK_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=self.health_check_timeout) as client:
             for endpoint in health_endpoints:
                 try:
                     response = await client.get(endpoint)
