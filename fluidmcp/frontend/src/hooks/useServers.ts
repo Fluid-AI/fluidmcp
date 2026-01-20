@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '../services/api';
 import type { Server } from '../types/server';
 
@@ -7,30 +7,53 @@ export function useServers() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const isMountedRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const fetchServers = useCallback(async () => {
+    // Abort any existing request
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    if (!isMountedRef.current) return;
     setLoading(true);
     setError(null);
+
     try {
-      const response = await apiClient.listServers();
-      setServers(response.servers);
+      const response = await apiClient.listServers({ signal: controller.signal });
+      if (isMountedRef.current) {
+        setServers(response.servers);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch servers');
+      // Only set error if not aborted and still mounted
+      if (!controller.signal.aborted && isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch servers');
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    isMountedRef.current = true;
     fetchServers();
+
+    return () => {
+      isMountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
   }, [fetchServers]);
 
   const startServer = async (serverId: string) => {
-    // Note: UI should prevent concurrent start clicks by tracking loading state
-    // (e.g., startingServerId state in Dashboard component)
     try {
       await apiClient.startServer(serverId);
-      // Server status is refreshed after explicit user actions (no polling yet)
-      await fetchServers();
+      // NOTE: This refetch will be replaced by polling in follow-up PR
+      if (isMountedRef.current) {
+        await fetchServers();
+      }
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Failed to start server');
     }
@@ -39,7 +62,10 @@ export function useServers() {
   const stopServer = async (serverId: string) => {
     try {
       await apiClient.stopServer(serverId);
-      await fetchServers();
+      // NOTE: This refetch will be replaced by polling in follow-up PR
+      if (isMountedRef.current) {
+        await fetchServers();
+      }
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Failed to stop server');
     }
@@ -48,7 +74,10 @@ export function useServers() {
   const restartServer = async (serverId: string) => {
     try {
       await apiClient.restartServer(serverId);
-      await fetchServers();
+      // NOTE: This refetch will be replaced by polling in follow-up PR
+      if (isMountedRef.current) {
+        await fetchServers();
+      }
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Failed to restart server');
     }

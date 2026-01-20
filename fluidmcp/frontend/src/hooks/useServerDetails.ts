@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '../services/api';
 import type { ServerDetailsResponse, ToolsResponse } from '../types/server';
 
@@ -9,42 +9,68 @@ export function useServerDetails(serverId: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const isMountedRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const fetchDetails = useCallback(async () => {
-    // Guard against missing serverId to prevent loading deadlock
+    // Guard against missing serverId
     if (!serverId) {
       setLoading(false);
       setError('Server ID is required');
       return;
     }
 
+    // Abort any existing request
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    if (!isMountedRef.current) return;
     setLoading(true);
     setError(null);
+
     try {
       const [detailsRes, toolsRes] = await Promise.all([
-        apiClient.getServerDetails(serverId),
+        apiClient.getServerDetails(serverId, { signal: controller.signal }),
         // Tool discovery failure should not block server details view
-        // If tools endpoint fails, we show server info without tools
-        apiClient.getServerTools(serverId).catch(() => ({ server_id: serverId, tools: [], count: 0 })),
+        apiClient.getServerTools(serverId, { signal: controller.signal })
+          .catch(() => ({ server_id: serverId, tools: [], count: 0 })),
       ]);
-      setServerDetails(detailsRes);
-      setTools(toolsRes);
+
+      if (isMountedRef.current) {
+        setServerDetails(detailsRes);
+        setTools(toolsRes);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch server details');
+      // Only set error if not aborted and still mounted
+      if (!controller.signal.aborted && isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch server details');
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [serverId]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     fetchDetails();
+
+    return () => {
+      isMountedRef.current = false;
+      abortControllerRef.current?.abort();
+    };
   }, [fetchDetails]);
 
   // Fetch server logs
   const fetchLogs = useCallback(async (lines = 100) => {
-    if (!serverId) return;
+    if (!serverId || !isMountedRef.current) return;
     try {
       const logsRes = await apiClient.getServerLogs(serverId, lines);
-      setLogs(logsRes.logs || []);
+      if (isMountedRef.current) {
+        setLogs(logsRes.logs || []);
+      }
     } catch (err) {
       console.error('Failed to fetch logs:', err);
       // Don't throw error - logs are optional
@@ -55,7 +81,10 @@ export function useServerDetails(serverId: string) {
   const startServer = async () => {
     try {
       await apiClient.startServer(serverId);
-      await fetchDetails(); // Refresh after starting
+      // NOTE: This refetch will be replaced by polling in follow-up PR
+      if (isMountedRef.current) {
+        await fetchDetails();
+      }
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Failed to start server');
     }
@@ -64,7 +93,10 @@ export function useServerDetails(serverId: string) {
   const stopServer = async () => {
     try {
       await apiClient.stopServer(serverId);
-      await fetchDetails();
+      // NOTE: This refetch will be replaced by polling in follow-up PR
+      if (isMountedRef.current) {
+        await fetchDetails();
+      }
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Failed to stop server');
     }
@@ -73,7 +105,10 @@ export function useServerDetails(serverId: string) {
   const restartServer = async () => {
     try {
       await apiClient.restartServer(serverId);
-      await fetchDetails();
+      // NOTE: This refetch will be replaced by polling in follow-up PR
+      if (isMountedRef.current) {
+        await fetchDetails();
+      }
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Failed to restart server');
     }

@@ -10,6 +10,24 @@ import type {
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
 
+/**
+ * Merges multiple AbortSignals into one
+ * If any signal aborts, the returned signal aborts
+ */
+function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController();
+
+  signals.forEach(signal => {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  });
+
+  return controller.signal;
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -17,10 +35,21 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
-  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    // Add timeout using AbortController (30 seconds default)
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+  private async request<T>(
+    endpoint: string,
+    options?: RequestInit & { signal?: AbortSignal }
+  ): Promise<T> {
+    // AbortController lifecycle is owned by hooks/components, not apiClient
+    // This method accepts optional signal for request cancellation
+
+    // Create timeout controller (30 seconds default)
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), 30000);
+
+    // Merge external signal with timeout signal (if provided)
+    const signal = options?.signal
+      ? mergeAbortSignals(options.signal, timeoutController.signal)
+      : timeoutController.signal;
 
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
@@ -29,7 +58,7 @@ class ApiClient {
           ...options?.headers,
         },
         ...options,
-        signal: controller.signal,
+        signal,
       });
 
       clearTimeout(timeoutId);
@@ -55,16 +84,16 @@ class ApiClient {
   }
 
   // Server Management APIs
-  async listServers(): Promise<ServersListResponse> {
-    return this.request<ServersListResponse>('/api/servers');
+  async listServers(options?: { signal?: AbortSignal }): Promise<ServersListResponse> {
+    return this.request<ServersListResponse>('/api/servers', options);
   }
 
-  async getServerDetails(serverId: string): Promise<ServerDetailsResponse> {
-    return this.request<ServerDetailsResponse>(`/api/servers/${serverId}`);
+  async getServerDetails(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerDetailsResponse> {
+    return this.request<ServerDetailsResponse>(`/api/servers/${serverId}`, options);
   }
 
-  async getServerStatus(serverId: string): Promise<ServerStatus> {
-    return this.request<ServerStatus>(`/api/servers/${serverId}/status`);
+  async getServerStatus(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerStatus> {
+    return this.request<ServerStatus>(`/api/servers/${serverId}/status`, options);
   }
 
   async startServer(serverId: string): Promise<{ message: string; pid: number }> {
@@ -80,8 +109,8 @@ class ApiClient {
   }
 
   // Tool Discovery & Execution APIs
-  async getServerTools(serverId: string): Promise<ToolsResponse> {
-    return this.request<ToolsResponse>(`/api/servers/${serverId}/tools`);
+  async getServerTools(serverId: string, options?: { signal?: AbortSignal }): Promise<ToolsResponse> {
+    return this.request<ToolsResponse>(`/api/servers/${serverId}/tools`, options);
   }
 
   async runTool(
@@ -99,8 +128,8 @@ class ApiClient {
   }
 
   // Server Logs API
-  async getServerLogs(serverId: string, lines = 100): Promise<any> {
-    return this.request(`/api/servers/${serverId}/logs?lines=${lines}`);
+  async getServerLogs(serverId: string, lines = 100, options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request(`/api/servers/${serverId}/logs?lines=${lines}`, options);
   }
 }
 

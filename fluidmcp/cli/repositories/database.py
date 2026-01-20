@@ -15,6 +15,36 @@ from loguru import logger
 from .base import PersistenceBackend
 
 
+def mask_mongodb_uri(uri: str) -> str:
+    """
+    Mask sensitive information in MongoDB URI for logging.
+
+    Args:
+        uri: MongoDB connection URI
+
+    Returns:
+        Masked URI safe for logging (e.g., mongodb+srv://***:***@cluster.net)
+    """
+    if not uri or '@' not in uri:
+        return uri
+
+    try:
+        parts = uri.split('@')
+        if len(parts) != 2:
+            return uri
+
+        prefix_with_creds = parts[0]
+        host_and_path = parts[1]
+
+        if '://' in prefix_with_creds:
+            protocol, _ = prefix_with_creds.split('://', 1)
+            return f"{protocol}://***:***@{host_and_path}"
+
+        return uri
+    except Exception:
+        return "mongodb://***:***@[masked]"
+
+
 class LogBuffer:
     """In-memory buffer for failed log writes with retry mechanism."""
 
@@ -148,7 +178,7 @@ class DatabaseManager(PersistenceBackend):
 
             # Test connection
             await self.client.admin.command('ping')
-            logger.info(f"Connected to MongoDB at {self.mongodb_uri}")
+            logger.info(f"Connected to MongoDB at {mask_mongodb_uri(self.mongodb_uri)}")
 
             # Check if change streams are supported (requires replica set)
             try:
