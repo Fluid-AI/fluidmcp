@@ -1,20 +1,37 @@
 """Unit tests for llm_launcher.py"""
 
+# Standard library imports
+import asyncio
 import os
 import subprocess
 import time
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, mock_open
+from unittest.mock import AsyncMock, Mock, patch
 
+# Third-party imports
+import httpx
 import pytest
 
+# Local application imports
 from fluidmcp.cli.services.llm_launcher import (
+    CUDA_OOM_CACHE_TTL,
+    DEFAULT_MAX_RESTARTS,
+    DEFAULT_RESTART_DELAY,
+    DEFAULT_SHUTDOWN_TIMEOUT,
+    HEALTH_CHECK_FAILURES_THRESHOLD,
+    HEALTH_CHECK_INTERVAL,
+    HEALTH_CHECK_TIMEOUT,
+    LLMHealthMonitor,
     LLMProcess,
+    MAX_BACKOFF_EXPONENT,
+    PROCESS_START_DELAY,
     launch_llm_models,
     stop_all_llm_models,
-    DEFAULT_SHUTDOWN_TIMEOUT,
-    PROCESS_START_DELAY,
 )
+
+# Test constants
+TEST_TASK_START_DELAY = 0.1  # Time to allow async tasks to start
+TEST_HEALTH_CHECK_INTERVAL = 0.5  # Seconds for health check interval in tests
+TEST_HEALTH_CHECK_WAIT = 0.6  # Wait slightly longer than interval
 
 
 class TestLLMProcess:
@@ -389,3 +406,835 @@ class TestStopAllLLMModels:
         # Both should have been called
         mock_proc1.stop.assert_called_once()
         mock_proc2.stop.assert_called_once()
+
+
+class TestConfigurationValidation:
+    """Tests for configuration validation (High Priority Fix #3)"""
+
+    def test_invalid_restart_policy_raises_error(self):
+        """Test that invalid restart_policy raises ValueError"""
+        config = {"command": "echo", "restart_policy": "invalid"}
+
+        with pytest.raises(ValueError, match="Invalid restart_policy 'invalid'"):
+            LLMProcess("test", config)
+
+    def test_valid_restart_policies_accepted(self):
+        """Test that valid restart policies are accepted"""
+        for policy in ["no", "on-failure", "always"]:
+            config = {"command": "echo", "restart_policy": policy}
+            process = LLMProcess("test", config)
+            assert process.restart_policy == policy
+
+    def test_negative_max_restarts_raises_error(self):
+        """Test that negative max_restarts raises ValueError"""
+        config = {"command": "echo", "max_restarts": -1}
+
+        with pytest.raises(ValueError, match="Invalid max_restarts -1"):
+            LLMProcess("test", config)
+
+    def test_non_integer_max_restarts_raises_error(self):
+        """Test that non-integer max_restarts raises ValueError"""
+        config = {"command": "echo", "max_restarts": "invalid"}
+
+        with pytest.raises(ValueError, match="Invalid max_restarts 'invalid'"):
+            LLMProcess("test", config)
+
+    def test_valid_max_restarts_accepted(self):
+        """Test that valid max_restarts values are accepted"""
+        config = {"command": "echo", "max_restarts": 5}
+        process = LLMProcess("test", config)
+        assert process.max_restarts == 5
+
+    def test_negative_restart_delay_raises_error(self):
+        """Test that negative restart_delay raises ValueError"""
+        config = {"command": "echo", "restart_delay": -1.5}
+
+        with pytest.raises(ValueError, match="Invalid restart_delay -1.5"):
+            LLMProcess("test", config)
+
+    def test_non_numeric_restart_delay_raises_error(self):
+        """Test that non-numeric restart_delay raises ValueError"""
+        config = {"command": "echo", "restart_delay": "invalid"}
+
+        with pytest.raises(ValueError, match="Invalid restart_delay 'invalid'"):
+            LLMProcess("test", config)
+
+    def test_valid_restart_delay_accepted(self):
+        """Test that valid restart_delay values are accepted"""
+        config = {"command": "echo", "restart_delay": 10.5}
+        process = LLMProcess("test", config)
+        assert process.restart_delay == 10.5
+
+    def test_zero_health_check_timeout_raises_error(self):
+        """Test that zero health_check_timeout raises ValueError"""
+        config = {"command": "echo", "health_check_timeout": 0}
+
+        with pytest.raises(ValueError, match="Invalid health_check_timeout 0"):
+            LLMProcess("test", config)
+
+    def test_negative_health_check_timeout_raises_error(self):
+        """Test that negative health_check_timeout raises ValueError"""
+        config = {"command": "echo", "health_check_timeout": -5}
+
+        with pytest.raises(ValueError, match="Invalid health_check_timeout -5"):
+            LLMProcess("test", config)
+
+    def test_valid_health_check_timeout_accepted(self):
+        """Test that valid health_check_timeout is accepted"""
+        config = {"command": "echo", "health_check_timeout": 15.5}
+        process = LLMProcess("test", config)
+        assert process.health_check_timeout == 15.5
+
+    def test_zero_health_check_interval_raises_error(self):
+        """Test that zero health_check_interval raises ValueError"""
+        config = {"command": "echo", "health_check_interval": 0}
+
+        with pytest.raises(ValueError, match="Invalid health_check_interval 0"):
+            LLMProcess("test", config)
+
+    def test_valid_health_check_interval_accepted(self):
+        """Test that valid health_check_interval is accepted"""
+        config = {"command": "echo", "health_check_interval": 45}
+        process = LLMProcess("test", config)
+        assert process.health_check_interval == 45
+
+    def test_default_values_when_not_specified(self):
+        """Test that default values are used when config keys are missing"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        assert process.restart_policy == "no"
+        assert process.max_restarts == DEFAULT_MAX_RESTARTS
+        assert process.restart_delay == DEFAULT_RESTART_DELAY
+        assert process.health_check_timeout == HEALTH_CHECK_TIMEOUT
+        assert process.health_check_interval == HEALTH_CHECK_INTERVAL
+
+
+class TestHealthChecks:
+    """Tests for health check functionality"""
+
+    @pytest.mark.asyncio
+    async def test_check_health_when_process_not_running(self):
+        """Test check_health returns False when process is not running"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        process.process = None
+
+        is_healthy, error_msg = await process.check_health()
+
+        assert is_healthy is False
+        assert error_msg == "Process not running"
+        assert process.consecutive_health_failures == 1
+
+    @pytest.mark.asyncio
+    async def test_check_health_with_no_endpoints_returns_healthy(self):
+        """Test check_health returns True when no endpoints configured"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None  # Still running
+        process.process = mock_proc
+
+        is_healthy, error_msg = await process.check_health()
+
+        assert is_healthy is True
+        assert error_msg is None
+        assert process.consecutive_health_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_check_health_successful_http_response(self):
+        """Test check_health with successful HTTP response"""
+        config = {
+            "command": "echo",
+            "endpoints": {"base_url": "http://localhost:8001/v1"}
+        }
+        process = LLMProcess("test", config)
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        # Mock successful HTTP response
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_client.get.return_value = mock_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            is_healthy, error_msg = await process.check_health()
+
+        assert is_healthy is True
+        assert error_msg is None
+        assert process.consecutive_health_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_check_health_failed_http_requests(self):
+        """Test check_health when all HTTP requests fail"""
+        config = {
+            "command": "echo",
+            "endpoints": {"base_url": "http://localhost:8001/v1"}
+        }
+        process = LLMProcess("test", config)
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        # Mock failed HTTP requests
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get.side_effect = httpx.ConnectError("Connection failed")
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            is_healthy, error_msg = await process.check_health()
+
+        assert is_healthy is False
+        assert "Health check failed" in error_msg
+        assert process.consecutive_health_failures == 1
+
+    @pytest.mark.asyncio
+    async def test_check_health_consecutive_failures_increment(self):
+        """Test that consecutive health failures increment correctly"""
+        config = {
+            "command": "echo",
+            "endpoints": {"base_url": "http://localhost:8001/v1"}
+        }
+        process = LLMProcess("test", config)
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        # Mock failed HTTP requests
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get.side_effect = httpx.ConnectError("Connection failed")
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            # First failure
+            await process.check_health()
+            assert process.consecutive_health_failures == 1
+
+            # Second failure
+            await process.check_health()
+            assert process.consecutive_health_failures == 2
+
+            # Third failure
+            await process.check_health()
+            assert process.consecutive_health_failures == 3
+
+    @pytest.mark.asyncio
+    async def test_check_health_resets_failures_on_success(self):
+        """Test that consecutive failures reset to 0 on successful health check"""
+        config = {
+            "command": "echo",
+            "endpoints": {"base_url": "http://localhost:8001/v1"}
+        }
+        process = LLMProcess("test", config)
+        process.consecutive_health_failures = 5
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        # Mock successful HTTP response
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_client.get.return_value = mock_response
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            is_healthy, error_msg = await process.check_health()
+
+        assert is_healthy is True
+        assert process.consecutive_health_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_check_health_sets_last_check_time(self):
+        """Test that check_health updates last_health_check_time"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        process.last_health_check_time = None
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        before_time = time.time()
+        await process.check_health()
+        after_time = time.time()
+
+        assert process.last_health_check_time is not None
+        assert before_time <= process.last_health_check_time <= after_time
+
+
+class TestRestartLogic:
+    """Tests for restart logic and policies"""
+
+    def test_can_restart_with_policy_no(self):
+        """Test can_restart returns False when restart_policy is 'no'"""
+        config = {"command": "echo", "restart_policy": "no"}
+        process = LLMProcess("test", config)
+
+        assert process.can_restart() is False
+
+    def test_can_restart_with_policy_on_failure(self):
+        """Test can_restart returns True for 'on-failure' policy"""
+        config = {"command": "echo", "restart_policy": "on-failure", "max_restarts": 3}
+        process = LLMProcess("test", config)
+        process.restart_count = 1
+
+        assert process.can_restart() is True
+
+    def test_can_restart_with_policy_always(self):
+        """Test can_restart returns True for 'always' policy"""
+        config = {"command": "echo", "restart_policy": "always", "max_restarts": 3}
+        process = LLMProcess("test", config)
+        process.restart_count = 1
+
+        assert process.can_restart() is True
+
+    def test_can_restart_when_max_restarts_reached(self):
+        """Test can_restart returns False when max_restarts is reached"""
+        config = {"command": "echo", "restart_policy": "on-failure", "max_restarts": 3}
+        process = LLMProcess("test", config)
+        process.restart_count = 3
+
+        assert process.can_restart() is False
+
+    def test_can_restart_when_exceeds_max_restarts(self):
+        """Test can_restart returns False when restart_count exceeds max_restarts"""
+        config = {"command": "echo", "restart_policy": "always", "max_restarts": 3}
+        process = LLMProcess("test", config)
+        process.restart_count = 5
+
+        assert process.can_restart() is False
+
+    def test_needs_restart_with_policy_no(self):
+        """Test needs_restart returns False when restart_policy is 'no'"""
+        config = {"command": "echo", "restart_policy": "no"}
+        process = LLMProcess("test", config)
+
+        assert process.needs_restart() is False
+
+    def test_needs_restart_when_process_dead_on_failure_policy(self):
+        """Test needs_restart returns True for dead process with on-failure policy"""
+        config = {"command": "echo", "restart_policy": "on-failure"}
+        process = LLMProcess("test", config)
+
+        # Mock dead process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = 1  # Exited
+        process.process = mock_proc
+
+        assert process.needs_restart() is True
+
+    def test_needs_restart_when_process_dead_always_policy(self):
+        """Test needs_restart returns True for dead process with always policy"""
+        config = {"command": "echo", "restart_policy": "always"}
+        process = LLMProcess("test", config)
+
+        # Mock dead process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = 0  # Exited cleanly
+        process.process = mock_proc
+
+        assert process.needs_restart() is True
+
+    def test_needs_restart_when_health_failures_exceed_threshold(self):
+        """Test needs_restart when consecutive health failures exceed threshold"""
+        config = {"command": "echo", "restart_policy": "on-failure"}
+        process = LLMProcess("test", config)
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        # Set failures to threshold
+        process.consecutive_health_failures = HEALTH_CHECK_FAILURES_THRESHOLD
+
+        assert process.needs_restart() is True
+
+    def test_needs_restart_when_health_failures_below_threshold(self):
+        """Test needs_restart returns False when failures below threshold"""
+        config = {"command": "echo", "restart_policy": "on-failure"}
+        process = LLMProcess("test", config)
+
+        # Mock running process
+        mock_proc = Mock()
+        mock_proc.poll.return_value = None
+        process.process = mock_proc
+
+        # Set failures below threshold
+        process.consecutive_health_failures = HEALTH_CHECK_FAILURES_THRESHOLD - 1
+
+        assert process.needs_restart() is False
+
+    @pytest.mark.asyncio
+    async def test_attempt_restart_when_cannot_restart(self, tmp_path):
+        """Test attempt_restart returns False when can_restart is False"""
+        config = {"command": "echo", "restart_policy": "no"}
+        process = LLMProcess("test", config)
+
+        result = await process.attempt_restart()
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_attempt_restart_successful(self, tmp_path):
+        """Test successful restart flow"""
+        config = {"command": "echo", "args": ["test"], "restart_policy": "on-failure", "restart_delay": TEST_TASK_START_DELAY}
+        process = LLMProcess("test", config)
+
+        # Mock existing process
+        mock_old_proc = Mock()
+        mock_old_proc.pid = 123
+        mock_old_proc.poll.return_value = 1  # Dead
+        process.process = mock_old_proc
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            with patch("subprocess.Popen") as mock_popen:
+                mock_new_proc = Mock()
+                mock_new_proc.pid = 456
+                mock_new_proc.poll.return_value = None  # Running
+                mock_popen.return_value = mock_new_proc
+
+                result = await process.attempt_restart()
+
+        assert result is True
+        assert process.restart_count == 1
+        assert process.last_restart_time is not None
+        assert process.process == mock_new_proc
+
+    @pytest.mark.asyncio
+    async def test_attempt_restart_failure(self, tmp_path):
+        """Test restart failure when process doesn't start"""
+        config = {"command": "echo", "restart_policy": "on-failure", "restart_delay": TEST_TASK_START_DELAY}
+        process = LLMProcess("test", config)
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            with patch("subprocess.Popen") as mock_popen:
+                mock_new_proc = Mock()
+                mock_new_proc.pid = 456
+                mock_new_proc.poll.return_value = 1  # Dead after restart
+                mock_popen.return_value = mock_new_proc
+
+                result = await process.attempt_restart()
+
+        assert result is False
+
+
+class TestExponentialBackoff:
+    """Tests for exponential backoff calculation"""
+
+    def test_calculate_restart_delay_first_restart(self):
+        """Test delay calculation for first restart (restart_count=0)"""
+        config = {"command": "echo", "restart_delay": 5}
+        process = LLMProcess("test", config)
+        process.restart_count = 0
+
+        delay = process.calculate_restart_delay()
+
+        # 5 * (2^0) = 5 * 1 = 5
+        assert delay == 5
+
+    def test_calculate_restart_delay_second_restart(self):
+        """Test delay calculation for second restart (restart_count=1)"""
+        config = {"command": "echo", "restart_delay": 5}
+        process = LLMProcess("test", config)
+        process.restart_count = 1
+
+        delay = process.calculate_restart_delay()
+
+        # 5 * (2^1) = 5 * 2 = 10
+        assert delay == 10
+
+    def test_calculate_restart_delay_third_restart(self):
+        """Test delay calculation for third restart (restart_count=2)"""
+        config = {"command": "echo", "restart_delay": 5}
+        process = LLMProcess("test", config)
+        process.restart_count = 2
+
+        delay = process.calculate_restart_delay()
+
+        # 5 * (2^2) = 5 * 4 = 20
+        assert delay == 20
+
+    def test_calculate_restart_delay_sequence(self):
+        """Test exponential backoff sequence: 5s, 10s, 20s, 40s, 80s, 160s"""
+        config = {"command": "echo", "restart_delay": 5}
+        process = LLMProcess("test", config)
+
+        expected_delays = [5, 10, 20, 40, 80, 160]
+
+        for count, expected_delay in enumerate(expected_delays):
+            process.restart_count = count
+            delay = process.calculate_restart_delay()
+            assert delay == expected_delay, f"Failed at restart_count={count}"
+
+    def test_calculate_restart_delay_capped_at_max_exponent(self):
+        """Test that delay is capped at MAX_BACKOFF_EXPONENT"""
+        config = {"command": "echo", "restart_delay": 5}
+        process = LLMProcess("test", config)
+
+        # Set restart_count beyond MAX_BACKOFF_EXPONENT
+        process.restart_count = MAX_BACKOFF_EXPONENT + 10
+
+        delay = process.calculate_restart_delay()
+
+        # Should be capped at 5 * (2^MAX_BACKOFF_EXPONENT)
+        max_delay = 5 * (2 ** MAX_BACKOFF_EXPONENT)
+        assert delay == max_delay
+
+    def test_calculate_restart_delay_with_custom_base(self):
+        """Test backoff with custom restart_delay value"""
+        config = {"command": "echo", "restart_delay": 10}
+        process = LLMProcess("test", config)
+
+        process.restart_count = 0
+        assert process.calculate_restart_delay() == 10
+
+        process.restart_count = 1
+        assert process.calculate_restart_delay() == 20
+
+        process.restart_count = 2
+        assert process.calculate_restart_delay() == 40
+
+    def test_calculate_restart_delay_with_fractional_base(self):
+        """Test backoff with fractional restart_delay"""
+        config = {"command": "echo", "restart_delay": 2.5}
+        process = LLMProcess("test", config)
+
+        process.restart_count = 0
+        assert process.calculate_restart_delay() == 2.5
+
+        process.restart_count = 1
+        assert process.calculate_restart_delay() == 5.0
+
+        process.restart_count = 2
+        assert process.calculate_restart_delay() == 10.0
+
+
+class TestCUDAOOMDetection:
+    """Tests for CUDA Out of Memory detection"""
+
+    def test_check_for_cuda_oom_with_nonexistent_log_file(self):
+        """Test CUDA OOM check when log file doesn't exist"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Ensure log file doesn't exist
+        with patch("os.path.exists", return_value=False):
+            result = process.check_for_cuda_oom()
+
+        assert result is False
+        # Verify cache was set
+        assert process._cuda_oom_cache is not None
+        cached_result, cached_time, cached_mtime = process._cuda_oom_cache
+        assert cached_result is False
+
+    def test_check_for_cuda_oom_with_oom_error_in_log(self, tmp_path):
+        """Test CUDA OOM detection with OOM error in log file"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file with CUDA OOM error
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("Some startup logs\nCUDA out of memory. Tried to allocate 2.00 GiB\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            result = process.check_for_cuda_oom()
+
+        assert result is True
+
+    def test_check_for_cuda_oom_with_cudaerror_oom_pattern(self, tmp_path):
+        """Test CUDA OOM detection with CudaError: out of memory pattern"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file with CudaError OOM pattern
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("CudaError: out of memory\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            result = process.check_for_cuda_oom()
+
+        assert result is True
+
+    def test_check_for_cuda_oom_without_oom_error(self, tmp_path):
+        """Test CUDA OOM check with log file but no OOM errors"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file with different errors
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("Loading model...\nModel loaded successfully\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            result = process.check_for_cuda_oom()
+
+        assert result is False
+
+    def test_check_for_cuda_oom_caching(self, tmp_path):
+        """Test that CUDA OOM check uses caching (60s TTL)"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("No OOM here\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            # First call - should read file
+            result1 = process.check_for_cuda_oom()
+
+            # Modify log file (add OOM error)
+            log_file.write_text("CUDA out of memory\n")
+
+            # Second call within TTL - should use cache (still returns False)
+            with patch("time.time", return_value=time.time() + 10):  # 10s later, within 60s TTL
+                result2 = process.check_for_cuda_oom()
+
+        assert result1 is False
+        assert result2 is False  # Cache hit, doesn't see new OOM error
+
+    def test_check_for_cuda_oom_cache_invalidation_after_ttl(self, tmp_path):
+        """Test cache invalidation after 60s TTL"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("No OOM\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            # First call
+            with patch("time.time", return_value=1000.0):
+                result1 = process.check_for_cuda_oom()
+
+            # Modify file
+            log_file.write_text("CUDA out of memory\n")
+
+            # Call after TTL expires (61s later)
+            with patch("time.time", return_value=1000.0 + CUDA_OOM_CACHE_TTL + 1):
+                result2 = process.check_for_cuda_oom()
+
+        assert result1 is False
+        assert result2 is True  # Cache expired, reads file again
+
+    def test_check_for_cuda_oom_cache_invalidation_on_file_modification(self, tmp_path):
+        """Test cache invalidation when file is modified"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("No OOM\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            # First call
+            result1 = process.check_for_cuda_oom()
+
+            # Wait a bit and modify file (changes mtime)
+            time.sleep(0.1)
+            log_file.write_text("CUDA out of memory\n")
+
+            # Second call - cache should be invalidated due to mtime change
+            result2 = process.check_for_cuda_oom()
+
+        assert result1 is False
+        assert result2 is True  # Cache invalidated, detects OOM
+
+
+class TestLLMHealthMonitor:
+    """Tests for LLMHealthMonitor (High Priority Fix #2 - Event Loop)"""
+
+    def test_health_monitor_init(self):
+        """Test health monitor initialization"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes, check_interval=30)
+
+        assert monitor.processes == processes
+        assert monitor.check_interval == 30
+        assert monitor._monitor_task is None
+        assert monitor._running is False
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_start_creates_task(self):
+        """Test that start() creates asyncio task"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes)
+
+        monitor.start()
+
+        assert monitor._running is True
+        assert monitor._monitor_task is not None
+        assert isinstance(monitor._monitor_task, asyncio.Task)
+
+        # Clean up
+        await monitor.stop()
+
+    @pytest.fixture
+    def no_event_loop(self):
+        """Temporarily remove the event loop"""
+        original_loop = asyncio.get_event_loop()
+        asyncio.set_event_loop(None)
+        yield
+        asyncio.set_event_loop(original_loop)
+
+    def test_health_monitor_start_raises_on_no_event_loop(self, no_event_loop):
+        """Test that start() raises RuntimeError when no event loop exists (Fix #2)"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes)
+
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            monitor.start()
+
+        # Verify _running was NOT set to True
+        assert monitor._running is False
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_start_when_already_running(self):
+        """Test that start() warns if monitor is already running"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes)
+
+        monitor.start()
+        # Start again
+        monitor.start()
+
+        # Should still have only one task
+        assert monitor._running is True
+
+        # Clean up
+        await monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_stop(self):
+        """Test that stop() cancels the monitor task"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes, check_interval=1)
+
+        monitor.start()
+
+        # Give task a moment to start
+        await asyncio.sleep(TEST_TASK_START_DELAY)
+
+        # Stop monitor
+        await monitor.stop()
+
+        assert monitor._running is False
+        assert monitor._monitor_task.cancelled() or monitor._monitor_task.done()
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_checks_all_processes(self):
+        """Test that monitor checks health of all processes"""
+        # Create mock processes
+        mock_proc1 = Mock(spec=LLMProcess)
+        mock_proc1.restart_policy = "on-failure"
+        mock_proc1.check_health = AsyncMock(return_value=(True, None))
+        mock_proc1.needs_restart = Mock(return_value=False)
+
+        mock_proc2 = Mock(spec=LLMProcess)
+        mock_proc2.restart_policy = "always"
+        mock_proc2.check_health = AsyncMock(return_value=(True, None))
+        mock_proc2.needs_restart = Mock(return_value=False)
+
+        processes = {"model1": mock_proc1, "model2": mock_proc2}
+        monitor = LLMHealthMonitor(processes, check_interval=TEST_HEALTH_CHECK_INTERVAL)
+
+        monitor.start()
+
+        # Wait for one health check cycle
+        await asyncio.sleep(TEST_HEALTH_CHECK_WAIT)
+
+        await monitor.stop()
+
+        # Verify both processes were checked
+        mock_proc1.check_health.assert_called()
+        mock_proc2.check_health.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_triggers_restart_on_failure(self):
+        """Test that monitor triggers restart when process needs it.
+
+        Note: Uses flexible assertion (>= 1) instead of assert_called_once()
+        because the health monitor may trigger multiple restart attempts
+        during the test interval due to async timing."""
+        # Create mock process that needs restart
+        mock_proc = Mock(spec=LLMProcess)
+        mock_proc.restart_policy = "on-failure"
+        mock_proc.consecutive_health_failures = 3
+        mock_proc.model_id = "model"
+        mock_proc.check_health = AsyncMock(return_value=(False, "Health check failed"))
+        mock_proc.needs_restart = Mock(return_value=True)
+        mock_proc.attempt_restart = AsyncMock(return_value=True)
+        mock_proc.check_for_cuda_oom = Mock(return_value=False)
+
+        processes = {"model": mock_proc}
+        monitor = LLMHealthMonitor(processes, check_interval=TEST_HEALTH_CHECK_INTERVAL)
+
+        monitor.start()
+
+        # Wait for health check and restart
+        await asyncio.sleep(TEST_HEALTH_CHECK_WAIT)
+
+        await monitor.stop()
+
+        # Verify restart was attempted (may be called multiple times during the interval)
+        assert mock_proc.attempt_restart.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_skips_no_restart_policy(self):
+        """Test that monitor skips processes with restart_policy='no'"""
+        mock_proc = Mock(spec=LLMProcess)
+        mock_proc.restart_policy = "no"
+        mock_proc.check_health = AsyncMock()
+
+        processes = {"model": mock_proc}
+        monitor = LLMHealthMonitor(processes, check_interval=TEST_HEALTH_CHECK_INTERVAL)
+
+        monitor.start()
+
+        await asyncio.sleep(TEST_HEALTH_CHECK_WAIT)
+
+        await monitor.stop()
+
+        # Verify health check was NOT called (skipped due to policy)
+        mock_proc.check_health.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_health_monitor_is_running(self):
+        """Test is_running() status check"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes)
+
+        assert monitor.is_running() is False
+
+        monitor.start()
+        assert monitor.is_running() is True
+
+        # Clean up
+        await monitor.stop()
