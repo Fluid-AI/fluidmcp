@@ -935,7 +935,6 @@ async def get_llm_model_status(
         "uptime_seconds": process.get_uptime(),
         "last_restart_time": process.last_restart_time,
         "last_health_check_time": process.last_health_check_time,
-        "stderr_log_path": process.get_stderr_log_path(),
         "has_cuda_oom": process.check_for_cuda_oom()
     }
 
@@ -1093,7 +1092,6 @@ async def get_llm_model_logs(
 
         return {
             "model_id": model_id,
-            "log_path": log_path,
             "lines": recent_lines,
             "total_lines": total_lines_approx,
             "returned_lines": len(recent_lines)

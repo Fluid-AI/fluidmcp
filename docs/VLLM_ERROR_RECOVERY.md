@@ -130,7 +130,6 @@ GET /api/llm/models/{model_id}
   "uptime_seconds": 125.3,
   "last_restart_time": null,
   "last_health_check_time": 1705423890.12,
-  "stderr_log_path": "/home/user/.fluidmcp/logs/llm_vllm_stderr.log",
   "has_cuda_oom": false
 }
 ```
@@ -186,7 +185,6 @@ GET /api/llm/models/{model_id}/logs?lines=100
 ```json
 {
   "model_id": "vllm",
-  "log_path": "/home/user/.fluidmcp/logs/llm_vllm_stderr.log",
   "lines": [
     "INFO: Loading model facebook/opt-125m\n",
     "INFO: Model loaded successfully\n"
@@ -316,11 +314,6 @@ curl -X POST http://localhost:8099/llm/models/vllm/health-check
 - vLLM crashed (check `is_running` status)
 
 ### Logs Not Available
-
-**Check log path:**
-```bash
-curl http://localhost:8099/llm/models/vllm | jq '.stderr_log_path'
-```
 
 **Common causes:**
 - Process never started (logs created on first start)
