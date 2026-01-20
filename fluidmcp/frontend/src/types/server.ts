@@ -77,3 +77,44 @@ export interface ToolExecutionResponse {
 export interface ApiError {
   detail: string;
 }
+
+// JSON Schema types for dynamic form generation
+export interface JsonSchemaProperty {
+  type: string;
+  title?: string;
+  description?: string;
+  default?: any;
+  enum?: any[];
+  format?: string; // v1: only 'email' and 'url'
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  items?: JsonSchemaProperty;
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
+}
+
+export interface JsonSchema {
+  type: string;
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
+  items?: JsonSchemaProperty;
+  enum?: any[];
+}
+
+// Tool execution history for localStorage persistence
+export interface ToolExecution {
+  id: string;
+  serverId: string;
+  serverName: string;
+  toolName: string;
+  arguments: Record<string, any>;
+  result: any;
+  timestamp: string;
+  success: boolean;
+  error?: string;
+  executionTime?: number;
+}

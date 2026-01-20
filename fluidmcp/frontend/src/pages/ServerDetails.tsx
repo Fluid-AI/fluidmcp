@@ -158,9 +158,7 @@ export default function ServerDetails() {
 
                   <button
                     className="details-btn"
-                    onClick={() =>
-                      alert(`Tool runner page coming soon!\n\nTool: ${tool.name}\nServer: ${serverId}`)
-                    }
+                    onClick={() => navigate(`/servers/${serverId}/tools/${tool.name}`)}
                   >
                     Run tool
                   </button>
