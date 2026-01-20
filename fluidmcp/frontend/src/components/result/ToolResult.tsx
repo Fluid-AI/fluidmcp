@@ -122,11 +122,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       <div className="section-header">
         <h2>Results</h2>
         {result !== null && !error && (
-          <ResultActions
-            result={result}
-            onCopy={handleCopy}
-            onDownload={handleDownload}
-          />
+          <ResultActions onCopy={handleCopy} onDownload={handleDownload} />
         )}
       </div>
 
@@ -167,7 +163,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
             <TextResultView text={result} />
           )}
           {format === ResultFormat.PRIMITIVE && (
-            <TextResultView text={JSON.stringify(result)} />
+            <TextResultView text={result === undefined ? 'undefined' : JSON.stringify(result)} />
           )}
         </>
       )}

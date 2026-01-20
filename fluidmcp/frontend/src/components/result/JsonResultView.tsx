@@ -31,10 +31,11 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
 
   // Primitives
   if (type === 'string') {
+    const strData = data as string;
     return (
       <div className="json-line">
         {name && <span className="json-key">{name}: </span>}
-        <span className="json-string">"{data}"</span>
+        <span className="json-string">"{strData}"</span>
       </div>
     );
   }
@@ -83,7 +84,8 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
 
   // Objects
   if (type === 'object') {
-    const keys = Object.keys(data);
+    const objData = data as Record<string, unknown>;
+    const keys = Object.keys(objData);
     if (keys.length === 0) {
       return (
         <div className="json-line">
@@ -106,7 +108,7 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
         {!isCollapsed && (
           <div style={{ paddingLeft: '1rem' }}>
             {keys.map((key) => (
-              <JsonNode key={key} name={key} data={data[key]} depth={depth + 1} />
+              <JsonNode key={key} name={key} data={objData[key]} depth={depth + 1} />
             ))}
             <div>{'}'}</div>
           </div>

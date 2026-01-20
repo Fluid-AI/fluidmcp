@@ -1,7 +1,6 @@
 import React from 'react';
 
 interface ResultActionsProps {
-  result: unknown;
   onCopy: () => void;
   onDownload: () => void;
 }
