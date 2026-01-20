@@ -80,8 +80,10 @@ export function useToolRunner(
           executionTime: duration,
         });
 
-        // Reload history
-        loadHistory();
+        // Reload history with mount guard
+        if (isMountedRef.current) {
+          loadHistory();
+        }
       } catch (err: any) {
         const endTime = performance.now();
         const duration = (endTime - startTime) / 1000;
@@ -105,8 +107,10 @@ export function useToolRunner(
           executionTime: duration,
         });
 
-        // Reload history
-        loadHistory();
+        // Reload history with mount guard
+        if (isMountedRef.current) {
+          loadHistory();
+        }
       } finally {
         if (isMountedRef.current) {
           setLoading(false);

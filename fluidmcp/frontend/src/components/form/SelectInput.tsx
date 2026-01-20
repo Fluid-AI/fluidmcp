@@ -20,6 +20,8 @@ export const SelectInput: React.FC<SelectInputProps> = ({
 }) => {
   const label = schema.title || name;
   const options = schema.enum || [];
+  const errorId = error ? `${name}-error` : undefined;
+  const descId = schema.description ? `${name}-desc` : undefined;
 
   return (
     <div className="form-field">
@@ -29,7 +31,7 @@ export const SelectInput: React.FC<SelectInputProps> = ({
       </label>
 
       {schema.description && (
-        <p className="field-description">{schema.description}</p>
+        <p id={descId} className="field-description">{schema.description}</p>
       )}
 
       <select
@@ -42,12 +44,20 @@ export const SelectInput: React.FC<SelectInputProps> = ({
           if (schema.type === 'number' || schema.type === 'integer') {
             onChange(parseFloat(selectedValue));
           } else if (schema.type === 'boolean') {
-            onChange(selectedValue === 'true');
+            // Strict boolean handling to distinguish empty from false
+            if (selectedValue === '') {
+              onChange(undefined); // Not selected
+            } else {
+              onChange(selectedValue === 'true');
+            }
           } else {
             onChange(selectedValue);
           }
         }}
         className={error ? 'error' : ''}
+        aria-invalid={error ? 'true' : 'false'}
+        aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
+        aria-required={required}
       >
         <option value="">Select an option...</option>
         {options.map((option) => (
@@ -57,7 +67,7 @@ export const SelectInput: React.FC<SelectInputProps> = ({
         ))}
       </select>
 
-      {error && <span className="error-message">{error}</span>}
+      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
     </div>
   );
 };

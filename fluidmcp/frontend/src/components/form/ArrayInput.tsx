@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { JsonSchemaProperty } from '../../types/server';
 
 interface ArrayInputProps {
@@ -20,6 +20,12 @@ export const ArrayInput: React.FC<ArrayInputProps> = ({
 }) => {
   const label = schema.title || name;
   const itemSchema = schema.items;
+
+  // Track JSON parse errors for each item
+  const [jsonErrors, setJsonErrors] = useState<Record<number, string>>({});
+
+  // Track raw text input for JSON items (allows typing invalid JSON)
+  const [jsonText, setJsonText] = useState<Record<number, string>>({});
 
   // Determine if items are primitives or objects
   const isPrimitiveArray = itemSchema && ['string', 'number', 'integer', 'boolean'].includes(itemSchema.type);
@@ -109,20 +115,40 @@ export const ArrayInput: React.FC<ArrayInputProps> = ({
                   </label>
                 ) : null
               ) : (
-                <textarea
-                  value={typeof item === 'object' ? JSON.stringify(item, null, 2) : String(item)}
-                  onChange={(e) => {
-                    try {
-                      const parsed = JSON.parse(e.target.value);
-                      handleUpdateItem(index, parsed);
-                    } catch {
-                      // Keep editing invalid JSON
-                      handleUpdateItem(index, e.target.value);
-                    }
-                  }}
-                  rows={3}
-                  placeholder={`Item ${index + 1} (JSON)`}
-                />
+                <div className="json-input-wrapper">
+                  <textarea
+                    value={jsonText[index] ?? (typeof item === 'object' ? JSON.stringify(item, null, 2) : String(item))}
+                    onChange={(e) => {
+                      const newText = e.target.value;
+                      // Always update the text (allow typing)
+                      setJsonText((prev) => ({ ...prev, [index]: newText }));
+
+                      // Try to parse, but don't block on error
+                      try {
+                        const parsed = JSON.parse(newText);
+                        handleUpdateItem(index, parsed);
+                        // Clear error on successful parse
+                        setJsonErrors((prev) => {
+                          const updated = { ...prev };
+                          delete updated[index];
+                          return updated;
+                        });
+                      } catch (err) {
+                        // Show error but allow continued typing
+                        setJsonErrors((prev) => ({
+                          ...prev,
+                          [index]: 'Invalid JSON format',
+                        }));
+                      }
+                    }}
+                    rows={3}
+                    placeholder={`Item ${index + 1} (JSON)`}
+                    className={jsonErrors[index] ? 'error' : ''}
+                  />
+                  {jsonErrors[index] && (
+                    <span className="error-message">{jsonErrors[index]}</span>
+                  )}
+                </div>
               )}
             </div>
             <button

@@ -20,6 +20,8 @@ export const StringInput: React.FC<StringInputProps> = ({
 }) => {
   const label = schema.title || name;
   const isTextarea = schema.maxLength && schema.maxLength > 100;
+  const errorId = error ? `${name}-error` : undefined;
+  const descId = schema.description ? `${name}-desc` : undefined;
 
   return (
     <div className="form-field">
@@ -29,7 +31,7 @@ export const StringInput: React.FC<StringInputProps> = ({
       </label>
 
       {schema.description && (
-        <p className="field-description">{schema.description}</p>
+        <p id={descId} className="field-description">{schema.description}</p>
       )}
 
       {isTextarea ? (
@@ -41,6 +43,9 @@ export const StringInput: React.FC<StringInputProps> = ({
           placeholder={schema.default || ''}
           rows={5}
           className={error ? 'error' : ''}
+          aria-invalid={error ? 'true' : 'false'}
+          aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
+          aria-required={required}
         />
       ) : (
         <input
@@ -53,10 +58,13 @@ export const StringInput: React.FC<StringInputProps> = ({
           minLength={schema.minLength}
           maxLength={schema.maxLength}
           className={error ? 'error' : ''}
+          aria-invalid={error ? 'true' : 'false'}
+          aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
+          aria-required={required}
         />
       )}
 
-      {error && <span className="error-message">{error}</span>}
+      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
     </div>
   );
 };

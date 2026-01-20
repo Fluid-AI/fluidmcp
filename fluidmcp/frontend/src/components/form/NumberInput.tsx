@@ -20,6 +20,8 @@ export const NumberInput: React.FC<NumberInputProps> = ({
 }) => {
   const label = schema.title || name;
   const isInteger = schema.type === 'integer';
+  const errorId = error ? `${name}-error` : undefined;
+  const descId = schema.description ? `${name}-desc` : undefined;
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawValue = e.target.value;
@@ -42,7 +44,7 @@ export const NumberInput: React.FC<NumberInputProps> = ({
       </label>
 
       {schema.description && (
-        <p className="field-description">{schema.description}</p>
+        <p id={descId} className="field-description">{schema.description}</p>
       )}
 
       <input
@@ -55,9 +57,12 @@ export const NumberInput: React.FC<NumberInputProps> = ({
         min={schema.minimum}
         max={schema.maximum}
         className={error ? 'error' : ''}
+        aria-invalid={error ? 'true' : 'false'}
+        aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
+        aria-required={required}
       />
 
-      {error && <span className="error-message">{error}</span>}
+      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
     </div>
   );
 };

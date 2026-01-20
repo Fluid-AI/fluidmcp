@@ -166,6 +166,10 @@ class ToolHistoryService {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
     } catch (error) {
       console.error('Failed to save tool history:', error);
+      // Notify user that history won't persist
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        console.warn('Cannot save history: Storage quota exceeded or private browsing mode');
+      }
     }
   }
 }

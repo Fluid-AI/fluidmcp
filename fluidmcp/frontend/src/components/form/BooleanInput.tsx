@@ -19,6 +19,8 @@ export const BooleanInput: React.FC<BooleanInputProps> = ({
   required,
 }) => {
   const label = schema.title || name;
+  const errorId = error ? `${name}-error` : undefined;
+  const descId = schema.description ? `${name}-desc` : undefined;
 
   return (
     <div className="form-field">
@@ -31,6 +33,9 @@ export const BooleanInput: React.FC<BooleanInputProps> = ({
             checked={value}
             onChange={(e) => onChange(e.target.checked)}
             className={error ? 'error' : ''}
+            aria-invalid={error ? 'true' : 'false'}
+            aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
+            aria-required={required}
           />
           <span>
             {label}
@@ -39,11 +44,11 @@ export const BooleanInput: React.FC<BooleanInputProps> = ({
         </label>
 
         {schema.description && (
-          <p className="field-description">{schema.description}</p>
+          <p id={descId} className="field-description">{schema.description}</p>
         )}
       </div>
 
-      {error && <span className="error-message">{error}</span>}
+      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
     </div>
   );
 };

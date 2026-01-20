@@ -23,6 +23,11 @@ export const ObjectInput: React.FC<ObjectInputProps> = ({
   // For simple objects with defined properties, render fields
   if (schema.properties) {
     const handleFieldChange = (fieldName: string, fieldValue: any) => {
+      // Guard against prototype pollution
+      if (['__proto__', 'constructor', 'prototype'].includes(fieldName)) {
+        console.warn(`Blocked prototype pollution attempt: ${fieldName}`);
+        return;
+      }
       onChange({
         ...value,
         [fieldName]: fieldValue,
