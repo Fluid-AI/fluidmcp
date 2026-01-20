@@ -486,3 +486,121 @@
     order: 2;
   }
 }
+
+/* ========================================
+   Result Display Components (PR #3)
+   ======================================== */
+
+/* Text Result */
+.result-text {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  padding: 1rem;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+.result-text-long {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* JSON Viewer */
+.json-viewer {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  padding: 1rem;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  overflow-x: auto;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.json-line {
+  margin: 0.125rem 0;
+}
+
+.json-toggle {
+  display: inline-block;
+  width: 1.2rem;
+  cursor: pointer;
+  user-select: none;
+  color: #6b7280;
+}
+
+.json-toggle:hover {
+  color: #374151;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+}
+
+.json-key {
+  color: #881391;
+  font-weight: 500;
+  margin-right: 0.25rem;
+}
+
+.json-string {
+  color: #1a1aa6;
+}
+
+.json-number {
+  color: #1c00cf;
+}
+
+.json-boolean {
+  color: #0d22aa;
+}
+
+.json-null {
+  color: #808080;
+  font-style: italic;
+}
+
+/* Table Result */
+.result-table-wrapper {
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.result-table th {
+  background: #f9fafb;
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 2px solid #e5e7eb;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.result-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-table tr:hover {
+  background: #f9fafb;
+}
+
+.result-table tbody tr:last-child td {
+  border-bottom: none;
+}

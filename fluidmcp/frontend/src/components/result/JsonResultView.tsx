@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
 interface JsonNodeProps {
-  data: any;
+  data: unknown;
   depth: number;
   name?: string;
 }
@@ -119,14 +119,10 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
 };
 
 interface JsonResultViewProps {
-  data: any;
-  initialDepth?: number;
+  data: unknown;
 }
 
-export const JsonResultView: React.FC<JsonResultViewProps> = ({
-  data,
-  initialDepth = 2,
-}) => {
+export const JsonResultView: React.FC<JsonResultViewProps> = ({ data }) => {
   return (
     <div className="json-viewer">
       <JsonNode data={data} depth={0} />

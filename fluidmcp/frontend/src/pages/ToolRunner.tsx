@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { apiClient } from '../services/api';
 import { useToolRunner } from '../hooks/useToolRunner';
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
+import { ToolResult } from '../components/result/ToolResult';
 import type { Server, Tool } from '../types/server';
 import './ToolRunner.css';
 
@@ -98,12 +99,6 @@ export const ToolRunner: React.FC = () => {
   const handleClearHistory = () => {
     if (window.confirm('Are you sure you want to clear the execution history for this tool?')) {
       clearHistory();
-    }
-  };
-
-  const handleCopyResult = () => {
-    if (result) {
-      navigator.clipboard.writeText(JSON.stringify(result, null, 2));
     }
   };
 
@@ -230,42 +225,12 @@ export const ToolRunner: React.FC = () => {
         {/* Right Column: Results */}
         {(result !== null || executionError) && (
           <div className="tool-runner-right">
-            <div className="tool-runner-section">
-              <div className="section-header">
-                <h2>Results</h2>
-                <div className="result-actions">
-                  {result && (
-                    <button onClick={handleCopyResult} className="btn-text">
-                      Copy
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Execution Info */}
-              {executionTime !== null && (
-                <div className="execution-info">
-                  <span>
-                    Execution Time: <strong>{executionTime.toFixed(2)}s</strong>
-                  </span>
-                </div>
-              )}
-
-              {/* Error Display */}
-              {executionError && (
-                <div className="result-error">
-                  <h3>Error</h3>
-                  <p>{executionError}</p>
-                </div>
-              )}
-
-              {/* Result Display (v1: Plain JSON) */}
-              {result && (
-                <div className="result-content">
-                  <pre>{JSON.stringify(result, null, 2)}</pre>
-                </div>
-              )}
-            </div>
+            <ToolResult
+              result={result}
+              error={executionError || undefined}
+              loading={executing}
+              executionTime={executionTime}
+            />
           </div>
         )}
       </div>

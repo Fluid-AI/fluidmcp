@@ -1,13 +1,12 @@
 import React from 'react';
 
 interface ResultActionsProps {
-  result: any;
+  result: unknown;
   onCopy: () => void;
   onDownload: () => void;
 }
 
 export const ResultActions: React.FC<ResultActionsProps> = ({
-  result,
   onCopy,
   onDownload,
 }) => {

@@ -1,24 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { ResultActions } from './ResultActions';
 import { JsonResultView } from './JsonResultView';
 import { TextResultView } from './TextResultView';
 import { TableResultView } from './TableResultView';
 
-enum ResultFormat {
-  MCP_CONTENT = 'mcp_content',
-  TABLE = 'table',
-  JSON_OBJECT = 'json_object',
-  TEXT_BLOCK = 'text_block',
-  TEXT = 'text',
-  PRIMITIVE = 'primitive',
-}
+const ResultFormat = {
+  MCP_CONTENT: 'mcp_content',
+  TABLE: 'table',
+  JSON_OBJECT: 'json_object',
+  TEXT_BLOCK: 'text_block',
+  TEXT: 'text',
+  PRIMITIVE: 'primitive',
+} as const;
 
-function detectResultFormat(result: any): ResultFormat {
+type ResultFormatType = typeof ResultFormat[keyof typeof ResultFormat];
+
+function detectResultFormat(result: unknown): ResultFormatType {
   // MCP content array
   if (
     Array.isArray(result) &&
     result.length > 0 &&
-    result.every((item) => item.type && item.text)
+    result.every((item: unknown) =>
+      typeof item === 'object' && item !== null &&
+      'type' in item && 'text' in item
+    )
   ) {
     return ResultFormat.MCP_CONTENT;
   }
@@ -27,13 +32,14 @@ function detectResultFormat(result: any): ResultFormat {
   if (
     Array.isArray(result) &&
     result.length > 0 &&
-    result.every((item) => typeof item === 'object' && item !== null)
+    result.every((item: unknown) => typeof item === 'object' && item !== null)
   ) {
-    const keys = Object.keys(result[0]);
+    const keys = Object.keys(result[0] as Record<string, unknown>);
     if (
       result.every(
-        (item) =>
-          keys.every((k) => k in item) && Object.keys(item).length === keys.length
+        (item: unknown) =>
+          keys.every((k) => k in (item as Record<string, unknown>)) &&
+          Object.keys(item as Record<string, unknown>).length === keys.length
       )
     ) {
       return ResultFormat.TABLE;
@@ -58,7 +64,7 @@ function detectResultFormat(result: any): ResultFormat {
 }
 
 interface ToolResultProps {
-  result: any;
+  result: unknown;
   error?: string;
   loading?: boolean;
   executionTime?: number | null;
@@ -67,16 +73,9 @@ interface ToolResultProps {
 export const ToolResult: React.FC<ToolResultProps> = ({
   result,
   error,
-  loading,
   executionTime,
 }) => {
-  const [format, setFormat] = useState<ResultFormat>(ResultFormat.PRIMITIVE);
-
-  useEffect(() => {
-    if (result !== null && !error) {
-      setFormat(detectResultFormat(result));
-    }
-  }, [result, error]);
+  const format = result !== null && !error ? detectResultFormat(result) : ResultFormat.PRIMITIVE;
 
   const handleCopy = () => {
     let textToCopy: string;
@@ -88,7 +87,9 @@ export const ToolResult: React.FC<ToolResultProps> = ({
           textToCopy = String(result);
           break;
         case ResultFormat.MCP_CONTENT:
-          textToCopy = result.map((c: any) => c.text).join('\n');
+          textToCopy = Array.isArray(result)
+            ? result.map((c: { text: string }) => c.text).join('\n')
+            : String(result);
           break;
         default:
           textToCopy = JSON.stringify(result, null, 2);
@@ -130,7 +131,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       </div>
 
       {/* Execution Info */}
-      {executionTime !== null && (
+      {executionTime !== null && executionTime !== undefined && (
         <div className="execution-info">
           <span>
             Execution Time: <strong>{executionTime.toFixed(2)}s</strong>
@@ -149,18 +150,22 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       {/* Result Display */}
       {!error && result !== null && (
         <>
-          {format === ResultFormat.MCP_CONTENT && (
+          {format === ResultFormat.MCP_CONTENT && Array.isArray(result) && (
             <TextResultView
-              text={result.map((c: any) => c.text).join('\n')}
+              text={result.map((c: { text: string }) => c.text).join('\n')}
               isLongText={true}
             />
           )}
-          {format === ResultFormat.TABLE && <TableResultView data={result} />}
+          {format === ResultFormat.TABLE && Array.isArray(result) && (
+            <TableResultView data={result as Array<Record<string, unknown>>} />
+          )}
           {format === ResultFormat.JSON_OBJECT && <JsonResultView data={result} />}
-          {format === ResultFormat.TEXT_BLOCK && (
+          {format === ResultFormat.TEXT_BLOCK && typeof result === 'string' && (
             <TextResultView text={result} isLongText={true} />
           )}
-          {format === ResultFormat.TEXT && <TextResultView text={result} />}
+          {format === ResultFormat.TEXT && typeof result === 'string' && (
+            <TextResultView text={result} />
+          )}
           {format === ResultFormat.PRIMITIVE && (
             <TextResultView text={JSON.stringify(result)} />
           )}

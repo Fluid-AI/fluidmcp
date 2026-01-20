@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface TableResultViewProps {
-  data: Array<Record<string, any>>;
+  data: Array<Record<string, unknown>>;
 }
 
 export const TableResultView: React.FC<TableResultViewProps> = ({ data }) => {
@@ -11,7 +11,7 @@ export const TableResultView: React.FC<TableResultViewProps> = ({ data }) => {
 
   const columns = Object.keys(data[0]);
 
-  const renderCell = (value: any): string => {
+  const renderCell = (value: unknown): string => {
     if (value === null) return 'null';
     if (value === undefined) return 'undefined';
     if (typeof value === 'object') return JSON.stringify(value);

@@ -65,7 +65,7 @@ export function useToolRunner(
         const duration = (endTime - startTime) / 1000; // Convert to seconds
 
         if (isMountedRef.current) {
-          setResult(response.result);
+          setResult(response);
           setExecutionTime(duration);
         }
 
@@ -75,7 +75,7 @@ export function useToolRunner(
           serverName,
           toolName,
           arguments: args,
-          result: response.result,
+          result: response,
           success: true,
           executionTime: duration,
         });
