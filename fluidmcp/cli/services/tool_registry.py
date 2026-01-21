@@ -21,6 +21,7 @@ class ToolRegistry:
     def __init__(self):
         """Initialize the tool registry."""
         self.tools: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.Lock()
         logger.debug("Tool registry initialized")
 
     def register(
@@ -42,26 +43,27 @@ class ToolRegistry:
         Raises:
             ValueError: If tool name already registered or schema is invalid
         """
-        if name in self.tools:
-            raise ValueError(f"Tool '{name}' is already registered")
+        with self._lock:
+            if name in self.tools:
+                raise ValueError(f"Tool '{name}' is already registered")
 
-        # Validate schema structure
-        self._validate_schema(parameters)
+            # Validate schema structure
+            self._validate_schema(parameters)
 
-        # Store tool with metadata
-        self.tools[name] = {
-            "function": function,
-            "schema": {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": description,
-                    "parameters": parameters
+            # Store tool with metadata
+            self.tools[name] = {
+                "function": function,
+                "schema": {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": description,
+                        "parameters": parameters
+                    }
                 }
             }
-        }
 
-        logger.info(f"Registered tool: {name}")
+            logger.info(f"Registered tool: {name}")
 
     def unregister(self, name: str) -> None:
         """
@@ -73,11 +75,12 @@ class ToolRegistry:
         Raises:
             KeyError: If tool is not registered
         """
-        if name not in self.tools:
-            raise KeyError(f"Tool '{name}' is not registered")
+        with self._lock:
+            if name not in self.tools:
+                raise KeyError(f"Tool '{name}' is not registered")
 
-        del self.tools[name]
-        logger.info(f"Unregistered tool: {name}")
+            del self.tools[name]
+            logger.info(f"Unregistered tool: {name}")
 
     def get_tool(self, name: str) -> Optional[Dict[str, Any]]:
         """
@@ -89,7 +92,8 @@ class ToolRegistry:
         Returns:
             Tool dictionary with 'function' and 'schema', or None if not found
         """
-        return self.tools.get(name)
+        with self._lock:
+            return self.tools.get(name)
 
     def get_function(self, name: str) -> Optional[Callable]:
         """
@@ -111,7 +115,8 @@ class ToolRegistry:
         Returns:
             List of tool names
         """
-        return list(self.tools.keys())
+        with self._lock:
+            return list(self.tools.keys())
 
     def list_tool_schemas(self) -> List[Dict[str, Any]]:
         """
@@ -120,7 +125,8 @@ class ToolRegistry:
         Returns:
             List of tool schemas in OpenAI format
         """
-        return [tool["schema"] for tool in self.tools.values()]
+        with self._lock:
+            return [tool["schema"] for tool in self.tools.values()]
 
     def is_registered(self, name: str) -> bool:
         """
@@ -132,13 +138,15 @@ class ToolRegistry:
         Returns:
             True if tool is registered, False otherwise
         """
-        return name in self.tools
+        with self._lock:
+            return name in self.tools
 
     def clear(self) -> None:
         """Clear all registered tools."""
-        count = len(self.tools)
-        self.tools.clear()
-        logger.info(f"Cleared {count} tools from registry")
+        with self._lock:
+            count = len(self.tools)
+            self.tools.clear()
+            logger.info(f"Cleared {count} tools from registry")
 
     def _validate_schema(self, parameters: Dict[str, Any]) -> None:
         """

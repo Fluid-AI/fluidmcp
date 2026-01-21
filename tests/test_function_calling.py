@@ -295,6 +295,35 @@ class TestToolExecutor:
         assert "Invalid JSON" in content["message"]
 
     @pytest.mark.asyncio
+    async def test_execute_tool_call_missing_required_args(self, registry, sample_tool_function, sample_tool_schema):
+        """Test that missing required arguments are detected and rejected."""
+        registry.register(
+            "get_weather",
+            sample_tool_function,
+            "Get weather",
+            sample_tool_schema
+        )
+
+        executor = ToolExecutor(registry, "test_model")
+
+        # Tool call missing required "city" argument
+        tool_call = {
+            "id": "call_123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{}'  # Empty - missing required "city"
+            }
+        }
+
+        result = await executor.execute_tool_call(tool_call)
+
+        content = json.loads(result["content"])
+        assert content["error"] is True
+        assert "Missing required arguments" in content["message"]
+        assert "city" in content["message"]
+
+    @pytest.mark.asyncio
     async def test_execute_tool_call_timeout(self, registry, sample_tool_schema):
         """Test tool execution timeout."""
         async def slow_function(city: str):

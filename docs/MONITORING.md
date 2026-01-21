@@ -89,15 +89,16 @@ sudo apt-get install prometheus     # Debian/Ubuntu
 sudo yum install prometheus         # RHEL/CentOS
 
 # Linux - Option 2: Manual Installation
-# 1. Find the latest version at: https://github.com/prometheus/prometheus/releases
-# 2. Replace VERSION below with the version number (e.g., "2.45.0")
-VERSION="2.45.0"  # Update this to the latest version from releases page
+# Fetch the latest Prometheus release version automatically (recommended):
+VERSION=$(curl -s https://api.github.com/repos/prometheus/prometheus/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//')
 wget "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/prometheus-${VERSION}.linux-amd64.tar.gz"
 tar xvfz "prometheus-${VERSION}.linux-amd64.tar.gz"
 cd "prometheus-${VERSION}.linux-amd64"
 
-# Or fetch the latest version automatically:
-# VERSION=$(curl -s https://api.github.com/repos/prometheus/prometheus/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//')
+# Or use a specific version:
+# 1. Find the latest version at: https://github.com/prometheus/prometheus/releases
+# 2. Replace VERSION below with the desired version number (e.g., "2.45.0")
+# VERSION="2.45.0"
 # wget "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/prometheus-${VERSION}.linux-amd64.tar.gz"
 ```
 

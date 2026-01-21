@@ -127,6 +127,27 @@ class ToolExecutor:
                     f"Invalid JSON arguments: {str(e)}"
                 )
 
+            # Validate required arguments against tool parameter schema
+            tool_schema = tool.get("schema", {}).get("function", {})
+            parameters = tool_schema.get("parameters", {})
+            required_fields = parameters.get("required", [])
+
+            if required_fields:
+                missing_fields = [
+                    field for field in required_fields
+                    if field not in arguments
+                ]
+                if missing_fields:
+                    logger.error(
+                        f"Missing required arguments for tool '{function_name}': "
+                        f"{', '.join(missing_fields)}"
+                    )
+                    return self._error_response(
+                        tool_call_id,
+                        function_name,
+                        f"Missing required arguments: {', '.join(missing_fields)}"
+                    )
+
             # Execute tool with timeout
             try:
                 function = tool["function"]
