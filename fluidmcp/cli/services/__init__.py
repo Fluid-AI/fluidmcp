@@ -2,7 +2,7 @@ from .package_installer import install_package
 from .package_installer import parse_package_string
 from .env_manager import edit_env_variables
 from .config_resolver import ServerConfig, resolve_config
-from .run_servers import run_servers
+from .run_servers import run_servers, get_llm_processes, get_llm_health_monitor
 from .github_utils import (
     normalize_github_repo,
     clone_github_repo,
@@ -27,6 +27,8 @@ __all__ = [
     "ServerConfig",
     "resolve_config",
     "run_servers",
+    "get_llm_processes",
+    "get_llm_health_monitor",
     "normalize_github_repo",
     "clone_github_repo",
     "extract_or_create_metadata",
