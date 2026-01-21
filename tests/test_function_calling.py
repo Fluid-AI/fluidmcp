@@ -59,6 +59,20 @@ def sample_tool_schema():
     }
 
 
+@pytest.fixture
+def calculator_function():
+    """Calculator function for testing (reusable fixture)."""
+    def calculator(operation: str, x: float, y: float) -> dict:
+        if operation == "add":
+            result = x + y
+        elif operation == "multiply":
+            result = x * y
+        else:
+            result = 0
+        return {"result": result}
+    return calculator
+
+
 # ToolRegistry Tests
 
 class TestToolRegistry:
@@ -334,12 +348,12 @@ class TestToolExecutor:
             }
         }
 
-        # Execute at depth 2 (should succeed)
+        # Execute at depth 1 (should succeed - below limit)
         result = await executor.execute_tool_call(tool_call, depth=1)
         content = json.loads(result["content"])
         assert "error" not in content or not content.get("error")
 
-        # Execute at depth 2 (should fail - at limit)
+        # Execute at depth 2 (should fail - at limit, depth >= max_call_depth)
         result = await executor.execute_tool_call(tool_call, depth=2)
         content = json.loads(result["content"])
         assert content["error"] is True
@@ -509,8 +523,11 @@ class TestFunctionRouter:
             stream=False
         )
 
-        # Verify it was called but stopped at limit
-        assert mock_client.chat.completions.create.call_count <= config["max_iterations"] + 1
+        # Verify it was called the expected number of times
+        # Router calls vLLM once per iteration (max 2) + tool execution calls don't count
+        # Each iteration: 1 vLLM call, then tool execution, then next iteration
+        # So for max_iterations=2: iteration 1 (call), iteration 2 (call), then stop
+        assert mock_client.chat.completions.create.call_count == config["max_iterations"]
 
 
 # Integration Tests
@@ -519,18 +536,9 @@ class TestIntegration:
     """Integration tests for complete function calling flow."""
 
     @pytest.mark.asyncio
-    async def test_complete_function_calling_flow(self, registry):
+    async def test_complete_function_calling_flow(self, registry, calculator_function):
         """Test complete flow: register tool -> call model -> execute tool -> final answer."""
-        # Register tool
-        def calculator(operation: str, x: float, y: float) -> dict:
-            if operation == "add":
-                result = x + y
-            elif operation == "multiply":
-                result = x * y
-            else:
-                result = 0
-            return {"result": result}
-
+        # Use calculator fixture (no duplication)
         schema = {
             "type": "object",
             "properties": {
@@ -543,7 +551,7 @@ class TestIntegration:
 
         registry.register(
             "calculator",
-            calculator,
+            calculator_function,
             "Perform calculations",
             schema
         )

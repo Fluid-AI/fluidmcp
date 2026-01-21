@@ -94,6 +94,7 @@ class FunctionRouter:
         # Iteration loop for multi-turn tool calling
         current_messages = messages.copy()
         iteration = 0
+        response = None  # Initialize to prevent UnboundLocalError if max_iterations=0
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -117,12 +118,15 @@ class FunctionRouter:
                 logger.info("No tool calls in response, returning final answer")
                 return response
 
-            # Warn if model returns tool calls despite tool_choice="none"
+            # SECURITY: Enforce tool_choice="none" - refuse to execute tools if explicitly disabled
             if tool_choice == "none":
                 logger.warning(
                     f"Model returned {len(tool_calls)} tool calls despite tool_choice='none'. "
-                    f"This may indicate the model is not respecting tool_choice parameter."
+                    f"Refusing to execute tools as per user's explicit tool_choice setting. "
+                    f"Returning response without tool execution."
                 )
+                # Return response immediately without executing tools
+                return response
 
             logger.info(f"Model requested {len(tool_calls)} tool calls")
 
@@ -153,7 +157,17 @@ class FunctionRouter:
             # (model should now use tool results to provide final answer)
             tool_choice = "none"
 
-        # Max iterations reached
+        # Max iterations reached or max_iterations=0
+        if response is None:
+            # Edge case: max_iterations=0, no iterations executed
+            logger.warning("max_iterations=0, returning response without any tool calling iterations")
+            return await self._call_vllm(
+                vllm_client,
+                current_messages,
+                stream=stream,
+                **completion_kwargs
+            )
+
         logger.warning(
             f"Max iterations ({self.max_iterations}) reached, "
             f"returning last response"
@@ -224,12 +238,22 @@ class FunctionRouter:
                 "  2. 'base_url' attribute for direct HTTP calls"
             )
 
+        # Validate authentication for HTTP fallback
+        if not hasattr(vllm_client, 'api_key') or not vllm_client.api_key:
+            logger.warning(
+                "vLLM client missing 'api_key' attribute for HTTP authentication. "
+                "Proceeding without Authorization header - this may fail if server requires auth."
+            )
+
         async with httpx.AsyncClient() as client:
+            headers = {}
+            if hasattr(vllm_client, 'api_key') and vllm_client.api_key:
+                headers["Authorization"] = f"Bearer {vllm_client.api_key}"
+
             response = await client.post(
                 f"{vllm_client.base_url}/v1/chat/completions",
                 json=request_params,
-                headers={"Authorization": f"Bearer {vllm_client.api_key}"}
-                if hasattr(vllm_client, 'api_key') else None
+                headers=headers if headers else None
             )
             response.raise_for_status()
             return response.json()

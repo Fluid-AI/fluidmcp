@@ -618,20 +618,17 @@ class ToolTimer:
     """
     Context manager for timing tool executions.
 
-    This utility is provided for MCP hosts that want per-tool execution metrics.
-    It is **not** integrated into the default tool execution path in this
-    package, and will only emit metrics if the host application explicitly
-    wraps its tool calls with `ToolTimer` (or calls
-    `MetricsCollector.record_tool_call` directly).
-
-    When used, the following Prometheus metrics are populated:
+    This utility is integrated into ToolExecutor for vLLM function calling
+    and automatically tracks tool execution metrics. When used, the following
+    Prometheus metrics are populated:
       - fluidmcp_tool_calls_total
       - fluidmcp_tool_execution_seconds
 
-    If `ToolTimer` is not wired into your tool invocation code, these metrics
-    will remain empty and any associated dashboard panels will show no data.
+    Integration status:
+      - vLLM function calling: ✅ Integrated (tool_executor.py line 87)
+      - MCP hosts: Optional - wrap tool calls to emit metrics
 
-    Usage example (opt-in integration):
+    Usage example (manual integration for custom tools):
         collector = MetricsCollector("server_id")
         with ToolTimer(collector, "tool_name"):
             # Execute tool code here
