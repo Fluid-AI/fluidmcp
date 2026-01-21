@@ -190,7 +190,7 @@ class FunctionRouter:
             # Set tool_choice to "none" for subsequent calls
             # This prevents the model from calling tools again in the next iteration.
             # The model should use the tool results we just added to provide a final answer.
-            # If the model disobeys and returns tool_calls anyway, line 122 will catch it
+            # If the model disobeys and returns tool_calls anyway, line 156 will catch it
             # and return without executing tools (security enforcement).
             tool_choice = "none"
 

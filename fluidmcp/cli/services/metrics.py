@@ -540,7 +540,7 @@ class RequestTimer:
         #
         # NOTE ON DEFENSIVE TRY-EXCEPT BLOCKS:
         # Each issubclass() call is wrapped in try-except for defense-in-depth, even though
-        # the initial validation (line 545) confirms exc_type is a valid class. This protects against:
+        # the initial validation (line 531) confirms exc_type is a valid class. This protects against:
         # 1. Future refactoring that might bypass initial validation
         # 2. Subtle bugs where exc_type gets corrupted between checks
         # 3. Edge cases in Python's exception hierarchy
