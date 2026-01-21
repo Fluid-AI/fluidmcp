@@ -7,7 +7,7 @@ including validation, timeout handling, and error management.
 
 import asyncio
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from loguru import logger
 
 from .tool_registry import ToolRegistry
@@ -162,9 +162,9 @@ class ToolExecutor:
 
     async def execute_tool_calls(
         self,
-        tool_calls: list[Dict[str, Any]],
+        tool_calls: List[Dict[str, Any]],
         depth: int = 0
-    ) -> list[Dict[str, Any]]:
+    ) -> List[Dict[str, Any]]:
         """
         Execute multiple tool calls in parallel.
 

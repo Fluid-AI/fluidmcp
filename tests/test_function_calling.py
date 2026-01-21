@@ -36,7 +36,7 @@ def sample_tool_function():
 
 
 @pytest.fixture
-async def async_sample_tool():
+def async_sample_tool():
     """Sample async tool function."""
     async def search(query: str) -> dict:
         await asyncio.sleep(0.01)  # Simulate async work
