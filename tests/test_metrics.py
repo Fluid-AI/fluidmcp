@@ -444,8 +444,8 @@ class TestThreadSafety:
     def test_concurrent_counter_increments(self):
         """Test counter handles concurrent increments from multiple threads."""
         counter = Counter("test", "desc")
-        num_threads = 20
-        increments = 50
+        num_threads = 10
+        increments = 100
 
         def worker():
             for _ in range(increments):
