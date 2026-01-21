@@ -3,6 +3,7 @@ import { ResultActions } from './ResultActions';
 import { JsonResultView } from './JsonResultView';
 import { TextResultView } from './TextResultView';
 import { TableResultView } from './TableResultView';
+import { McpContentView } from './McpContentView';
 
 const ResultFormat = {
   MCP_CONTENT: 'mcp_content',
@@ -16,13 +17,23 @@ const ResultFormat = {
 type ResultFormatType = typeof ResultFormat[keyof typeof ResultFormat];
 
 function detectResultFormat(result: unknown): ResultFormatType {
-  // MCP content array
+  // MCP result object with content array (standard MCP response format)
+  if (
+    typeof result === 'object' &&
+    result !== null &&
+    'content' in result &&
+    Array.isArray((result as any).content)
+  ) {
+    return ResultFormat.MCP_CONTENT;
+  }
+
+  // MCP content array (direct array format) - check for objects with 'type' field (text, image, resource, etc.)
   if (
     Array.isArray(result) &&
     result.length > 0 &&
     result.every((item: unknown) =>
       typeof item === 'object' && item !== null &&
-      'type' in item && 'text' in item
+      'type' in item
     )
   ) {
     return ResultFormat.MCP_CONTENT;
@@ -88,9 +99,15 @@ export const ToolResult: React.FC<ToolResultProps> = ({
           textToCopy = String(result);
           break;
         case ResultFormat.MCP_CONTENT:
-          textToCopy = Array.isArray(result)
-            ? result.map((c: { text: string }) => c.text).join('\n')
-            : String(result);
+          const contentArray = Array.isArray(result)
+            ? result
+            : (result as any).content || [];
+          textToCopy = contentArray.map((c: any) => {
+            if (c.type === 'text' && c.text) return c.text;
+            if (c.type === 'image') return `[Image: ${c.mimeType || 'unknown'}]`;
+            if (c.type === 'resource' && c.uri) return c.uri;
+            return JSON.stringify(c);
+          }).join('\n');
           break;
         default:
           textToCopy = JSON.stringify(result, null, 2);
@@ -153,10 +170,13 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       {/* Result Display */}
       {!error && result !== null && (
         <>
-          {format === ResultFormat.MCP_CONTENT && Array.isArray(result) && (
-            <TextResultView
-              text={result.map((c: { text: string }) => c.text).join('\n')}
-              isLongText={true}
+          {format === ResultFormat.MCP_CONTENT && (
+            <McpContentView
+              content={
+                Array.isArray(result)
+                  ? result
+                  : (result as any).content || []
+              }
             />
           )}
           {format === ResultFormat.TABLE && Array.isArray(result) && (

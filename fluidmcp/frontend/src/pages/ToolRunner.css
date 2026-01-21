@@ -67,6 +67,9 @@
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   padding: 1.5rem;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .tool-runner-section h2 {
@@ -439,6 +442,8 @@
   border-radius: 4px;
   padding: 1rem;
   overflow-x: auto;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .result-content pre {
@@ -520,6 +525,9 @@
   overflow-x: auto;
   max-height: 600px;
   overflow-y: auto;
+  max-width: 100%;
+  box-sizing: border-box;
+  word-break: break-word;
 }
 
 .json-line {

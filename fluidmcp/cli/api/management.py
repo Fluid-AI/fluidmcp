@@ -841,7 +841,13 @@ async def run_tool(
         response = json.loads(response_line.strip())
 
         if "error" in response:
-            raise HTTPException(500, f"Tool execution error: {response['error']}")
+            # Handle error object properly - JSON-RPC error format
+            error_obj = response['error']
+            if isinstance(error_obj, dict):
+                error_message = error_obj.get('message', str(error_obj))
+            else:
+                error_message = str(error_obj)
+            raise HTTPException(500, f"Tool execution error: {error_message}")
 
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
