@@ -604,3 +604,78 @@
 .result-table tbody tr:last-child td {
   border-bottom: none;
 }
+
+/* ========================================
+   Enhanced Table Styles (PR #4)
+   ======================================== */
+
+.result-table th {
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.result-table th:hover {
+  background: #f3f4f6;
+}
+
+.result-table th.sorted-asc::after {
+  content: ' ↑';
+  color: #2563eb;
+  font-weight: bold;
+}
+
+.result-table th.sorted-desc::after {
+  content: ' ↓';
+  color: #2563eb;
+  font-weight: bold;
+}
+
+/* Pagination */
+.result-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border-top: 1px solid #e5e7eb;
+  background: white;
+}
+
+.result-pagination button {
+  padding: 0.5rem 1rem;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+}
+
+.result-pagination button:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.result-pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #f9fafb;
+}
+
+.result-pagination-info {
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+/* ========================================
+   JSON Viewer Enhancements (PR #4)
+   ======================================== */
+
+.json-line {
+  transition: background 0.1s;
+}
+
+.json-line:hover {
+  background: rgba(0, 0, 0, 0.02);
+}

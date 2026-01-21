@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ResultActions } from './ResultActions';
 import { JsonResultView } from './JsonResultView';
 import { TextResultView } from './TextResultView';
@@ -76,6 +76,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
   executionTime,
 }) => {
   const format = result !== null && !error ? detectResultFormat(result) : ResultFormat.PRIMITIVE;
+  const [expandAll, setExpandAll] = useState(true);
 
   const handleCopy = () => {
     let textToCopy: string;
@@ -122,7 +123,13 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       <div className="section-header">
         <h2>Results</h2>
         {result !== null && !error && (
-          <ResultActions onCopy={handleCopy} onDownload={handleDownload} />
+          <ResultActions
+            onCopy={handleCopy}
+            onDownload={handleDownload}
+            canExpand={format === ResultFormat.JSON_OBJECT}
+            isExpanded={expandAll}
+            onToggleExpand={() => setExpandAll(!expandAll)}
+          />
         )}
       </div>
 
@@ -155,7 +162,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
           {format === ResultFormat.TABLE && Array.isArray(result) && (
             <TableResultView data={result as Array<Record<string, unknown>>} />
           )}
-          {format === ResultFormat.JSON_OBJECT && <JsonResultView data={result} />}
+          {format === ResultFormat.JSON_OBJECT && <JsonResultView data={result} expandAll={expandAll} />}
           {format === ResultFormat.TEXT_BLOCK && typeof result === 'string' && (
             <TextResultView text={result} isLongText={true} />
           )}
