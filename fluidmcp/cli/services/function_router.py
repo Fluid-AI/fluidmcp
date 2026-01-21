@@ -167,6 +167,8 @@ class FunctionRouter:
             return await self._call_vllm(
                 vllm_client,
                 current_messages,
+                tools=tools,
+                tool_choice=tool_choice,
                 stream=stream,
                 **completion_kwargs
             )
