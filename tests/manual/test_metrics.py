@@ -207,10 +207,14 @@ def test_generate_traffic_and_verify():
         print(f"  Baseline request count: {baseline_count}")
 
         # Generate traffic by making a request to health endpoint
-        # Note: The /health endpoint itself is NOT instrumented with RequestTimer, but
-        # calling /metrics multiple times DOES increment fluidmcp_requests_total because
-        # the /metrics endpoint is instrumented. This test validates that the metrics
-        # system works by checking if the baseline count increased from our own /metrics calls.
+        # Note: The /health and /metrics endpoints are intentionally NOT instrumented
+        # with RequestTimer to avoid polluting fluidmcp_requests_total with internal
+        # health checks and metrics scrapes. Only business logic endpoints (MCP
+        # requests) are counted in fluidmcp_requests_total. The /metrics endpoint is
+        # still accessible and will appear in server/access logs, so monitoring systems
+        # can track scrape frequency via logs if needed. This test validates that the
+        # metrics system works by checking whether the request counter changes over time
+        # in response to real traffic, not from the /metrics scrapes themselves.
         print("\nGenerating traffic (health check request for reference)...")
         requests.get("http://localhost:8099/health", timeout=5)
 

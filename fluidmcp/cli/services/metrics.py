@@ -155,7 +155,11 @@ class Histogram(Metric):
             hist["count"] += 1
 
             # Increment the smallest matching bucket (O(1) write, not cumulative).
-            # Cumulative counts are computed during render() for Prometheus format.
+            # IMPORTANT: The break statement is intentional - we only increment the first
+            # matching bucket, not all buckets >= value. This is correct for Prometheus:
+            # - At write time: non-cumulative counts (one bucket only)
+            # - At read time: render() computes cumulative counts (bucket <= value)
+            # This design reduces write overhead and is standard for Prometheus histograms.
             # Values exceeding all buckets are tracked in hist["count"] only.
             for bucket in self.buckets:
                 if value <= bucket:

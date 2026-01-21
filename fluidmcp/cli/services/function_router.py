@@ -117,6 +117,13 @@ class FunctionRouter:
                 logger.info("No tool calls in response, returning final answer")
                 return response
 
+            # Warn if model returns tool calls despite tool_choice="none"
+            if tool_choice == "none":
+                logger.warning(
+                    f"Model returned {len(tool_calls)} tool calls despite tool_choice='none'. "
+                    f"This may indicate the model is not respecting tool_choice parameter."
+                )
+
             logger.info(f"Model requested {len(tool_calls)} tool calls")
 
             # Add assistant message with tool calls to conversation
@@ -191,26 +198,41 @@ class FunctionRouter:
 
         logger.debug(f"Calling vLLM with {len(messages)} messages")
 
-        # Call vLLM (implementation depends on your vLLM client)
-        # This is a placeholder - replace with actual vLLM client call
+        # Detect vLLM client type and call appropriately
+        # Try OpenAI-compatible client first
         if hasattr(vllm_client, 'chat') and hasattr(vllm_client.chat, 'completions'):
-            # OpenAI-compatible client
-            if stream:
-                return await vllm_client.chat.completions.create(**request_params)
-            else:
-                response = await vllm_client.chat.completions.create(**request_params)
-                return response.model_dump() if hasattr(response, 'model_dump') else dict(response)
-        else:
-            # Direct HTTP call
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{vllm_client.base_url}/v1/chat/completions",
-                    json=request_params,
-                    headers={"Authorization": f"Bearer {vllm_client.api_key}"}
-                    if hasattr(vllm_client, 'api_key') else None
+            try:
+                # OpenAI-compatible client
+                if stream:
+                    return await vllm_client.chat.completions.create(**request_params)
+                else:
+                    response = await vllm_client.chat.completions.create(**request_params)
+                    return response.model_dump() if hasattr(response, 'model_dump') else dict(response)
+            except AttributeError as e:
+                logger.error(
+                    f"vLLM client has 'chat.completions' attributes but calling failed: {e}. "
+                    f"The client may not be fully OpenAI-compatible. Falling back to HTTP."
                 )
-                response.raise_for_status()
-                return response.json()
+                # Fall through to HTTP method
+
+        # Direct HTTP call fallback
+        if not hasattr(vllm_client, 'base_url'):
+            raise TypeError(
+                "vLLM client is not OpenAI-compatible and does not have 'base_url' attribute. "
+                "Please provide a client with either:\n"
+                "  1. OpenAI-compatible 'chat.completions.create' method, or\n"
+                "  2. 'base_url' attribute for direct HTTP calls"
+            )
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{vllm_client.base_url}/v1/chat/completions",
+                json=request_params,
+                headers={"Authorization": f"Bearer {vllm_client.api_key}"}
+                if hasattr(vllm_client, 'api_key') else None
+            )
+            response.raise_for_status()
+            return response.json()
 
     def _extract_tool_calls(self, response: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

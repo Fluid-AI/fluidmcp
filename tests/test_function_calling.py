@@ -553,10 +553,18 @@ class TestIntegration:
 
         # Mock vLLM client with two-stage response
         call_count = 0
+        max_expected_calls = 2
 
         async def mock_create(**kwargs):
             nonlocal call_count
             call_count += 1
+
+            # Safety check: prevent infinite calls if router logic fails
+            if call_count > max_expected_calls:
+                pytest.fail(
+                    f"Mock called {call_count} times, expected max {max_expected_calls}. "
+                    f"Router may not be stopping correctly."
+                )
 
             if call_count == 1:
                 # First call: return tool call

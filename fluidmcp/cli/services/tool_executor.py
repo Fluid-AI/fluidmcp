@@ -7,7 +7,7 @@ including validation, timeout handling, and error management.
 
 import asyncio
 import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from loguru import logger
 
 from .tool_registry import ToolRegistry
@@ -209,7 +209,7 @@ class ToolExecutor:
 
     async def _execute_with_timeout(
         self,
-        function: callable,
+        function: Callable,
         arguments: Dict[str, Any],
         function_name: str
     ) -> Any:

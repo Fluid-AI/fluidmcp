@@ -160,10 +160,8 @@ class ToolRegistry:
         if parameters["type"] != "object":
             raise ValueError("Parameters type must be 'object'")
 
-        if "properties" not in parameters:
-            raise ValueError("Parameters schema must have 'properties' field")
-
-        if not isinstance(parameters["properties"], dict):
+        # Properties field is optional (empty objects are valid JSON Schema)
+        if "properties" in parameters and not isinstance(parameters["properties"], dict):
             raise ValueError("Properties must be a dictionary")
 
         # Validate required field if present
@@ -171,12 +169,13 @@ class ToolRegistry:
             if not isinstance(parameters["required"], list):
                 raise ValueError("Required must be a list")
 
-            # Check that all required fields exist in properties
-            for field in parameters["required"]:
-                if field not in parameters["properties"]:
-                    raise ValueError(
-                        f"Required field '{field}' not found in properties"
-                    )
+            # Check that all required fields exist in properties (if properties is defined)
+            if "properties" in parameters:
+                for field in parameters["required"]:
+                    if field not in parameters["properties"]:
+                        raise ValueError(
+                            f"Required field '{field}' not found in properties"
+                        )
 
 
 # Global registry instance
