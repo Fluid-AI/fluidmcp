@@ -142,16 +142,7 @@ class Histogram(Metric):
         key = self._get_label_key(label_values)
 
         with self._lock:
-            # Initialize histogram entry if it doesn't exist (thread-safe).
-            #
-            # Note: self.histograms may be a defaultdict that can create entries on
-            # demand, but we keep this explicit initialization to make the expected
-            # structure of each histogram entry clear at the point of first use.
-            #
-            # CORRECTION (Round 13): The lambda is only called ONCE per key when the
-            # key is first accessed (not on every check). The "in" operator doesn't
-            # trigger the default factory at all. Explicit initialization is kept
-            # purely for code clarity, not performance.
+            # Explicitly initialize histogram entry for code clarity (defaultdict would also work)
             if key not in self.histograms:
                 self.histograms[key] = {
                     "sum": 0.0,
@@ -163,20 +154,9 @@ class Histogram(Metric):
             hist["sum"] += value
             hist["count"] += 1
 
-            # Update bucket counts: increment only the smallest matching bucket.
-            # Cumulative counts are computed during render().
-            #
-            # Implementation Note: This is the CORRECT approach for Prometheus histograms.
-            # We store individual (non-cumulative) bucket counts and compute cumulative
-            # counts during export. This is more efficient (O(1) write vs O(n) write)
-            # and follows the pattern used by many Prometheus client libraries.
-            #
-            # Example: value=3 with buckets [1, 5, 10]
-            #   - observe(3): increments bucket[5] only (breaks after first match)
-            #   - render(): outputs cumulative counts: bucket[1]=0, bucket[5]=1, bucket[10]=1
-            #
-            # Note: Values exceeding all buckets don't increment any specific bucket counter.
-            # The +Inf bucket (rendered in render()) shows hist["count"], which includes all observations.
+            # Increment the smallest matching bucket (O(1) write, not cumulative).
+            # Cumulative counts are computed during render() for Prometheus format.
+            # Values exceeding all buckets are tracked in hist["count"] only.
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1

@@ -602,24 +602,8 @@ def create_dynamic_router(server_manager):
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
-        # Pre-validation (errors NOT tracked - occurs before streaming begins)
-        #
-        # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
-        # in RequestTimer because they represent pre-flight validation failures that occur
-        # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
-        #
-        # These errors are observable through:
-        # 1. FastAPI's built-in HTTP error logs
-        # 2. HTTP status code monitoring at the load balancer/proxy level
-        # 3. Application logs (logged by FastAPI middleware)
-        #
-        # If you need metrics for these specific errors, consider:
-        # - Option 1: New metric fluidmcp_http_errors_total{endpoint, status_code}
-        # - Option 2: Manual tracking via collector.record_error("server_not_found")
-        # - Option 3: Wrap these checks in a lightweight context manager
-        #
-        # Current implementation prioritizes clarity by separating HTTP validation from
-        # MCP protocol errors tracked via RequestTimer.
+        # Pre-flight HTTP validation: not tracked by RequestTimer since these occur
+        # before MCP protocol interaction. HTTP errors are observable via FastAPI logs.
         if server_name not in server_manager.processes:
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
@@ -638,22 +622,9 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
+                    # Use specific completion_status ("broken_pipe") for stream tracking,
+                    # while recording a global error_type of "io_error" for service-wide monitoring.
                     completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
                     collector.record_error("io_error")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
