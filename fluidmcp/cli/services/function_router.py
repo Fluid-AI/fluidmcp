@@ -46,8 +46,34 @@ class FunctionRouter:
         # Create executor
         self.executor = ToolExecutor(registry, model_id, config)
 
-        # Loop detection
-        self.max_iterations = self.config.get("max_iterations", 5)
+        # Loop detection with validation
+        max_iterations = self.config.get("max_iterations", 5)
+        if not isinstance(max_iterations, int):
+            logger.warning(
+                f"max_iterations must be an integer, got {type(max_iterations)}. "
+                f"Using default value 5."
+            )
+            max_iterations = 5
+        if max_iterations < 1:
+            logger.warning(
+                f"max_iterations must be >= 1, got {max_iterations}. "
+                f"Using default value 5."
+            )
+            max_iterations = 5
+        if max_iterations > 100:
+            logger.warning(
+                f"max_iterations too large ({max_iterations}), capping at 100 "
+                f"to prevent resource exhaustion."
+            )
+            max_iterations = 100
+        self.max_iterations = max_iterations
+
+        # HTTP timeout configuration
+        self.http_timeout = self.config.get("http_timeout", 60.0)
+        self.http_connect_timeout = self.config.get("http_connect_timeout", 10.0)
+
+        # Message history limit to prevent memory exhaustion
+        self.max_message_history = self.config.get("max_message_history", 20)
 
         logger.debug(
             f"Function router initialized for model '{model_id}' "
@@ -99,6 +125,14 @@ class FunctionRouter:
         while iteration < self.max_iterations:
             iteration += 1
             logger.debug(f"Function calling iteration {iteration}/{self.max_iterations}")
+
+            # Enforce message history limit to prevent memory exhaustion
+            if len(current_messages) > self.max_message_history:
+                # Keep system messages + recent messages
+                system_msgs = [m for m in current_messages if m.get("role") == "system"]
+                recent_msgs = current_messages[-(self.max_message_history - len(system_msgs)):]
+                current_messages = system_msgs + recent_msgs
+                logger.debug(f"Trimmed message history to {len(current_messages)} messages")
 
             # Call vLLM with tools
             response = await self._call_vllm(
@@ -250,18 +284,42 @@ class FunctionRouter:
                 "Proceeding without Authorization header - this may fail if server requires auth."
             )
 
-        async with httpx.AsyncClient() as client:
-            headers = {}
-            if hasattr(vllm_client, 'api_key') and vllm_client.api_key:
-                headers["Authorization"] = f"Bearer {vllm_client.api_key}"
-
-            response = await client.post(
-                f"{vllm_client.base_url}/v1/chat/completions",
-                json=request_params,
-                headers=headers if headers else None
+        try:
+            # Configure timeouts to prevent indefinite hangs
+            timeout = httpx.Timeout(
+                connect=self.http_connect_timeout,
+                read=self.http_timeout,
+                write=self.http_timeout,
+                pool=5.0
             )
-            response.raise_for_status()
-            return response.json()
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                headers = {}
+                if hasattr(vllm_client, 'api_key') and vllm_client.api_key:
+                    headers["Authorization"] = f"Bearer {vllm_client.api_key}"
+
+                response = await client.post(
+                    f"{vllm_client.base_url}/v1/chat/completions",
+                    json=request_params,
+                    headers=headers if headers else None
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code if e.response is not None else "unknown"
+            error_body = e.response.text if e.response is not None else ""
+            logger.error(
+                f"vLLM HTTP request failed with status {status_code}: {error_body}"
+            )
+            raise RuntimeError(
+                f"vLLM HTTP request failed with status {status_code}"
+            ) from e
+        except httpx.TimeoutException as e:
+            logger.error(f"vLLM HTTP request timed out after {self.http_timeout}s: {e}")
+            raise RuntimeError(f"vLLM HTTP request timed out after {self.http_timeout}s") from e
+        except httpx.RequestError as e:
+            logger.error(f"vLLM HTTP request error: {e}")
+            raise RuntimeError(f"vLLM HTTP request failed: {str(e)}") from e
 
     def _extract_tool_calls(self, response: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
