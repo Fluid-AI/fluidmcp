@@ -316,9 +316,12 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
             stderr_output = process.stderr.read() if process.stderr else None
             if stderr_output:
                 logger.error(f"Process stderr: {stderr_output[:500]}")
+        except (OSError, ValueError) as e:
+            # Expected: stderr read can fail if process terminated or pipe is closed - safe to ignore
+            logger.debug(f"Failed to read process stderr after initialization timeout (expected): {e}")
         except Exception:
-            # Intentional: stderr read can fail if process terminated - safe to ignore
-            pass
+            # Unexpected error while reading stderr - log for debugging
+            logger.exception("Unexpected error while reading process stderr after initialization timeout")
 
         return False
     except Exception:

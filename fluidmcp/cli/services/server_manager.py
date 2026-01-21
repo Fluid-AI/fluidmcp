@@ -86,7 +86,10 @@ class ServerManager:
                         process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         # Intentional: timeout during cleanup is acceptable - process will be reaped by OS
-                        pass
+                        logger.debug(
+                            f"Timeout while reaping server '{server_id}' (PID: {process.pid}) "
+                            "during cleanup; relying on OS to reap the process."
+                        )
 
             except Exception as e:
                 logger.error(f"Error cleaning up server '{server_id}': {e}")
