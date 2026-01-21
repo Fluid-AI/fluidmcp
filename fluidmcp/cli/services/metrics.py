@@ -534,66 +534,30 @@ class RequestTimer:
         # IMPORTANT: Check specific exceptions before their base classes
         # Python exception hierarchy: BaseException → Exception → OSError → (PermissionError, ConnectionError, etc.)
         #
-        # NOTE ON DEFENSIVE TRY-EXCEPT BLOCKS:
-        # Each issubclass() call is wrapped in try-except for defense-in-depth, even though
-        # the initial validation (line 545) confirms exc_type is a valid class. This protects against:
-        # 1. Future refactoring that might bypass initial validation
-        # 2. Subtle bugs where exc_type gets corrupted between checks
-        # 3. Edge cases in Python's exception hierarchy
-        # While this adds cognitive overhead (36 lines for 5 checks), it ensures robustness and
-        # fail-safe behavior. Performance impact is negligible (exception handling only triggered
-        # on actual errors, not normal flow).
-        #
-        # DESIGN DECISION: Code prioritizes extreme defensiveness and production safety over
-        # readability. This pattern prevents catastrophic failures in edge cases that "cannot occur."
-        # (Discussed and intentionally kept in Rounds 8, 10, 11, 12, 13, 14, and 15 - Copilot disagrees)
-        #
-        # This is a conscious trade-off: 36 extra lines of defensive code for guaranteed safety
-        # in production. The alternative (removing try-except blocks) would be more readable but
-        # less robust. This code runs in the error handling path, so safety > readability.
-        #
-        # Copilot will continue flagging this pattern. That's expected and intentional.
+        # NOTE: At this point, exc_type has already been validated as an exception class
+        # by the initial check above (lines 527-531), so direct issubclass() checks are safe.
+        # No additional try-except blocks needed around individual checks.
 
         # BrokenPipeError: Explicit check first to clarify intent
         # (subclass of both ConnectionError and OSError, but categorized as io_error)
-        try:
-            if issubclass(exc_type, BrokenPipeError):
-                return 'io_error'
-        except TypeError:
-            # issubclass() raised TypeError - exc_type is not a valid class
-            pass
+        if issubclass(exc_type, BrokenPipeError):
+            return 'io_error'
 
         # Network errors (TimeoutError and ConnectionError, but not BrokenPipeError)
-        try:
-            if issubclass(exc_type, (TimeoutError, ConnectionError)):
-                return 'network_error'
-        except TypeError:
-            # issubclass() raised TypeError - exc_type is not a valid class
-            pass
+        if issubclass(exc_type, (TimeoutError, ConnectionError)):
+            return 'network_error'
 
         # Auth errors (PermissionError before OSError)
-        try:
-            if issubclass(exc_type, PermissionError):
-                return 'auth_error'
-        except TypeError:
-            # issubclass() raised TypeError - exc_type is not a valid class
-            pass
+        if issubclass(exc_type, PermissionError):
+            return 'auth_error'
 
         # I/O errors (OSError and its remaining subclasses)
-        try:
-            if issubclass(exc_type, OSError):
-                return 'io_error'
-        except TypeError:
-            # issubclass() raised TypeError - exc_type is not a valid class
-            pass
+        if issubclass(exc_type, OSError):
+            return 'io_error'
 
         # Client errors (value/type errors)
-        try:
-            if issubclass(exc_type, (ValueError, TypeError, KeyError, AttributeError)):
-                return 'client_error'
-        except TypeError:
-            # issubclass() raised TypeError - exc_type is not a valid class
-            pass
+        if issubclass(exc_type, (ValueError, TypeError, KeyError, AttributeError)):
+            return 'client_error'
 
         # Fallback to name-based matching for non-stdlib exceptions
         exc_name = exc_type.__name__
