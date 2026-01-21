@@ -5,6 +5,7 @@ This module manages registration and retrieval of tools/functions that can be
 called by vLLM models during chat completion.
 """
 
+import threading
 from typing import Dict, List, Optional, Callable, Any
 from loguru import logger
 
@@ -180,6 +181,7 @@ class ToolRegistry:
 
 # Global registry instance
 _global_registry: Optional[ToolRegistry] = None
+_registry_lock = threading.Lock()
 
 
 def get_global_registry() -> ToolRegistry:
@@ -191,5 +193,7 @@ def get_global_registry() -> ToolRegistry:
     """
     global _global_registry
     if _global_registry is None:
-        _global_registry = ToolRegistry()
+        with _registry_lock:
+            if _global_registry is None:  # Double-checked locking
+                _global_registry = ToolRegistry()
     return _global_registry

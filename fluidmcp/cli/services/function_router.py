@@ -5,6 +5,7 @@ This module routes function calls between vLLM models and tool executors,
 managing the conversation flow with tool results.
 """
 
+import httpx
 from typing import Dict, List, Any, Optional
 from loguru import logger
 
@@ -201,7 +202,6 @@ class FunctionRouter:
                 return response.model_dump() if hasattr(response, 'model_dump') else dict(response)
         else:
             # Direct HTTP call
-            import httpx
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{vllm_client.base_url}/v1/chat/completions",

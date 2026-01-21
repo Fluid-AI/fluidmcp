@@ -12,7 +12,7 @@ Tests cover:
 import pytest
 import asyncio
 import json
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from fluidmcp.cli.services.tool_registry import ToolRegistry, get_global_registry
 from fluidmcp.cli.services.tool_executor import ToolExecutor
@@ -180,9 +180,16 @@ class TestToolRegistry:
 
     def test_global_registry_singleton(self):
         """Test that global registry is a singleton."""
+        # Reset global registry to ensure clean state
+        import fluidmcp.cli.services.tool_registry as registry_module
+        registry_module._global_registry = None
+
         registry1 = get_global_registry()
         registry2 = get_global_registry()
         assert registry1 is registry2
+
+        # Clean up after test
+        registry_module._global_registry = None
 
 
 # ToolExecutor Tests
@@ -496,7 +503,7 @@ class TestFunctionRouter:
         messages = [{"role": "user", "content": "What's the weather?"}]
 
         # Should stop after max_iterations
-        result = await router.handle_completion(
+        await router.handle_completion(
             messages,
             mock_client,
             stream=False
