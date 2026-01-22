@@ -639,21 +639,28 @@ async def get_server_instance_env(
     user_id: str = Depends(get_current_user)
 ):
     """
-    Get environment variable metadata for server instance.
+    Get environment variable METADATA for server instance.
 
-    Returns metadata about which env variables are configured, NOT raw values.
-    This is security-first design - never expose secrets.
+    IMPORTANT: This endpoint returns ONLY metadata, NEVER raw secret values.
+    This is a security-first design to prevent credential leakage.
+
+    For each environment variable, returns:
+    - present: bool - whether the variable has a configured value
+    - required: bool - whether it's marked as required (from config)
+    - masked: str - "****" if present, null otherwise (no actual value shown)
+    - description: str - help text from config (if available)
 
     Args:
         id: Server identifier
         user_id: Current user (from token)
 
     Returns:
-        Dict of env variable metadata with keys:
-        - present: bool (has value in instance)
-        - required: bool (from config metadata)
-        - masked: str (last 4 chars only)
-        - description: str (from config if available)
+        Dict mapping env variable names to their metadata objects.
+        Example: {"API_KEY": {"present": true, "required": true, "masked": "****", "description": "..."}}
+
+    Security:
+        Raw environment variable values are NEVER returned by this endpoint.
+        Frontend must use empty inputs for editing (user re-enters values).
     """
     manager = get_server_manager(request)
 
@@ -666,18 +673,18 @@ async def get_server_instance_env(
     instance = await manager.db.get_instance_state(id)
 
     # Build metadata response
-    config_env = config.get("mcp_config", {}).get("env", {}) or config.get("env", {})
+    config_env = config.get("mcp_config", {}).get("env", {}) or {}
     instance_env = instance.get("env", {}) if instance else {}
 
     env_metadata = {}
 
     # Process all env keys from config template
     for key in config_env.keys():
-        value_present = key in instance_env and instance_env[key] is not None
+        value_present = key in instance_env and instance_env[key] is not None and instance_env[key] != ""
         env_metadata[key] = {
             "present": value_present,
             "required": False,  # TODO: Extract from metadata if available
-            "masked": f"****{instance_env[key][-4:]}" if value_present and len(instance_env[key]) >= 4 else None,
+            "masked": "****" if value_present else None,
             "description": ""  # TODO: Extract from config metadata
         }
 
@@ -685,10 +692,11 @@ async def get_server_instance_env(
     for key in instance_env.keys():
         if key not in env_metadata:
             value = instance_env[key]
+            value_present = value is not None and value != ""
             env_metadata[key] = {
-                "present": True,
+                "present": value_present,
                 "required": False,
-                "masked": f"****{value[-4:]}" if value and len(value) >= 4 else None,
+                "masked": "****" if value_present else None,
                 "description": ""
             }
 
@@ -705,17 +713,30 @@ async def update_server_instance_env(
     user_id: str = Depends(get_current_user)
 ):
     """
-    Update environment variables for server instance and auto-restart.
+    Update environment variables for server instance (auto-restarts if running).
 
-    Authorization: Users can only update env for servers they started.
+    This updates ONLY the instance-level env variables, never the server config.
+    If the server is currently running, it will be automatically restarted to apply changes.
+
+    Validation:
+    - Names: STRICT - must be uppercase alphanumeric + underscore (e.g., API_KEY)
+    - Values: LOOSE - allows =, /, +, -, ., :, @, % (API keys/JWTs compatible)
+    - Rejects: null bytes, values > 10k chars
+
+    Authorization:
+        Users can only update env for servers they started (or in anonymous mode).
 
     Args:
         id: Server identifier
-        env_data: Dict of environment variables to set
+        env_data: Dict of environment variables to set (e.g., {"API_KEY": "sk-..."})
         user_id: Current user (from token)
 
     Returns:
-        Success message with restart info
+        Success message with restart status
+
+    Behavior:
+        - If running: stops server → updates env in DB → restarts with new env
+        - If stopped: updates env in DB → will be used on next start
     """
     manager = get_server_manager(request)
 
@@ -775,6 +796,10 @@ async def update_server_instance_env(
     # If server is running, restart with new env
     restart_message = ""
     if is_running:
+        # Double-check process exists (race condition guard)
+        if id not in manager.processes:
+            raise HTTPException(409, f"Server '{id}' state inconsistent - not in process registry")
+
         logger.info(f"Server '{id}' is running, restarting with new env...")
 
         # Stop server

@@ -466,10 +466,11 @@ class ServerManager:
                     env[key] = value
 
             # Override with instance env (actual user-provided values)
+            # Note: We set values even if empty - user intent matters
+            # Validation happens at API level, not here
             if instance_env:
                 for key, value in instance_env.items():
-                    if value:  # Only set if value is not None or empty
-                        env[key] = value
+                    env[key] = value
 
             # Determine working directory
             working_dir = Path(working_dir).resolve() if working_dir else Path(install_path).resolve()
