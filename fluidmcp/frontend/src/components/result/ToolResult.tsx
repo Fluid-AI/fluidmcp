@@ -4,6 +4,7 @@ import { JsonResultView } from './JsonResultView';
 import { TextResultView } from './TextResultView';
 import { TableResultView } from './TableResultView';
 import { McpContentView } from './McpContentView';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 const ResultFormat = {
   MCP_CONTENT: 'mcp_content',
@@ -171,13 +172,15 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       {!error && result !== null && (
         <>
           {format === ResultFormat.MCP_CONTENT && (
-            <McpContentView
-              content={
-                Array.isArray(result)
-                  ? result
-                  : (result as any).content || []
-              }
-            />
+            <ErrorBoundary>
+              <McpContentView
+                content={
+                  Array.isArray(result)
+                    ? result
+                    : (result as any).content || []
+                }
+              />
+            </ErrorBoundary>
           )}
           {format === ResultFormat.TABLE && Array.isArray(result) && (
             <TableResultView data={result as Array<Record<string, unknown>>} />

@@ -108,3 +108,38 @@
   color: #9ca3af;
   font-size: 0.875rem;
 }
+
+/* Security warning styles */
+.mcp-content-warning {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-left: 4px solid #ef4444;
+  border-radius: 4px;
+  padding: 1rem;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mcp-content-warning strong {
+  display: block;
+  color: #991b1b;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.mcp-content-warning code {
+  background: #fee2e2;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+  color: #7f1d1d;
+  word-break: break-all;
+}
+
+.mcp-content-warning-detail {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.875rem;
+  color: #7f1d1d;
+  line-height: 1.5;
+}
