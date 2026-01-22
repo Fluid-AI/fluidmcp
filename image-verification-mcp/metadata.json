@@ -6,19 +6,19 @@
   "license": "MIT",
   "mcpServers": {
     "image-verification": {
-      "command": "python",
-      "args": ["server.py"],
+      "command": "uv",
+      "args": ["run", "server.py"],
       "env": {}
     }
   },
   "tools": [
     {
       "name": "verify_image_authenticity",
-      "description": "Verify if an image is authentic, AI-generated, or tampered. Analyzes metadata, OCR, document structure, and AI artifacts.",
+      "description": "Verify if an image or PDF is authentic, AI-generated, or tampered. Supports images (JPEG, PNG) and PDFs. Analyzes metadata, OCR, document structure, and AI artifacts.",
       "parameters": {
         "image_base64": {
           "type": "string",
-          "description": "Base64 encoded image data",
+          "description": "Base64 encoded image or PDF data",
           "required": true
         },
         "document_type": {
@@ -26,6 +26,12 @@
           "description": "Type of document: 'boarding_pass', 'irctc', or 'generic'",
           "required": false,
           "default": "generic"
+        },
+        "source_type": {
+          "type": "string",
+          "description": "Source type: 'auto' (detect), 'image', or 'pdf'",
+          "required": false,
+          "default": "auto"
         }
       }
     },
@@ -39,6 +45,7 @@
     "Boarding pass authenticity checking",
     "IRCTC ticket validation",
     "Detecting AI-generated documents",
-    "Identifying tampered images"
+    "Identifying tampered images",
+    "PDF document verification"
   ]
 }
