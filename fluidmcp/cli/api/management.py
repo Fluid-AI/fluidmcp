@@ -631,6 +631,175 @@ async def restart_server(
     }
 
 
+@router.get("/servers/{id}/instance/env")
+async def get_server_instance_env(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Get environment variable metadata for server instance.
+
+    Returns metadata about which env variables are configured, NOT raw values.
+    This is security-first design - never expose secrets.
+
+    Args:
+        id: Server identifier
+        user_id: Current user (from token)
+
+    Returns:
+        Dict of env variable metadata with keys:
+        - present: bool (has value in instance)
+        - required: bool (from config metadata)
+        - masked: str (last 4 chars only)
+        - description: str (from config if available)
+    """
+    manager = get_server_manager(request)
+
+    # Get server config for template env keys
+    config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Get instance for configured env keys
+    instance = await manager.db.get_instance_state(id)
+
+    # Build metadata response
+    config_env = config.get("mcp_config", {}).get("env", {}) or config.get("env", {})
+    instance_env = instance.get("env", {}) if instance else {}
+
+    env_metadata = {}
+
+    # Process all env keys from config template
+    for key in config_env.keys():
+        value_present = key in instance_env and instance_env[key] is not None
+        env_metadata[key] = {
+            "present": value_present,
+            "required": False,  # TODO: Extract from metadata if available
+            "masked": f"****{instance_env[key][-4:]}" if value_present and len(instance_env[key]) >= 4 else None,
+            "description": ""  # TODO: Extract from config metadata
+        }
+
+    # Add any extra keys from instance env (custom vars)
+    for key in instance_env.keys():
+        if key not in env_metadata:
+            value = instance_env[key]
+            env_metadata[key] = {
+                "present": True,
+                "required": False,
+                "masked": f"****{value[-4:]}" if value and len(value) >= 4 else None,
+                "description": ""
+            }
+
+    logger.debug(f"Retrieved instance env metadata for '{id}'")
+    return env_metadata
+
+
+@router.put("/servers/{id}/instance/env")
+async def update_server_instance_env(
+    request: Request,
+    id: str,
+    env_data: Dict[str, str] = Body(...),
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Update environment variables for server instance and auto-restart.
+
+    Authorization: Users can only update env for servers they started.
+
+    Args:
+        id: Server identifier
+        env_data: Dict of environment variables to set
+        user_id: Current user (from token)
+
+    Returns:
+        Success message with restart info
+    """
+    manager = get_server_manager(request)
+
+    # Validate env variable names STRICTLY
+    import re
+    env_name_pattern = re.compile(r'^[A-Z_][A-Z0-9_]*$')
+
+    for key in env_data.keys():
+        if not env_name_pattern.match(key):
+            raise HTTPException(
+                400,
+                f"Invalid environment variable name '{key}'. Must be uppercase alphanumeric with underscores."
+            )
+
+    # Validate env variable values LOOSELY
+    for key, value in env_data.items():
+        if value is None:
+            continue
+
+        # Reject null bytes
+        if '\x00' in value:
+            raise HTTPException(400, f"Environment variable '{key}' contains null bytes")
+
+        # Max 10k chars
+        if len(value) > 10000:
+            raise HTTPException(400, f"Environment variable '{key}' exceeds 10,000 character limit")
+
+    # Check if server exists
+    config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Authorization: Check if user started this server
+    instance = await manager.db.get_instance_state(id)
+    is_running = id in manager.processes and manager.processes[id].poll() is None
+
+    if instance and is_running:
+        started_by = instance.get("started_by")
+        # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
+        if started_by and started_by != user_id and user_id != "anonymous":
+            raise HTTPException(
+                403,
+                f"Forbidden: Server '{id}' was started by another user. Only the user who started it can update env."
+            )
+
+    # Update instance env in database
+    success = await manager.db.update_instance_env(id, env_data)
+    if not success:
+        # If instance doesn't exist yet, create it
+        await manager.db.save_instance_state({
+            "server_id": id,
+            "state": "stopped",
+            "env": env_data,
+            "started_by": user_id
+        })
+
+    # If server is running, restart with new env
+    restart_message = ""
+    if is_running:
+        logger.info(f"Server '{id}' is running, restarting with new env...")
+
+        # Stop server
+        await manager.stop_server(id)
+
+        # Start server with new env
+        success = await manager.start_server(id, config=config, user_id=user_id, env_overrides=env_data)
+        if not success:
+            raise HTTPException(500, f"Failed to restart server '{id}' with new environment")
+
+        # Get new PID
+        process = manager.processes.get(id)
+        pid = process.pid if process else None
+
+        restart_message = f" Server restarted with PID {pid}."
+    else:
+        restart_message = " Server is stopped. Environment will be applied on next start."
+
+    logger.info(f"Updated instance env for '{id}' via API")
+    return {
+        "message": f"Environment variables updated for server '{id}'.{restart_message}",
+        "env_updated": True
+    }
+
+
 @router.post("/servers/start-all")
 async def start_all_servers(request: Request, token: str = Depends(get_token)):
     """

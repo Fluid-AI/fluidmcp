@@ -50,6 +50,7 @@ class ServerInstanceDocument:
     last_error: Optional[str] = None         # Last error message
     started_by: str = "system"               # User who started instance
     updated_at: Optional[datetime] = None    # Last state update
+    env: Optional[Dict[str, str]] = None     # Instance-specific environment variables
 
 
 @dataclass
