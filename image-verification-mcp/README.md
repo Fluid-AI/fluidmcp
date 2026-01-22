@@ -21,26 +21,65 @@ Perfect for travel expense reimbursement, compliance checks, and document valida
 
 ## Quick Start
 
-### 1. Installation
+### 1. Prerequisites
+
+Before installing, ensure you have:
+
+1. **Python 3.8+** installed
+   ```bash
+   python3 --version  # Should be 3.8 or higher
+   ```
+
+2. **pip** (Python package manager)
+   ```bash
+   pip --version
+   ```
+
+3. **Tesseract OCR** (required for text extraction)
+   ```bash
+   # Ubuntu/Debian:
+   sudo apt-get update
+   sudo apt-get install tesseract-ocr
+
+   # macOS:
+   brew install tesseract
+
+   # Windows:
+   # Download installer from: https://github.com/UB-Mannheim/tesseract/wiki
+   ```
+
+4. **Poppler** (required for PDF support)
+   ```bash
+   # Ubuntu/Debian:
+   sudo apt-get install poppler-utils
+
+   # macOS:
+   brew install poppler
+
+   # Windows:
+   # Download from: http://blog.alivate.com.au/poppler-windows/
+   # Add to PATH
+   ```
+
+### 2. Installation
 
 ```bash
+# Clone or navigate to the project directory
 cd image-verification-mcp
 
-# Install dependencies
+# Install Python dependencies
 pip install -r requirements.txt
 
-# Install Tesseract OCR (required)
-# Ubuntu/Debian:
-sudo apt-get install tesseract-ocr
+# Verify Tesseract installation
+tesseract --version
 
-# macOS:
-brew install tesseract
-
-# Windows:
-# Download from: https://github.com/UB-Mannheim/tesseract/wiki
+# Verify Poppler installation
+pdfinfo -v
 ```
 
-### 2. Run with FluidMCP
+**Note**: Installing dependencies may take 5-10 minutes (PyTorch and transformers are large packages).
+
+### 3. Run with FluidMCP
 
 Create config file `image-verification-config.json`:
 
@@ -62,14 +101,14 @@ Start the server:
 fluidmcp run image-verification-config.json --file --start-server
 ```
 
-### 3. Test the Server
+### 4. Test the Server
 
 ```bash
 # Convert an image to base64
 IMAGE_B64=$(base64 -w 0 your_ticket.jpg)
 
 # Call the verification API
-curl -X POST http://localhost:8090/image-verification/mcp \
+curl -X POST http://localhost:8099/image-verification/mcp \
   -H "Content-Type: application/json" \
   -d "{
     \"jsonrpc\": \"2.0\",

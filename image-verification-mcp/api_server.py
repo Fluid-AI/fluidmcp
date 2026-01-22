@@ -105,8 +105,9 @@ async def verify_image(
                         detail=f"Failed to process PDF: {str(e)}"
                     )
 
-            # Analyze the image
-            result = analyze_image(image_path_to_analyze, document_type)
+            # Analyze the image (pass source_type so pipeline knows how to weight factors)
+            source_type = "pdf" if is_pdf else "image"
+            result = analyze_image(image_path_to_analyze, document_type, source_type)
 
             # Add PDF note if applicable
             if is_pdf:
@@ -178,8 +179,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Image Verification API Server")
     print("=" * 60)
-    print("Starting server on http://0.0.0.0:8100")
-    print("API Documentation: http://localhost:8100/docs")
+    print("Starting server on http://0.0.0.0:8099")
+    print("API Documentation: http://localhost:8099/docs")
     print("=" * 60)
 
-    uvicorn.run(app, host="0.0.0.0", port=8100)
+    uvicorn.run(app, host="0.0.0.0", port=8099)

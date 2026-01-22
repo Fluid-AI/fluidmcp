@@ -331,4 +331,4 @@ def validate_boarding_pass(text: str, ocr_data: dict) -> tuple[float, list[str]]
         flags.append(f"❌ Missing critical fields ({required_fields}/5 present)")
 
     score = max(0.0, min(1.0, score))
-    return score, flags
+    return score, flags 
