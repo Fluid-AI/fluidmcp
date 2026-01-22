@@ -1,13 +1,16 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useServerDetails } from "../hooks/useServerDetails";
+import { useServerEnv } from "../hooks/useServerEnv";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
+import { ServerEnvForm } from "../components/ServerEnvForm";
 
 export default function ServerDetails() {
   const { serverId } = useParams<{ serverId: string }>();
   const navigate = useNavigate();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [envFormExpanded, setEnvFormExpanded] = useState(false);
 
   const {
     serverDetails,
@@ -22,6 +25,22 @@ export default function ServerDetails() {
     stopServer,
     restartServer,
   } = useServerDetails(serverId!);
+
+  const {
+    envMetadata,
+    loading: envLoading,
+    error: envError,
+    updateEnv,
+    refetch: refetchEnv,
+  } = useServerEnv(serverId);
+
+  // Detect if server needs env variables
+  const configEnv = serverDetails?.config?.env || {};
+  const needsEnv = Object.keys(configEnv).length > 0;
+  const hasInstanceEnv = serverDetails?.status?.env && Object.keys(serverDetails.status.env).length > 0;
+
+  // Auto-expand env form if server needs env but doesn't have instance env yet
+  const shouldExpandEnvForm = needsEnv && !hasInstanceEnv;
 
   const handleStartServer = async () => {
     setActionLoading('start');
@@ -53,6 +72,26 @@ export default function ServerDetails() {
       alert(err instanceof Error ? err.message : 'Failed to restart server');
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleEnvSubmit = async (env: Record<string, string>) => {
+    try {
+      await updateEnv(env);
+
+      // Wait 2 seconds for server to restart (V1 simplification)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Refetch server details and env metadata
+      await Promise.all([refetch(), refetchEnv()]);
+
+      // Collapse form after successful update
+      setEnvFormExpanded(false);
+
+      alert('Environment variables saved and server restarted successfully');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update environment variables');
+      throw err; // Re-throw so form knows it failed
     }
   };
 
@@ -133,11 +172,73 @@ export default function ServerDetails() {
         </div>
       </header>
 
+      {/* Environment Configuration Section */}
+      {needsEnv && (
+        <section className="dashboard-section">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2>
+              {shouldExpandEnvForm ? '⚠️ Environment Configuration Required' : '✓ Environment Configuration'}
+            </h2>
+            {hasInstanceEnv && !envFormExpanded && (
+              <button
+                className="details-btn"
+                onClick={() => setEnvFormExpanded(true)}
+              >
+                Edit Variables ▼
+              </button>
+            )}
+            {hasInstanceEnv && envFormExpanded && (
+              <button
+                className="details-btn"
+                onClick={() => setEnvFormExpanded(false)}
+              >
+                Collapse ▲
+              </button>
+            )}
+          </div>
+
+          {shouldExpandEnvForm && (
+            <div style={{ padding: '16px', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: '8px', marginBottom: '16px' }}>
+              <p style={{ margin: 0, color: 'var(--color-warning)' }}>
+                This server requires environment variables to function properly. Please configure them below.
+              </p>
+            </div>
+          )}
+
+          {(shouldExpandEnvForm || envFormExpanded) && (
+            <>
+              {envLoading ? (
+                <LoadingSpinner message="Loading environment configuration..." />
+              ) : envError ? (
+                <ErrorMessage message={envError} onRetry={refetchEnv} />
+              ) : (
+                <ServerEnvForm
+                  serverId={serverId!}
+                  configEnv={configEnv}
+                  envMetadata={envMetadata}
+                  onSubmit={handleEnvSubmit}
+                  onCancel={hasInstanceEnv ? () => setEnvFormExpanded(false) : undefined}
+                  serverState={serverDetails?.status?.state || 'stopped'}
+                />
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       {/* Tools */}
       <section className="dashboard-section">
         <h2>Available tools</h2>
         <div className="active-server-container">
-          {!hasTools ? (
+          {needsEnv && !hasInstanceEnv ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">⚠️</div>
+              <h3 className="empty-state-title">Environment Configuration Required</h3>
+              <p className="empty-state-description">
+                Configure environment variables above to enable tools
+              </p>
+            </div>
+          ) : !hasTools ? (
             <div className="empty-state">
               <div className="empty-state-icon">🔧</div>
               <h3 className="empty-state-title">No tools available</h3>
