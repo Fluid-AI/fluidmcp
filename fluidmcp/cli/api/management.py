@@ -673,8 +673,10 @@ async def get_server_instance_env(
     instance = await manager.db.get_instance_state(id)
 
     # Build metadata response
-    config_env = config.get("mcp_config", {}).get("env", {}) or {}
-    instance_env = instance.get("env", {}) if instance else {}
+    # Config uses flat structure with env at root level
+    config_env = config.get("env", {}) or {}
+    # Handle case where instance.env exists but is None
+    instance_env = (instance.get("env") or {}) if instance else {}
 
     env_metadata = {}
 
