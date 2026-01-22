@@ -10,6 +10,7 @@ import subprocess
 import json
 import time
 import atexit
+import threading
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -36,6 +37,10 @@ class ServerManager:
         self.processes: Dict[str, subprocess.Popen] = {}
         self.configs: Dict[str, Dict[str, Any]] = {}
         self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
+
+        # Thread-safe access locks
+        self._registry_lock = threading.Lock()  # Protects processes and configs dicts
+        self._start_times_lock = threading.Lock()  # Thread-safe access to start_times
 
         # Event loop for async operations
         self._loop = None
@@ -145,8 +150,9 @@ class ServerManager:
                     logger.error(f"No configuration found for server '{id}'")
                     return False
 
-            # Store config
-            self.configs[id] = config
+            # Store config (thread-safe)
+            with self._registry_lock:
+                self.configs[id] = config
 
             # Get display name from config
             name = config.get("name", id)
@@ -159,8 +165,9 @@ class ServerManager:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
                 return False
 
-            # Store process
-            self.processes[id] = process
+            # Store process (thread-safe)
+            with self._registry_lock:
+                self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
             # Save state to database with user tracking
@@ -181,8 +188,9 @@ class ServerManager:
             # Note: Metrics update after database save to ensure state consistency
             collector.set_server_status(2)  # 2 = running
 
-            # Store start time for dynamic uptime calculation
-            self.start_times[id] = time.monotonic()
+            # Store start time for dynamic uptime calculation (thread-safe)
+            with self._start_times_lock:
+                self.start_times[id] = time.monotonic()
             collector.set_uptime(0.0)  # Just started
 
             return True
@@ -223,10 +231,10 @@ class ServerManager:
                 logger.warning(f"Server '{id}' is not running")
                 return False
 
-            process = self.processes[id]
-
-            # Get display name from config
-            config = self.configs.get(id, {})
+            # Get process and config (thread-safe)
+            with self._registry_lock:
+                process = self.processes[id]
+                config = self.configs.get(id, {})
             name = config.get("name", id)
 
             # Check if already dead
@@ -280,8 +288,9 @@ class ServerManager:
         Returns:
             True if restarted successfully
         """
-        # Get current config before stopping
-        config = self.configs.get(id)
+        # Get current config before stopping (thread-safe)
+        with self._registry_lock:
+            config = self.configs.get(id)
         if not config:
             config = await self.db.get_server_config(id)
 
@@ -620,11 +629,15 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
         """
-        # Remove from registry
-        if id in self.processes:
-            del self.processes[id]
-        if id in self.start_times:
-            del self.start_times[id]
+        # Remove from registry (thread-safe)
+        with self._registry_lock:
+            if id in self.processes:
+                del self.processes[id]
+            if id in self.configs:
+                del self.configs[id]
+        with self._start_times_lock:
+            if id in self.start_times:
+                del self.start_times[id]
 
         # Update database
         await self.db.save_instance_state({
@@ -647,9 +660,22 @@ class ServerManager:
         Returns:
             Uptime in seconds since server start, or None if server not running
         """
-        if server_id not in self.start_times:
+        with self._start_times_lock:
+            if server_id not in self.start_times:
+                return None
+            start_time = self.start_times[server_id]
+
+        # Calculate uptime (outside lock to minimize lock duration)
+        try:
+            uptime = time.monotonic() - start_time
+            # Validate uptime is reasonable (non-negative, not NaN/Inf)
+            if uptime < 0 or uptime != uptime or uptime == float('inf'):
+                logger.warning(f"Invalid uptime calculated for {server_id}: {uptime}")
+                return None
+            return uptime
+        except Exception as e:
+            logger.error(f"Error calculating uptime for {server_id}: {e}")
             return None
-        return time.monotonic() - self.start_times[server_id]
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:

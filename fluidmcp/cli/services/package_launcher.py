@@ -433,6 +433,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
         async def event_generator() -> Iterator[str]:
             completion_status = "success"
+            should_continue = True
             try:
                 # Track streaming session when generator starts
                 collector.increment_active_streams()
@@ -444,49 +445,54 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                         error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
                         logger.error(error_msg)
                         collector.record_error("process_dead")
+                        completion_status = "error"
                         yield f"data: {json.dumps({'error': error_msg, 'type': 'process_dead'})}\n\n"
-                        return
+                        should_continue = False  # Signal to skip remaining logic
 
-                    # Convert dict to JSON string and send to MCP server
-                    msg = json.dumps(request)
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        error_msg = f"Failed to write to MCP server stdin: {e}"
-                        logger.error(error_msg)
-                        collector.record_error("broken_pipe_write")
-                        yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
-                        return
-
-                    # Read from stdout and stream as SSE events
-                    while True:
+                    if should_continue:
+                        # Convert dict to JSON string and send to MCP server
+                        msg = json.dumps(request)
                         try:
-                            response_line = process.stdout.readline()
-                            if not response_line:
-                                break
+                            process.stdin.write(msg + "\n")
+                            process.stdin.flush()
                         except (BrokenPipeError, OSError) as e:
-                            error_msg = f"Failed to read from MCP server stdout: {e}"
+                            error_msg = f"Failed to write to MCP server stdin: {e}"
                             logger.error(error_msg)
-                            collector.record_error("broken_pipe_read")
+                            collector.record_error("broken_pipe_write")
+                            completion_status = "error"
                             yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
-                            break
+                            should_continue = False
 
-                        # Add logging
-                        logger.debug(f"Received from MCP: {response_line.strip()}")
-
-                        # Format as SSE event
-                        yield f"data: {response_line.strip()}\n\n"
-
-                        # Check if response contains "result" which indicates completion
-                        try:
-                            response_data = json.loads(response_line)
-                            if "result" in response_data:
-                                # If it's a final result, we can stop the stream
+                    # Read from stdout and stream as SSE events (only if no early errors)
+                    if should_continue:
+                        while True:
+                            try:
+                                response_line = process.stdout.readline()
+                                if not response_line:
+                                    break
+                            except (BrokenPipeError, OSError) as e:
+                                error_msg = f"Failed to read from MCP server stdout: {e}"
+                                logger.error(error_msg)
+                                collector.record_error("broken_pipe_read")
+                                completion_status = "error"
+                                yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
                                 break
-                        except json.JSONDecodeError:
-                            # If it's not valid JSON, just stream it as-is
-                            pass
+
+                            # Add logging
+                            logger.debug(f"Received from MCP: {response_line.strip()}")
+
+                            # Format as SSE event
+                            yield f"data: {response_line.strip()}\n\n"
+
+                            # Check if response contains "result" which indicates completion
+                            try:
+                                response_data = json.loads(response_line)
+                                if "result" in response_data:
+                                    # If it's a final result, we can stop the stream
+                                    break
+                            except json.JSONDecodeError:
+                                # If it's not valid JSON, just stream it as-is
+                                pass
 
             except (BrokenPipeError, OSError) as e:
                 completion_status = "broken_pipe"
@@ -497,9 +503,12 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                 # Send error as SSE event
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics
-                collector.record_streaming_request(completion_status)
-                collector.decrement_active_streams()
+                # Record streaming metrics (with error handling to prevent gauge drift)
+                try:
+                    collector.record_streaming_request(completion_status)
+                    collector.decrement_active_streams()
+                except Exception as e:
+                    logger.error(f"Failed to record streaming metrics: {e}")
 
         return StreamingResponse(
             event_generator(),
@@ -687,6 +696,7 @@ def create_dynamic_router(server_manager):
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
+            should_continue = True
             try:
                 # Track streaming session when generator starts executing
                 collector.increment_active_streams()
@@ -700,9 +710,10 @@ def create_dynamic_router(server_manager):
                     completion_status = "broken_pipe"
                     collector.record_error("io_error")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                    return
+                    should_continue = False  # Signal to skip remaining logic
 
-                while True:
+                # Only continue streaming if no early errors
+                while should_continue:
                     # Non-blocking I/O with asyncio.to_thread
                     response_line = await asyncio.to_thread(process.stdout.readline)
                     if not response_line:
@@ -725,9 +736,12 @@ def create_dynamic_router(server_manager):
                 logger.exception(f"Error in event generator for '{server_name}': {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics
-                collector.record_streaming_request(completion_status)
-                collector.decrement_active_streams()
+                # Record streaming metrics (with error handling to prevent gauge drift)
+                try:
+                    collector.record_streaming_request(completion_status)
+                    collector.decrement_active_streams()
+                except Exception as e:
+                    logger.error(f"Failed to record streaming metrics: {e}")
 
         return StreamingResponse(
             event_generator(),

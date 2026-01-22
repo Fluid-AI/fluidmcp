@@ -11,6 +11,7 @@ Metrics exposed:
 """
 
 import time
+import math
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
 from threading import Lock
@@ -138,6 +139,20 @@ class Histogram(Metric):
 
     def observe(self, value: float, label_values: Optional[Dict[str, str]] = None):
         """Record an observation."""
+        # Validate value to prevent NaN/Inf corruption
+        if not isinstance(value, (int, float)):
+            logger.warning(f"Invalid histogram value type: {type(value).__name__}")
+            return
+        if value != value:  # NaN check (NaN != NaN is always True)
+            logger.warning(f"Rejecting NaN value for histogram {self.name}")
+            return
+        if math.isinf(value):  # Block both +inf and -inf
+            logger.warning(f"Rejecting infinite value {value} for histogram {self.name}")
+            return
+        if value < 0:
+            logger.warning(f"Rejecting negative value {value} for histogram {self.name}")
+            return
+
         label_values = label_values or {}
         key = self._get_label_key(label_values)
 
@@ -154,13 +169,13 @@ class Histogram(Metric):
             hist["sum"] += value
             hist["count"] += 1
 
-            # Increment the smallest matching bucket (O(1) write, not cumulative).
-            # Cumulative counts are computed during render() for Prometheus format.
-            # Values exceeding all buckets are tracked in hist["count"] only.
+            # Increment ALL buckets >= value (Prometheus histograms are cumulative).
+            # A value of 0.15 must increment buckets: 0.25, 0.5, 1.0, 2.5, etc.
+            # This ensures correct percentile calculations (P50, P95, P99).
             for bucket in self.buckets:
                 if value <= bucket:
                     hist["buckets"][bucket] += 1
-                    break
+                    # Continue to increment all larger buckets (don't break!)
 
     def render(self) -> str:
         """Render histogram in Prometheus format."""
@@ -175,13 +190,12 @@ class Histogram(Metric):
                 if self.labels:
                     base_labels = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
 
-                # Emit bucket counts
-                cumulative = 0
+                # Emit bucket counts (already cumulative from observe())
                 bucket_lines = []
                 for bucket in self.buckets:
-                    cumulative += hist["buckets"][bucket]
+                    count = hist["buckets"][bucket]
                     labels = f"{base_labels},le=\"{bucket}\"" if base_labels else f"le=\"{bucket}\""
-                    bucket_lines.append(f"{self.name}_bucket{{{labels}}} {cumulative}")
+                    bucket_lines.append(f"{self.name}_bucket{{{labels}}} {count}")
                 lines.extend(bucket_lines)
 
                 # Emit +Inf bucket
