@@ -359,12 +359,60 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             try:
                 # Thread-safe communication with MCP server
                 with process_lock:
+                    # Check if process is alive before attempting communication
+                    if process.poll() is not None:
+                        error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
+                        logger.error(error_msg)
+                        collector.record_error("process_dead")
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": error_msg, "type": "process_dead"}
+                        )
+
                     msg = json.dumps(request)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                    response_line = process.stdout.readline()
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        error_msg = f"Failed to write to MCP server stdin: {e}"
+                        logger.error(error_msg)
+                        collector.record_error("broken_pipe_write")
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": error_msg, "type": "broken_pipe"}
+                        )
+
+                    try:
+                        response_line = process.stdout.readline()
+                        if not response_line:
+                            error_msg = "MCP server returned empty response (pipe may be closed)"
+                            logger.error(error_msg)
+                            collector.record_error("empty_response")
+                            return JSONResponse(
+                                status_code=503,
+                                content={"error": error_msg, "type": "empty_response"}
+                            )
+                    except (BrokenPipeError, OSError) as e:
+                        error_msg = f"Failed to read from MCP server stdout: {e}"
+                        logger.error(error_msg)
+                        collector.record_error("broken_pipe_read")
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": error_msg, "type": "broken_pipe"}
+                        )
+
                 return JSONResponse(content=json.loads(response_line))
+            except json.JSONDecodeError as e:
+                error_msg = f"Invalid JSON response from MCP server: {e}"
+                logger.error(error_msg)
+                collector.record_error("invalid_json")
+                return JSONResponse(
+                    status_code=502,
+                    content={"error": error_msg, "type": "invalid_json"}
+                )
             except Exception as e:
+                logger.exception(f"Unexpected error in MCP proxy: {e}")
+                collector.record_error("unknown")
                 return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
@@ -391,15 +439,37 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
                 # Thread-safe communication with MCP server
                 with process_lock:
+                    # Check if process is alive before attempting communication
+                    if process.poll() is not None:
+                        error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
+                        logger.error(error_msg)
+                        collector.record_error("process_dead")
+                        yield f"data: {json.dumps({'error': error_msg, 'type': 'process_dead'})}\n\n"
+                        return
+
                     # Convert dict to JSON string and send to MCP server
                     msg = json.dumps(request)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        error_msg = f"Failed to write to MCP server stdin: {e}"
+                        logger.error(error_msg)
+                        collector.record_error("broken_pipe_write")
+                        yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
+                        return
 
                     # Read from stdout and stream as SSE events
                     while True:
-                        response_line = process.stdout.readline()
-                        if not response_line:
+                        try:
+                            response_line = process.stdout.readline()
+                            if not response_line:
+                                break
+                        except (BrokenPipeError, OSError) as e:
+                            error_msg = f"Failed to read from MCP server stdout: {e}"
+                            logger.error(error_msg)
+                            collector.record_error("broken_pipe_read")
+                            yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
                             break
 
                         # Add logging
