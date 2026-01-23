@@ -13,20 +13,30 @@ interface McpContentViewProps {
   content: McpContent[];
 }
 
-// Allowed image MIME types
+// Allowed image MIME types (SVG removed due to XSS risk)
 const ALLOWED_IMAGE_MIMES = [
   'image/png',
   'image/jpeg',
   'image/jpg',
   'image/gif',
-  'image/webp',
-  'image/svg+xml'
+  'image/webp'
 ];
 
 const MAX_IMAGE_SIZE_MB = 10;
 
+// Validate base64 string
+function isValidBase64(data: string): boolean {
+  // Check if string contains only valid base64 characters
+  return /^[A-Za-z0-9+/]*={0,2}$/.test(data);
+}
+
 // Validate image data
 function validateImage(data: string, mimeType: string): { valid: boolean; error?: string } {
+  // Check base64 validity first
+  if (!isValidBase64(data)) {
+    return { valid: false, error: 'Invalid base64 data' };
+  }
+
   // Check MIME type
   if (!ALLOWED_IMAGE_MIMES.includes(mimeType)) {
     return { valid: false, error: `Unsupported image type: ${mimeType}` };
@@ -48,6 +58,15 @@ function validateImage(data: string, mimeType: string): { valid: boolean; error?
 
 // Validate URL scheme (only allow http/https)
 function isSafeUrl(uri: string): boolean {
+  // Block protocol-relative URLs and dangerous schemes
+  if (uri.startsWith('//') ||
+      uri.startsWith('javascript:') ||
+      uri.startsWith('data:') ||
+      uri.startsWith('file:') ||
+      uri.startsWith('vbscript:')) {
+    return false;
+  }
+
   try {
     const url = new URL(uri);
     return url.protocol === 'http:' || url.protocol === 'https:';
