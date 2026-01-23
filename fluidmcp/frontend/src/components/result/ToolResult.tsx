@@ -17,26 +17,48 @@ const ResultFormat = {
 
 type ResultFormatType = typeof ResultFormat[keyof typeof ResultFormat];
 
-function detectResultFormat(result: unknown): ResultFormatType {
-  // MCP result object with content array (standard MCP response format)
-  if (
+// Type definitions for MCP result structures
+interface McpContent {
+  type: 'text' | 'image' | 'resource' | string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  uri?: string;
+}
+
+interface McpResult {
+  content: McpContent[];
+}
+
+// Type guard to check if result is an MCP result object
+function isMcpResult(result: unknown): result is McpResult {
+  return (
     typeof result === 'object' &&
     result !== null &&
     'content' in result &&
-    Array.isArray((result as any).content)
-  ) {
+    Array.isArray((result as McpResult).content)
+  );
+}
+
+// Type guard to check if result is an MCP content array
+function isMcpContentArray(result: unknown): result is McpContent[] {
+  return (
+    Array.isArray(result) &&
+    result.length > 0 &&
+    result.every((item: unknown) =>
+      typeof item === 'object' && item !== null && 'type' in item
+    )
+  );
+}
+
+function detectResultFormat(result: unknown): ResultFormatType {
+  // MCP result object with content array (standard MCP response format)
+  if (isMcpResult(result)) {
     return ResultFormat.MCP_CONTENT;
   }
 
   // MCP content array (direct array format) - check for objects with 'type' field (text, image, resource, etc.)
-  if (
-    Array.isArray(result) &&
-    result.length > 0 &&
-    result.every((item: unknown) =>
-      typeof item === 'object' && item !== null &&
-      'type' in item
-    )
-  ) {
+  if (isMcpContentArray(result)) {
     return ResultFormat.MCP_CONTENT;
   }
 
@@ -75,6 +97,32 @@ function detectResultFormat(result: unknown): ResultFormatType {
   return ResultFormat.PRIMITIVE;
 }
 
+// Extract text to copy based on result format
+function extractCopyText(result: unknown, format: ResultFormatType): string {
+  switch (format) {
+    case ResultFormat.TEXT:
+    case ResultFormat.TEXT_BLOCK:
+      return String(result);
+
+    case ResultFormat.MCP_CONTENT:
+      const contentArray = isMcpContentArray(result)
+        ? result
+        : isMcpResult(result)
+        ? result.content
+        : [];
+
+      return contentArray.map((c) => {
+        if (c.type === 'text' && c.text) return c.text;
+        if (c.type === 'image') return `[Image: ${c.mimeType || 'unknown'}]`;
+        if (c.type === 'resource' && c.uri) return c.uri;
+        return JSON.stringify(c);
+      }).join('\n');
+
+    default:
+      return JSON.stringify(result, null, 2);
+  }
+}
+
 interface ToolResultProps {
   result: unknown;
   error?: string;
@@ -91,29 +139,8 @@ export const ToolResult: React.FC<ToolResultProps> = ({
   const [expandAll, setExpandAll] = useState(true);
 
   const handleCopy = () => {
-    let textToCopy: string;
-
     try {
-      switch (format) {
-        case ResultFormat.TEXT:
-        case ResultFormat.TEXT_BLOCK:
-          textToCopy = String(result);
-          break;
-        case ResultFormat.MCP_CONTENT:
-          const contentArray = Array.isArray(result)
-            ? result
-            : (result as any).content || [];
-          textToCopy = contentArray.map((c: any) => {
-            if (c.type === 'text' && c.text) return c.text;
-            if (c.type === 'image') return `[Image: ${c.mimeType || 'unknown'}]`;
-            if (c.type === 'resource' && c.uri) return c.uri;
-            return JSON.stringify(c);
-          }).join('\n');
-          break;
-        default:
-          textToCopy = JSON.stringify(result, null, 2);
-      }
-
+      const textToCopy = extractCopyText(result, format);
       navigator.clipboard.writeText(textToCopy);
     } catch (err) {
       console.error('Failed to copy:', err);
@@ -175,9 +202,11 @@ export const ToolResult: React.FC<ToolResultProps> = ({
             <ErrorBoundary>
               <McpContentView
                 content={
-                  Array.isArray(result)
+                  isMcpContentArray(result)
                     ? result
-                    : (result as any).content || []
+                    : isMcpResult(result)
+                    ? result.content
+                    : []
                 }
               />
             </ErrorBoundary>

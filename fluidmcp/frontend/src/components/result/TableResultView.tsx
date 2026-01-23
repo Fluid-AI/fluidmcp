@@ -1,5 +1,9 @@
 import React, { useState, useMemo } from 'react';
 
+// Constants
+const DEFAULT_ROWS_PER_PAGE = 50;
+const MAX_ROWS_WARNING_THRESHOLD = 10000;
+
 interface TableResultViewProps {
   data: Array<Record<string, unknown>>;
   maxRowsPerPage?: number;
@@ -7,7 +11,7 @@ interface TableResultViewProps {
 
 export const TableResultView: React.FC<TableResultViewProps> = ({
   data,
-  maxRowsPerPage = 50
+  maxRowsPerPage = DEFAULT_ROWS_PER_PAGE
 }) => {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -15,6 +19,22 @@ export const TableResultView: React.FC<TableResultViewProps> = ({
 
   if (!data || data.length === 0) {
     return <div className="result-text">Empty array</div>;
+  }
+
+  // Warning for large datasets
+  if (data.length > MAX_ROWS_WARNING_THRESHOLD) {
+    return (
+      <div className="result-error">
+        <h3>Dataset Too Large</h3>
+        <p>
+          The result contains {data.length.toLocaleString()} rows, which exceeds the maximum
+          display limit of {MAX_ROWS_WARNING_THRESHOLD.toLocaleString()} rows.
+        </p>
+        <p>
+          Consider filtering your data or exporting it for analysis in external tools.
+        </p>
+      </div>
+    );
   }
 
   const columns = Object.keys(data[0]);
@@ -70,7 +90,7 @@ export const TableResultView: React.FC<TableResultViewProps> = ({
   return (
     <div>
       <div className="result-table-wrapper">
-        <table className="result-table">
+        <table className="result-table" role="table" aria-label="Data table with sortable columns">
           <thead>
             <tr>
               {columns.map((col) => (
@@ -78,6 +98,17 @@ export const TableResultView: React.FC<TableResultViewProps> = ({
                   key={col}
                   onClick={() => handleSort(col)}
                   className={sortColumn === col ? `sorted-${sortDirection}` : ''}
+                  role="columnheader"
+                  aria-sort={sortColumn === col ? sortDirection === 'asc' ? 'ascending' : 'descending' : 'none'}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleSort(col);
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
+                  title={`Sort by ${col}`}
                 >
                   {col}
                 </th>
@@ -98,19 +129,21 @@ export const TableResultView: React.FC<TableResultViewProps> = ({
 
       {/* Pagination Controls */}
       {totalPages > 1 && (
-        <div className="result-pagination">
+        <div className="result-pagination" role="navigation" aria-label="Table pagination">
           <button
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage === 1}
+            aria-label="Go to previous page"
           >
             Previous
           </button>
-          <span className="result-pagination-info">
+          <span className="result-pagination-info" aria-live="polite" aria-atomic="true">
             Page {currentPage} of {totalPages} ({sortedData.length} rows)
           </span>
           <button
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage === totalPages}
+            aria-label="Go to next page"
           >
             Next
           </button>

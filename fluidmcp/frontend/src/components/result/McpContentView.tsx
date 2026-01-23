@@ -26,7 +26,18 @@ const MAX_IMAGE_SIZE_MB = 10;
 
 // Validate base64 string
 function isValidBase64(data: string): boolean {
+  // Check for empty strings
+  if (!data || data.length === 0) {
+    return false;
+  }
+
+  // Base64 length must be multiple of 4
+  if (data.length % 4 !== 0) {
+    return false;
+  }
+
   // Check if string contains only valid base64 characters
+  // Valid base64: A-Za-z0-9+/ with up to 2 '=' padding at the end
   return /^[A-Za-z0-9+/]*={0,2}$/.test(data);
 }
 
@@ -85,6 +96,15 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
       {content.map((item, index) => {
         // Handle text content
         if (item.type === 'text' && item.text) {
+          // Type guard: ensure text is a string
+          if (typeof item.text !== 'string') {
+            return (
+              <div key={index} className="mcp-content-warning">
+                <strong>⚠️ Text Validation Failed:</strong> Invalid text data type
+              </div>
+            );
+          }
+
           return (
             <div key={index} className="mcp-content-text">
               <pre>{item.text}</pre>
@@ -94,6 +114,15 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
 
         // Handle image content
         if (item.type === 'image' && item.data && item.mimeType) {
+          // Type guards: ensure data and mimeType are strings
+          if (typeof item.data !== 'string' || typeof item.mimeType !== 'string') {
+            return (
+              <div key={index} className="mcp-content-warning">
+                <strong>⚠️ Image Validation Failed:</strong> Invalid image data type
+              </div>
+            );
+          }
+
           const validation = validateImage(item.data, item.mimeType);
 
           if (!validation.valid) {
@@ -117,6 +146,15 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
 
         // Handle resource content (URLs)
         if (item.type === 'resource' && item.uri) {
+          // Type guard: ensure URI is a string
+          if (typeof item.uri !== 'string') {
+            return (
+              <div key={index} className="mcp-content-warning">
+                <strong>⚠️ URL Validation Failed:</strong> Invalid URI data type
+              </div>
+            );
+          }
+
           if (!isSafeUrl(item.uri)) {
             return (
               <div key={index} className="mcp-content-warning">

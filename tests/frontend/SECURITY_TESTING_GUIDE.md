@@ -11,6 +11,7 @@ Tests run automatically on page load.
 1. Backend server running (FluidMCP API)
 2. Frontend development server running
 3. At least one MCP server configured (e.g., Time MCP, Wikimedia)
+4. Live Server Extension installed
 
 ---
 
