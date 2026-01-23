@@ -12,6 +12,16 @@ from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
+import re
+
+# Environment variable validation patterns and constants
+ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
+ENV_VALUE_MAX_LENGTH = 10000
+
+# Validation error messages
+ENV_NAME_INVALID_MSG = "Invalid environment variable name '{}'. Must match pattern: ^[A-Z_][A-Z0-9_]*$"
+ENV_VALUE_NULL_BYTE_MSG = "Environment variable value cannot contain null bytes"
+ENV_VALUE_TOO_LONG_MSG = f"Environment variable value exceeds maximum length of {ENV_VALUE_MAX_LENGTH} characters"
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -631,6 +641,35 @@ async def restart_server(
     }
 
 
+def _get_env_metadata(config: Dict[str, Any], env_key: str) -> Dict[str, Any]:
+    """
+    Get metadata for a specific environment variable from config.
+
+    Args:
+        config: Server configuration dict
+        env_key: Environment variable name (e.g., "API_KEY")
+
+    Returns:
+        Dict with 'required' and 'description' fields.
+        Defaults to False and "" if no metadata found.
+    """
+    # Look for optional env_metadata field in config
+    env_metadata = config.get("env_metadata", {})
+
+    if env_key in env_metadata:
+        meta = env_metadata[env_key]
+        return {
+            "required": meta.get("required", False),
+            "description": meta.get("description", "")
+        }
+
+    # No metadata found - return defaults
+    return {
+        "required": False,
+        "description": ""
+    }
+
+
 @router.get("/servers/{id}/instance/env")
 async def get_server_instance_env(
     request: Request,
@@ -683,11 +722,13 @@ async def get_server_instance_env(
     # Process all env keys from config template
     for key in config_env.keys():
         value_present = key in instance_env and instance_env[key] is not None and instance_env[key] != ""
+        # Get metadata for this env var (required, description)
+        metadata = _get_env_metadata(config, key)
         env_metadata[key] = {
             "present": value_present,
-            "required": False,  # TODO: Extract from metadata if available
+            "required": metadata["required"],
             "masked": "****" if value_present else None,
-            "description": ""  # TODO: Extract from config metadata
+            "description": metadata["description"]
         }
 
     # Add any extra keys from instance env (custom vars)
@@ -695,11 +736,13 @@ async def get_server_instance_env(
         if key not in env_metadata:
             value = instance_env[key]
             value_present = value is not None and value != ""
+            # Get metadata for this env var (will return defaults if not in config)
+            metadata = _get_env_metadata(config, key)
             env_metadata[key] = {
                 "present": value_present,
-                "required": False,
+                "required": metadata["required"],
                 "masked": "****" if value_present else None,
-                "description": ""
+                "description": metadata["description"]
             }
 
     logger.debug(f"Retrieved instance env metadata for '{id}'")
@@ -743,14 +786,11 @@ async def update_server_instance_env(
     manager = get_server_manager(request)
 
     # Validate env variable names STRICTLY
-    import re
-    env_name_pattern = re.compile(r'^[A-Z_][A-Z0-9_]*$')
-
     for key in env_data.keys():
-        if not env_name_pattern.match(key):
+        if not ENV_NAME_PATTERN.match(key):
             raise HTTPException(
                 400,
-                f"Invalid environment variable name '{key}'. Must be uppercase alphanumeric with underscores."
+                ENV_NAME_INVALID_MSG.format(key)
             )
 
     # Validate env variable values LOOSELY
@@ -760,11 +800,11 @@ async def update_server_instance_env(
 
         # Reject null bytes
         if '\x00' in value:
-            raise HTTPException(400, f"Environment variable '{key}' contains null bytes")
+            raise HTTPException(400, ENV_VALUE_NULL_BYTE_MSG)
 
-        # Max 10k chars
-        if len(value) > 10000:
-            raise HTTPException(400, f"Environment variable '{key}' exceeds 10,000 character limit")
+        # Max length check
+        if len(value) > ENV_VALUE_MAX_LENGTH:
+            raise HTTPException(400, ENV_VALUE_TOO_LONG_MSG)
 
     # Check if server exists
     config = await manager.db.get_server_config(id)
