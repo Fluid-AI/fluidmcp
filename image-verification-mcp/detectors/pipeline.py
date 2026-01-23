@@ -22,7 +22,100 @@ def analyze_image(image_path: str, document_type: str = "generic", source_type: 
     if source_type == "pdf":
         return _analyze_pdf_document(image_path, document_type)
     else:
-        return _analyze_photo_image(image_path, document_type)
+        # Smart detection: Check if this is a scanned/converted document
+        # even though it's in image format (JPEG/PNG)
+        meta_score, meta_flags = analyze_metadata(image_path)
+        ocr_score, ocr_data, ocr_flags = extract_and_analyze_text(image_path)
+        doc_score, doc_flags = validate_document_structure(ocr_data, document_type)
+
+        # Detect scanned/converted documents:
+        # - No camera metadata (meta_score < 0.5)
+        # - Excellent OCR quality (ocr_score > 0.8)
+        # - Good document structure (doc_score > 0.7)
+        has_no_camera = meta_score < 0.5
+        has_good_ocr = ocr_score > 0.8
+        has_good_doc = doc_score > 0.7
+
+        # If it looks like a scanned/converted document, use PDF scoring
+        if has_no_camera and has_good_ocr and has_good_doc:
+            return _analyze_scanned_document(image_path, document_type, meta_score, meta_flags,
+                                            ocr_score, ocr_data, ocr_flags, doc_score, doc_flags)
+        else:
+            return _analyze_photo_image(image_path, document_type)
+
+
+def _analyze_scanned_document(image_path: str, document_type: str,
+                             meta_score: float, meta_flags: list,
+                             ocr_score: float, ocr_data: dict, ocr_flags: list,
+                             doc_score: float, doc_flags: list) -> dict:
+    """
+    Analyze scanned/converted documents (JPEG/PNG without camera metadata).
+
+    These are images that look like digital documents:
+    - No camera metadata (scanned or PDF-to-image conversion)
+    - High OCR quality
+    - Good document structure
+
+    Uses PDF-style scoring since they're digital documents, not photos.
+    """
+
+    # Run AI detection (only one we haven't computed yet)
+    ai_prob, ai_signals = detect_ai_generated(image_path)
+
+    # Use PDF-style scoring (same as _analyze_pdf_document)
+    confidence = (
+        (1 - ai_prob) * 0.15 +      # AI detection (15%)
+        meta_score * 0.20 +          # Metadata analysis (20%)
+        ocr_score * 0.30 +           # OCR quality (30%)
+        doc_score * 0.35             # Document structure (35%)
+    )
+
+    # Determine verdicts
+    is_ai_generated = ai_prob > 0.65
+
+    # Tampering detection
+    has_editing_software = any("editing software detected" in flag.lower() for flag in meta_flags)
+    has_suspicious_patterns = any("suspicious" in flag.lower() for flag in doc_flags)
+    has_low_confidence = confidence < 0.6
+
+    is_tampered = has_editing_software or (has_suspicious_patterns and has_low_confidence)
+
+    # Real document requires: confidence >= 0.6 AND not AI-generated
+    is_real_image = confidence >= 0.6 and not is_ai_generated
+
+    # Compile reasoning
+    reasoning = []
+
+    # Add verdict if confidence is below threshold
+    if confidence < 0.6:
+        reasoning.append(f"❌ INVALID DOCUMENT: Overall confidence {confidence:.2f} is below 0.6 threshold")
+
+    # Add auto-detection note
+    reasoning.insert(0, "ℹ️ SCANNED/CONVERTED DOCUMENT: Image detected as digital document (no camera metadata, high OCR quality)")
+
+    # Add negative flags (prioritize document structure issues)
+    negative_flags = [f for f in doc_flags + ocr_flags + meta_flags if '❌' in f or '⚠️' in f]
+    reasoning.extend(negative_flags[:5])
+
+    # Add positive flags
+    positive_flags = [f for f in doc_flags + ocr_flags + ai_signals if '✓' in f]
+    reasoning.extend(positive_flags[:3])
+
+    return {
+        "is_real_image": is_real_image,
+        "is_ai_generated": is_ai_generated,
+        "is_tampered": is_tampered,
+        "confidence": round(confidence, 2),
+        "signals": {
+            "ai_probability": round(ai_prob, 2),
+            "metadata_score": round(meta_score, 2),
+            "ocr_score": round(ocr_score, 2),
+            "document_score": round(doc_score, 2)
+        },
+        "reasoning": reasoning,
+        "document_type": document_type,
+        "source_type": "scanned_document"
+    }
 
 
 def _analyze_pdf_document(image_path: str, document_type: str) -> dict:
