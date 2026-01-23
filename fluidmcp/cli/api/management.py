@@ -27,6 +27,24 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 
+def sanitize_error_message(error_msg: str) -> str:
+    """
+    Sanitize error messages to prevent exposure of sensitive information.
+
+    - Removes absolute file paths
+    - Removes user directories
+    - Keeps only generic error information
+    """
+    # Remove absolute paths (e.g., /home/user/... or C:\Users\...)
+    sanitized = re.sub(r'(/[a-zA-Z0-9_/.-]+/|[A-Z]:\\[a-zA-Z0-9_\\.-]+\\)', '<path>/', error_msg)
+
+    # Remove common sensitive patterns
+    sanitized = re.sub(r'File ".*?"', 'File "<sanitized>"', sanitized)
+    sanitized = re.sub(r'at /.+?:\d+', 'at <sanitized>', sanitized)
+
+    return sanitized
+
+
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
@@ -1077,7 +1095,14 @@ async def run_tool(
         response = json.loads(response_line.strip())
 
         if "error" in response:
-            raise HTTPException(500, f"Tool execution error: {response['error']}")
+            # Handle error object properly - JSON-RPC error format
+            error_obj = response['error']
+            if isinstance(error_obj, dict):
+                error_message = error_obj.get('message', str(error_obj))
+            else:
+                error_message = str(error_obj)
+            sanitized_message = sanitize_error_message(error_message)
+            raise HTTPException(500, f"Tool execution error: {sanitized_message}")
 
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
@@ -1085,7 +1110,9 @@ async def run_tool(
     except asyncio.TimeoutError:
         raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"Failed to parse tool response: {str(e)}")
+        sanitized_error = sanitize_error_message(str(e))
+        raise HTTPException(500, f"Failed to parse tool response: {sanitized_error}")
     except Exception as e:
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
-        raise HTTPException(500, f"Tool execution failed: {str(e)}")
+        sanitized_error = sanitize_error_message(str(e))
+        raise HTTPException(500, f"Tool execution failed: {sanitized_error}")
