@@ -19,7 +19,7 @@ ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
 ENV_VALUE_MAX_LENGTH = 10000
 
 # Validation error messages
-ENV_NAME_INVALID_MSG = "Invalid environment variable name '{}'. Must match pattern: ^[A-Z_][A-Z0-9_]*$"
+ENV_NAME_INVALID_MSG = "Invalid environment variable name '{}'. Must start with A-Z or underscore, followed by A-Z, 0-9, or underscores only."
 ENV_VALUE_NULL_BYTE_MSG = "Environment variable value cannot contain null bytes"
 ENV_VALUE_TOO_LONG_MSG = f"Environment variable value exceeds maximum length of {ENV_VALUE_MAX_LENGTH} characters"
 
@@ -595,6 +595,7 @@ async def stop_server(
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
+            logger.warning(f"Authorization failed: User '{user_id}' attempted to stop server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
                 f"Forbidden: Server '{id}' was started by another user. Only the user who started it can stop it."
@@ -646,6 +647,7 @@ async def restart_server(
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
+            logger.warning(f"Authorization failed: User '{user_id}' attempted to restart server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
                 f"Forbidden: Server '{id}' was started by another user. Only the user who started it can restart it."
@@ -747,7 +749,8 @@ async def get_server_instance_env(
 
     # Process all env keys from config template
     for key in config_env.keys():
-        value_present = key in instance_env and instance_env[key] is not None and instance_env[key] != ""
+        # Empty strings are valid env values (some tools use them)
+        value_present = key in instance_env and instance_env[key] is not None
         # Get metadata for this env var (required, description)
         metadata = _get_env_metadata(config, key)
         env_metadata[key] = {
@@ -761,7 +764,8 @@ async def get_server_instance_env(
     for key in instance_env.keys():
         if key not in env_metadata:
             value = instance_env[key]
-            value_present = value is not None and value != ""
+            # Empty strings are valid env values (some tools use them)
+            value_present = value is not None
             # Get metadata for this env var (will return defaults if not in config)
             metadata = _get_env_metadata(config, key)
             env_metadata[key] = {
@@ -811,6 +815,13 @@ async def update_server_instance_env(
     """
     manager = get_server_manager(request)
 
+    # Validate env_data types (FastAPI type hints don't guarantee runtime type safety)
+    for key, value in env_data.items():
+        if not isinstance(key, str):
+            raise HTTPException(400, f"Environment variable name must be string, got {type(key).__name__}")
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(400, f"Environment variable '{key}' value must be string, got {type(value).__name__}")
+
     # Validate env variable names STRICTLY
     for key in env_data.keys():
         if not ENV_NAME_PATTERN.match(key):
@@ -837,36 +848,38 @@ async def update_server_instance_env(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Authorization: Check if user started this server
+    # Get instance state and check if running
     instance = await manager.db.get_instance_state(id)
     is_running = id in manager.processes and manager.processes[id].poll() is None
 
-    if instance and is_running:
+    # Authorization: Check ownership if instance exists (regardless of running state)
+    if instance:
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
+            logger.warning(f"Authorization failed: User '{user_id}' attempted to update env for server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
-                f"Forbidden: Server '{id}' was started by another user. Only the user who started it can update env."
+                f"Forbidden: Server '{id}' environment was configured by another user."
             )
 
     # Update instance env in database
     success = await manager.db.update_instance_env(id, env_data)
     if not success:
         # If instance doesn't exist yet, create it
+        # Don't set started_by - will be set when server actually starts
         await manager.db.save_instance_state({
             "server_id": id,
             "state": "stopped",
-            "env": env_data,
-            "started_by": user_id
+            "env": env_data
         })
 
     # If server is running, restart with new env
     restart_message = ""
     if is_running:
-        # Double-check process exists (race condition guard)
-        if id not in manager.processes:
-            raise HTTPException(409, f"Server '{id}' state inconsistent - not in process registry")
+        # Double-check process exists and is still alive (race condition guard)
+        if id not in manager.processes or manager.processes[id].poll() is not None:
+            raise HTTPException(409, f"Server '{id}' stopped before restart could complete")
 
         logger.info(f"Server '{id}' is running, restarting with new env...")
 
