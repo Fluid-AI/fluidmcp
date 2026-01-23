@@ -353,7 +353,7 @@ async def get_server(request: Request, id: str):
         id: Server identifier
 
     Returns:
-        Server config and status
+        Server config and status (with masked env values for security)
     """
     manager = get_server_manager(request)
 
@@ -367,10 +367,18 @@ async def get_server(request: Request, id: str):
     # Get status
     status = await manager.get_server_status(id)
 
+    # Mask env values for security (never expose credentials in config)
+    config_copy = config.copy()
+    if "env" in config_copy and config_copy["env"]:
+        config_copy["env"] = {
+            key: "****" if value else None
+            for key, value in config_copy["env"].items()
+        }
+
     return {
         "id": id,
         "name": config.get("name"),
-        "config": config,
+        "config": config_copy,
         "status": status
     }
 
