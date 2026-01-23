@@ -263,7 +263,16 @@ def test_histogram_buckets():
                     le_end = line.index('"', le_start)
                     le_values.add(line[le_start:le_end])
 
-            print(f"  Bucket boundaries: {sorted(le_values, key=lambda x: float(x) if x != '+Inf' else float('inf'))}")
+            # Safe sorting function for bucket boundaries
+            def safe_float_key(x):
+                if x == '+Inf':
+                    return float('inf')
+                try:
+                    return float(x)
+                except ValueError:
+                    return float('inf')  # Treat invalid values as infinity
+
+            print(f"  Bucket boundaries: {sorted(le_values, key=safe_float_key)}")
             return True
         else:
             print("⚠ No histogram buckets found (may not have request data yet)")

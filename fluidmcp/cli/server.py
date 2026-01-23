@@ -154,7 +154,13 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
         # Creating N instances per scrape is acceptable given low overhead.
         # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
-        for server_id in server_manager.processes.keys():
+
+        # Get snapshot of server IDs under lock to avoid race condition
+        with server_manager._registry_lock:
+            server_ids = list(server_manager.processes.keys())
+
+        # Update metrics outside lock (safe iteration)
+        for server_id in server_ids:
             uptime = server_manager.get_uptime(server_id)
             if uptime is not None:
                 collector = MetricsCollector(server_id)

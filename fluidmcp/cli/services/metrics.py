@@ -143,7 +143,7 @@ class Histogram(Metric):
         if not isinstance(value, (int, float)):
             logger.warning(f"Invalid histogram value type: {type(value).__name__}")
             return
-        if value != value:  # NaN check (NaN != NaN is always True)
+        if math.isnan(value):  # Explicit NaN check for clarity
             logger.warning(f"Rejecting NaN value for histogram {self.name}")
             return
         if math.isinf(value):  # Block both +inf and -inf

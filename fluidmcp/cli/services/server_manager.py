@@ -9,6 +9,7 @@ import asyncio
 import subprocess
 import json
 import time
+import math
 import atexit
 import threading
 from typing import Dict, Any, Optional, List
@@ -669,7 +670,7 @@ class ServerManager:
         try:
             uptime = time.monotonic() - start_time
             # Validate uptime is reasonable (non-negative, not NaN/Inf)
-            if uptime < 0 or uptime != uptime or uptime == float('inf'):
+            if uptime < 0 or math.isnan(uptime) or math.isinf(uptime):
                 logger.warning(f"Invalid uptime calculated for {server_id}: {uptime}")
                 return None
             return uptime
