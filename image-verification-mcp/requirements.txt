@@ -4,6 +4,7 @@ fastmcp>=0.2.0
 # REST API Framework (for api_server.py)
 fastapi>=0.104.0
 uvicorn>=0.24.0
+requests>=2.31.0
 
 # Image Processing
 pillow>=10.0.0
