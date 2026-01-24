@@ -74,6 +74,11 @@ _llm_processes: Dict[str, LLMProcess] = {}
 # LLM endpoint configurations
 _llm_endpoints: Dict[str, Dict[str, str]] = {}
 
+# Getter functions for management API (avoids circular import issues)
+def get_llm_processes() -> Dict[str, LLMProcess]:
+    """Get the LLM processes registry. Used by management API."""
+    return _llm_processes
+
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 
@@ -87,6 +92,35 @@ _http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async u
 # Cleanup synchronization
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
+
+# Server start times for uptime tracking (server_name -> start timestamp)
+_server_start_times: Dict[str, float] = {}
+_server_start_times_lock = threading.Lock()
+
+
+def _initialize_server_metrics(server_name: str) -> None:
+    """
+    Initialize metrics for a newly launched server.
+
+    Args:
+        server_name: Name of the server to initialize metrics for
+    """
+    from .metrics import MetricsCollector
+
+    # Record server start time for uptime calculation
+    with _server_start_times_lock:
+        _server_start_times[server_name] = time.monotonic()
+
+    # Initialize metrics collector
+    collector = MetricsCollector(server_name)
+
+    # Set initial server status to running (2)
+    collector.set_server_status(2)
+
+    # Set initial uptime to 0
+    collector.set_uptime(0.0)
+
+    logger.debug(f"Initialized metrics for server: {server_name}")
 
 
 def _extract_port_from_args(args) -> int:
@@ -211,11 +245,23 @@ def run_servers(
 
         try:
             logger.info(f"Launching server '{server_name}' from: {install_path}")
-            package_name, router, process = launch_mcp_using_fastapi_proxy(install_path)
+
+            # Create or get lock for this server
+            if server_name not in _process_locks:
+                _process_locks[server_name] = threading.Lock()
+
+            package_name, router, process = launch_mcp_using_fastapi_proxy(
+                install_path,
+                _process_locks[server_name]
+            )
 
             if router and process:
                 app.include_router(router, tags=[server_name])
                 _register_server_process(server_name, process)  # Register in explicit registry
+
+                # Initialize metrics for the server
+                _initialize_server_metrics(server_name)
+
                 logger.info(f"Added {package_name} endpoints")
                 launched_servers += 1
                 logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
@@ -288,6 +334,14 @@ def run_servers(
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
+
+    # Add Prometheus metrics endpoint
+    _add_metrics_endpoint(app)
+
+    # Add management API endpoints
+    from ..api.management import router as management_router
+    app.include_router(management_router, prefix="/api", tags=["management"])
+    logger.debug("Management API endpoints added")
 
     # Start FastAPI server if requested
     if start_server:
@@ -791,6 +845,47 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
 
         return JSONResponse(content=response)
+
+
+def _add_metrics_endpoint(app: FastAPI) -> None:
+    """
+    Add GET /metrics endpoint for Prometheus-compatible metrics.
+
+    Args:
+        app: FastAPI application instance
+    """
+    from fastapi.responses import PlainTextResponse
+    from .metrics import get_registry, MetricsCollector
+
+    @app.get("/metrics", tags=["monitoring"])
+    async def metrics():
+        """
+        Prometheus-compatible metrics endpoint.
+
+        Exposes metrics in Prometheus exposition format:
+        - Request counters and histograms
+        - Server status and uptime (dynamically calculated)
+        - GPU memory utilization
+        - Tool execution metrics
+        - Streaming request metrics
+        """
+        # Update uptime for all running servers before rendering metrics
+        # Compute uptimes under lock (fast), then update metrics outside (can be slow)
+        with _server_start_times_lock:
+            current_time = time.monotonic()
+            uptimes = {name: current_time - start for name, start in _server_start_times.items()}
+
+        # Update metrics outside lock to minimize lock duration
+        for server_name, uptime in uptimes.items():
+            collector = MetricsCollector(server_name)
+            collector.set_uptime(uptime)
+
+        registry = get_registry()
+        # Prometheus text exposition format v0.0.4 (not OpenMetrics)
+        return PlainTextResponse(
+            content=registry.render_all(),
+            media_type="text/plain; version=0.0.4; charset=utf-8"
+        )
 
 
 def _install_packages_from_config(config: ServerConfig) -> None:

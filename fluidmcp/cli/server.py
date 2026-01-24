@@ -19,6 +19,7 @@ from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
+from .services.metrics import get_registry
 
 
 def mask_mongodb_uri(uri: str) -> str:
@@ -147,6 +148,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     logger.info("Dynamic MCP router mounted")
 
     # Add a health check endpoint with actual connection verification
+    # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
+    # RequestTimer to avoid high-cardinality metric pollution from frequent load
+    # balancer health checks and Prometheus scrapes. Only business logic endpoints
+    # (MCP requests) are instrumented and counted in fluidmcp_requests_total.
     @app.get("/health")
     async def health_check():
         """Health check endpoint with database connection status."""
@@ -171,6 +176,41 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "persistence_enabled": db_status == "connected"
         }
 
+    @app.get("/metrics")
+    async def metrics():
+        """
+        Prometheus-compatible metrics endpoint.
+
+        Exposes metrics in Prometheus exposition format:
+        - Request counters and histograms
+        - Server status and uptime (dynamically calculated)
+        - GPU memory utilization
+        - Tool execution metrics
+        - Streaming request metrics
+        """
+        from fastapi.responses import PlainTextResponse
+        from .services.metrics import MetricsCollector
+
+        # Update uptime for all running servers before rendering metrics
+        # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
+        # Creating N instances per scrape is acceptable given low overhead.
+        # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
+
+        # Get snapshot of server IDs under lock to avoid race condition
+        with server_manager._registry_lock:
+            server_ids = list(server_manager.processes.keys())
+
+        # Update metrics outside lock (safe iteration)
+        for server_id in server_ids:
+            uptime = server_manager.get_uptime(server_id)
+            if uptime is not None:
+                collector = MetricsCollector(server_id)
+                collector.set_uptime(uptime)
+
+        registry = get_registry()
+        # Prometheus text exposition format v0.0.4 (not OpenMetrics)
+        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
     @app.get("/")
     async def root():
         """Root endpoint with API information."""
@@ -179,6 +219,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "version": "2.0.0",
             "docs": "/docs",
             "health": "/health",
+            "metrics": "/metrics",
             "api": {
                 "management": "/api/servers",
                 "mcp": "/{server_name}/mcp"

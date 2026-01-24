@@ -1,0 +1,272 @@
+{
+  "dashboard": {
+    "title": "FluidMCP Monitoring Dashboard",
+    "tags": ["fluidmcp", "mcp", "monitoring"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Request Rate",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(fluidmcp_requests_total[1m])) by (server_id)",
+            "legendFormat": "{{server_id}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "reqps", "label": "Requests/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Error Rate",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(fluidmcp_errors_total[1m])) by (server_id, error_type)",
+            "legendFormat": "{{server_id}} - {{error_type}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "errps", "label": "Errors/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Active Requests",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 8, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "sum(fluidmcp_active_requests) by (server_id)",
+            "legendFormat": "{{server_id}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 4,
+        "title": "Server Status",
+        "type": "stat",
+        "gridPos": {"x": 6, "y": 8, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "fluidmcp_server_status",
+            "legendFormat": "{{server_id}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {"type": "value", "value": "0", "text": "Stopped"},
+              {"type": "value", "value": "1", "text": "Starting"},
+              {"type": "value", "value": "2", "text": "Running"},
+              {"type": "value", "value": "3", "text": "Error"},
+              {"type": "value", "value": "4", "text": "Restarting"}
+            ],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "grey"},
+                {"value": 1, "color": "yellow"},
+                {"value": 2, "color": "green"},
+                {"value": 3, "color": "red"},
+                {"value": 4, "color": "orange"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Request Latency (P50, P95, P99)",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 12, "w": 24, "h": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le, server_id))",
+            "legendFormat": "{{server_id}} - P50",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le, server_id))",
+            "legendFormat": "{{server_id}} - P95",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le, server_id))",
+            "legendFormat": "{{server_id}} - P99",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Latency"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "GPU Memory Utilization",
+        "type": "gauge",
+        "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "fluidmcp_gpu_memory_utilization_ratio",
+            "legendFormat": "{{server_id}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 0.7, "color": "yellow"},
+                {"value": 0.9, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 7,
+        "title": "Active Streams",
+        "type": "stat",
+        "gridPos": {"x": 12, "y": 20, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "sum(fluidmcp_active_streams) by (server_id)",
+            "legendFormat": "{{server_id}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 8,
+        "title": "Server Uptime",
+        "type": "stat",
+        "gridPos": {"x": 18, "y": 20, "w": 6, "h": 4},
+        "targets": [
+          {
+            "expr": "fluidmcp_server_uptime_seconds",
+            "legendFormat": "{{server_id}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        },
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 9,
+        "title": "Tool Execution Rate",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 28, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(fluidmcp_tool_calls_total[1m])) by (server_id, tool_name)",
+            "legendFormat": "{{server_id}} - {{tool_name}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Calls/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Tool Execution Latency",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 28, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(fluidmcp_tool_execution_seconds_bucket[5m])) by (le, server_id, tool_name))",
+            "legendFormat": "{{server_id}} - {{tool_name}} - P95",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Latency"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Restart Count",
+        "type": "stat",
+        "gridPos": {"x": 0, "y": 36, "w": 8, "h": 4},
+        "targets": [
+          {
+            "expr": "fluidmcp_server_restarts_total",
+            "legendFormat": "{{server_id}} - {{reason}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 12,
+        "title": "Streaming Request Status",
+        "type": "piechart",
+        "gridPos": {"x": 8, "y": 36, "w": 8, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(fluidmcp_streaming_requests_total) by (completion_status)",
+            "legendFormat": "{{completion_status}}",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "title": "Request Status Distribution",
+        "type": "piechart",
+        "gridPos": {"x": 16, "y": 36, "w": 8, "h": 8},
+        "targets": [
+          {
+            "expr": "sum(fluidmcp_requests_total) by (status)",
+            "legendFormat": "{{status}}",
+            "refId": "A"
+          }
+        ]
+      }
+    ]
+  }
+}
