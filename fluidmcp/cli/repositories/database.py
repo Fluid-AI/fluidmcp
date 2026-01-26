@@ -561,6 +561,58 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error listing instances by state: {e}")
             return []
 
+    async def get_instance_env(self, server_id: str) -> Optional[Dict[str, str]]:
+        """
+        Get environment variables from server instance.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Dict of environment variables or None if instance not found
+        """
+        try:
+            instance = await self.get_instance_state(server_id)
+            if instance:
+                return instance.get("env")
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving instance env: {e}")
+            return None
+
+    async def update_instance_env(self, server_id: str, env: Dict[str, str]) -> bool:
+        """
+        Update environment variables in server instance.
+
+        Args:
+            server_id: Server identifier
+            env: Dict of environment variables to set
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = await self.db.fluidmcp_server_instances.update_one(
+                {"server_id": server_id},
+                {
+                    "$set": {
+                        "env": env,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+
+            if result.matched_count == 0:
+                logger.warning(f"No instance found for server '{server_id}'")
+                return False
+
+            logger.debug(f"Updated instance env for server: {server_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating instance env: {e}")
+            return False
+
     # ==================== Log Operations ====================
 
     async def save_log_entry(self, server_name: str, stream: str, content: str) -> bool:

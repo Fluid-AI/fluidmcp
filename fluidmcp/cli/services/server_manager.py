@@ -120,7 +120,7 @@ class ServerManager:
 
     # ==================== Server Lifecycle Methods ====================
 
-    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
+    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None, env_overrides: Optional[Dict[str, str]] = None) -> bool:
         """
         Start an MCP server.
 
@@ -128,6 +128,7 @@ class ServerManager:
             id: Unique server identifier
             config: Server configuration (if None, loads from database)
             user_id: User who is starting the server (for tracking)
+            env_overrides: Instance-specific environment variables (overrides config env)
 
         Returns:
             True if started successfully, False otherwise
@@ -160,7 +161,7 @@ class ServerManager:
 
             # Spawn the MCP process
             logger.info(f"Starting server '{name}' (id: {id})...")
-            process = await self._spawn_mcp_process(id, config)
+            process = await self._spawn_mcp_process(id, config, instance_env=env_overrides)
 
             if not process:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
@@ -182,7 +183,8 @@ class ServerManager:
                 "restart_count": 0,
                 "last_health_check": datetime.utcnow(),
                 "health_check_failures": 0,
-                "started_by": user_id  # Track who started this instance
+                "started_by": user_id,  # Track who started this instance
+                "env": env_overrides  # Store instance-specific environment variables
             })
 
             # Update metrics - server is now running (status code: 2)
@@ -462,13 +464,14 @@ class ServerManager:
 
     # ==================== Private Helper Methods ====================
 
-    async def _spawn_mcp_process(self, id: str, config: Dict[str, Any]) -> Optional[subprocess.Popen]:
+    async def _spawn_mcp_process(self, id: str, config: Dict[str, Any], instance_env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
         """
         Spawn MCP server process.
 
         Args:
             id: Server identifier
             config: Server configuration
+            instance_env: Instance-specific environment variables (overrides config env)
 
         Returns:
             Popen process or None if failed
@@ -493,10 +496,22 @@ class ServerManager:
             # Build command list
             cmd_list = [command] + args
 
-            # Merge environment variables (shell env takes precedence)
+            # Merge environment variables with priority order:
+            # 1. Shell environment (highest priority)
+            # 2. Instance env (user-provided, from instance_env parameter)
+            # 3. Config env (lowest priority - templates/defaults)
             env = dict(os.environ)
+
+            # Add config env (templates) if not in shell env and not placeholder
             for key, value in env_vars.items():
                 if key not in env and value and not self._is_placeholder(value):
+                    env[key] = value
+
+            # Override with instance env (actual user-provided values)
+            # Note: We set values even if empty - user intent matters
+            # Validation happens at API level, not here
+            if instance_env:
+                for key, value in instance_env.items():
                     env[key] = value
 
             # Determine working directory
