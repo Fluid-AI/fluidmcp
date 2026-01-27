@@ -569,7 +569,8 @@ class TestE2EConfigFileFlow:
 
         server_config = resolve_from_file(str(config_path))
 
-        assert server_config.needs_install is True
+        # Direct configs with "command" don't need installation
+        assert server_config.needs_install is False
         assert server_config.source_type == "file"
         assert "test-server" in server_config.servers
         assert server_config.servers["test-server"]["command"] == "echo"
