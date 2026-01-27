@@ -47,17 +47,26 @@ Before starting, ensure you have:
 
 ## Quick Start
 
-**Option 1: Docker Compose (Recommended)**
+**Option 1: Docker (Recommended)**
 
 ```bash
 # 1. Start FluidMCP
 fluidmcp run examples/sample-config.json --file --start-server
 
-# 2. Start Prometheus + Grafana with Docker Compose
-cd /path/to/fluidmcp
-docker-compose up -d
+# 2. Start Prometheus
+docker run -d \
+  --name prometheus \
+  -p 9090:9090 \
+  -v $(pwd)/examples/prometheus-config.yml:/etc/prometheus/prometheus.yml \
+  prom/prometheus:latest
 
-# 3. Access services
+# 3. Start Grafana
+docker run -d \
+  --name grafana \
+  -p 3000:3000 \
+  grafana/grafana:latest
+
+# 4. Access services
 # - FluidMCP metrics: http://localhost:8099/metrics
 # - Prometheus: http://localhost:9090
 # - Grafana: http://localhost:3000 (admin/admin)

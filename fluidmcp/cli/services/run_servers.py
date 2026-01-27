@@ -864,10 +864,11 @@ def _add_health_endpoint(app: FastAPI) -> None:
 
         Returns server health status.
         """
+        processes = _get_server_processes()
         return {
             "status": "healthy",
-            "servers": len(_server_processes),
-            "running_servers": len([p for p in _server_processes.values() if p.poll() is None])
+            "servers": len(processes),
+            "running_servers": sum(1 for p in processes.values() if p.poll() is None),
         }
 
 
