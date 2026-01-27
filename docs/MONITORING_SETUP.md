@@ -39,9 +39,12 @@ FluidMCP Server → Prometheus → Grafana
 
 Before starting, ensure you have:
 
-- ✅ FluidMCP installed (`pip install fluidmcp` or `pip install -e .`)
-- ✅ Docker installed (recommended) OR manual installation of Prometheus & Grafana
+- ✅ FluidMCP >= 0.1.0 installed (`pip install fluidmcp` or `pip install -e .`)
+- ✅ Docker >= 20.10 (recommended) OR manual installation of Prometheus & Grafana
+  - Prometheus >= 2.30
+  - Grafana >= 8.0
 - ✅ A FluidMCP configuration file (e.g., `examples/sample-config.json`)
+- ✅ Python >= 3.9 (for FluidMCP)
 
 ---
 
@@ -53,10 +56,11 @@ Before starting, ensure you have:
 # 1. Start FluidMCP
 fluidmcp run examples/sample-config.json --file --start-server
 
-# 2. Start Prometheus
+# 2. Start Prometheus (with host network access)
 docker run -d \
   --name prometheus \
   -p 9090:9090 \
+  --add-host=host.docker.internal:host-gateway \
   -v $(pwd)/examples/prometheus-config.yml:/etc/prometheus/prometheus.yml \
   prom/prometheus:latest
 
@@ -69,8 +73,13 @@ docker run -d \
 # 4. Access services
 # - FluidMCP metrics: http://localhost:8099/metrics
 # - Prometheus: http://localhost:9090
-# - Grafana: http://localhost:3000 (admin/admin)
+# - Grafana: http://localhost:3000 (admin/admin - CHANGE PASSWORD!)
 ```
+
+**Important Notes**:
+- The `--add-host=host.docker.internal:host-gateway` flag allows Prometheus running in Docker to access FluidMCP on the host machine. This works on all platforms (Linux, macOS, Windows).
+- **Security**: Change the Grafana default password (`admin/admin`) immediately after first login.
+- **Windows users**: If using cmd.exe, replace `$(pwd)` with the absolute path to your config file.
 
 **Option 2: Manual Installation**
 
@@ -479,9 +488,42 @@ Topics covered:
 | Service | Port | Endpoint |
 |---------|------|----------|
 | FluidMCP | 8099 | http://localhost:8099 |
+| FluidMCP Health | 8099 | http://localhost:8099/health |
 | FluidMCP Metrics | 8099 | http://localhost:8099/metrics |
 | Prometheus | 9090 | http://localhost:9090 |
 | Grafana | 3000 | http://localhost:3000 |
+
+### API Endpoints
+
+#### Health Check Endpoint
+
+**GET** `/health`
+
+Returns the health status of FluidMCP server.
+
+**Response Schema**:
+```json
+{
+  "status": "healthy",
+  "servers": 2,
+  "running_servers": 1
+}
+```
+
+**Field Descriptions**:
+- `status` (string): Health status - "healthy", "degraded", or "unhealthy"
+- `servers` (integer): Total number of registered servers
+- `running_servers` (integer): Number of currently running servers
+
+**Status Codes**:
+- `200 OK` - Server is healthy (at least one server running)
+- `503 Service Unavailable` - Server is degraded or unhealthy
+
+**Example**:
+```bash
+curl http://localhost:8099/health
+# Response: {"status":"healthy","servers":2,"running_servers":1}
+```
 
 ### Quick Commands
 
@@ -495,9 +537,11 @@ curl http://localhost:8099/metrics
 # Query Prometheus
 curl 'http://localhost:9090/api/v1/query?query=fluidmcp_requests_total'
 
-# Test metrics collection
+# Test metrics collection (if test file is available in your branch)
 python tests/manual/test_metrics.py
 ```
+
+**Note**: `tests/manual/test_metrics.py` is part of the monitoring metrics feature. If it's not available in your branch, use the curl commands above for manual testing.
 
 ---
 

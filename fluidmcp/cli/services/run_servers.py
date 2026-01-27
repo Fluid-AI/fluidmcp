@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 from loguru import logger
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 import httpx
 
@@ -858,18 +858,52 @@ def _add_health_endpoint(app: FastAPI) -> None:
         app: FastAPI application instance
     """
     @app.get("/health", tags=["monitoring"])
-    async def health_check():
+    async def health_check() -> JSONResponse:
         """
         Health check endpoint.
 
-        Returns server health status.
+        Returns server health status with appropriate HTTP status codes:
+        - 200 OK: Server is healthy (at least one server running)
+        - 503 Service Unavailable: Server is degraded or unhealthy
+
+        Returns:
+            JSONResponse with health status, server count, and running server count
         """
-        processes = _get_server_processes()
-        return {
-            "status": "healthy",
-            "servers": len(processes),
-            "running_servers": sum(1 for p in processes.values() if p.poll() is None),
-        }
+        try:
+            processes = _get_server_processes()
+            if processes is None:
+                processes = {}
+
+            # Count running servers (check if process is not None and still alive)
+            running_count = sum(1 for p in processes.values() if p and p.poll() is None)
+
+            # Determine health status
+            status = "healthy" if running_count > 0 else "degraded"
+            status_code = 200 if running_count > 0 else 503
+
+            response_data = {
+                "status": status,
+                "servers": len(processes),
+                "running_servers": running_count,
+            }
+
+            return JSONResponse(
+                status_code=status_code,
+                content=response_data
+            )
+
+        except Exception as e:
+            # Log full error for debugging but return generic message to client
+            logger.error(f"Health check failed: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "unhealthy",
+                    "error": "Internal server error during health check",
+                    "servers": 0,
+                    "running_servers": 0
+                }
+            )
 
 
 def _add_metrics_endpoint(app: FastAPI) -> None:
