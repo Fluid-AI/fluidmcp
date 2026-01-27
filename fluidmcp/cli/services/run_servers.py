@@ -870,12 +870,15 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
         - Streaming request metrics
         """
         # Update uptime for all running servers before rendering metrics
+        # Compute uptimes under lock (fast), then update metrics outside (can be slow)
         with _server_start_times_lock:
             current_time = time.monotonic()
-            for server_name, start_time in _server_start_times.items():
-                uptime = current_time - start_time
-                collector = MetricsCollector(server_name)
-                collector.set_uptime(uptime)
+            uptimes = {name: current_time - start for name, start in _server_start_times.items()}
+
+        # Update metrics outside lock to minimize lock duration
+        for server_name, uptime in uptimes.items():
+            collector = MetricsCollector(server_name)
+            collector.set_uptime(uptime)
 
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)

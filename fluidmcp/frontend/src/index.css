@@ -153,7 +153,30 @@ button:disabled {
   color: var(--color-text-secondary);
   font-size: 0.9rem;
   line-height: 1.5;
-  margin: 0 0 16px 0;
+  margin: 0 0 12px 0;
+}
+
+.server-card-metadata {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 12px;
+  font-size: 0.8rem;
+}
+
+.metadata-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #93bbfd;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.metadata-timestamp {
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
 }
 
 .server-action {
@@ -200,6 +223,33 @@ button:disabled {
   margin-right: 8px;
 }
 
+.active-server-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.active-server-actions button {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  margin-top: 0;
+}
+
+.active-server-actions .details-btn {
+  opacity: 1;
+  cursor: pointer;
+  background: #475569;
+}
+
+.active-server-actions .details-btn:hover {
+  background: #334155;
+}
+
+.active-server-actions .stop-btn,
+.active-server-actions .restart-btn {
+  font-size: 0.85rem;
+  padding: 6px 12px;
+}
+
 /* Status badges */
 
 .status {
@@ -219,9 +269,24 @@ button:disabled {
   color: var(--color-warning);
 }
 
+.status.restarting {
+  background: rgba(234, 179, 8, 0.2);
+  color: var(--color-warning);
+}
+
 .status.stopped {
   background: rgba(239, 68, 68, 0.2);
   color: var(--color-error);
+}
+
+.status.failed {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--color-error);
+}
+
+.status.not_found {
+  background: rgba(148, 163, 184, 0.2);
+  color: #94a3b8;
 }
 
 /* Buttons in active list */
@@ -229,13 +294,187 @@ button:disabled {
 .details-btn {
   padding: 6px 12px;
   font-size: 0.85rem;
-  opacity: 0.6;
-  cursor: not-allowed;
+  cursor: pointer;
+  background: #7aa2ff;
+  color: #000;
+}
+
+.details-btn:hover {
+  background: #5f8cff;
 }
 
 /* Empty state */
 
 .empty-state {
-  color: var(--color-text-secondary);
-  font-size: 0.9rem;
+  text-align: center;
+  padding: 3rem 1rem;
+  color: #64748b;
+}
+
+.empty-state-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.empty-state-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #94a3b8;
+}
+
+.empty-state-description {
+  font-size: 0.875rem;
+  color: #64748b;
+}
+
+/* Loading Spinner */
+.loading-spinner-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.loading-spinner {
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.loading-spinner.small { width: 24px; height: 24px; }
+.loading-spinner.medium { width: 40px; height: 40px; }
+.loading-spinner.large { width: 60px; height: 60px; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-message {
+  margin-top: 1rem;
+  color: #94a3b8;
+  font-size: 0.875rem;
+}
+
+/* Error Message */
+.error-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.error-icon {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.error-text {
+  color: #f87171;
+  margin-bottom: 1rem;
+}
+
+.retry-btn {
+  padding: 0.5rem 1rem;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+  margin-top: 0;
+}
+
+.retry-btn:hover {
+  background: #2563eb;
+}
+
+/* Server Card Actions */
+.server-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.server-card-actions button {
+  flex: 1;
+  margin-top: 0;
+}
+
+.start-btn {
+  background: #10b981;
+  color: white;
+}
+
+.start-btn:hover:not(:disabled) {
+  background: #059669;
+}
+
+.start-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stop-btn {
+  background: #ef4444;
+  color: white;
+}
+
+.stop-btn:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.stop-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.restart-btn {
+  background: #f59e0b;
+  color: white;
+}
+
+.restart-btn:hover:not(:disabled) {
+  background: #d97706;
+}
+
+.restart-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Server Info Section */
+.server-info {
+  background: rgba(51, 65, 85, 0.5);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.info-value {
+  color: #e2e8f0;
+  font-family: monospace;
 }

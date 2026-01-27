@@ -40,21 +40,11 @@ scrape_configs:
     scrape_timeout: 5s
 
 # Alert rules (optional)
-# Alert rules MUST be in a separate file (e.g., alerts.yml)
-# Prometheus does NOT support inline alert rules in this configuration file.
-# To use alerts:
-#   1. Create a new file called 'alerts.yml' in the same directory
-#   2. Copy the example rules below into that file (remove # prefix)
-#   3. Uncomment the rule_files line below to enable alert loading
-#   4. Restart Prometheus to load the alert rules
+# Create a file 'alerts.yml' with these rules and reference it in prometheus.yml
 rule_files:
-  # - "alerts.yml"  # Uncomment this line after creating alerts.yml
+  # - "alerts.yml"
 
-# ============================================================================
-# EXAMPLE ALERT RULES - For reference only, create alerts.yml with these rules
-# ============================================================================
-# The rules below are formatted as valid YAML for copy-paste convenience.
-# Copy everything from "groups:" onwards to your alerts.yml file.
+# Example alert rules (save to alerts.yml):
 # groups:
 #   - name: fluidmcp_alerts
 #     interval: 30s

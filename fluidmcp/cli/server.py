@@ -22,6 +22,45 @@ from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 
 
+def mask_mongodb_uri(uri: str) -> str:
+    """
+    Mask sensitive information in MongoDB URI for logging.
+
+    Examples:
+        mongodb://user:pass@host:27017/db -> mongodb://***:***@host:27017/db
+        mongodb+srv://user:pass@cluster.net -> mongodb+srv://***:***@cluster.net
+
+    Args:
+        uri: MongoDB connection URI
+
+    Returns:
+        Masked URI safe for logging
+    """
+    if not uri or '@' not in uri:
+        return uri
+
+    try:
+        # Split by @ to separate credentials from host
+        parts = uri.split('@')
+        if len(parts) != 2:
+            return uri
+
+        prefix_with_creds = parts[0]
+        host_and_path = parts[1]
+
+        # Split prefix to get protocol and credentials
+        if '://' in prefix_with_creds:
+            protocol, creds = prefix_with_creds.split('://', 1)
+            # Mask credentials completely
+            masked = f"{protocol}://***:***@{host_and_path}"
+            return masked
+
+        return uri
+    except Exception:
+        # If anything goes wrong, return a safe default
+        return "mongodb://***:***@[masked]"
+
+
 def save_token_to_file(token: str) -> Path:
     """
     Save bearer token to secure file.
@@ -119,7 +158,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         db_status = "disconnected"
         db_error = None
 
-        if db_manager.client:
+        if hasattr(db_manager, 'client') and db_manager.client:
             try:
                 # Actually ping the database to verify connection
                 await db_manager.client.admin.command('ping')
@@ -127,6 +166,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             except Exception as e:
                 db_status = "error"
                 db_error = str(e)
+        elif hasattr(db_manager, '__class__') and db_manager.__class__.__name__ == 'InMemoryBackend':
+            db_status = "in-memory"
 
         return {
             "status": "healthy",
@@ -154,7 +195,13 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
         # Creating N instances per scrape is acceptable given low overhead.
         # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
-        for server_id in server_manager.processes.keys():
+
+        # Get snapshot of server IDs under lock to avoid race condition
+        with server_manager._registry_lock:
+            server_ids = list(server_manager.processes.keys())
+
+        # Update metrics outside lock (safe iteration)
+        for server_id in server_ids:
             uptime = server_manager.get_uptime(server_id)
             if uptime is not None:
                 collector = MetricsCollector(server_id)
@@ -245,6 +292,31 @@ async def main(args):
         origins_str = args.allowed_origins or os.getenv("FMCP_ALLOWED_ORIGINS", "")
         if origins_str:
             allowed_origins = [origin.strip() for origin in origins_str.split(",")]
+    else:
+        # Check environment variable even if no CLI args
+        origins_str = os.getenv("FMCP_ALLOWED_ORIGINS", "")
+        if origins_str:
+            allowed_origins = [origin.strip() for origin in origins_str.split(",")]
+
+    # Auto-detect GitHub Codespaces environment and add Codespaces URLs to CORS
+    codespace_name = os.getenv("CODESPACE_NAME")
+    if codespace_name:
+        codespaces_domain = f"https://*.{codespace_name}.preview.app.github.dev"
+        logger.info(f"GitHub Codespaces detected: {codespace_name}")
+        logger.info(f"Adding Codespaces domain to CORS: {codespaces_domain}")
+
+        if allowed_origins is None:
+            allowed_origins = [
+                "http://localhost:*",
+                "http://127.0.0.1:*",
+                f"https://*.{codespace_name}.preview.app.github.dev",
+                f"https://*-*.app.github.dev"
+            ]
+        elif "*" not in allowed_origins:
+            allowed_origins.extend([
+                f"https://*.{codespace_name}.preview.app.github.dev",
+                f"https://*-*.app.github.dev"
+            ])
 
     # 1. Choose persistence backend
     persistence_mode = getattr(args, 'persistence_mode', 'mongodb')
@@ -255,7 +327,7 @@ async def main(args):
         persistence: PersistenceBackend = InMemoryBackend()
         db_connected = await persistence.connect()
     else:  # mongodb (default)
-        logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
+        logger.info(f"Using MongoDB persistence backend at {mask_mongodb_uri(args.mongodb_uri)}")
         persistence: PersistenceBackend = DatabaseManager(
             mongodb_uri=args.mongodb_uri,
             database_name=args.database
@@ -304,7 +376,11 @@ async def main(args):
         host=args.host,
         port=args.port,
         loop="asyncio",
-        log_level="info"
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+        server_header=False,
+        date_header=False
     )
     server = Server(config)
 

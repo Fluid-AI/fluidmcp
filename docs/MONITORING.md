@@ -89,17 +89,12 @@ sudo apt-get install prometheus     # Debian/Ubuntu
 sudo yum install prometheus         # RHEL/CentOS
 
 # Linux - Option 2: Manual Installation
-# Fetch the latest Prometheus release version automatically (recommended):
-VERSION=$(curl -s https://api.github.com/repos/prometheus/prometheus/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/v//')
+# Visit https://prometheus.io/download/ or https://github.com/prometheus/prometheus/releases
+# and download the latest linux-amd64 tarball
+VERSION="<LATEST_VERSION>"  # Replace with the latest Prometheus version from the releases page
 wget "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/prometheus-${VERSION}.linux-amd64.tar.gz"
 tar xvfz "prometheus-${VERSION}.linux-amd64.tar.gz"
 cd "prometheus-${VERSION}.linux-amd64"
-
-# Or use a specific version:
-# 1. Find the latest version at: https://github.com/prometheus/prometheus/releases
-# 2. Replace VERSION below with the desired version number (e.g., "2.45.0")
-# VERSION="2.45.0"
-# wget "https://github.com/prometheus/prometheus/releases/download/v${VERSION}/prometheus-${VERSION}.linux-amd64.tar.gz"
 ```
 
 ### Step 2: Configure Prometheus
@@ -581,16 +576,16 @@ sum by (error_type) (rate(fluidmcp_errors_total{error_type="io_error"}[5m]))
 
 # Streaming sessions ending due to client disconnect / broken pipe
 # Use for: Understanding how and why individual SSE streams end
-sum by (server_name) (
+sum by (server_id) (
   rate(fluidmcp_streaming_requests_total{completion_status="broken_pipe"}[5m])
 )
 
 # Compare I/O errors vs streaming terminations in a dashboard
 # Panel A: Global I/O errors (includes broken pipes, network issues, file I/O)
-fluidmcp_errors_total{error_type="io_error", server_name="your-server"}
+fluidmcp_errors_total{error_type="io_error", server_id="your-server"}
 
 # Panel B: Streaming-specific terminations (only SSE endpoint)
-fluidmcp_streaming_requests_total{completion_status!="success", server_name="your-server"}
+fluidmcp_streaming_requests_total{completion_status!="success", server_id="your-server"}
 ```
 
 **Example: BrokenPipeError appears in both dimensions**
