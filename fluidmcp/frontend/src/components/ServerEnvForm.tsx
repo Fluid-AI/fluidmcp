@@ -105,12 +105,18 @@ export const ServerEnvForm: React.FC<ServerEnvFormProps> = ({
 
   const isSensitiveField = (key: string): boolean => {
     const lowerKey = key.toLowerCase();
-    return (
-      lowerKey.includes('key') ||
-      lowerKey.includes('token') ||
-      lowerKey.includes('secret') ||
-      lowerKey.includes('password') ||
-      lowerKey.includes('credential')
+    const sensitivePatterns = [
+      'key', 'token', 'secret', 'password', 'credential',
+      'apikey', 'api_key', 'auth', 'jwt', 'bearer',
+      'private', 'passphrase', 'salt', 'hash'
+    ];
+
+    // Check if field name ends with or contains sensitive keywords
+    // This catches variations like: api_key_prod, database_token, oauth_secret_backup
+    return sensitivePatterns.some(pattern =>
+      lowerKey.endsWith(pattern) ||
+      lowerKey.includes(`_${pattern}`) ||
+      lowerKey.includes(`${pattern}_`)
     );
   };
 
