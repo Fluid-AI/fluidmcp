@@ -10,7 +10,7 @@ import type {
   UpdateEnvResponse,
 } from '../types/server';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
 /**
  * Merges multiple AbortSignals into one

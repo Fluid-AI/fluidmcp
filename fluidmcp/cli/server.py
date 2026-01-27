@@ -11,8 +11,10 @@ import signal
 import secrets
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -137,6 +139,33 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
         logger.info("Secure mode enabled with bearer token")
+
+    # Serve frontend from backend (single-port deployment)
+    # NOTE:
+    # - Development: Frontend runs separately via Vite (port 5173) with hot reload
+    # - Production: Frontend is pre-built via `npm run build` and served by backend at /ui
+    # - This mount only works when dist directory exists (after build)
+    frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+
+    if frontend_dist.exists():
+        # Serve root /ui and /ui/ before mounting StaticFiles
+        @app.get("/ui")
+        @app.get("/ui/")
+        async def serve_ui_root():
+            """Serve index.html for the root /ui path."""
+            return FileResponse(frontend_dist / "index.html")
+
+        # Mount StaticFiles for serving built assets (JS, CSS, images)
+        # This handles all /ui/* paths efficiently with proper MIME types
+        try:
+            app.mount("/ui", StaticFiles(directory=str(frontend_dist), html=True), name="ui")
+            logger.info("✓ Frontend UI routes registered")
+            logger.info("✓ Frontend UI available at /ui")
+        except Exception as e:
+            logger.warning(f"Failed to mount frontend static files: {e}")
+    else:
+        logger.warning(f"Frontend dist directory not found at {frontend_dist}")
+        logger.warning("Run 'npm run build' in fluidmcp/frontend to build the UI")
 
     # Include Management API
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
@@ -385,6 +414,7 @@ async def main(args):
     server = Server(config)
 
     logger.info(f"Backend server starting on http://{args.host}:{args.port}")
+    logger.info(f"Frontend UI available at: http://{args.host}:{args.port}/ui")
     logger.info(f"Swagger UI available at: http://{args.host}:{args.port}/docs")
     logger.info(f"Health check at: http://{args.host}:{args.port}/health")
 
