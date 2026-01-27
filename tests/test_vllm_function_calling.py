@@ -6,9 +6,7 @@ parameters to vLLM and returns the response unchanged (Mode 1: pass-through).
 """
 
 import pytest
-import httpx
 from unittest.mock import AsyncMock, patch, Mock
-from fastapi.testclient import TestClient
 
 
 class TestVLLMFunctionCallingPassThrough:
