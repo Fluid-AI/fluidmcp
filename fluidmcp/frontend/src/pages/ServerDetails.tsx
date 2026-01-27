@@ -12,6 +12,7 @@ export default function ServerDetails() {
   const navigate = useNavigate();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [envFormExpanded, setEnvFormExpanded] = useState(false);
+  const [envSubmitting, setEnvSubmitting] = useState(false);
 
   const {
     serverDetails,
@@ -91,12 +92,20 @@ export default function ServerDetails() {
   const handleEnvSubmit = async (env: Record<string, string>) => {
     if (!serverId) return;
 
+    setEnvSubmitting(true);
+
     try {
       await updateEnv(env);
 
       // TEMP: Manual retry until polling hook is introduced in follow-up PR
-      // Wait for server to restart and tools to be discovered (with retry)
-      // Try up to 3 times with 2 second intervals
+      //
+      // RETRY LOGIC (intentional, not a bug):
+      // After env update, server auto-restarts. We retry 3 times (2s intervals)
+      // to wait for server restart + tool discovery to complete. This handles:
+      // - Server restart delay (~1-2s)
+      // - Tool discovery/initialization delay
+      // - Network latency
+      // Total wait: up to 6 seconds with exponential checks
       let retries = 3;
       let toolsFound = false;
 
@@ -124,6 +133,8 @@ export default function ServerDetails() {
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update environment variables');
       throw err; // Re-throw so form knows it failed
+    } finally {
+      setEnvSubmitting(false);
     }
   };
 
@@ -244,14 +255,24 @@ export default function ServerDetails() {
               ) : envError ? (
                 <ErrorMessage message={envError} onRetry={refetchEnv} />
               ) : (
-                <ServerEnvForm
-                  serverId={serverId!}
-                  configEnv={configEnv}
-                  envMetadata={envMetadata}
-                  onSubmit={handleEnvSubmit}
-                  onCancel={hasInstanceEnv ? () => setEnvFormExpanded(false) : undefined}
-                  serverState={serverDetails?.status?.state || 'stopped'}
-                />
+                <>
+                  <ServerEnvForm
+                    serverId={serverId!}
+                    configEnv={configEnv}
+                    envMetadata={envMetadata}
+                    onSubmit={handleEnvSubmit}
+                    onCancel={hasInstanceEnv ? () => setEnvFormExpanded(false) : undefined}
+                    serverState={serverDetails?.status?.state || 'stopped'}
+                  />
+                  {envSubmitting && (
+                    <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(74, 144, 226, 0.1)', borderRadius: '8px', textAlign: 'center' }}>
+                      <LoadingSpinner size="small" />
+                      <p style={{ marginTop: '0.5rem', color: '#4a90e2' }}>
+                        Saving and restarting server... This may take a few moments.
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
