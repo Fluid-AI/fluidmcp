@@ -53,8 +53,9 @@ export const ServerEnvForm: React.FC<ServerEnvFormProps> = ({
     Object.entries(formValues).forEach(([key, value]) => {
       const metadata = envMetadata[key];
 
-      // Check required fields
-      if (metadata?.required && !value) {
+      // Check required fields (only enforce if not already configured)
+      // This allows "leave empty to keep current value" UX for existing values
+      if (metadata?.required && !value && !metadata?.present) {
         errors[key] = 'This field is required';
       }
 
@@ -83,7 +84,10 @@ export const ServerEnvForm: React.FC<ServerEnvFormProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Only send non-empty values
+      // Only send non-empty values to preserve existing secrets
+      // Empty values are ignored intentionally - users cannot clear values once set
+      // This is a security-first design to prevent accidental credential deletion
+      // (Support for explicit clearing can be added in a future enhancement)
       const envToSubmit: Record<string, string> = {};
       Object.entries(formValues).forEach(([key, value]) => {
         if (value !== '') {

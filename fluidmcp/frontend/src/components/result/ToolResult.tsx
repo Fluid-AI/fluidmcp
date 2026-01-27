@@ -62,18 +62,29 @@ function detectResultFormat(result: unknown): ResultFormatType {
     return ResultFormat.MCP_CONTENT;
   }
 
-  // Table (array of similar objects)
+  // Table (array of similar flat objects)
   if (
     Array.isArray(result) &&
     result.length > 0 &&
     result.every((item: unknown) => typeof item === 'object' && item !== null)
   ) {
+    // Helper to check if object is flat (no nested objects)
+    const isFlatObject = (obj: Record<string, unknown>) =>
+      Object.values(obj).every(
+        v => typeof v !== 'object' || v === null
+      );
+
     const keys = Object.keys(result[0] as Record<string, unknown>);
     if (
       result.every(
-        (item: unknown) =>
-          keys.every((k) => k in (item as Record<string, unknown>)) &&
-          Object.keys(item as Record<string, unknown>).length === keys.length
+        (item: unknown) => {
+          const itemObj = item as Record<string, unknown>;
+          return (
+            isFlatObject(itemObj) &&
+            keys.every((k) => k in itemObj) &&
+            Object.keys(itemObj).length === keys.length
+          );
+        }
       )
     ) {
       return ResultFormat.TABLE;
@@ -136,7 +147,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
   executionTime,
 }) => {
   const format = result !== null && !error ? detectResultFormat(result) : ResultFormat.PRIMITIVE;
-  const [expandAll, setExpandAll] = useState(true);
+  const [expandAll, setExpandAll] = useState(false);
 
   const handleCopy = () => {
     try {

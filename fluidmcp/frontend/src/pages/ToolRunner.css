@@ -534,6 +534,10 @@
   margin: 0.125rem 0;
 }
 
+.json-children {
+  padding-left: 1rem;
+}
+
 .json-toggle {
   display: inline-block;
   width: 1.2rem;

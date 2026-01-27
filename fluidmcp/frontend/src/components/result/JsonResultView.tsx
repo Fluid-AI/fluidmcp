@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 
 interface JsonNodeProps {
   data: unknown;
-  depth: number;
   name?: string;
   expandAll?: boolean;
 }
 
-const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name, expandAll = false }) => {
+const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) => {
   const [isCollapsed, setIsCollapsed] = useState(!expandAll);
 
   // Sync with parent expand/collapse control
@@ -77,9 +76,9 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name, expandAll = fals
         </span>
         <span>{isCollapsed ? `[${data.length} items]` : '['}</span>
         {!isCollapsed && (
-          <div style={{ paddingLeft: '1rem' }}>
+          <div className="json-children">
             {data.map((item, idx) => (
-              <JsonNode key={idx} data={item} depth={depth + 1} expandAll={expandAll} />
+              <JsonNode key={idx} name={`[${idx}]`} data={item} expandAll={expandAll} />
             ))}
             <div>]</div>
           </div>
@@ -112,9 +111,9 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name, expandAll = fals
         </span>
         <span>{isCollapsed ? `{${keys.length} keys}` : '{'}</span>
         {!isCollapsed && (
-          <div style={{ paddingLeft: '1rem' }}>
+          <div className="json-children">
             {keys.map((key) => (
-              <JsonNode key={key} name={key} data={objData[key]} depth={depth + 1} expandAll={expandAll} />
+              <JsonNode key={key} name={key} data={objData[key]} expandAll={expandAll} />
             ))}
             <div>{'}'}</div>
           </div>
@@ -134,7 +133,7 @@ interface JsonResultViewProps {
 export const JsonResultView: React.FC<JsonResultViewProps> = ({ data, expandAll = false }) => {
   return (
     <div className="json-viewer">
-      <JsonNode data={data} depth={0} expandAll={expandAll} />
+      <JsonNode data={data} expandAll={expandAll} />
     </div>
   );
 };

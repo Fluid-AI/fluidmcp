@@ -16,6 +16,7 @@ export const ToolRunner: React.FC = () => {
   const [loadingServer, setLoadingServer] = useState(true);
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<Record<string, any> | undefined>(undefined);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
 
   const {
     execute,
@@ -183,41 +184,52 @@ export const ToolRunner: React.FC = () => {
             <div className="tool-runner-section">
               <div className="section-header">
                 <h2>Execution History</h2>
-                <button onClick={handleClearHistory} className="btn-text">
-                  Clear All
-                </button>
-              </div>
-
-              <div className="history-list">
-                {history.slice(0, 10).map((execution) => (
-                  <div
-                    key={execution.id}
-                    className={`history-item ${execution.success ? 'success' : 'failed'}`}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => setHistoryCollapsed(!historyCollapsed)}
+                    className="btn-text"
+                    title={historyCollapsed ? 'Expand history' : 'Collapse history'}
                   >
-                    <div className="history-item-header">
-                      <span className="history-timestamp">
-                        {new Date(execution.timestamp).toLocaleString()}
-                      </span>
-                      <span className={`history-status ${execution.success ? 'success' : 'failed'}`}>
-                        {execution.success ? '✓' : '✗'}
-                      </span>
-                    </div>
-
-                    <div className="history-item-details">
-                      <pre className="history-args">
-                        {JSON.stringify(execution.arguments, null, 2)}
-                      </pre>
-                    </div>
-
-                    <button
-                      onClick={() => handleLoadFromHistory(execution.id)}
-                      className="btn-load-history"
-                    >
-                      Load
-                    </button>
-                  </div>
-                ))}
+                    {historyCollapsed ? 'Expand ▼' : 'Collapse ▲'}
+                  </button>
+                  <button onClick={handleClearHistory} className="btn-text">
+                    Clear All
+                  </button>
+                </div>
               </div>
+
+              {!historyCollapsed && (
+                <div className="history-list">
+                  {history.slice(0, 10).map((execution) => (
+                    <div
+                      key={execution.id}
+                      className={`history-item ${execution.success ? 'success' : 'failed'}`}
+                    >
+                      <div className="history-item-header">
+                        <span className="history-timestamp">
+                          {new Date(execution.timestamp).toLocaleString()}
+                        </span>
+                        <span className={`history-status ${execution.success ? 'success' : 'failed'}`}>
+                          {execution.success ? '✓' : '✗'}
+                        </span>
+                      </div>
+
+                      <div className="history-item-details">
+                        <pre className="history-args">
+                          {JSON.stringify(execution.arguments, null, 2)}
+                        </pre>
+                      </div>
+
+                      <button
+                        onClick={() => handleLoadFromHistory(execution.id)}
+                        className="btn-load-history"
+                      >
+                        Load
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

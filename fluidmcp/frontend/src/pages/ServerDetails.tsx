@@ -5,6 +5,7 @@ import { useServerEnv } from "../hooks/useServerEnv";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
 import { ServerEnvForm } from "../components/ServerEnvForm";
+import apiClient from "../services/api";
 
 export default function ServerDetails() {
   const { serverId } = useParams<{ serverId: string }>();
@@ -37,7 +38,19 @@ export default function ServerDetails() {
   // Detect if server needs env variables
   const configEnv = serverDetails?.config?.env || {};
   const needsEnv = Object.keys(configEnv).length > 0;
-  const hasInstanceEnv = serverDetails?.status?.env && Object.keys(serverDetails.status.env).length > 0;
+
+  // Check if instance env is configured by looking at envMetadata
+  // All required env vars must be present
+  const hasInstanceEnv = envMetadata && needsEnv &&
+    Object.keys(configEnv).every(key => envMetadata[key]?.present === true);
+
+  // Debug logging
+  console.log('[ServerDetails] Env Check:', {
+    needsEnv,
+    hasInstanceEnv,
+    configEnvKeys: Object.keys(configEnv),
+    envMetadata
+  });
 
   // Auto-expand env form if server needs env but doesn't have instance env yet
   const shouldExpandEnvForm = needsEnv && !hasInstanceEnv;
@@ -76,19 +89,38 @@ export default function ServerDetails() {
   };
 
   const handleEnvSubmit = async (env: Record<string, string>) => {
+    if (!serverId) return;
+
     try {
       await updateEnv(env);
 
-      // Wait 2 seconds for server to restart (V1 simplification)
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // TEMP: Manual retry until polling hook is introduced in follow-up PR
+      // Wait for server to restart and tools to be discovered (with retry)
+      // Try up to 3 times with 2 second intervals
+      let retries = 3;
+      let toolsFound = false;
 
-      // Refetch server details and env metadata
-      await Promise.all([refetch(), refetchEnv()]);
+      while (retries > 0 && !toolsFound) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Refetch server details and env metadata
+        await Promise.all([refetch(), refetchEnv()]);
+
+        // Check if tools are now available
+        const currentTools = await apiClient.getServerTools(serverId).catch(() => ({ tools: [] }));
+        toolsFound = currentTools.tools && currentTools.tools.length > 0;
+
+        retries--;
+      }
 
       // Collapse form after successful update
       setEnvFormExpanded(false);
 
-      alert('Environment variables saved and server restarted successfully');
+      if (toolsFound) {
+        alert('Environment variables saved and server restarted successfully. Tools are now available!');
+      } else {
+        alert('Environment variables saved and server restarted successfully. Tools may take a moment to appear.');
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update environment variables');
       throw err; // Re-throw so form knows it failed
@@ -230,15 +262,7 @@ export default function ServerDetails() {
       <section className="dashboard-section">
         <h2>Available tools</h2>
         <div className="active-server-container">
-          {needsEnv && !hasInstanceEnv ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">⚠️</div>
-              <h3 className="empty-state-title">Environment Configuration Required</h3>
-              <p className="empty-state-description">
-                Configure environment variables above to enable tools
-              </p>
-            </div>
-          ) : !hasTools ? (
+          {!hasTools ? (
             <div className="empty-state">
               <div className="empty-state-icon">🔧</div>
               <h3 className="empty-state-title">No tools available</h3>
@@ -249,23 +273,36 @@ export default function ServerDetails() {
               </p>
             </div>
           ) : (
-            <div className="active-server-list">
-              {tools.map((tool) => (
-                <div key={tool.name} className="active-server-row">
-                  <div>
-                    <strong>{tool.name}</strong>
-                    <p className="subtitle">{tool.description}</p>
-                  </div>
-
-                  <button
-                    className="details-btn"
-                    onClick={() => navigate(`/servers/${serverId}/tools/${tool.name}`)}
-                  >
-                    Run tool
-                  </button>
+            <>
+              {needsEnv && !hasInstanceEnv && (
+                <div className="empty-state" style={{ marginBottom: '1rem', backgroundColor: '#2a2a2a', padding: '1rem', borderLeft: '4px solid #f59e0b' }}>
+                  <div className="empty-state-icon" style={{ fontSize: '1.5rem' }}>⚠️</div>
+                  <h3 className="empty-state-title" style={{ fontSize: '1rem', margin: '0.5rem 0' }}>Environment Configuration Required</h3>
+                  <p className="empty-state-description" style={{ fontSize: '0.875rem', margin: '0' }}>
+                    Configure environment variables above before running tools
+                  </p>
                 </div>
-              ))}
-            </div>
+              )}
+              <div className="active-server-list">
+                {tools.map((tool) => (
+                  <div key={tool.name} className="active-server-row">
+                    <div>
+                      <strong>{tool.name}</strong>
+                      <p className="subtitle">{tool.description}</p>
+                    </div>
+
+                    <button
+                      className="details-btn"
+                      onClick={() => navigate(`/servers/${serverId}/tools/${tool.name}`)}
+                      disabled={needsEnv && !hasInstanceEnv}
+                      title={needsEnv && !hasInstanceEnv ? "Configure environment variables first" : "Run this tool"}
+                    >
+                      Run tool
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       </section>
