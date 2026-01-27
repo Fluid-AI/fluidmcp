@@ -5,15 +5,20 @@ This module provides FastAPI endpoints for Auth0 authentication.
 """
 
 from datetime import datetime
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends, Security
 from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from .config import Auth0Config
 from .oauth_client import Auth0Client
 from .token_manager import TokenManager
 from .session_store import session_store
+from ..services.package_launcher import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+# Security instance for optional authentication (auto_error=False for idempotent operations)
+security = HTTPBearer(auto_error=False)
 
 # Initialize Auth0 components (will be set during app startup)
 config: Auth0Config = None
@@ -205,22 +210,42 @@ async def callback(request: Request, code: str = None, state: str = None, error:
 
 
 @router.get("/me")
-async def get_user_info(request: Request):
-    """Get current user information"""
-    # This will be called with JWT token in Authorization header
-    # The middleware will handle token validation
-    if hasattr(request.state, 'user'):
-        return request.state.user
-    else:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+async def get_user_info(user: dict = Depends(get_current_user)):
+    """Get current user information.
+
+    Returns user data if authenticated, otherwise returns unauthenticated status.
+    This endpoint is developer-friendly for no-auth mode testing.
+    """
+    if not user:
+        # In no-auth mode, return friendly response instead of 401
+        return {"authenticated": False, "mode": "no-auth"}
+    return {"authenticated": True, "user": user}
 
 
 @router.post("/logout")
-async def logout(request: Request):
-    """Logout user and clear session"""
+async def logout(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Security(security)
+):
+    """Logout user and clear session.
+
+    This endpoint is idempotent and works even if:
+    - User is already logged out
+    - Token is invalid/expired
+    - No authentication is enabled
+    """
     # Extract request metadata for logging
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get('user-agent', '')
+
+    # Try to validate token if provided (optional, non-blocking)
+    user = None
+    if credentials:
+        try:
+            user = get_current_user(credentials)
+        except Exception:
+            # Invalid token - that's okay for logout
+            pass
 
     # Get session ID from request if available
     session_id = request.headers.get('X-Session-ID')
@@ -234,4 +259,8 @@ async def logout(request: Request):
     # Generate Auth0 logout URL
     logout_url = oauth_client.logout_url(str(request.base_url))
 
-    return {"logout_url": logout_url}
+    return {
+        "success": True,
+        "logout_url": logout_url,
+        "user_authenticated": bool(user)
+    }
