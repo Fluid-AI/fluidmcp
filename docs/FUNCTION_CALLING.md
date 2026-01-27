@@ -1,483 +1,815 @@
-# vLLM Function Calling
+# vLLM Function Calling (OpenAI-Compatible Pass-Through)
 
-FluidMCP supports OpenAI-compatible function calling for vLLM models, enabling agents to use tools and execute actions.
+FluidMCP supports OpenAI-compatible function calling for vLLM models by passing tool schemas and responses transparently between clients and the vLLM inference server.
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
-- [Tool Definition](#tool-definition)
-- [Configuration](#configuration)
-- [Examples](#examples)
-- [Safety Controls](#safety-controls)
+- [Request Format](#request-format)
+- [Response Format](#response-format)
+- [Complete Example](#complete-example)
+- [MCP Tools Integration](#mcp-tools-integration)
 - [Streaming Support](#streaming-support)
-- [Metrics](#metrics)
 - [Troubleshooting](#troubleshooting)
+
+---
 
 ## Overview
 
-Function calling allows vLLM models to:
-- Request tool execution during conversations
-- Receive structured tool results
-- Use results to provide informed answers
+FluidMCP's vLLM proxy provides **transparent pass-through** of OpenAI function calling parameters:
 
-**Use cases:**
-- Search and retrieval
-- Data analysis
-- API integrations
-- Calculator operations
-- File system operations (in sandbox)
+1. **Client sends** `tools` parameter with function schemas
+2. **FluidMCP forwards** the request directly to vLLM
+3. **vLLM returns** `tool_calls` in the response
+4. **Client receives** the tool_calls and **manually executes** them
+5. **Client sends** tool results back in the next message
 
-## Quick Start
+**What FluidMCP does:**
+- ✅ Forwards `tools`, `tool_choice`, and other OpenAI parameters to vLLM
+- ✅ Returns vLLM's response including `tool_calls` unchanged
+- ✅ Supports streaming mode with function calling
 
-### 1. Register a Tool
+**What FluidMCP does NOT do:**
+- ❌ Does not automatically execute tools
+- ❌ Does not maintain an agent loop
+- ❌ Does not orchestrate multi-step workflows
 
-```python
-from fluidmcp.cli.services.tool_registry import get_global_registry
+This follows the standard OpenAI function calling pattern where **the client is responsible for tool execution**.
 
-# Get global registry
-registry = get_global_registry()
+---
 
-# Define your tool function
-def get_weather(city: str) -> dict:
-    # Your implementation
-    return {"city": city, "temperature": 25, "condition": "sunny"}
+## How It Works
 
-# Register the tool
-registry.register(
-    name="get_weather",
-    function=get_weather,
-    description="Get current weather for a city",
-    parameters={
-        "type": "object",
-        "properties": {
-            "city": {
-                "type": "string",
-                "description": "City name"
-            }
-        },
-        "required": ["city"]
-    }
-)
+### Architecture
+
+```
+┌──────────┐         ┌─────────────┐         ┌──────────┐
+│  Client  │────1───▶│  FluidMCP   │────2───▶│   vLLM   │
+│          │         │    Proxy    │         │  Server  │
+│          │◀───4────│             │◀───3────│          │
+└──────────┘         └─────────────┘         └──────────┘
+     │
+     └────────5 (manual execution)───────────┘
 ```
 
-### 2. Use in Chat Completion
+1. Client sends request with `tools` parameter
+2. FluidMCP forwards entire request body to vLLM
+3. vLLM returns response with `tool_calls`
+4. FluidMCP forwards response to client
+5. Client executes tool and sends result in next request
 
-```python
-from fluidmcp.cli.services.function_router import create_function_router
+### Request Flow
 
-# Create router
-router = create_function_router("llama-2-70b", config={
-    "allowed_tools": ["get_weather"],
-    "timeout_per_tool": 10,
-    "max_iterations": 5
-})
-
-# Chat with function calling
-messages = [
-    {"role": "user", "content": "What's the weather in Bangalore?"}
-]
-
-response = await router.handle_completion(
-    messages=messages,
-    vllm_client=vllm_client,
-    stream=False
-)
-```
-
-## Tool Definition
-
-### Tool Schema Format
-
-Tools follow OpenAI's function calling schema:
-
-```python
+```json
+POST /llm/{model_id}/v1/chat/completions
 {
-    "name": "tool_name",           # Unique identifier
-    "description": "What it does",  # Model uses this to decide when to call
-    "parameters": {                 # JSON Schema for parameters
-        "type": "object",
-        "properties": {
-            "param1": {
-                "type": "string",
-                "description": "Parameter description"
-            },
-            "param2": {
-                "type": "number",
-                "description": "Another parameter"
-            }
-        },
-        "required": ["param1"]      # Required parameters
-    }
+  "messages": [...],
+  "tools": [...]  // ← Passed through to vLLM
 }
 ```
 
-### Supported Parameter Types
-
-- `string` - Text values
-- `number` - Numeric values (int or float)
-- `boolean` - True/false
-- `array` - Lists
-- `object` - Nested objects
-
-### Tool Function Requirements
-
-**Synchronous functions:**
+FluidMCP proxy code ([run_servers.py:685-701](../fluidmcp/cli/services/run_servers.py#L685-L701)):
 ```python
-def my_tool(arg1: str, arg2: int) -> dict:
-    # Process synchronously
-    return {"result": "value"}
+@app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
+async def proxy_chat_completions(model_id: str, request: Request):
+    body = await request.json()
+    return await _proxy_llm_request(model_id, "chat", "POST", body)
 ```
 
-**Async functions:**
-```python
-async def my_async_tool(arg1: str) -> dict:
-    # Process asynchronously
-    await asyncio.sleep(0.1)
-    return {"result": "value"}
-```
+The request body (including `tools`, `tool_choice`, etc.) is forwarded **verbatim** to vLLM.
 
-**Return values:**
-- Return dict, list, str, or any JSON-serializable type
-- Result is converted to string and passed back to model
+---
 
-## Configuration
+## Quick Start
 
-### Model-Level Configuration
+### 1. Start FluidMCP with vLLM Model
 
-Configure function calling in your vLLM model config:
+Configure a vLLM model with function calling support:
 
 ```json
 {
   "llmModels": {
-    "llama-2-70b": {
+    "llama-3-70b": {
       "command": "vllm",
-      "args": ["serve", "meta-llama/Llama-2-70b-chat-hf"],
-      "tooling": {
-        "enabled": true,
-        "allowed_tools": ["get_weather", "calculator", "search"],
-        "timeout_per_tool": 10,
-        "max_call_depth": 3,
-        "max_iterations": 5
+      "args": ["serve", "meta-llama/Meta-Llama-3-70B-Instruct"],
+      "endpoint": {
+        "base_url": "http://localhost:8000",
+        "chat": "/v1/chat/completions"
       }
     }
   }
 }
 ```
 
-### Configuration Options
+Start FluidMCP:
+```bash
+fluidmcp run config.json --file --start-server
+```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `enabled` | boolean | true | Enable function calling |
-| `allowed_tools` | list | [] | Whitelist of allowed tools (empty = all allowed) |
-| `timeout_per_tool` | int | 10 | Timeout in seconds per tool execution |
-| `max_call_depth` | int | 3 | Maximum recursive call depth |
-| `max_iterations` | int | 5 | Maximum conversation iterations |
+### 2. Send Request with Tools
 
-## Examples
+```bash
+curl -X POST http://localhost:8099/llm/llama-3-70b/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "What is the weather in San Francisco?"}
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "Get current weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "city": {"type": "string", "description": "City name"}
+            },
+            "required": ["city"]
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  }'
+```
 
-### Example 1: Weather Tool
+### 3. Handle Response with tool_calls
+
+vLLM returns (via FluidMCP):
+```json
+{
+  "id": "chatcmpl-123",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\": \"San Francisco\"}"
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ]
+}
+```
+
+### 4. Execute Tool Manually
+
+Your client code:
+```python
+# Parse tool call
+tool_call = response["choices"][0]["message"]["tool_calls"][0]
+function_name = tool_call["function"]["name"]
+arguments = json.loads(tool_call["function"]["arguments"])
+
+# Execute tool (YOUR code, not FluidMCP)
+if function_name == "get_weather":
+    result = get_weather(arguments["city"])
+    # result = {"temperature": 18, "condition": "foggy"}
+```
+
+### 5. Send Tool Result Back
+
+```bash
+curl -X POST http://localhost:8099/llm/llama-3-70b/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "What is the weather in San Francisco?"},
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\": \"San Francisco\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_abc123",
+        "content": "{\"temperature\": 18, \"condition\": \"foggy\"}"
+      }
+    ]
+  }'
+```
+
+vLLM responds with final answer:
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "It's currently 18°C and foggy in San Francisco."
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+---
+
+## Request Format
+
+### Full Request Schema
+
+```json
+{
+  "messages": [
+    {"role": "user", "content": "Your question"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "tool_name",
+        "description": "What the tool does (helps model decide when to call)",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "param1": {
+              "type": "string",
+              "description": "Parameter description"
+            }
+          },
+          "required": ["param1"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",  // "auto", "none", or {"type": "function", "function": {"name": "tool_name"}}
+  "temperature": 0.7,
+  "max_tokens": 1000,
+  "stream": false
+}
+```
+
+### Tool Definition
+
+Each tool follows OpenAI's schema:
 
 ```python
+{
+  "type": "function",
+  "function": {
+    "name": "function_name",           # Unique identifier (snake_case recommended)
+    "description": "Clear description of what the function does and when to use it",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "param_name": {
+          "type": "string" | "number" | "boolean" | "array" | "object",
+          "description": "What this parameter represents",
+          "enum": ["option1", "option2"]  # Optional: restrict to specific values
+        }
+      },
+      "required": ["param_name"]        # List of required parameters
+    }
+  }
+}
+```
+
+### Supported Parameter Types
+
+- `string` - Text values
+- `number` - Numeric values (integer or float)
+- `boolean` - `true` or `false`
+- `array` - Lists of values
+- `object` - Nested objects
+
+### tool_choice Values
+
+- `"auto"` (default) - Model decides whether to call a tool
+- `"none"` - Model will not call any tools
+- `{"type": "function", "function": {"name": "tool_name"}}` - Force specific tool call
+
+---
+
+## Response Format
+
+### Response with tool_calls
+
+When vLLM decides to call a tool:
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "llama-3-70b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_xyz789",
+            "type": "function",
+            "function": {
+              "name": "function_name",
+              "arguments": "{\"param\": \"value\"}"  // JSON string
+            }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 50,
+    "completion_tokens": 20,
+    "total_tokens": 70
+  }
+}
+```
+
+**Key fields:**
+- `finish_reason: "tool_calls"` - Indicates tool call was made
+- `content: null` - No text content when making tool call
+- `tool_calls` - Array of function calls to execute
+- `arguments` - JSON string (you must parse it)
+
+### Response without tool_calls
+
+When model responds normally:
+
+```json
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Here is my answer based on the information..."
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+---
+
+## Complete Example
+
+### Python Client Example
+
+```python
+import httpx
+import json
+
+FLUIDMCP_URL = "http://localhost:8099"
+MODEL_ID = "llama-3-70b"
+
+# Define tool schema
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "City name (e.g., 'San Francisco', 'Tokyo')"
+                    },
+                    "units": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "description": "Temperature units"
+                    }
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "Perform basic mathematical operations",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["add", "subtract", "multiply", "divide"]
+                    },
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                },
+                "required": ["operation", "x", "y"]
+            }
+        }
+    }
+]
+
+# Tool implementations
 def get_weather(city: str, units: str = "celsius") -> dict:
-    """Get weather information for a city."""
-    # Implementation (could call weather API)
+    # Your implementation (call weather API, etc.)
     return {
         "city": city,
-        "temperature": 25,
-        "units": units,
-        "condition": "sunny",
-        "humidity": 65
+        "temperature": 18 if units == "celsius" else 64,
+        "condition": "foggy",
+        "units": units
     }
 
-registry.register(
-    name="get_weather",
-    function=get_weather,
-    description="Get current weather information for any city",
-    parameters={
-        "type": "object",
-        "properties": {
-            "city": {
-                "type": "string",
-                "description": "City name (e.g., 'Bangalore', 'New York')"
-            },
-            "units": {
-                "type": "string",
-                "enum": ["celsius", "fahrenheit"],
-                "description": "Temperature units"
-            }
-        },
-        "required": ["city"]
-    }
-)
-```
-
-**Usage:**
-```
-User: "What's the weather in Mumbai?"
-Model: [calls get_weather(city="Mumbai")]
-Tool: Returns {"city": "Mumbai", "temperature": 28, ...}
-Model: "It's currently 28°C and sunny in Mumbai with 65% humidity."
-```
-
-### Example 2: Calculator Tool
-
-```python
 def calculator(operation: str, x: float, y: float) -> dict:
-    """Perform mathematical operations."""
-    operations = {
+    ops = {
         "add": x + y,
         "subtract": x - y,
         "multiply": x * y,
         "divide": x / y if y != 0 else None
     }
+    return {"result": ops.get(operation)}
 
-    result = operations.get(operation)
-    return {"operation": operation, "result": result}
+# Function calling loop
+async def chat_with_tools(user_message: str):
+    messages = [{"role": "user", "content": user_message}]
 
-registry.register(
-    name="calculator",
-    function=calculator,
-    description="Perform basic mathematical calculations",
-    parameters={
-        "type": "object",
-        "properties": {
-            "operation": {
-                "type": "string",
-                "enum": ["add", "subtract", "multiply", "divide"],
-                "description": "Mathematical operation to perform"
-            },
-            "x": {
-                "type": "number",
-                "description": "First operand"
-            },
-            "y": {
-                "type": "number",
-                "description": "Second operand"
+    async with httpx.AsyncClient() as client:
+        # Step 1: Send initial request with tools
+        response = await client.post(
+            f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+            json={
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "auto"
             }
-        },
-        "required": ["operation", "x", "y"]
-    }
-)
+        )
+        data = response.json()
+        message = data["choices"][0]["message"]
+
+        # Step 2: Check if model wants to call tools
+        if message.get("tool_calls"):
+            # Add assistant message with tool calls
+            messages.append(message)
+
+            # Step 3: Execute each tool call
+            for tool_call in message["tool_calls"]:
+                function_name = tool_call["function"]["name"]
+                arguments = json.loads(tool_call["function"]["arguments"])
+
+                # Execute tool
+                if function_name == "get_weather":
+                    result = get_weather(**arguments)
+                elif function_name == "calculator":
+                    result = calculator(**arguments)
+                else:
+                    result = {"error": "Unknown function"}
+
+                # Add tool result message
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": json.dumps(result)
+                })
+
+            # Step 4: Send tool results back to model
+            response = await client.post(
+                f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+                json={"messages": messages}
+            )
+            data = response.json()
+            final_message = data["choices"][0]["message"]["content"]
+            return final_message
+        else:
+            # No tool calls, return direct response
+            return message["content"]
+
+# Usage
+import asyncio
+result = asyncio.run(chat_with_tools("What's 25 * 4?"))
+print(result)  # Model calls calculator tool and responds: "25 * 4 equals 100"
 ```
 
-### Example 3: Async Search Tool
+---
+
+## MCP Tools Integration
+
+### Option 1: Manual MCP Tool Execution
+
+If you have FluidMCP MCP servers running, you can call them from your tool functions:
 
 ```python
 import httpx
 
-async def web_search(query: str, max_results: int = 5) -> dict:
-    """Search the web for information."""
+async def filesystem_read(path: str) -> dict:
+    """Read file using FluidMCP filesystem MCP server."""
     async with httpx.AsyncClient() as client:
-        # Your search API implementation
-        response = await client.get(
-            "https://api.search.com/search",
-            params={"q": query, "limit": max_results}
-        )
-        results = response.json()
-
-    return {
-        "query": query,
-        "results": results["items"],
-        "count": len(results["items"])
-    }
-
-registry.register(
-    name="web_search",
-    function=web_search,
-    description="Search the web for current information",
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Search query"
-            },
-            "max_results": {
-                "type": "integer",
-                "description": "Maximum number of results",
-                "default": 5
+        response = await client.post(
+            "http://localhost:8099/filesystem/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "read_file",
+                    "arguments": {"path": path}
+                }
             }
-        },
-        "required": ["query"]
+        )
+        result = response.json()
+        return result.get("result", {})
+
+# Register as tool
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read contents of a file from the filesystem",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path"}
+                },
+                "required": ["path"]
+            }
+        }
     }
-)
+]
+
+# In your tool execution:
+if function_name == "read_file":
+    result = await filesystem_read(arguments["path"])
 ```
 
-## Safety Controls
+### Option 2: Dynamic Tool Discovery
 
-### 1. Tool Allowlist
-
-Restrict which tools can be called:
+Fetch available MCP tools and convert to OpenAI schema:
 
 ```python
-config = {
-    "allowed_tools": ["get_weather", "calculator"]
-    # "search" tool will be rejected even if registered
-}
+async def get_mcp_tools_schema() -> list:
+    """Convert MCP tools to OpenAI function calling schema."""
+    async with httpx.AsyncClient() as client:
+        # List available MCP tools
+        response = await client.post(
+            "http://localhost:8099/filesystem/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        )
+        mcp_tools = response.json()["result"]["tools"]
+
+        # Convert to OpenAI schema
+        openai_tools = []
+        for tool in mcp_tools:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["inputSchema"]
+                }
+            })
+
+        return openai_tools
+
+# Usage:
+tools = await get_mcp_tools_schema()
+# Now use these tools in your chat completion request
 ```
 
-### 2. Execution Timeout
+**Note:** Future versions of FluidMCP may include automatic MCP tool execution (agent mode). This would eliminate the need for manual tool execution loops. See [Future: Automatic Tool Execution](#future-automatic-tool-execution).
 
-Prevent long-running tools from blocking:
-
-```python
-config = {
-    "timeout_per_tool": 5  # 5 seconds max per tool
-}
-```
-
-If tool exceeds timeout:
-```json
-{
-  "error": true,
-  "message": "Tool execution timeout (5s)"
-}
-```
-
-### 3. Call Depth Limiting
-
-Prevent infinite recursion:
-
-```python
-config = {
-    "max_call_depth": 3
-}
-```
-
-Model cannot call tools more than 3 levels deep.
-
-### 4. Iteration Limiting
-
-Prevent infinite loops:
-
-```python
-config = {
-    "max_iterations": 5
-}
-```
-
-Conversation will stop after 5 tool-calling iterations.
+---
 
 ## Streaming Support
 
-Function calling works with streaming responses:
+Function calling works with streaming mode:
 
 ```python
-response = await router.handle_completion(
-    messages=messages,
-    vllm_client=vllm_client,
-    stream=True  # Enable streaming
-)
+async def chat_with_streaming(user_message: str):
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": user_message}],
+                "tools": tools,
+                "stream": True
+            }
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]  # Remove "data: " prefix
+                    if data_str == "[DONE]":
+                        break
 
-async for chunk in response:
-    # Handle streaming chunks
-    if "tool_calls" in chunk:
-        # Tool call detected
-        pass
-    else:
-        # Regular content
-        print(chunk["choices"][0]["delta"]["content"], end="")
+                    chunk = json.loads(data_str)
+                    delta = chunk["choices"][0]["delta"]
+
+                    # Check for tool calls
+                    if "tool_calls" in delta:
+                        print(f"Tool call: {delta['tool_calls']}")
+
+                    # Check for content
+                    if "content" in delta:
+                        print(delta["content"], end="", flush=True)
 ```
 
-**Note:** Tool execution happens between streaming calls. The model streams initial response, tools execute, then model streams final answer.
+**Streaming behavior:**
+- Model streams text content chunk-by-chunk
+- When making tool call, `finish_reason` becomes `"tool_calls"`
+- Tool calls appear in final chunk
+- You must stop, execute tools, and send results in a new request
 
-## Metrics
-
-Function calling integrates with FluidMCP metrics:
-
-### Tool Metrics
-
-- `fluidmcp_tool_calls_total{tool_name, status}` - Total tool calls
-- `fluidmcp_tool_execution_seconds{tool_name}` - Tool execution duration
-- `fluidmcp_tool_errors_total{tool_name, error_type}` - Tool errors
-
-### Query Metrics
-
-```bash
-# View tool execution metrics
-curl http://localhost:8099/metrics | grep tool
-
-# Example output:
-fluidmcp_tool_calls_total{tool_name="get_weather",status="success"} 42
-fluidmcp_tool_execution_seconds{tool_name="get_weather",quantile="0.5"} 0.12
-fluidmcp_tool_errors_total{tool_name="calculator",error_type="timeout"} 2
-```
-
-### Grafana Dashboard
-
-Import `examples/grafana-dashboard.json` for visualization:
-- Tool call rates
-- Tool execution latency
-- Tool error rates
-- Most used tools
+---
 
 ## Troubleshooting
 
-### Tool Not Being Called
+### Model doesn't call tools
 
-**Symptom:** Model doesn't call tool even when appropriate.
-
-**Solutions:**
-1. Check tool description is clear and specific
-2. Verify tool is in `allowed_tools` list (if configured)
-3. Ensure model supports function calling (not all vLLM models do)
-4. Try more explicit user prompts
-
-### Tool Execution Timeout
-
-**Symptom:** `Tool execution timeout` error.
+**Symptoms:**
+- Model responds with text instead of calling function
+- `tool_calls` not present in response
 
 **Solutions:**
-1. Increase `timeout_per_tool` in config
-2. Optimize tool function performance
-3. Use async functions for I/O-bound operations
-4. Add caching if tool fetches external data
 
-### Invalid Arguments Error
+1. **Check model compatibility**: Not all vLLM models support function calling. Use models trained for tool use:
+   - Meta-Llama-3-70B-Instruct
+   - Mistral-7B-Instruct-v0.3 (or later)
+   - Any model fine-tuned on function calling data
 
-**Symptom:** `Invalid JSON arguments` error.
+2. **Improve tool descriptions**:
+   ```python
+   # ❌ Bad
+   "description": "Get weather"
+
+   # ✅ Good
+   "description": "Get current weather information including temperature, conditions, and humidity for any city worldwide. Use this when user asks about weather, temperature, or climate in a specific location."
+   ```
+
+3. **Use more explicit prompts**:
+   ```python
+   # ❌ Vague
+   "What's the weather?"
+
+   # ✅ Explicit
+   "What's the current weather in San Francisco? Use the get_weather tool."
+   ```
+
+4. **Try forcing tool call**:
+   ```python
+   "tool_choice": {
+       "type": "function",
+       "function": {"name": "get_weather"}
+   }
+   ```
+
+### Invalid arguments error
+
+**Symptoms:**
+- vLLM returns error about invalid JSON
+- Arguments string cannot be parsed
 
 **Solutions:**
-1. Verify parameter schema matches function signature
-2. Check required fields are marked correctly
-3. Add parameter descriptions to guide model
-4. Validate model is passing correct JSON
 
-### Max Iterations Exceeded
+1. **Check parameter schema matches expected format**:
+   ```python
+   # Schema must exactly match what you expect
+   "parameters": {
+       "type": "object",
+       "properties": {
+           "city": {"type": "string"}  # Not "city_name" or "location"
+       }
+   }
+   ```
 
-**Symptom:** Loop stops after 5 iterations.
+2. **Add parameter descriptions to guide model**:
+   ```python
+   "city": {
+       "type": "string",
+       "description": "City name in English, e.g., 'San Francisco' or 'Tokyo'"
+   }
+   ```
+
+3. **Handle parse errors gracefully**:
+   ```python
+   try:
+       arguments = json.loads(tool_call["function"]["arguments"])
+   except json.JSONDecodeError:
+       print(f"Invalid JSON: {tool_call['function']['arguments']}")
+       # Send error back to model
+   ```
+
+### vLLM not responding
+
+**Symptoms:**
+- Request times out
+- 502 Bad Gateway error
 
 **Solutions:**
-1. Increase `max_iterations` in config
-2. Review tool descriptions (model may be confused)
-3. Add more specific prompts to guide model
-4. Check if tool results are informative enough
 
-### Tool Not Found
+1. **Check vLLM server is running**:
+   ```bash
+   curl http://localhost:8000/health
+   ```
 
-**Symptom:** `Tool 'tool_name' not found` error.
+2. **Verify endpoint configuration**:
+   ```json
+   {
+     "endpoint": {
+       "base_url": "http://localhost:8000",  // Correct port?
+       "chat": "/v1/chat/completions"        // Correct path?
+     }
+   }
+   ```
+
+3. **Check vLLM logs** for errors:
+   ```bash
+   # If running vLLM directly
+   tail -f vllm.log
+   ```
+
+### Tool result not affecting response
+
+**Symptoms:**
+- Model ignores tool results
+- Response doesn't incorporate tool data
 
 **Solutions:**
-1. Verify tool is registered before use
-2. Check spelling of tool name
-3. Ensure registry is using global instance
-4. Confirm tool wasn't unregistered
+
+1. **Ensure tool result message is properly formatted**:
+   ```python
+   {
+       "role": "tool",
+       "tool_call_id": "call_abc123",  # Must match tool_call.id
+       "content": json.dumps(result)   # Must be JSON string
+   }
+   ```
+
+2. **Include complete conversation history**:
+   ```python
+   messages = [
+       {"role": "user", "content": "..."},
+       {"role": "assistant", "content": None, "tool_calls": [...]},
+       {"role": "tool", "tool_call_id": "...", "content": "..."}
+   ]
+   ```
+
+3. **Return informative tool results**:
+   ```python
+   # ❌ Bad
+   return "18"
+
+   # ✅ Good
+   return json.dumps({
+       "temperature": 18,
+       "units": "celsius",
+       "condition": "foggy",
+       "city": "San Francisco"
+   })
+   ```
+
+---
 
 ## Best Practices
 
-### 1. Clear Tool Descriptions
+### 1. Clear, Descriptive Tool Names
 
 ```python
 # ❌ Bad
-description="Get data"
+"name": "func1"
+"name": "get"
 
 # ✅ Good
-description="Get current weather data including temperature, humidity, and conditions for any city worldwide"
+"name": "get_weather"
+"name": "calculate_mortgage_payment"
 ```
 
-### 2. Specific Parameter Descriptions
+### 2. Comprehensive Descriptions
+
+```python
+# ❌ Bad
+"description": "Gets data"
+
+# ✅ Good
+"description": "Retrieves current weather data including temperature (°C), humidity (%), conditions, and wind speed for any city worldwide. Use when user asks about weather, climate, or temperature in a specific location."
+```
+
+### 3. Detailed Parameter Descriptions
 
 ```python
 # ❌ Bad
@@ -486,84 +818,135 @@ description="Get current weather data including temperature, humidity, and condi
 # ✅ Good
 "city": {
     "type": "string",
-    "description": "City name in English (e.g., 'San Francisco', 'Tokyo', 'London')"
+    "description": "City name in English (e.g., 'San Francisco', 'London', 'Tokyo'). Use common English names, not local spellings."
 }
 ```
 
-### 3. Handle Errors Gracefully
+### 4. Use Enums for Constrained Values
 
 ```python
-def my_tool(param: str) -> dict:
+"units": {
+    "type": "string",
+    "enum": ["celsius", "fahrenheit"],
+    "description": "Temperature units to return"
+}
+```
+
+### 5. Return Structured Data
+
+```python
+# ❌ Bad
+return "It's 18 degrees and foggy"
+
+# ✅ Good
+return {
+    "temperature": 18,
+    "units": "celsius",
+    "condition": "foggy",
+    "humidity": 85,
+    "wind_speed": 12
+}
+```
+
+### 6. Handle Errors Gracefully
+
+```python
+def get_weather(city: str) -> dict:
     try:
-        result = potentially_failing_operation(param)
-        return {"success": True, "result": result}
+        data = fetch_weather_api(city)
+        return {"success": True, "data": data}
     except Exception as e:
-        # Return error as dict, not exception
         return {"success": False, "error": str(e)}
 ```
 
-### 4. Use Async for I/O
+### 7. Limit Conversation Length
+
+Avoid infinite loops:
 
 ```python
-# ✅ Good for API calls, database queries, file I/O
-async def fetch_data(url: str) -> dict:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        return response.json()
+MAX_ITERATIONS = 5
+
+for iteration in range(MAX_ITERATIONS):
+    response = await client.post(...)
+    if not response.get("tool_calls"):
+        break  # Model finished
+    # Execute tools and continue
 ```
 
-### 5. Validate Input
+---
 
-```python
-def calculator(operation: str, x: float, y: float) -> dict:
-    if operation not in ["add", "subtract", "multiply", "divide"]:
-        return {"error": f"Unknown operation: {operation}"}
+## Future: Automatic Tool Execution
 
-    if operation == "divide" and y == 0:
-        return {"error": "Division by zero"}
+FluidMCP may add **agent mode** in a future release, which would automatically:
+- Execute MCP tools when model requests them
+- Handle multi-step tool orchestration
+- Maintain conversation state
+- Provide safety controls (timeouts, allowlists)
 
-    # Proceed with calculation
-    ...
+This would eliminate the need for manual tool execution loops.
+
+**Proposed usage** (future):
+```json
+{
+  "llmModels": {
+    "llama-3-70b": {
+      "command": "vllm",
+      "args": ["serve", "meta-llama/Meta-Llama-3-70B-Instruct"],
+      "agent_mode": {
+        "enabled": true,
+        "auto_execute_mcp_tools": true,
+        "allowed_tools": ["filesystem", "weather"],
+        "max_iterations": 5
+      }
+    }
+  }
+}
 ```
+
+For now, use the manual execution pattern documented above.
+
+---
 
 ## API Reference
 
-### ToolRegistry
+### Endpoint
 
-```python
-from fluidmcp.cli.services.tool_registry import ToolRegistry, get_global_registry
-
-registry = get_global_registry()
-registry.register(name, function, description, parameters)
-registry.unregister(name)
-registry.get_tool(name)
-registry.list_tool_schemas()
+```
+POST /llm/{model_id}/v1/chat/completions
 ```
 
-### ToolExecutor
+### Request Body
 
-```python
-from fluidmcp.cli.services.tool_executor import ToolExecutor
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `messages` | array | Yes | Conversation history |
+| `tools` | array | No | Function definitions (OpenAI schema) |
+| `tool_choice` | string/object | No | `"auto"`, `"none"`, or force specific tool |
+| `temperature` | number | No | Sampling temperature (0-2) |
+| `max_tokens` | number | No | Maximum tokens to generate |
+| `stream` | boolean | No | Enable streaming (default: false) |
 
-executor = ToolExecutor(registry, model_id, config)
-result = await executor.execute_tool_call(tool_call, depth=0)
-results = await executor.execute_tool_calls(tool_calls, depth=0)
-```
+### Response Body
 
-### FunctionRouter
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique completion ID |
+| `choices` | array | Array of completion choices |
+| `choices[].message.role` | string | Always `"assistant"` |
+| `choices[].message.content` | string/null | Text response (null if tool_calls) |
+| `choices[].message.tool_calls` | array | Tools to execute (if any) |
+| `choices[].finish_reason` | string | `"stop"`, `"tool_calls"`, or `"length"` |
+| `usage` | object | Token usage statistics |
 
-```python
-from fluidmcp.cli.services.function_router import create_function_router
-
-router = create_function_router(model_id, config)
-response = await router.handle_completion(
-    messages, vllm_client, tools, tool_choice, stream
-)
-```
+---
 
 ## Further Reading
 
-- [OpenAI Function Calling Guide](https://platform.openai.com/docs/guides/function-calling)
-- [vLLM Documentation](https://docs.vllm.ai/)
-- [FluidMCP Monitoring Guide](MONITORING.md)
-- [MCP Specification](https://modelcontextprotocol.io/)
+- **OpenAI Function Calling**: https://platform.openai.com/docs/guides/function-calling
+- **vLLM Documentation**: https://docs.vllm.ai/
+- **MCP Specification**: https://modelcontextprotocol.io/
+- **FluidMCP Monitoring**: [MONITORING.md](MONITORING.md)
+
+---
+
+**Questions or issues?** Open an issue: https://github.com/Fluid-AI/fluidmcp/issues
