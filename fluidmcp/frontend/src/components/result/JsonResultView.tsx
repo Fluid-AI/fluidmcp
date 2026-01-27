@@ -1,13 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface JsonNodeProps {
   data: unknown;
   depth: number;
   name?: string;
+  expandAll?: boolean;
 }
 
-const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
-  const [isCollapsed, setIsCollapsed] = useState(depth > 2);
+const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name, expandAll = false }) => {
+  const [isCollapsed, setIsCollapsed] = useState(!expandAll);
+
+  // Sync with parent expand/collapse control
+  useEffect(() => {
+    setIsCollapsed(!expandAll);
+  }, [expandAll]);
 
   if (data === null) {
     return (
@@ -73,7 +79,7 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
         {!isCollapsed && (
           <div style={{ paddingLeft: '1rem' }}>
             {data.map((item, idx) => (
-              <JsonNode key={idx} data={item} depth={depth + 1} />
+              <JsonNode key={idx} data={item} depth={depth + 1} expandAll={expandAll} />
             ))}
             <div>]</div>
           </div>
@@ -108,7 +114,7 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
         {!isCollapsed && (
           <div style={{ paddingLeft: '1rem' }}>
             {keys.map((key) => (
-              <JsonNode key={key} name={key} data={objData[key]} depth={depth + 1} />
+              <JsonNode key={key} name={key} data={objData[key]} depth={depth + 1} expandAll={expandAll} />
             ))}
             <div>{'}'}</div>
           </div>
@@ -122,12 +128,13 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, depth, name }) => {
 
 interface JsonResultViewProps {
   data: unknown;
+  expandAll?: boolean;
 }
 
-export const JsonResultView: React.FC<JsonResultViewProps> = ({ data }) => {
+export const JsonResultView: React.FC<JsonResultViewProps> = ({ data, expandAll = false }) => {
   return (
     <div className="json-viewer">
-      <JsonNode data={data} depth={0} />
+      <JsonNode data={data} depth={0} expandAll={expandAll} />
     </div>
   );
 };

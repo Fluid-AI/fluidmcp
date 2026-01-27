@@ -20,6 +20,7 @@ class ServerConfigDocument:
     description: str = ""                    # Server description
     enabled: bool = True                     # Whether server is enabled
     mcp_config: Dict[str, Any] = field(default_factory=dict)  # Nested: {command, args, env}
+    env_metadata: Optional[Dict[str, Dict[str, Any]]] = None  # Metadata for env vars: {var_name: {required, description}}
     restart_policy: str = "never"            # "never", "on-failure", "always"
     restart_window_sec: int = 300            # Restart time window
     max_restarts: int = 3                    # Max restart attempts
