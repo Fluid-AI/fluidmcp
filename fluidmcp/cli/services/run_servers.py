@@ -335,6 +335,9 @@ def run_servers(
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
 
+    # Add health check endpoint
+    _add_health_endpoint(app)
+
     # Add Prometheus metrics endpoint
     _add_metrics_endpoint(app)
 
@@ -845,6 +848,27 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         logger.info(f"Tool discovery complete: {len(all_tools)} tools from {len(servers_found)} servers")
 
         return JSONResponse(content=response)
+
+
+def _add_health_endpoint(app: FastAPI) -> None:
+    """
+    Add GET /health endpoint for health checks.
+
+    Args:
+        app: FastAPI application instance
+    """
+    @app.get("/health", tags=["monitoring"])
+    async def health_check():
+        """
+        Health check endpoint.
+
+        Returns server health status.
+        """
+        return {
+            "status": "healthy",
+            "servers": len(_server_processes),
+            "running_servers": len([p for p in _server_processes.values() if p.poll() is None])
+        }
 
 
 def _add_metrics_endpoint(app: FastAPI) -> None:
