@@ -9,6 +9,7 @@ export interface ServerStatus {
   uptime?: number;
   restart_count: number;
   exit_code?: number | null;
+  env?: Record<string, string>; // Instance environment variables (for presence check)
 }
 
 export interface Tool {
@@ -117,4 +118,21 @@ export interface ToolExecution {
   success: boolean;
   error?: string;
   executionTime?: number;
+}
+
+// Environment variable metadata for instance configuration
+export interface EnvMetadata {
+  present: boolean;        // Has value in instance
+  required: boolean;       // Required for server operation
+  masked: string | null;   // Masked value ("****") if present
+  description: string;     // Help text for user
+}
+
+export interface ServerEnvMetadataResponse {
+  [key: string]: EnvMetadata;
+}
+
+export interface UpdateEnvResponse {
+  message: string;
+  env_updated: boolean;
 }

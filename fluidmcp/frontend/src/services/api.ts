@@ -6,6 +6,8 @@ import type {
   ToolExecutionRequest,
   ToolExecutionResponse,
   ApiError,
+  ServerEnvMetadataResponse,
+  UpdateEnvResponse,
 } from '../types/server';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8099';
@@ -130,6 +132,21 @@ class ApiClient {
   // Server Logs API
   async getServerLogs(serverId: string, lines = 100, options?: { signal?: AbortSignal }): Promise<any> {
     return this.request(`/api/servers/${serverId}/logs?lines=${lines}`, options);
+  }
+
+  // Environment Variables APIs
+  async getServerInstanceEnv(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerEnvMetadataResponse> {
+    return this.request<ServerEnvMetadataResponse>(`/api/servers/${serverId}/instance/env`, options);
+  }
+
+  async updateServerInstanceEnv(serverId: string, env: Record<string, string>): Promise<UpdateEnvResponse> {
+    return this.request<UpdateEnvResponse>(
+      `/api/servers/${serverId}/instance/env`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(env),
+      }
+    );
   }
 }
 
