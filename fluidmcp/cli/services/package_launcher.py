@@ -10,10 +10,10 @@ from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
-security = HTTPBearer(auto_error=False)
+from ..auth import get_token
+
 
 def is_placeholder_value(value: str) -> bool:
     """
@@ -45,16 +45,6 @@ def is_placeholder_value(value: str) -> bool:
 
     return any(placeholder_indicators)
 
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-    
-    if not secure_mode:
-        return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
 
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: threading.Lock = None):
     """
