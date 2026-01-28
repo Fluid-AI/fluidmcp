@@ -19,6 +19,7 @@ from .validators import (
     validate_mcpservers_config,
     is_valid_package_version,
 )
+from .frontend_utils import setup_frontend_routes, get_frontend_dist_path
 
 __all__ = [
     "install_package",
@@ -41,4 +42,6 @@ __all__ = [
     "validate_env_dict",
     "validate_mcpservers_config",
     "is_valid_package_version",
+    "setup_frontend_routes",
+    "get_frontend_dist_path",
 ]

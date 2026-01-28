@@ -15,6 +15,36 @@ from loguru import logger
 from .base import PersistenceBackend
 
 
+def mask_mongodb_uri(uri: str) -> str:
+    """
+    Mask sensitive information in MongoDB URI for logging.
+
+    Args:
+        uri: MongoDB connection URI
+
+    Returns:
+        Masked URI safe for logging (e.g., mongodb+srv://***:***@cluster.net)
+    """
+    if not uri or '@' not in uri:
+        return uri
+
+    try:
+        parts = uri.split('@')
+        if len(parts) != 2:
+            return uri
+
+        prefix_with_creds = parts[0]
+        host_and_path = parts[1]
+
+        if '://' in prefix_with_creds:
+            protocol, _ = prefix_with_creds.split('://', 1)
+            return f"{protocol}://***:***@{host_and_path}"
+
+        return uri
+    except Exception:
+        return "mongodb://***:***@[masked]"
+
+
 class LogBuffer:
     """In-memory buffer for failed log writes with retry mechanism."""
 
@@ -148,7 +178,7 @@ class DatabaseManager(PersistenceBackend):
 
             # Test connection
             await self.client.admin.command('ping')
-            logger.info(f"Connected to MongoDB at {self.mongodb_uri}")
+            logger.info(f"Connected to MongoDB at {mask_mongodb_uri(self.mongodb_uri)}")
 
             # Check if change streams are supported (requires replica set)
             try:
@@ -531,6 +561,58 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error listing instances by state: {e}")
             return []
 
+    async def get_instance_env(self, server_id: str) -> Optional[Dict[str, str]]:
+        """
+        Get environment variables from server instance.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Dict of environment variables or None if instance not found
+        """
+        try:
+            instance = await self.get_instance_state(server_id)
+            if instance:
+                return instance.get("env")
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving instance env: {e}")
+            return None
+
+    async def update_instance_env(self, server_id: str, env: Dict[str, str]) -> bool:
+        """
+        Update environment variables in server instance.
+
+        Args:
+            server_id: Server identifier
+            env: Dict of environment variables to set
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            result = await self.db.fluidmcp_server_instances.update_one(
+                {"server_id": server_id},
+                {
+                    "$set": {
+                        "env": env,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+
+            if result.matched_count == 0:
+                logger.warning(f"No instance found for server '{server_id}'")
+                return False
+
+            logger.debug(f"Updated instance env for server: {server_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating instance env: {e}")
+            return False
+
     # ==================== Log Operations ====================
 
     async def save_log_entry(self, server_name: str, stream: str, content: str) -> bool:
@@ -647,8 +729,12 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error retrieving logs: {e}")
             return []
 
-    async def close(self):
-        """Close MongoDB connection."""
+    async def disconnect(self):
+        """Disconnect from MongoDB and cleanup resources."""
         if self.client:
             self.client.close()
             logger.info("Closed MongoDB connection")
+
+    async def close(self):
+        """Close MongoDB connection (alias for disconnect)."""
+        await self.disconnect()

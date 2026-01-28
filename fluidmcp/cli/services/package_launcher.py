@@ -10,10 +10,10 @@ from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
-security = HTTPBearer(auto_error=False)
+from ..auth import get_token
+
 
 def is_placeholder_value(value: str) -> bool:
     """
@@ -45,16 +45,6 @@ def is_placeholder_value(value: str) -> bool:
 
     return any(placeholder_indicators)
 
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-    
-    if not secure_mode:
-        return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
 
 def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: threading.Lock = None):
     """
@@ -316,9 +306,12 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
             stderr_output = process.stderr.read() if process.stderr else None
             if stderr_output:
                 logger.error(f"Process stderr: {stderr_output[:500]}")
+        except (OSError, ValueError) as e:
+            # Expected: stderr read can fail if process terminated or pipe is closed - safe to ignore
+            logger.debug(f"Failed to read process stderr after initialization timeout (expected): {e}")
         except Exception:
-            # Intentional: stderr read can fail if process terminated - safe to ignore
-            pass
+            # Unexpected error while reading stderr - log for debugging
+            logger.exception("Unexpected error while reading process stderr after initialization timeout")
 
         return False
     except Exception:
@@ -356,12 +349,60 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             try:
                 # Thread-safe communication with MCP server
                 with process_lock:
+                    # Check if process is alive before attempting communication
+                    if process.poll() is not None:
+                        error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
+                        logger.error(error_msg)
+                        collector.record_error("process_dead")
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": error_msg, "type": "process_dead"}
+                        )
+
                     msg = json.dumps(request)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                    response_line = process.stdout.readline()
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        error_msg = f"Failed to write to MCP server stdin: {e}"
+                        logger.error(error_msg)
+                        collector.record_error("broken_pipe_write")
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": error_msg, "type": "broken_pipe"}
+                        )
+
+                    try:
+                        response_line = process.stdout.readline()
+                        if not response_line:
+                            error_msg = "MCP server returned empty response (pipe may be closed)"
+                            logger.error(error_msg)
+                            collector.record_error("empty_response")
+                            return JSONResponse(
+                                status_code=503,
+                                content={"error": error_msg, "type": "empty_response"}
+                            )
+                    except (BrokenPipeError, OSError) as e:
+                        error_msg = f"Failed to read from MCP server stdout: {e}"
+                        logger.error(error_msg)
+                        collector.record_error("broken_pipe_read")
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": error_msg, "type": "broken_pipe"}
+                        )
+
                 return JSONResponse(content=json.loads(response_line))
+            except json.JSONDecodeError as e:
+                error_msg = f"Invalid JSON response from MCP server: {e}"
+                logger.error(error_msg)
+                collector.record_error("invalid_json")
+                return JSONResponse(
+                    status_code=502,
+                    content={"error": error_msg, "type": "invalid_json"}
+                )
             except Exception as e:
+                logger.exception(f"Unexpected error in MCP proxy: {e}")
+                collector.record_error("unknown")
                 return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
@@ -382,38 +423,66 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
         async def event_generator() -> Iterator[str]:
             completion_status = "success"
+            should_continue = True
             try:
                 # Track streaming session when generator starts
                 collector.increment_active_streams()
 
                 # Thread-safe communication with MCP server
                 with process_lock:
-                    # Convert dict to JSON string and send to MCP server
-                    msg = json.dumps(request)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
+                    # Check if process is alive before attempting communication
+                    if process.poll() is not None:
+                        error_msg = f"MCP server process for {package_name} has died (exit code: {process.returncode})"
+                        logger.error(error_msg)
+                        collector.record_error("process_dead")
+                        completion_status = "error"
+                        yield f"data: {json.dumps({'error': error_msg, 'type': 'process_dead'})}\n\n"
+                        should_continue = False  # Signal to skip remaining logic
 
-                    # Read from stdout and stream as SSE events
-                    while True:
-                        response_line = process.stdout.readline()
-                        if not response_line:
-                            break
-
-                        # Add logging
-                        logger.debug(f"Received from MCP: {response_line.strip()}")
-
-                        # Format as SSE event
-                        yield f"data: {response_line.strip()}\n\n"
-
-                        # Check if response contains "result" which indicates completion
+                    if should_continue:
+                        # Convert dict to JSON string and send to MCP server
+                        msg = json.dumps(request)
                         try:
-                            response_data = json.loads(response_line)
-                            if "result" in response_data:
-                                # If it's a final result, we can stop the stream
+                            process.stdin.write(msg + "\n")
+                            process.stdin.flush()
+                        except (BrokenPipeError, OSError) as e:
+                            error_msg = f"Failed to write to MCP server stdin: {e}"
+                            logger.error(error_msg)
+                            collector.record_error("broken_pipe_write")
+                            completion_status = "error"
+                            yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
+                            should_continue = False
+
+                    # Read from stdout and stream as SSE events (only if no early errors)
+                    if should_continue:
+                        while True:
+                            try:
+                                response_line = process.stdout.readline()
+                                if not response_line:
+                                    break
+                            except (BrokenPipeError, OSError) as e:
+                                error_msg = f"Failed to read from MCP server stdout: {e}"
+                                logger.error(error_msg)
+                                collector.record_error("broken_pipe_read")
+                                completion_status = "error"
+                                yield f"data: {json.dumps({'error': error_msg, 'type': 'broken_pipe'})}\n\n"
                                 break
-                        except json.JSONDecodeError:
-                            # If it's not valid JSON, just stream it as-is
-                            pass
+
+                            # Add logging
+                            logger.debug(f"Received from MCP: {response_line.strip()}")
+
+                            # Format as SSE event
+                            yield f"data: {response_line.strip()}\n\n"
+
+                            # Check if response contains "result" which indicates completion
+                            try:
+                                response_data = json.loads(response_line)
+                                if "result" in response_data:
+                                    # If it's a final result, we can stop the stream
+                                    break
+                            except json.JSONDecodeError:
+                                # If it's not valid JSON, just stream it as-is
+                                pass
 
             except (BrokenPipeError, OSError) as e:
                 completion_status = "broken_pipe"
@@ -424,9 +493,12 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                 # Send error as SSE event
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics
-                collector.record_streaming_request(completion_status)
-                collector.decrement_active_streams()
+                # Record streaming metrics (with error handling to prevent gauge drift)
+                try:
+                    collector.record_streaming_request(completion_status)
+                    collector.decrement_active_streams()
+                except Exception as e:
+                    logger.error(f"Failed to record streaming metrics: {e}")
 
         return StreamingResponse(
             event_generator(),
@@ -602,24 +674,8 @@ def create_dynamic_router(server_manager):
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
-        # Pre-validation (errors NOT tracked - occurs before streaming begins)
-        #
-        # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
-        # in RequestTimer because they represent pre-flight validation failures that occur
-        # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
-        #
-        # These errors are observable through:
-        # 1. FastAPI's built-in HTTP error logs
-        # 2. HTTP status code monitoring at the load balancer/proxy level
-        # 3. Application logs (logged by FastAPI middleware)
-        #
-        # If you need metrics for these specific errors, consider:
-        # - Option 1: New metric fluidmcp_http_errors_total{endpoint, status_code}
-        # - Option 2: Manual tracking via collector.record_error("server_not_found")
-        # - Option 3: Wrap these checks in a lightweight context manager
-        #
-        # Current implementation prioritizes clarity by separating HTTP validation from
-        # MCP protocol errors tracked via RequestTimer.
+        # Pre-flight HTTP validation: not tracked by RequestTimer since these occur
+        # before MCP protocol interaction. HTTP errors are observable via FastAPI logs.
         if server_name not in server_manager.processes:
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
@@ -630,6 +686,7 @@ def create_dynamic_router(server_manager):
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
+            should_continue = True
             try:
                 # Track streaming session when generator starts executing
                 collector.increment_active_streams()
@@ -638,27 +695,15 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
+                    # Use specific completion_status ("broken_pipe") for stream tracking,
+                    # while recording a global error_type of "io_error" for service-wide monitoring.
                     completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
                     collector.record_error("io_error")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                    return
+                    should_continue = False  # Signal to skip remaining logic
 
-                while True:
+                # Only continue streaming if no early errors
+                while should_continue:
                     # Non-blocking I/O with asyncio.to_thread
                     response_line = await asyncio.to_thread(process.stdout.readline)
                     if not response_line:
@@ -681,9 +726,12 @@ def create_dynamic_router(server_manager):
                 logger.exception(f"Error in event generator for '{server_name}': {e}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics
-                collector.record_streaming_request(completion_status)
-                collector.decrement_active_streams()
+                # Record streaming metrics (with error handling to prevent gauge drift)
+                try:
+                    collector.record_streaming_request(completion_status)
+                    collector.decrement_active_streams()
+                except Exception as e:
+                    logger.error(f"Failed to record streaming metrics: {e}")
 
         return StreamingResponse(
             event_generator(),
