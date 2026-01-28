@@ -535,8 +535,11 @@ async def start_server(
         if process.poll() is None:
             raise HTTPException(400, f"Server '{id}' is already running (PID: {process.pid})")
 
-    # Start server with user tracking
-    success = await manager.start_server(id, config, user_id=user_id)
+    # Load instance environment variables from database (user-provided values)
+    instance_env = await manager.db.get_instance_env(id) if manager.db else None
+
+    # Start server with user tracking and instance env
+    success = await manager.start_server(id, config, user_id=user_id, env_overrides=instance_env)
     if not success:
         raise HTTPException(500, f"Failed to start server '{id}'")
 

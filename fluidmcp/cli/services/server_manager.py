@@ -313,8 +313,11 @@ class ServerManager:
         if config:
             config["_restart_count"] = restart_count + 1
 
-        # Start server
-        success = await self.start_server(id, config)
+        # Load instance environment variables from database (user-provided values)
+        instance_env = await self.db.get_instance_env(id) if self.db else None
+
+        # Start server with instance env
+        success = await self.start_server(id, config, env_overrides=instance_env)
 
         if success:
             # Update restart count in database
