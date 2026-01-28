@@ -139,6 +139,37 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_headers=["*"],
     )
 
+    # Add security headers middleware
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        """Add security headers to all responses"""
+        response = await call_next(request)
+
+        # Content Security Policy (CSP) - prevent XSS
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "  # Allow inline scripts for docs
+            "style-src 'self' 'unsafe-inline'; "   # Allow inline styles
+            "img-src 'self' data: https:; "
+            "font-src 'self' data:;"
+        )
+
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        # Prevent clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+
+        # XSS protection (legacy browsers)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+
+        # Referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        return response
+
+    logger.info("Security headers middleware enabled")
+
     # Store managers in app state for dependency injection
     app.state.db_manager = db_manager
     app.state.server_manager = server_manager

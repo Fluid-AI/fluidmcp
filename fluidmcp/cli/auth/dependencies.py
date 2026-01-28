@@ -7,7 +7,7 @@ both OAuth JWT tokens and simple bearer token authentication.
 
 import os
 from typing import Dict, Optional
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 
@@ -17,16 +17,20 @@ security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Dict[str, Optional[str]]:
     """
     Extract user from OAuth JWT or bearer token.
 
     This dependency checks for both OAuth and bearer token authentication
-    modes and validates tokens accordingly. It returns a unified user context
-    that works for both authentication methods.
+    modes and validates tokens accordingly. Supports three token sources:
+    1. Authorization header (Bearer token) - for API clients
+    2. httpOnly cookie (fmcp_auth_token) - for browser-based OAuth
+    3. Anonymous mode (no token)
 
     Args:
+        request: FastAPI request object (to access cookies)
         credentials: HTTP Authorization credentials (Bearer token)
 
     Returns:
@@ -51,14 +55,23 @@ async def get_current_user(
             "auth_method": "none"
         }
 
-    # Authentication required but no credentials provided
-    if not credentials:
+    # Try to get token from multiple sources
+    token = None
+
+    # 1. Authorization header (highest priority - for API clients)
+    if credentials:
+        token = credentials.credentials
+
+    # 2. httpOnly cookie (for browser-based OAuth)
+    elif "fmcp_auth_token" in request.cookies:
+        token = request.cookies["fmcp_auth_token"]
+
+    # Authentication required but no token found
+    if not token:
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Please provide a valid token."
         )
-
-    token = credentials.credentials
 
     # Try OAuth JWT validation first (if enabled)
     if auth0_mode:
@@ -101,7 +114,8 @@ async def get_current_user(
     )
 
 
-def get_optional_user(
+async def get_optional_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Optional[Dict[str, Optional[str]]]:
     """
@@ -111,19 +125,13 @@ def get_optional_user(
     and anonymous access.
 
     Args:
+        request: FastAPI request object (to access cookies)
         credentials: HTTP Authorization credentials (Bearer token)
 
     Returns:
         User context dictionary or None if no valid credentials
     """
     try:
-        # Use asyncio to run the async function
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If event loop is already running, we can't use run_until_complete
-            # This shouldn't happen in FastAPI context, but handle it anyway
-            return None
-        return loop.run_until_complete(get_current_user(credentials))
+        return await get_current_user(request, credentials)
     except HTTPException:
         return None

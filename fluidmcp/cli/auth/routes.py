@@ -8,7 +8,7 @@ import os
 import secrets
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, HTTPException, Depends
-from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, Response
 from loguru import logger
 from jose import jwt
 from .config import Auth0Config
@@ -67,6 +67,12 @@ def create_jwt_token(user_info: dict) -> str:
 
     token = jwt.encode(payload, jwt_secret, algorithm="HS256")
     return token
+
+
+def is_local_development() -> bool:
+    """Check if running in local development (HTTP allowed for cookies)"""
+    base_url = os.getenv("FMCP_BASE_URL", "")
+    return "localhost" in base_url or "127.0.0.1" in base_url or not base_url
 
 
 @auth_router.get("/login")
@@ -143,7 +149,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
 
         logger.info(f"OAuth login successful for user: {user_info.get('email', user_info.get('sub'))}")
 
-        # Return HTML that stores token and redirects
+        # Create HTML response WITHOUT localStorage (token in httpOnly cookie)
         success_html = f"""
         <!DOCTYPE html>
         <html>
@@ -165,9 +171,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
                 <div class="spinner"></div>
             </div>
             <script>
-                // Store token in localStorage
-                localStorage.setItem('fmcp_auth_token', '{access_token}');
-
+                // Token stored in httpOnly cookie (secure, XSS-safe)
                 // Redirect to dashboard/docs after 1 second
                 setTimeout(function() {{
                     window.location.href = '/docs';
@@ -177,7 +181,21 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         </html>
         """
 
-        return HTMLResponse(content=success_html)
+        # Create response with httpOnly cookie for security
+        response = Response(content=success_html, media_type="text/html")
+
+        # Set secure httpOnly cookie (XSS protection + CSRF protection)
+        response.set_cookie(
+            key="fmcp_auth_token",
+            value=access_token,
+            httponly=True,  # Not accessible to JavaScript (XSS protection)
+            secure=not is_local_development(),  # HTTPS only in production, HTTP ok for localhost
+            samesite="strict",  # CSRF protection
+            max_age=86400,  # 24 hours
+            path="/"
+        )
+
+        return response
 
     except Exception as e:
         logger.error(f"OAuth token exchange failed: {e}")
@@ -219,7 +237,7 @@ async def get_user_info(user: dict = Depends(get_current_user)):
 
 @auth_router.post("/logout")
 async def logout(request: Request):
-    """Logout user and return Auth0 logout URL"""
+    """Logout user and clear cookie"""
     if not oauth_client:
         raise HTTPException(status_code=500, detail="OAuth not configured")
 
@@ -227,10 +245,19 @@ async def logout(request: Request):
     base_url = str(request.base_url).rstrip('/')
     logout_url = oauth_client.logout_url(base_url)
 
-    return {
+    # Create response that clears the cookie
+    response = JSONResponse(content={
         "logout_url": logout_url,
-        "message": "Clear local token and redirect to logout_url"
-    }
+        "message": "Cookie cleared, redirect to logout_url"
+    })
+
+    # Clear the auth cookie
+    response.delete_cookie(
+        key="fmcp_auth_token",
+        path="/"
+    )
+
+    return response
 
 
 @auth_router.get("/config")
