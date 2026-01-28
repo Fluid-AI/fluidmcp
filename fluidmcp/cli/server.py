@@ -13,12 +13,11 @@ from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager
+from .services.frontend_utils import setup_frontend_routes
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
@@ -87,7 +86,7 @@ def save_token_to_file(token: str) -> Path:
     return token_file
 
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None) -> FastAPI:
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -97,6 +96,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
         allowed_origins: List of allowed CORS origins (default: localhost only)
+        host: Host address for URL logging (default: 0.0.0.0)
+        port: Port number for URL logging (default: 8099)
 
     Returns:
         FastAPI application
@@ -142,31 +143,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         logger.info("Secure mode enabled with bearer token")
 
     # Serve frontend from backend (single-port deployment)
-    # NOTE:
-    # - Development: Frontend runs separately via Vite (port 5173) with hot reload
-    # - Production: Frontend is pre-built via `npm run build` and served by backend at /ui
-    # - This mount only works when dist directory exists (after build)
-    frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-
-    if frontend_dist.exists():
-        # Serve root /ui and /ui/ before mounting StaticFiles
-        @app.get("/ui")
-        @app.get("/ui/")
-        async def serve_ui_root():
-            """Serve index.html for the root /ui path."""
-            return FileResponse(frontend_dist / "index.html")
-
-        # Mount StaticFiles for serving built assets (JS, CSS, images)
-        # This handles all /ui/* paths efficiently with proper MIME types
-        try:
-            app.mount("/ui", StaticFiles(directory=str(frontend_dist), html=True), name="ui")
-            logger.info("✓ Frontend UI routes registered")
-            logger.info("✓ Frontend UI available at /ui")
-        except Exception as e:
-            logger.warning(f"Failed to mount frontend static files: {e}")
-    else:
-        logger.warning(f"Frontend dist directory not found at {frontend_dist}")
-        logger.warning("Run 'npm run build' in fluidmcp/frontend to build the UI")
+    setup_frontend_routes(app, host=host, port=port)
 
     # Include Management API
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
@@ -383,7 +360,9 @@ async def main(args):
         server_manager=server_manager,
         secure_mode=args.secure,
         token=args.token,
-        allowed_origins=allowed_origins
+        allowed_origins=allowed_origins,
+        host=args.host,
+        port=args.port
     )
 
     # 3. Setup graceful shutdown with comprehensive signal handlers
