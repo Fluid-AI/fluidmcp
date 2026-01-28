@@ -15,7 +15,8 @@ from typing import Optional, Tuple
 from loguru import logger
 
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import httpx
@@ -265,6 +266,34 @@ def run_servers(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Serve frontend from backend (single-port deployment)
+    # NOTE:
+    # - Development: Frontend runs separately via Vite (port 5173) with hot reload
+    # - Production: Frontend is pre-built via `npm run build` and served by backend at /ui
+    # - This mount only works when dist directory exists (after build)
+    frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+
+    if frontend_dist.exists():
+        # Serve root /ui and /ui/ before mounting StaticFiles
+        @app.get("/ui")
+        @app.get("/ui/")
+        async def serve_ui_root():
+            """Serve index.html for the root /ui path."""
+            return FileResponse(frontend_dist / "index.html")
+
+        # Mount StaticFiles for serving built assets (JS, CSS, images)
+        # This handles all /ui/* paths efficiently with proper MIME types
+        try:
+            app.mount("/ui", StaticFiles(directory=str(frontend_dist), html=True), name="ui")
+            logger.info("✓ Frontend UI routes registered")
+            logger.info(f"✓ Frontend UI available at http://localhost:{port}/ui")
+        except Exception as e:
+            logger.warning(f"Failed to mount frontend static files: {e}")
+    else:
+        logger.warning(f"Frontend dist directory not found at {frontend_dist}")
+        logger.warning("Run 'npm run build' in fluidmcp/frontend to build the UI")
+
     # Launch each server and add its router
     launched_servers = 0
     logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
