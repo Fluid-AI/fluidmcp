@@ -92,8 +92,6 @@ _http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async u
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
 
-
-
 # Server start times for uptime tracking (server_name -> start timestamp)
 _server_start_times: Dict[str, float] = {}
 _server_start_times_lock = threading.Lock()

@@ -7,10 +7,11 @@ and manage MCP servers dynamically via HTTP API.
 import argparse
 import asyncio
 import os
+import secrets
 import signal
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles

@@ -10,10 +10,10 @@ from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials
 import uvicorn
 
-from ..auth import get_token, security
+from ..auth import get_token
+
 
 def is_placeholder_value(value: str) -> bool:
     """
