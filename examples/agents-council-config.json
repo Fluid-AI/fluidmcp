@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agents-council": {
+      "command": "npx",
+      "args": ["-y", "agents-council@latest", "mcp"],
+      "env": {}
+    }
+  }
+}
