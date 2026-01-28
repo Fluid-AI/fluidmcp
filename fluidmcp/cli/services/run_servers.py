@@ -10,13 +10,16 @@ import atexit
 import asyncio
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from loguru import logger
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import httpx
+import subprocess
+import threading
 
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
@@ -27,11 +30,7 @@ from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .frontend_utils import setup_frontend_routes
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
-from typing import Dict
-import subprocess
-import threading
+from ..auth import verify_token
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -920,10 +919,13 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
     from fastapi.responses import PlainTextResponse
     from .metrics import get_registry, MetricsCollector
 
-    @app.get("/metrics", tags=["monitoring"])
+    @app.get("/metrics", tags=["monitoring"], dependencies=[Depends(verify_token)])
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
+
+        Requires bearer token authentication when FMCP_SECURE_MODE=true.
+        Public access when secure mode is disabled.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms

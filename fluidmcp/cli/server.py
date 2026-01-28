@@ -7,11 +7,11 @@ and manage MCP servers dynamically via HTTP API.
 import argparse
 import asyncio
 import os
-import signal
 import secrets
+import signal
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
@@ -21,6 +21,7 @@ from .services.frontend_utils import setup_frontend_routes
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
+from .auth import verify_token
 
 
 def mask_mongodb_uri(uri: str) -> str:
@@ -197,10 +198,13 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "persistence_enabled": db_status == "connected"
         }
 
-    @app.get("/metrics")
+    @app.get("/metrics", dependencies=[Depends(verify_token)])
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
+
+        Requires bearer token authentication when FMCP_SECURE_MODE=true.
+        Public access when secure mode is disabled.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms

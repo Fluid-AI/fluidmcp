@@ -1,0 +1,12 @@
+{
+  "llmModels": {
+    "mock-llm": {
+      "command": "python",
+      "args": ["tests/mock_vllm_server.py"],
+      "env": {},
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      }
+    }
+  }
+}

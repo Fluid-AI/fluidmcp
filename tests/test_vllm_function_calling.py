@@ -274,8 +274,12 @@ class TestVLLMFunctionCallingPassThrough:
             assert result["choices"][0]["finish_reason"] == "stop"
 
     @pytest.mark.asyncio
-    async def test_streaming_with_tools_parameter(self):
-        """Test that streaming requests with tools are handled correctly."""
+    async def test_streaming_validation_passes_for_configured_model(self):
+        """Test that _validate_streaming_request accepts properly configured models.
+
+        Note: This tests validation only, not actual streaming behavior with tools.
+        Full streaming integration would require async generator mocking.
+        """
         mock_config = {
             "base_url": "http://localhost:8000",
             "chat": "/v1/chat/completions"
@@ -288,8 +292,5 @@ class TestVLLMFunctionCallingPassThrough:
             with patch('fluidmcp.cli.services.run_servers._llm_processes', {"test-model": mock_process}):
                 from fluidmcp.cli.services.run_servers import _validate_streaming_request
 
-                # Should not raise exception
+                # Should not raise exception for valid configuration
                 _validate_streaming_request("test-model", "chat")
-
-        # Note: Full streaming integration test would require async generator mocking
-        # which is complex. The key point is that streaming=True with tools should work.

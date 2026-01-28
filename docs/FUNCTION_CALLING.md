@@ -94,7 +94,7 @@ Configure a vLLM model with function calling support:
     "llama-3-70b": {
       "command": "vllm",
       "args": ["serve", "meta-llama/Meta-Llama-3-70B-Instruct"],
-      "endpoint": {
+      "endpoints": {
         "base_url": "http://localhost:8000",
         "chat": "/v1/chat/completions"
       }
@@ -730,7 +730,7 @@ async def chat_with_streaming(user_message: str):
 2. **Verify endpoint configuration**:
    ```json
    {
-     "endpoint": {
+     "endpoints": {
        "base_url": "http://localhost:8000",  // Correct port?
        "chat": "/v1/chat/completions"        // Correct path?
      }
