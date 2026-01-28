@@ -14,8 +14,7 @@ from typing import Optional, Tuple
 from loguru import logger
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 import httpx
 
@@ -27,9 +26,9 @@ from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
+from .frontend_utils import setup_frontend_routes
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Depends
-from fastapi.responses import JSONResponse
 from typing import Dict
 import subprocess
 import threading
@@ -223,31 +222,7 @@ def run_servers(
     )
 
     # Serve frontend from backend (single-port deployment)
-    # NOTE:
-    # - Development: Frontend runs separately via Vite (port 5173) with hot reload
-    # - Production: Frontend is pre-built via `npm run build` and served by backend at /ui
-    # - This mount only works when dist directory exists (after build)
-    frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
-
-    if frontend_dist.exists():
-        # Serve root /ui and /ui/ before mounting StaticFiles
-        @app.get("/ui")
-        @app.get("/ui/")
-        async def serve_ui_root():
-            """Serve index.html for the root /ui path."""
-            return FileResponse(frontend_dist / "index.html")
-
-        # Mount StaticFiles for serving built assets (JS, CSS, images)
-        # This handles all /ui/* paths efficiently with proper MIME types
-        try:
-            app.mount("/ui", StaticFiles(directory=str(frontend_dist), html=True), name="ui")
-            logger.info("✓ Frontend UI routes registered")
-            logger.info(f"✓ Frontend UI available at http://localhost:{port}/ui")
-        except Exception as e:
-            logger.warning(f"Failed to mount frontend static files: {e}")
-    else:
-        logger.warning(f"Frontend dist directory not found at {frontend_dist}")
-        logger.warning("Run 'npm run build' in fluidmcp/frontend to build the UI")
+    setup_frontend_routes(app, host="0.0.0.0", port=port)
 
     # Launch each server and add its router
     launched_servers = 0
