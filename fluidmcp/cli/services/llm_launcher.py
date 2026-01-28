@@ -44,7 +44,8 @@ class LLMProcess:
         self._stderr_log: Optional[object] = None  # File handle for stderr logging
 
         # Restart tracking
-        self.restart_count = 0
+        self.restart_count = 0  # Tracks restart attempts (not just successes)
+        self.successful_restarts = 0  # Tracks successful restarts
         self.last_restart_time: Optional[float] = None
         self.start_time: Optional[float] = None
 
@@ -437,7 +438,9 @@ class LLMProcess:
         if not self.can_restart():
             return False
 
-        logger.info(f"Attempting to restart LLM model '{self.model_id}' (attempt {self.restart_count + 1}/{self.max_restarts})")
+        # Increment attempt counter BEFORE restart (for proper backoff and max_restarts)
+        self.restart_count += 1
+        logger.info(f"Attempting to restart LLM model '{self.model_id}' (attempt {self.restart_count}/{self.max_restarts})")
 
         # Calculate delay with exponential backoff
         delay = self.calculate_restart_delay()
@@ -459,17 +462,17 @@ class LLMProcess:
             await asyncio.sleep(2)
 
             if self.is_running():
-                # Only increment counter after confirming success
-                self.restart_count += 1
+                # Track successful restart
+                self.successful_restarts += 1
                 self.last_restart_time = time.time()
-                logger.info(f"LLM model '{self.model_id}' restarted successfully")
+                logger.info(f"LLM model '{self.model_id}' restarted successfully (success {self.successful_restarts}/{self.restart_count})")
                 return True
             else:
-                logger.error(f"LLM model '{self.model_id}' failed to start after restart")
+                logger.error(f"LLM model '{self.model_id}' failed to start after restart attempt {self.restart_count}")
                 return False
 
         except Exception as e:
-            logger.error(f"Error restarting LLM model '{self.model_id}': {e}")
+            logger.error(f"Error restarting LLM model '{self.model_id}' on attempt {self.restart_count}: {e}")
             return False
 
 
@@ -586,8 +589,9 @@ class LLMHealthMonitor:
                                 f"(failures: {process.consecutive_health_failures})"
                             )
 
-                            # Check for CUDA OOM errors
-                            if process.check_for_cuda_oom():
+                            # Check for CUDA OOM errors (run in thread to avoid blocking event loop)
+                            has_cuda_oom = await asyncio.to_thread(process.check_for_cuda_oom)
+                            if has_cuda_oom:
                                 logger.error(
                                     f"CUDA OOM detected for LLM model '{model_id}'. "
                                     "Consider reducing GPU memory utilization or using a smaller model."
@@ -597,16 +601,9 @@ class LLMHealthMonitor:
                         if process.needs_restart():
                             logger.warning(f"LLM model '{model_id}' needs restart")
 
-                            # Attempt automatic restart
-                            success = await process.attempt_restart()
-
-                            if success:
-                                logger.info(f"LLM model '{model_id}' recovered successfully")
-                            else:
-                                logger.error(
-                                    f"LLM model '{model_id}' failed to recover. "
-                                    f"Restart count: {process.restart_count}/{process.max_restarts}"
-                                )
+                            # Schedule restart in background task to avoid blocking monitor loop
+                            # This ensures other models continue to be monitored on schedule
+                            asyncio.create_task(self._handle_restart(model_id, process))
 
                     except Exception as e:
                         logger.error(f"Error monitoring LLM model '{model_id}': {e}", exc_info=True)
@@ -624,6 +621,28 @@ class LLMHealthMonitor:
 
         logger.info("Health monitor stopped")
 
+    async def _handle_restart(self, model_id: str, process: "LLMProcess"):
+        """
+        Handle restart in background task to avoid blocking monitor loop.
+
+        Args:
+            model_id: Model identifier
+            process: LLMProcess instance to restart
+        """
+        try:
+            success = await process.attempt_restart()
+
+            if success:
+                logger.info(f"LLM model '{model_id}' recovered successfully")
+            else:
+                logger.error(
+                    f"LLM model '{model_id}' failed to recover. "
+                    f"Restart attempts: {process.restart_count}/{process.max_restarts}, "
+                    f"Successful restarts: {process.successful_restarts}"
+                )
+        except Exception as e:
+            logger.error(f"Error in restart handler for '{model_id}': {e}", exc_info=True)
+
     def start(self):
         """Start the background health monitor."""
         if self._running:
@@ -631,10 +650,13 @@ class LLMHealthMonitor:
             return
 
         try:
-            self._monitor_task = asyncio.create_task(self._monitor_loop())
+            # Set _running BEFORE creating task to avoid race condition
+            # (task might start immediately and check _running flag)
             self._running = True
+            self._monitor_task = asyncio.create_task(self._monitor_loop())
             logger.info("Health monitor task created")
         except RuntimeError as e:
+            self._running = False  # Reset on failure
             logger.error(f"Failed to create health monitor task (no event loop): {e}")
             raise
 

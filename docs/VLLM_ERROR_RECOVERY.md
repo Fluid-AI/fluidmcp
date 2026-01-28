@@ -67,11 +67,11 @@ Configure restart behavior in your FluidMCP configuration:
 - Increase for large models with slow startup times
 - Recommended: 10-30 seconds depending on model size
 
-**`health_check_interval`** (integer, default: `30`)
-- Global interval in seconds between health checks (configured at monitor level, not per-model)
-- Only applies when health monitoring is enabled
-- Recommended: 30-60 seconds for production
-- Note: This is a global setting for the LLMHealthMonitor, not a per-model configuration
+**Health Check Interval**
+- Health checks currently run every **30 seconds** (fixed interval)
+- This interval is **not configurable** in the current implementation
+- Future versions may expose this as a configurable setting
+- Only applies when health monitoring is enabled (restart_policy != "no")
 
 ### Health Check Configuration
 
