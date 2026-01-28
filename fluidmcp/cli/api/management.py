@@ -46,36 +46,98 @@ def sanitize_error_message(error_msg: str) -> str:
     return sanitized
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """
-    Extract user identifier from bearer token.
-
-    For now, uses a simple approach:
-    - In secure mode: Uses the token itself as user ID (simple but works)
-    - In non-secure mode: Returns "anonymous"
-
-    Future: Parse JWT tokens to extract user email/ID from claims
-
-    Returns:
-        User identifier string
-    """
+def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Validate bearer token if secure mode is enabled"""
+    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
     secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
 
     if not secure_mode:
-        return "anonymous"
+        return None
+    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
+    return credentials.credentials
 
-    if not credentials or not credentials.credentials:
-        return "anonymous"
 
-    # For now, use token as user ID (simple approach)
-    # In production, decode JWT and extract user_id/email claim
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """
+    Extract user from OAuth JWT or bearer token.
+
+    Returns user context dict with user_id, email, name, auth_method.
+
+    This dependency checks for both OAuth and bearer token authentication
+    modes and validates tokens accordingly.
+
+    Returns:
+        User context dictionary with:
+        - user_id: Unique user identifier
+        - email: User's email address (None for bearer tokens)
+        - name: User's display name
+        - auth_method: 'oauth', 'bearer', or 'none'
+    """
+    import asyncio
+    from typing import Dict, Optional
+
+    auth0_mode = os.environ.get("FMCP_AUTH0_MODE") == "true"
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    # Anonymous mode - no authentication required
+    if not auth0_mode and not secure_mode:
+        return {
+            "user_id": "anonymous",
+            "email": None,
+            "name": "Anonymous",
+            "auth_method": "none"
+        }
+
+    # Authentication required but no credentials provided
+    if not credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please provide a valid token."
+        )
+
     token = credentials.credentials
 
-    # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users
-    user_id = f"user_{token[:8]}"
+    # Try OAuth JWT validation first (if enabled)
+    if auth0_mode:
+        try:
+            from ..auth.jwt_validator import validate_oauth_jwt
+            user = await validate_oauth_jwt(token)
+            logger.debug(f"OAuth authentication successful for user: {user['user_id']}")
+            return user
+        except Exception as e:
+            logger.warning(f"OAuth JWT validation failed: {e}")
+            # Fall through to try bearer token if secure mode also enabled
+            if not secure_mode:
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"Invalid or expired OAuth token: {str(e)}"
+                )
 
-    return user_id
+    # Try bearer token validation (if enabled)
+    if secure_mode:
+        bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+        if not bearer_token:
+            raise HTTPException(
+                status_code=500,
+                detail="Bearer token authentication is enabled but FMCP_BEARER_TOKEN is not set"
+            )
+
+        if token == bearer_token:
+            logger.debug("Bearer token authentication successful")
+            return {
+                "user_id": f"bearer_{token[:8]}",
+                "email": None,
+                "name": f"Bearer User {token[:8]}",
+                "auth_method": "bearer"
+            }
+
+    # No valid authentication method succeeded
+    raise HTTPException(
+        status_code=401,
+        detail="Invalid or expired token"
+    )
 
 
 def get_server_manager(request: Request):
@@ -451,7 +513,7 @@ async def delete_server(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Delete server configuration (stops server if running).
@@ -461,11 +523,12 @@ async def delete_server(
 
     Args:
         id: Server identifier
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -508,18 +571,19 @@ async def start_server(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Start an MCP server.
 
     Args:
         id: Server identifier
-        user_id: User identifier (extracted from token)
+        user: User context (extracted from token)
 
     Returns:
         Success message with PID
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -557,7 +621,7 @@ async def stop_server(
     id: str,
     force: bool = Query(False, description="Use SIGKILL instead of SIGTERM"),
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Stop a running MCP server.
@@ -567,11 +631,12 @@ async def stop_server(
     Args:
         id: Server identifier
         force: If true, use SIGKILL
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message with exit code
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server is running
@@ -607,7 +672,7 @@ async def restart_server(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Restart an MCP server.
@@ -616,11 +681,12 @@ async def restart_server(
 
     Args:
         id: Server identifier
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message with new PID
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -692,7 +758,7 @@ async def get_server_instance_env(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Get environment variable METADATA for server instance.
@@ -708,7 +774,7 @@ async def get_server_instance_env(
 
     Args:
         id: Server identifier
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Dict mapping env variable names to their metadata objects.
@@ -718,6 +784,7 @@ async def get_server_instance_env(
         Raw environment variable values are NEVER returned by this endpoint.
         Frontend must use empty inputs for editing (user re-enters values).
     """
+    user_id = user["user_id"]  # Extract user ID from context (for future auth checks)
     manager = get_server_manager(request)
 
     # Get server config for template env keys
@@ -774,7 +841,7 @@ async def update_server_instance_env(
     id: str,
     env_data: Dict[str, str] = Body(...),
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Update environment variables for server instance (auto-restarts if running).
@@ -793,7 +860,7 @@ async def update_server_instance_env(
     Args:
         id: Server identifier
         env_data: Dict of environment variables to set (e.g., {"API_KEY": "sk-..."})
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message with restart status
@@ -802,6 +869,7 @@ async def update_server_instance_env(
         - If running: stops server → updates env in DB → restarts with new env
         - If stopped: updates env in DB → will be used on next start
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Validate env_data types (FastAPI type hints don't guarantee runtime type safety)
