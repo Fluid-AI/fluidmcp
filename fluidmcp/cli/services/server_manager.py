@@ -118,6 +118,29 @@ class ServerManager:
 
         logger.info("All servers shut down")
 
+    # ==================== Helper Methods ====================
+
+    def _process_exists(self, pid: int) -> bool:
+        """
+        Check if a process with the given PID exists.
+
+        Args:
+            pid: Process ID to check
+
+        Returns:
+            True if process exists, False otherwise
+        """
+        if pid is None:
+            return False
+
+        try:
+            # Send signal 0 to check if process exists (doesn't actually send a signal)
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            # Process doesn't exist or we don't have permission
+            return False
+
     # ==================== Server Lifecycle Methods ====================
 
     async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None, env_overrides: Optional[Dict[str, str]] = None) -> bool:
@@ -229,9 +252,21 @@ class ServerManager:
         collector = MetricsCollector(id)
 
         try:
-            # Check if server exists
+            # Check if server exists in memory
             if id not in self.processes:
-                logger.warning(f"Server '{id}' is not running")
+                logger.warning(f"Server '{id}' is not running in memory")
+
+                # Check if database has stale "running" state that needs cleanup
+                instance = await self.db.get_instance_state(id)
+                if instance and instance.get("state") == "running":
+                    logger.warning(
+                        f"Server '{id}' not in memory but database shows 'running' state. "
+                        "Cleaning up stale database state..."
+                    )
+                    # Clean up stale database state
+                    await self._cleanup_server(id, exit_code=-1)  # -1 indicates unexpected termination
+                    logger.info(f"Cleaned up stale state for server '{id}'")
+
                 return False
 
             # Get process and config (thread-safe)
@@ -381,10 +416,36 @@ class ServerManager:
         # Check database
         instance = await self.db.get_instance_state(id)
         if instance:
+            # IMPORTANT: Detect stale "running" state in database
+            # If database says "running" but process is not in memory, verify it actually exists
+            db_state = instance.get("state", "unknown")
+            db_pid = instance.get("pid")
+
+            if db_state == "running" and db_pid:
+                # Verify the process actually exists on the system
+                if not self._process_exists(db_pid):
+                    # Stale state detected! Process is dead but DB says "running"
+                    logger.warning(
+                        f"Detected stale 'running' state for server '{id}' (PID {db_pid} not found). "
+                        "Cleaning up database state..."
+                    )
+                    # Clean up stale state
+                    await self._cleanup_server(id, exit_code=-1)  # -1 indicates unexpected termination
+                    # Return corrected state
+                    return {
+                        "id": id,
+                        "state": "stopped",
+                        "pid": None,
+                        "uptime": None,
+                        "restart_count": instance.get("restart_count", 0),
+                        "exit_code": -1
+                    }
+
+            # State is consistent (not "running" or process exists)
             return {
                 "id": id,
-                "state": instance.get("state", "unknown"),
-                "pid": instance.get("pid"),
+                "state": db_state,
+                "pid": db_pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
                 "exit_code": instance.get("exit_code")
