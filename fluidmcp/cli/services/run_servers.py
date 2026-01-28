@@ -1132,21 +1132,17 @@ def _cleanup_resources():
             return
 
         # Stop health monitor if running
+        # Note: This is called from atexit/signal handler (not async context)
+        # The monitor task runs on uvicorn's loop, so we signal it to stop
+        # and let it clean up naturally rather than forcing from different loop
         if _llm_health_monitor and _llm_health_monitor.is_running():
             logger.info("Stopping LLM health monitor...")
             try:
-                loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(_llm_health_monitor.stop())
-                    logger.info("Health monitor stopped successfully")
-                except Exception as e:
-                    logger.warning(f"Error stopping health monitor: {e}")
-                finally:
-                    try:
-                        loop.close()
-                    except Exception as e:
-                        logger.debug(f"Error closing event loop: {e}")
+                # Set the stop flag - the monitor will clean up on its loop
+                _llm_health_monitor._running = False
+                logger.info("Health monitor stop signal sent")
+            except Exception as e:
+                logger.warning(f"Error stopping health monitor: {e}")
             finally:
                 _llm_health_monitor = None
 

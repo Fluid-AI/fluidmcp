@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 import os
 import re
+import asyncio
 
 from ..auth import get_token, security
 
@@ -1294,11 +1295,12 @@ async def stop_llm_model(
     logger.info(f"Stop requested for LLM model '{model_id}' (force={force})")
 
     try:
+        # Run blocking stop/kill operations in thread to avoid blocking event loop
         if force:
-            process.force_kill()
+            await asyncio.to_thread(process.force_kill)
             return {"message": f"LLM model '{model_id}' force killed"}
         else:
-            process.stop()
+            await asyncio.to_thread(process.stop)
             return {"message": f"LLM model '{model_id}' stopped gracefully"}
     except Exception as e:
         logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)

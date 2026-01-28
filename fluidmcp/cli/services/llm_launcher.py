@@ -88,14 +88,8 @@ class LLMProcess:
             )
         self.health_check_timeout = health_check_timeout
 
-        # Validate health_check_interval
-        health_check_interval = config.get("health_check_interval", HEALTH_CHECK_INTERVAL)
-        if not isinstance(health_check_interval, (int, float)) or health_check_interval <= 0:
-            raise ValueError(
-                f"Invalid health_check_interval {health_check_interval!r} for model '{model_id}'. "
-                f"Must be a positive number"
-            )
-        self.health_check_interval = health_check_interval
+        # Note: health_check_interval is configured globally in LLMHealthMonitor,
+        # not per-model. Removed unused field to avoid confusion.
 
         # CUDA OOM detection cache: (result, timestamp, file_mtime)
         self._cuda_oom_cache: Optional[Tuple[bool, float, Optional[float]]] = None
@@ -251,10 +245,26 @@ class LLMProcess:
             self.consecutive_health_failures = 0
             return True, None
 
-        # Try health check endpoints
+        # Normalize base URL (remove trailing slash)
+        normalized_base_url = base_url.rstrip("/")
+
+        # Derive root base URL for generic /health checks
+        # If the configured base URL ends with /v1, strip that segment
+        if normalized_base_url.endswith("/v1"):
+            root_base_url = normalized_base_url[:-3]  # Remove "/v1"
+        else:
+            root_base_url = normalized_base_url
+
+        # Ensure we have something usable (fall back to normalized_base_url if empty)
+        if not root_base_url:
+            root_base_url = normalized_base_url
+
+        # Try health check endpoints:
+        # - root /health (common for many backends)
+        # - OpenAI-compatible /models under the configured base URL
         health_endpoints = [
-            f"{base_url}/health",
-            f"{base_url}/v1/models",
+            f"{root_base_url}/health",
+            f"{normalized_base_url}/models",
         ]
 
         async with httpx.AsyncClient(timeout=self.health_check_timeout) as client:
@@ -434,12 +444,12 @@ class LLMProcess:
         logger.info(f"Waiting {delay}s before restart...")
         await asyncio.sleep(delay)
 
-        # Stop existing process
+        # Stop existing process (run in thread to avoid blocking event loop)
         if self.is_running():
-            self.stop()
+            await asyncio.to_thread(self.stop)
         elif self.process:
             # Process crashed but we still have the Popen object
-            self.force_kill()
+            await asyncio.to_thread(self.force_kill)
 
         # Attempt restart
         try:

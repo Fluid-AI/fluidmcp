@@ -6,7 +6,7 @@ FluidMCP includes a comprehensive error recovery system for vLLM processes, with
 
 ### 1. Automatic Health Monitoring
 - **Background Health Checks**: Monitors vLLM processes every 30 seconds
-- **HTTP Endpoint Probing**: Tests `/health` and `/v1/models` endpoints
+- **HTTP Endpoint Probing**: Tests `/health` (server root) and `/models` (OpenAI API) endpoints
 - **Process Status Tracking**: Detects crashed or unresponsive processes
 - **CUDA OOM Detection**: Parses stderr logs for GPU memory errors
 
@@ -55,7 +55,7 @@ Configure restart behavior in your FluidMCP configuration:
 **`max_restarts`** (integer, default: `3`)
 - Maximum number of restart attempts
 - After reaching limit, process remains stopped
-- Set to `0` to disable restart limits (not recommended)
+- Set to `0` to disable automatic restarts entirely (not recommended)
 
 **`restart_delay`** (integer, default: `5`)
 - Base delay in seconds between restarts
@@ -68,9 +68,10 @@ Configure restart behavior in your FluidMCP configuration:
 - Recommended: 10-30 seconds depending on model size
 
 **`health_check_interval`** (integer, default: `30`)
-- Interval in seconds between health checks
+- Global interval in seconds between health checks (configured at monitor level, not per-model)
 - Only applies when health monitoring is enabled
 - Recommended: 30-60 seconds for production
+- Note: This is a global setting for the LLMHealthMonitor, not a per-model configuration
 
 ### Health Check Configuration
 
@@ -83,12 +84,13 @@ Health checks are automatically configured based on the `endpoints.base_url` set
       "endpoints": {
         "base_url": "http://localhost:8001/v1"
       },
-      "health_check_timeout": 30.0,
-      "health_check_interval": 60
+      "health_check_timeout": 30.0
     }
   }
 }
 ```
+
+Note: `health_check_interval` is a global monitor setting, not per-model.
 
 **Configuration for Large Models:**
 ```json
@@ -102,8 +104,7 @@ Health checks are automatically configured based on the `endpoints.base_url` set
       },
       "restart_policy": "on-failure",
       "max_restarts": 3,
-      "health_check_timeout": 30.0,
-      "health_check_interval": 60
+      "health_check_timeout": 30.0
     }
   }
 }
@@ -250,10 +251,10 @@ POST /api/llm/models/{model_id}/health-check
 The system automatically detects CUDA OOM errors in stderr logs:
 
 ```python
-# Detection patterns:
+# Detection patterns (case-insensitive substring match):
 - "cuda out of memory"
-- "cudaerror"
-- "out of memory"
+- "cudaerror: out of memory"
+- "cuda error: out of memory"
 ```
 
 When detected:
@@ -304,7 +305,7 @@ See [MONITORING.md](MONITORING.md) for complete metrics documentation.
 
 **Check restart count:**
 ```bash
-curl http://localhost:8099/llm/models/vllm
+curl http://localhost:8099/api/llm/models/vllm
 ```
 
 If `restart_count >= max_restarts`:
@@ -317,7 +318,7 @@ If `restart_count >= max_restarts`:
 
 **Check for OOM:**
 ```bash
-curl http://localhost:8099/llm/models/vllm | jq '.has_cuda_oom'
+curl http://localhost:8099/api/llm/models/vllm | jq '.has_cuda_oom'
 ```
 
 **Solutions:**
@@ -335,7 +336,7 @@ curl http://localhost:8099/llm/models/vllm | jq '.has_cuda_oom'
 
 **Manual health check:**
 ```bash
-curl -X POST http://localhost:8099/llm/models/vllm/health-check
+curl -X POST http://localhost:8099/api/llm/models/vllm/health-check
 ```
 
 **Common causes:**
@@ -371,7 +372,7 @@ curl -X POST http://localhost:8099/llm/models/vllm/health-check
 
 ```bash
 # Cron job to check health every 5 minutes
-*/5 * * * * curl -sf http://localhost:8099/llm/models/vllm | jq '.is_healthy' || echo "vLLM unhealthy!"
+*/5 * * * * curl -sf http://localhost:8099/api/llm/models/vllm | jq '.is_healthy' || echo "vLLM unhealthy!"
 ```
 
 ### 3. Set Up Alerts
@@ -385,20 +386,20 @@ Use Prometheus + Alertmanager to alert on:
 
 ```bash
 # Get recent errors
-curl http://localhost:8099/llm/models/vllm/logs?lines=100 | jq -r '.lines[]' | grep ERROR
+curl http://localhost:8099/api/llm/models/vllm/logs?lines=100 | jq -r '.lines[]' | grep ERROR
 ```
 
 ### 5. Test Recovery Scenarios
 
 ```bash
 # Test crash recovery
-curl -X POST "http://localhost:8099/llm/models/vllm/stop?force=true"
+curl -X POST "http://localhost:8099/api/llm/models/vllm/stop?force=true"
 
 # Wait 30 seconds for health check
 sleep 30
 
 # Verify automatic restart
-curl http://localhost:8099/llm/models/vllm | jq '.restart_count'
+curl http://localhost:8099/api/llm/models/vllm | jq '.restart_count'
 ```
 
 ## Architecture
@@ -488,7 +489,7 @@ export FMCP_BEARER_TOKEN="your-secret-token"
 export FMCP_SECURE_MODE="true"
 
 curl -H "Authorization: Bearer your-secret-token" \
-  http://localhost:8099/llm/models
+  http://localhost:8099/api/llm/models
 ```
 
 ### Rate Limiting
