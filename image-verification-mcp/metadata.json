@@ -1,0 +1,51 @@
+{
+  "name": "image-verification",
+  "version": "1.0.0",
+  "description": "MCP server for detecting AI-generated, tampered, and fake document images. Validates boarding passes, IRCTC tickets, and generic images.",
+  "author": "FluidMCP Team",
+  "license": "MIT",
+  "mcpServers": {
+    "image-verification": {
+      "command": "uv",
+      "args": ["run", "server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "verify_image_authenticity",
+      "description": "Verify if an image or PDF is authentic, AI-generated, or tampered. Supports images (JPEG, PNG) and PDFs. Analyzes metadata, OCR, document structure, and AI artifacts.",
+      "parameters": {
+        "image_base64": {
+          "type": "string",
+          "description": "Base64 encoded image or PDF data",
+          "required": true
+        },
+        "document_type": {
+          "type": "string",
+          "description": "Type of document: 'boarding_pass', 'irctc', or 'generic'",
+          "required": false,
+          "default": "generic"
+        },
+        "source_type": {
+          "type": "string",
+          "description": "Source type: 'auto' (detect), 'image', or 'pdf'",
+          "required": false,
+          "default": "auto"
+        }
+      }
+    },
+    {
+      "name": "get_supported_document_types",
+      "description": "Get list of supported document types for verification"
+    }
+  ],
+  "use_cases": [
+    "Travel expense reimbursement verification",
+    "Boarding pass authenticity checking",
+    "IRCTC ticket validation",
+    "Detecting AI-generated documents",
+    "Identifying tampered images",
+    "PDF document verification"
+  ]
+}
