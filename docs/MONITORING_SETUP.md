@@ -80,6 +80,7 @@ docker run -d \
 - The `--add-host=host.docker.internal:host-gateway` flag allows Prometheus running in Docker to access FluidMCP on the host machine. This works on all platforms (Linux, macOS, Windows).
 - **Security**: Change the Grafana default password (`admin/admin`) immediately after first login.
 - **Windows users**: If using cmd.exe, replace `$(pwd)` with the absolute path to your config file.
+- **Secure Mode**: When running FluidMCP with `--secure` flag, the `/metrics` endpoint requires bearer token authentication. In this case, configure Prometheus with bearer token authentication (see [Secure Mode Setup](#secure-mode-setup) below).
 
 **Option 2: Manual Installation**
 
@@ -418,6 +419,90 @@ targets: ['fluidmcp:8099']
 
 ---
 
+## Secure Mode Setup
+
+When running FluidMCP with bearer token authentication (`--secure` flag), the `/metrics` endpoint requires authentication. This section explains how to configure Prometheus to scrape metrics from a secured FluidMCP instance.
+
+### Starting FluidMCP in Secure Mode
+
+```bash
+# Start FluidMCP with secure mode enabled
+fluidmcp run examples/sample-config.json --file --start-server --secure --token YOUR_SECRET_TOKEN
+```
+
+The server will require bearer token authentication for the `/metrics` endpoint.
+
+### Configuring Prometheus for Secure Mode
+
+Update your Prometheus configuration to include bearer token authentication:
+
+**prometheus-secure.yml:**
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'fluidmcp'
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials: YOUR_SECRET_TOKEN  # Replace with your actual token
+    static_configs:
+      - targets: ['localhost:8099']
+```
+
+**Starting Prometheus with secure config:**
+
+```bash
+# Using Docker
+docker run -d \
+  --name prometheus \
+  -p 9090:9090 \
+  --add-host=host.docker.internal:host-gateway \
+  -v $(pwd)/prometheus-secure.yml:/etc/prometheus/prometheus.yml \
+  prom/prometheus:latest
+
+# Or manually
+prometheus --config.file=prometheus-secure.yml
+```
+
+### Security Best Practices
+
+1. **Use Strong Tokens**: Generate cryptographically secure tokens:
+   ```bash
+   # FluidMCP generates a secure token automatically if you don't provide one
+   fluidmcp run config.json --file --start-server --secure
+   ```
+
+2. **Protect Configuration Files**: Ensure prometheus configuration files with tokens have restricted permissions:
+   ```bash
+   chmod 600 prometheus-secure.yml
+   ```
+
+3. **Use HTTPS in Production**: When deploying to production, use a reverse proxy (nginx, Caddy) with TLS to encrypt traffic:
+   ```
+   FluidMCP (localhost:8099) → nginx (HTTPS) → Public Internet
+   ```
+
+4. **Rotate Tokens Regularly**: Change bearer tokens periodically and update Prometheus configuration accordingly.
+
+### Testing Secure Metrics
+
+Verify that metrics endpoint requires authentication:
+
+```bash
+# Without token - should fail with 401 Unauthorized
+curl http://localhost:8099/metrics
+# Response: {"detail":"Invalid or missing authorization token"}
+
+# With valid token - should succeed
+curl -H "Authorization: Bearer YOUR_SECRET_TOKEN" http://localhost:8099/metrics
+# Response: Prometheus metrics data
+```
+
+---
+
 ## Next Steps
 
 ### 1. Set Up Alerts
@@ -501,6 +586,8 @@ Topics covered:
 
 Returns the health status of FluidMCP server.
 
+**Authentication**: Not required (public endpoint)
+
 **Response Schema**:
 ```json
 {
@@ -524,6 +611,45 @@ Returns the health status of FluidMCP server.
 curl http://localhost:8099/health
 # Response: {"status":"healthy","servers":2,"running_servers":1}
 ```
+
+#### Metrics Endpoint
+
+**GET** `/metrics`
+
+Returns Prometheus-compatible metrics in text exposition format.
+
+**Authentication**:
+- **Public access**: When `FMCP_SECURE_MODE=false` (default)
+- **Bearer token required**: When `FMCP_SECURE_MODE=true`
+
+**Security Consideration**: When running FluidMCP with `--secure` flag or `FMCP_SECURE_MODE=true`, the `/metrics` endpoint requires bearer token authentication. This protects sensitive operational metrics from unauthorized access.
+
+**Response Format**: Plain text in Prometheus exposition format
+
+**Exposed Metrics**:
+- `fluidmcp_requests_total` - Total number of MCP requests by server, method, and status
+- `fluidmcp_request_duration_seconds` - Request duration histogram
+- `fluidmcp_server_uptime_seconds` - Server uptime in seconds
+- `fluidmcp_server_status` - Server status (0=stopped, 1=starting, 2=running, 3=error)
+- `fluidmcp_tool_calls_total` - Total tool executions by tool name and status
+- `fluidmcp_tool_duration_seconds` - Tool execution duration histogram
+- `fluidmcp_streaming_requests_total` - Total streaming requests by server and status
+
+**Example (Public Access)**:
+```bash
+# No authentication required when secure mode is disabled
+curl http://localhost:8099/metrics
+```
+
+**Example (Secure Mode)**:
+```bash
+# Bearer token required when secure mode is enabled
+curl -H "Authorization: Bearer YOUR_TOKEN_HERE" http://localhost:8099/metrics
+```
+
+**Status Codes**:
+- `200 OK` - Metrics returned successfully
+- `401 Unauthorized` - Missing or invalid bearer token (secure mode only)
 
 ### Quick Commands
 

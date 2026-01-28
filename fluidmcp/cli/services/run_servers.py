@@ -8,13 +8,15 @@ import os
 import json
 import atexit
 import asyncio
+import secrets
 import time
 from pathlib import Path
 from typing import Optional, Tuple
 from loguru import logger
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import httpx
 
@@ -92,6 +94,49 @@ _http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async u
 # Cleanup synchronization
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
+
+# Security setup for bearer token authentication
+security = HTTPBearer(auto_error=False)
+
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> None:
+    """
+    Validate bearer token if secure mode is enabled.
+
+    This dependency is used to protect endpoints when FMCP_SECURE_MODE=true.
+    If secure mode is disabled, the endpoint is publicly accessible.
+
+    Args:
+        credentials: HTTP Authorization header with bearer token
+
+    Raises:
+        HTTPException: 401 if token is invalid or missing in secure mode
+    """
+    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    if not secure_mode:
+        # Public access when secure mode is disabled
+        return None
+
+    # Validate credentials exist and scheme is correct
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing authorization token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    # Use constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(credentials.credentials, bearer_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing authorization token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    return None
+
 
 # Server start times for uptime tracking (server_name -> start timestamp)
 _server_start_times: Dict[str, float] = {}
@@ -916,10 +961,13 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
     from fastapi.responses import PlainTextResponse
     from .metrics import get_registry, MetricsCollector
 
-    @app.get("/metrics", tags=["monitoring"])
+    @app.get("/metrics", tags=["monitoring"], dependencies=[Depends(verify_token)])
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
+
+        Requires bearer token authentication when FMCP_SECURE_MODE=true.
+        Public access when secure mode is disabled.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
