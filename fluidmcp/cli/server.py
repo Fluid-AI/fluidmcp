@@ -8,14 +8,12 @@ import argparse
 import asyncio
 import os
 import signal
-import secrets
 from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -23,57 +21,7 @@ from .services.server_manager import ServerManager
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
-
-# Security setup for bearer token authentication
-security = HTTPBearer(auto_error=False)
-
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> None:
-    """
-    Validate bearer token if secure mode is enabled.
-
-    This dependency is used to protect endpoints when FMCP_SECURE_MODE=true.
-    If secure mode is disabled, the endpoint is publicly accessible.
-
-    Args:
-        credentials: HTTP Authorization header with bearer token
-
-    Raises:
-        HTTPException:
-            - 401 if token is invalid or missing in secure mode
-            - 500 if secure mode enabled but FMCP_BEARER_TOKEN not configured
-    """
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
-    if not secure_mode:
-        # Public access when secure mode is disabled
-        return None
-
-    # Validate bearer token is configured when secure mode is enabled
-    if not bearer_token:
-        raise HTTPException(
-            status_code=500,
-            detail="Server misconfiguration: FMCP_BEARER_TOKEN not set in secure mode"
-        )
-
-    # Validate credentials exist and scheme is correct
-    if not credentials or credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing authorization token",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    # Use constant-time comparison to prevent timing attacks
-    if not secrets.compare_digest(credentials.credentials, bearer_token):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing authorization token",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    return None
+from .auth import verify_token
 
 
 def mask_mongodb_uri(uri: str) -> str:

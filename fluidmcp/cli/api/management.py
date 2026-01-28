@@ -9,10 +9,12 @@ Provides REST API for:
 """
 from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 import os
 import re
+
+from ..auth import get_token, security
 
 # Environment variable validation patterns and constants
 ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
@@ -24,7 +26,6 @@ ENV_VALUE_NULL_BYTE_MSG = "Environment variable value cannot contain null bytes"
 ENV_VALUE_TOO_LONG_MSG = f"Environment variable value exceeds maximum length of {ENV_VALUE_MAX_LENGTH} characters"
 
 router = APIRouter()
-security = HTTPBearer(auto_error=False)
 
 
 def sanitize_error_message(error_msg: str) -> str:
@@ -43,18 +44,6 @@ def sanitize_error_message(error_msg: str) -> str:
     sanitized = re.sub(r'at /.+?:\d+', 'at <sanitized>', sanitized)
 
     return sanitized
-
-
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
-    if not secure_mode:
-        return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:

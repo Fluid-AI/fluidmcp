@@ -17,7 +17,6 @@ from loguru import logger
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import httpx
 
@@ -29,9 +28,8 @@ from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
+from ..auth import verify_token
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
-from fastapi.responses import JSONResponse
 from typing import Dict
 import subprocess
 import threading
@@ -96,56 +94,6 @@ _http_client_lock: Optional[asyncio.Lock] = None  # Initialized on first async u
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
 
-# Security setup for bearer token authentication
-security = HTTPBearer(auto_error=False)
-
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> None:
-    """
-    Validate bearer token if secure mode is enabled.
-
-    This dependency is used to protect endpoints when FMCP_SECURE_MODE=true.
-    If secure mode is disabled, the endpoint is publicly accessible.
-
-    Args:
-        credentials: HTTP Authorization header with bearer token
-
-    Raises:
-        HTTPException:
-            - 401 if token is invalid or missing in secure mode
-            - 500 if secure mode enabled but FMCP_BEARER_TOKEN not configured
-    """
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
-    if not secure_mode:
-        # Public access when secure mode is disabled
-        return None
-
-    # Validate bearer token is configured when secure mode is enabled
-    if not bearer_token:
-        raise HTTPException(
-            status_code=500,
-            detail="Server misconfiguration: FMCP_BEARER_TOKEN not set in secure mode"
-        )
-
-    # Validate credentials exist and scheme is correct
-    if not credentials or credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing authorization token",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    # Use constant-time comparison to prevent timing attacks
-    if not secrets.compare_digest(credentials.credentials, bearer_token):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing authorization token",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    return None
 
 
 # Server start times for uptime tracking (server_name -> start timestamp)

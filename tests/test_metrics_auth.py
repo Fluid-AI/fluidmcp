@@ -11,7 +11,7 @@ class TestMetricsAuthentication:
     def test_metrics_endpoint_public_when_secure_mode_disabled(self):
         """Test that /metrics is publicly accessible when secure mode is disabled."""
         # Import here to avoid circular dependencies
-        from fluidmcp.cli.services.run_servers import verify_token
+        from fluidmcp.cli.auth import verify_token
         from fastapi.security import HTTPAuthorizationCredentials
 
         with patch.dict(os.environ, {"FMCP_SECURE_MODE": "false"}, clear=False):
@@ -21,7 +21,7 @@ class TestMetricsAuthentication:
 
     def test_metrics_endpoint_requires_token_when_secure_mode_enabled(self):
         """Test that /metrics requires valid token when secure mode is enabled."""
-        from fluidmcp.cli.services.run_servers import verify_token
+        from fluidmcp.cli.auth import verify_token
         from fastapi.security import HTTPAuthorizationCredentials
         from fastapi import HTTPException
 
@@ -48,7 +48,7 @@ class TestMetricsAuthentication:
 
     def test_metrics_endpoint_case_insensitive_bearer_scheme(self):
         """Test that bearer scheme check is case-insensitive."""
-        from fluidmcp.cli.services.run_servers import verify_token
+        from fluidmcp.cli.auth import verify_token
         from fastapi.security import HTTPAuthorizationCredentials
 
         with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": "test-token"}, clear=False):
@@ -65,16 +65,16 @@ class TestMetricsAuthentication:
             assert result is None
 
     def test_server_py_verify_token_public_when_secure_mode_disabled(self):
-        """Test that server.py verify_token allows public access when secure mode is disabled."""
-        from fluidmcp.cli.server import verify_token
+        """Test that shared auth verify_token allows public access when secure mode is disabled."""
+        from fluidmcp.cli.auth import verify_token
 
         with patch.dict(os.environ, {"FMCP_SECURE_MODE": "false"}, clear=False):
             result = verify_token(credentials=None)
             assert result is None
 
     def test_server_py_verify_token_requires_token_when_secure_mode_enabled(self):
-        """Test that server.py verify_token requires valid token when secure mode is enabled."""
-        from fluidmcp.cli.server import verify_token
+        """Test that shared auth verify_token requires valid token when secure mode is enabled."""
+        from fluidmcp.cli.auth import verify_token
         from fastapi.security import HTTPAuthorizationCredentials
         from fastapi import HTTPException
 
@@ -94,7 +94,7 @@ class TestMetricsAuthentication:
 
     def test_misconfigured_secure_mode_without_token(self):
         """Test that secure mode with missing bearer token raises 500 error."""
-        from fluidmcp.cli.services.run_servers import verify_token
+        from fluidmcp.cli.auth import verify_token
         from fastapi.security import HTTPAuthorizationCredentials
         from fastapi import HTTPException
 
