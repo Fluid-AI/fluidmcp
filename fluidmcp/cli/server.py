@@ -11,7 +11,7 @@ import signal
 import secrets
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -39,7 +39,9 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
         credentials: HTTP Authorization header with bearer token
 
     Raises:
-        HTTPException: 401 if token is invalid or missing in secure mode
+        HTTPException:
+            - 401 if token is invalid or missing in secure mode
+            - 500 if secure mode enabled but FMCP_BEARER_TOKEN not configured
     """
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
     secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
@@ -47,6 +49,13 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
     if not secure_mode:
         # Public access when secure mode is disabled
         return None
+
+    # Validate bearer token is configured when secure mode is enabled
+    if not bearer_token:
+        raise HTTPException(
+            status_code=500,
+            detail="Server misconfiguration: FMCP_BEARER_TOKEN not set in secure mode"
+        )
 
     # Validate credentials exist and scheme is correct
     if not credentials or credentials.scheme.lower() != "bearer":

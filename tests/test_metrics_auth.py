@@ -3,7 +3,6 @@
 import os
 import pytest
 from unittest.mock import patch, Mock
-from fastapi.testclient import TestClient
 
 
 class TestMetricsAuthentication:
@@ -92,3 +91,21 @@ class TestMetricsAuthentication:
             valid_creds.credentials = "test-token-456"
             result = verify_token(credentials=valid_creds)
             assert result is None
+
+    def test_misconfigured_secure_mode_without_token(self):
+        """Test that secure mode with missing bearer token raises 500 error."""
+        from fluidmcp.cli.services.run_servers import verify_token
+        from fastapi.security import HTTPAuthorizationCredentials
+        from fastapi import HTTPException
+
+        # Secure mode enabled but no bearer token configured
+        with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": ""}, clear=False):
+            valid_creds = Mock(spec=HTTPAuthorizationCredentials)
+            valid_creds.scheme = "Bearer"
+            valid_creds.credentials = "any-token"
+
+            # Should raise 500 for server misconfiguration
+            with pytest.raises(HTTPException) as exc_info:
+                verify_token(credentials=valid_creds)
+            assert exc_info.value.status_code == 500
+            assert "misconfiguration" in exc_info.value.detail.lower()
