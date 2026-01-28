@@ -8,17 +8,19 @@ import os
 import json
 import atexit
 import asyncio
-import secrets
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from loguru import logger
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import httpx
+import subprocess
+import threading
 
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
@@ -29,10 +31,6 @@ from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from ..auth import verify_token
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict
-import subprocess
-import threading
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))

@@ -7,6 +7,7 @@ All authentication logic should use these functions to ensure consistency and se
 
 import os
 import secrets
+from typing import Optional
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -81,7 +82,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
     return None
 
 
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[str]:
     """
     Validate bearer token and return the token value.
 
@@ -103,7 +104,7 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> 
             - 500 if secure mode enabled but FMCP_BEARER_TOKEN not configured
 
     Returns:
-        Token value if authentication succeeds, None if secure mode is disabled
+        Token value (str) if authentication succeeds in secure mode, None if secure mode is disabled
 
     Examples:
         >>> from fastapi import FastAPI, Depends
