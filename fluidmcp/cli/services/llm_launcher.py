@@ -12,6 +12,7 @@ import subprocess
 import time
 import asyncio
 import httpx
+import re
 from typing import Dict, Any, Optional, Tuple
 from loguru import logger
 
@@ -25,6 +26,34 @@ MAX_BACKOFF_EXPONENT = 5  # Maximum exponential backoff exponent (caps at 2^5 = 
 HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
+
+
+def sanitize_model_id(model_id: str) -> str:
+    """
+    Sanitize model ID to prevent path traversal attacks.
+
+    Args:
+        model_id: Raw model identifier from user input
+
+    Returns:
+        Sanitized model ID safe for use in file paths
+
+    Examples:
+        >>> sanitize_model_id("my-model")
+        'my-model'
+        >>> sanitize_model_id("../../etc/passwd")
+        '__etc_passwd'
+        >>> sanitize_model_id("model/with/slashes")
+        'model_with_slashes'
+    """
+    # Allow only alphanumeric, underscore, and hyphen
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', model_id)
+    # Extra safety: remove any remaining directory traversal patterns
+    sanitized = sanitized.replace('..', '_')
+    # Ensure it's not empty after sanitization
+    if not sanitized:
+        sanitized = 'unnamed_model'
+    return sanitized
 
 
 class LLMProcess:
@@ -48,6 +77,7 @@ class LLMProcess:
         self.successful_restarts = 0  # Tracks successful restarts
         self.last_restart_time: Optional[float] = None
         self.start_time: Optional[float] = None
+        self._restart_in_progress = False  # Guard against concurrent restarts
 
         # Get and validate restart policy from config
         restart_policy = config.get("restart_policy", "no")
@@ -119,7 +149,9 @@ class LLMProcess:
         # Create log file for stderr to aid debugging startup failures
         log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
         os.makedirs(log_dir, exist_ok=True)
-        stderr_log_path = os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+        # Sanitize model_id to prevent path traversal attacks
+        safe_model_id = sanitize_model_id(self.model_id)
+        stderr_log_path = os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
         stderr_log = None
         try:
@@ -133,8 +165,9 @@ class LLMProcess:
                 stderr=stderr_log,
             )
 
-            # Store log file handle for cleanup in stop()
+            # Transfer ownership of file handle to self (for cleanup in stop())
             self._stderr_log = stderr_log
+            stderr_log = None  # Clear local var to prevent double-close in finally
 
             # Track start time for uptime calculation
             self.start_time = time.time()
@@ -144,17 +177,18 @@ class LLMProcess:
             return self.process
 
         except FileNotFoundError:
-            # Close file handle if Popen failed before it could take ownership
-            if stderr_log and not self._stderr_log:
-                stderr_log.close()
             logger.error(f"Command '{command}' not found. Is {command} installed?")
             raise
         except Exception as e:
-            # Close file handle if Popen failed before it could take ownership
-            if stderr_log and not self._stderr_log:
-                stderr_log.close()
             logger.error(f"Failed to start LLM model '{self.model_id}': {e}")
             raise
+        finally:
+            # Close file handle if Popen failed before ownership transfer
+            if stderr_log is not None:
+                try:
+                    stderr_log.close()
+                except Exception as close_error:
+                    logger.debug(f"Error closing stderr log on exception: {close_error}")
 
     def stop(self, timeout: Optional[int] = None):
         """
@@ -256,9 +290,12 @@ class LLMProcess:
         else:
             root_base_url = normalized_base_url
 
-        # Ensure we have something usable (fall back to normalized_base_url if empty)
+        # Ensure we have something usable (handle edge case where base_url="/v1" exactly)
         if not root_base_url:
-            root_base_url = normalized_base_url
+            # If root is empty (base_url was "/v1"), default to localhost
+            # This prevents URLs like "/health" without a host
+            root_base_url = "http://localhost"
+            logger.warning(f"base_url '{base_url}' resulted in empty root, defaulting to {root_base_url}")
 
         # Try health check endpoints:
         # - root /health (common for many backends)
@@ -287,7 +324,9 @@ class LLMProcess:
     def get_stderr_log_path(self) -> str:
         """Get the path to the stderr log file."""
         log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
-        return os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+        # Sanitize model_id to prevent path traversal attacks
+        safe_model_id = sanitize_model_id(self.model_id)
+        return os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
     def check_for_cuda_oom(self) -> bool:
         """
@@ -384,6 +423,12 @@ class LLMProcess:
         if self.restart_policy == "no":
             return False
 
+        # max_restarts=0 means no restarts allowed (not unlimited)
+        # This check also handles the case where restart_count >= max_restarts
+        if self.max_restarts == 0:
+            logger.debug(f"LLM model '{self.model_id}' has max_restarts=0, no restarts allowed")
+            return False
+
         if self.restart_count >= self.max_restarts:
             logger.warning(
                 f"LLM model '{self.model_id}' has reached max restarts "
@@ -435,45 +480,57 @@ class LLMProcess:
         Returns:
             True if restart successful, False otherwise
         """
+        # Guard against concurrent restarts
+        if self._restart_in_progress:
+            logger.warning(f"Restart already in progress for LLM model '{self.model_id}'")
+            return False
+
         if not self.can_restart():
             return False
 
-        # Increment attempt counter BEFORE restart (for proper backoff and max_restarts)
-        self.restart_count += 1
-        logger.info(f"Attempting to restart LLM model '{self.model_id}' (attempt {self.restart_count}/{self.max_restarts})")
+        # Mark restart in progress to prevent concurrent attempts
+        self._restart_in_progress = True
 
-        # Calculate delay with exponential backoff
-        delay = self.calculate_restart_delay()
-        logger.info(f"Waiting {delay}s before restart...")
-        await asyncio.sleep(delay)
-
-        # Stop existing process (run in thread to avoid blocking event loop)
-        if self.is_running():
-            await asyncio.to_thread(self.stop)
-        elif self.process:
-            # Process crashed but we still have the Popen object
-            await asyncio.to_thread(self.force_kill)
-
-        # Attempt restart
         try:
-            self.start()
+            # Increment attempt counter BEFORE restart (for proper backoff and max_restarts)
+            self.restart_count += 1
+            logger.info(f"Attempting to restart LLM model '{self.model_id}' (attempt {self.restart_count}/{self.max_restarts})")
 
-            # Wait for process to stabilize
-            await asyncio.sleep(2)
+            # Calculate delay with exponential backoff
+            delay = self.calculate_restart_delay()
+            logger.info(f"Waiting {delay}s before restart...")
+            await asyncio.sleep(delay)
 
+            # Stop existing process (run in thread to avoid blocking event loop)
             if self.is_running():
-                # Track successful restart
-                self.successful_restarts += 1
-                self.last_restart_time = time.time()
-                logger.info(f"LLM model '{self.model_id}' restarted successfully (success {self.successful_restarts}/{self.restart_count})")
-                return True
-            else:
-                logger.error(f"LLM model '{self.model_id}' failed to start after restart attempt {self.restart_count}")
-                return False
+                await asyncio.to_thread(self.stop)
+            elif self.process:
+                # Process crashed but we still have the Popen object
+                await asyncio.to_thread(self.force_kill)
 
-        except Exception as e:
-            logger.error(f"Error restarting LLM model '{self.model_id}' on attempt {self.restart_count}: {e}")
-            return False
+            # Attempt restart
+            try:
+                self.start()
+
+                # Wait for process to stabilize
+                await asyncio.sleep(2)
+
+                if self.is_running():
+                    # Track successful restart
+                    self.successful_restarts += 1
+                    self.last_restart_time = time.time()
+                    logger.info(f"LLM model '{self.model_id}' restarted successfully (success {self.successful_restarts}/{self.restart_count})")
+                    return True
+                else:
+                    logger.error(f"LLM model '{self.model_id}' failed to start after restart attempt {self.restart_count}")
+                    return False
+
+            except Exception as e:
+                logger.error(f"Error restarting LLM model '{self.model_id}' on attempt {self.restart_count}: {e}")
+                return False
+        finally:
+            # Always clear restart flag
+            self._restart_in_progress = False
 
 
 def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
