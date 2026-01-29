@@ -8,6 +8,7 @@ Includes error recovery, health checks, and automatic restart capabilities.
 """
 
 import os
+import re
 import subprocess
 import time
 import asyncio
@@ -27,6 +28,37 @@ HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failur
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
 
+def sanitize_model_id(model_id: str) -> str:
+    """
+    Sanitize model ID to prevent path traversal attacks.
+
+    Removes or replaces characters that could be used for directory traversal
+    or other malicious file system operations.
+
+    Args:
+        model_id: Raw model identifier from user input
+
+    Returns:
+        Sanitized model ID safe for use in file paths
+
+    Examples:
+        >>> sanitize_model_id("../../etc/passwd")
+        '______etc_passwd'
+        >>> sanitize_model_id("normal-model_123")
+        'normal-model_123'
+        >>> sanitize_model_id("")
+        'unnamed_model'
+    """
+    # Replace any character that's not alphanumeric, underscore, or hyphen
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', model_id)
+    # Extra safety: replace any remaining .. sequences
+    sanitized = sanitized.replace('..', '_')
+    # Ensure we have a non-empty result
+    if not sanitized:
+        sanitized = 'unnamed_model'
+    return sanitized
+
+
 class LLMProcess:
     """Manages a single LLM inference server process."""
 
@@ -44,8 +76,7 @@ class LLMProcess:
         self._stderr_log: Optional[object] = None  # File handle for stderr logging
 
         # Restart tracking
-        self.restart_count = 0  # Tracks restart attempts (not just successes)
-        self.successful_restarts = 0  # Tracks successful restarts
+        self.restart_count = 0
         self.last_restart_time: Optional[float] = None
         self.start_time: Optional[float] = None
 
@@ -89,8 +120,14 @@ class LLMProcess:
             )
         self.health_check_timeout = health_check_timeout
 
-        # Note: health_check_interval is configured globally in LLMHealthMonitor,
-        # not per-model. Removed unused field to avoid confusion.
+        # Validate health_check_interval
+        health_check_interval = config.get("health_check_interval", HEALTH_CHECK_INTERVAL)
+        if not isinstance(health_check_interval, (int, float)) or health_check_interval <= 0:
+            raise ValueError(
+                f"Invalid health_check_interval {health_check_interval!r} for model '{model_id}'. "
+                f"Must be a positive number"
+            )
+        self.health_check_interval = health_check_interval
 
         # CUDA OOM detection cache: (result, timestamp, file_mtime)
         self._cuda_oom_cache: Optional[Tuple[bool, float, Optional[float]]] = None
@@ -117,10 +154,13 @@ class LLMProcess:
         logger.debug(f"Command: {' '.join(full_command)}")
 
         # Create log file for stderr to aid debugging startup failures
+        # Sanitize model_id to prevent path traversal attacks (Issue #1)
+        safe_model_id = sanitize_model_id(self.model_id)
         log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
         os.makedirs(log_dir, exist_ok=True)
-        stderr_log_path = os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+        stderr_log_path = os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
+        # Fix Issue #4: Properly handle file handle leak if Popen fails
         stderr_log = None
         try:
             # Open stderr log file for capturing process errors
@@ -135,6 +175,7 @@ class LLMProcess:
 
             # Store log file handle for cleanup in stop()
             self._stderr_log = stderr_log
+            stderr_log = None  # Transfer ownership, don't close in finally
 
             # Track start time for uptime calculation
             self.start_time = time.time()
@@ -144,17 +185,16 @@ class LLMProcess:
             return self.process
 
         except FileNotFoundError:
-            # Close file handle if Popen failed before it could take ownership
-            if stderr_log and not self._stderr_log:
-                stderr_log.close()
             logger.error(f"Command '{command}' not found. Is {command} installed?")
             raise
         except Exception as e:
-            # Close file handle if Popen failed before it could take ownership
-            if stderr_log and not self._stderr_log:
-                stderr_log.close()
             logger.error(f"Failed to start LLM model '{self.model_id}': {e}")
             raise
+        finally:
+            # Issue #4 fix: Close file handle if it wasn't transferred to self._stderr_log
+            # This ensures no file handle leak if Popen fails
+            if stderr_log is not None:
+                stderr_log.close()
 
     def stop(self, timeout: Optional[int] = None):
         """
@@ -246,26 +286,10 @@ class LLMProcess:
             self.consecutive_health_failures = 0
             return True, None
 
-        # Normalize base URL (remove trailing slash)
-        normalized_base_url = base_url.rstrip("/")
-
-        # Derive root base URL for generic /health checks
-        # If the configured base URL ends with /v1, strip that segment
-        if normalized_base_url.endswith("/v1"):
-            root_base_url = normalized_base_url[:-3]  # Remove "/v1"
-        else:
-            root_base_url = normalized_base_url
-
-        # Ensure we have something usable (fall back to normalized_base_url if empty)
-        if not root_base_url:
-            root_base_url = normalized_base_url
-
-        # Try health check endpoints:
-        # - root /health (common for many backends)
-        # - OpenAI-compatible /models under the configured base URL
+        # Try health check endpoints
         health_endpoints = [
-            f"{root_base_url}/health",
-            f"{normalized_base_url}/models",
+            f"{base_url}/health",
+            f"{base_url}/v1/models",
         ]
 
         async with httpx.AsyncClient(timeout=self.health_check_timeout) as client:
@@ -405,8 +429,22 @@ class LLMProcess:
 
         # Check if process is dead
         if not self.is_running():
-            if self.restart_policy in ("on-failure", "always"):
+            # Issue #6 fix: "always" restarts regardless of exit code
+            if self.restart_policy == "always":
                 return True
+
+            # Issue #6 fix: "on-failure" only restarts on non-zero exit (actual failure)
+            if self.restart_policy == "on-failure":
+                if self.process and self.process.poll() is not None:
+                    returncode = self.process.poll()
+                    # Only restart on non-zero exit code (failure)
+                    if returncode != 0:
+                        logger.info(f"Process '{self.model_id}' exited with code {returncode}, restarting...")
+                        return True
+                    else:
+                        logger.info(f"Process '{self.model_id}' exited cleanly (code 0), not restarting")
+                        return False
+                return True  # If we can't determine exit code, restart to be safe
 
         # Check if consecutive health failures exceeded threshold
         if self.consecutive_health_failures >= HEALTH_CHECK_FAILURES_THRESHOLD:
@@ -438,21 +476,19 @@ class LLMProcess:
         if not self.can_restart():
             return False
 
-        # Increment attempt counter BEFORE restart (for proper backoff and max_restarts)
-        self.restart_count += 1
-        logger.info(f"Attempting to restart LLM model '{self.model_id}' (attempt {self.restart_count}/{self.max_restarts})")
+        logger.info(f"Attempting to restart LLM model '{self.model_id}' (attempt {self.restart_count + 1}/{self.max_restarts})")
 
         # Calculate delay with exponential backoff
         delay = self.calculate_restart_delay()
         logger.info(f"Waiting {delay}s before restart...")
         await asyncio.sleep(delay)
 
-        # Stop existing process (run in thread to avoid blocking event loop)
+        # Stop existing process
         if self.is_running():
-            await asyncio.to_thread(self.stop)
+            self.stop()
         elif self.process:
             # Process crashed but we still have the Popen object
-            await asyncio.to_thread(self.force_kill)
+            self.force_kill()
 
         # Attempt restart
         try:
@@ -462,17 +498,17 @@ class LLMProcess:
             await asyncio.sleep(2)
 
             if self.is_running():
-                # Track successful restart
-                self.successful_restarts += 1
+                # Only increment counter after confirming success
+                self.restart_count += 1
                 self.last_restart_time = time.time()
-                logger.info(f"LLM model '{self.model_id}' restarted successfully (success {self.successful_restarts}/{self.restart_count})")
+                logger.info(f"LLM model '{self.model_id}' restarted successfully")
                 return True
             else:
-                logger.error(f"LLM model '{self.model_id}' failed to start after restart attempt {self.restart_count}")
+                logger.error(f"LLM model '{self.model_id}' failed to start after restart")
                 return False
 
         except Exception as e:
-            logger.error(f"Error restarting LLM model '{self.model_id}' on attempt {self.restart_count}: {e}")
+            logger.error(f"Error restarting LLM model '{self.model_id}': {e}")
             return False
 
 
@@ -566,6 +602,8 @@ class LLMHealthMonitor:
         self.check_interval = check_interval
         self._monitor_task: Optional[asyncio.Task] = None
         self._running = False
+        # Issue #5 fix: Track restarts in progress to prevent multiple simultaneous restarts
+        self._restarts_in_progress: set = set()
 
     async def _monitor_loop(self):
         """Main monitoring loop - runs continuously until stopped."""
@@ -589,9 +627,8 @@ class LLMHealthMonitor:
                                 f"(failures: {process.consecutive_health_failures})"
                             )
 
-                            # Check for CUDA OOM errors (run in thread to avoid blocking event loop)
-                            has_cuda_oom = await asyncio.to_thread(process.check_for_cuda_oom)
-                            if has_cuda_oom:
+                            # Check for CUDA OOM errors
+                            if process.check_for_cuda_oom():
                                 logger.error(
                                     f"CUDA OOM detected for LLM model '{model_id}'. "
                                     "Consider reducing GPU memory utilization or using a smaller model."
@@ -599,11 +636,30 @@ class LLMHealthMonitor:
 
                         # Check if restart is needed
                         if process.needs_restart():
+                            # Issue #5 fix: Only start restart if not already in progress
+                            if model_id in self._restarts_in_progress:
+                                logger.debug(f"Restart already in progress for '{model_id}', skipping")
+                                continue
+
                             logger.warning(f"LLM model '{model_id}' needs restart")
 
-                            # Schedule restart in background task to avoid blocking monitor loop
-                            # This ensures other models continue to be monitored on schedule
-                            asyncio.create_task(self._handle_restart(model_id, process))
+                            # Mark restart as in progress
+                            self._restarts_in_progress.add(model_id)
+
+                            try:
+                                # Attempt automatic restart
+                                success = await process.attempt_restart()
+
+                                if success:
+                                    logger.info(f"LLM model '{model_id}' recovered successfully")
+                                else:
+                                    logger.error(
+                                    f"LLM model '{model_id}' failed to recover. "
+                                    f"Restart count: {process.restart_count}/{process.max_restarts}"
+                                )
+                            finally:
+                                # Issue #5 fix: Always remove from in-progress set
+                                self._restarts_in_progress.discard(model_id)
 
                     except Exception as e:
                         logger.error(f"Error monitoring LLM model '{model_id}': {e}", exc_info=True)
@@ -621,28 +677,6 @@ class LLMHealthMonitor:
 
         logger.info("Health monitor stopped")
 
-    async def _handle_restart(self, model_id: str, process: "LLMProcess"):
-        """
-        Handle restart in background task to avoid blocking monitor loop.
-
-        Args:
-            model_id: Model identifier
-            process: LLMProcess instance to restart
-        """
-        try:
-            success = await process.attempt_restart()
-
-            if success:
-                logger.info(f"LLM model '{model_id}' recovered successfully")
-            else:
-                logger.error(
-                    f"LLM model '{model_id}' failed to recover. "
-                    f"Restart attempts: {process.restart_count}/{process.max_restarts}, "
-                    f"Successful restarts: {process.successful_restarts}"
-                )
-        except Exception as e:
-            logger.error(f"Error in restart handler for '{model_id}': {e}", exc_info=True)
-
     def start(self):
         """Start the background health monitor."""
         if self._running:
@@ -650,13 +684,10 @@ class LLMHealthMonitor:
             return
 
         try:
-            # Set _running BEFORE creating task to avoid race condition
-            # (task might start immediately and check _running flag)
-            self._running = True
             self._monitor_task = asyncio.create_task(self._monitor_loop())
+            self._running = True
             logger.info("Health monitor task created")
         except RuntimeError as e:
-            self._running = False  # Reset on failure
             logger.error(f"Failed to create health monitor task (no event loop): {e}")
             raise
 

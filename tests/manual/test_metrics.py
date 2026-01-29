@@ -207,11 +207,10 @@ def test_generate_traffic_and_verify():
         print(f"  Baseline request count: {baseline_count}")
 
         # Generate traffic by making a request to health endpoint
-        # Note: The /health endpoint itself is NOT instrumented with RequestTimer, but
-        # calling /metrics multiple times DOES increment fluidmcp_requests_total because
-        # the /metrics endpoint is instrumented. This test validates that the metrics
-        # system works by checking if the baseline count increased from our own /metrics calls.
-        print("\nGenerating traffic (health check request for reference)...")
+        # Note: Neither /health nor /metrics endpoints are instrumented with RequestTimer.
+        # This test validates that the metrics system works by checking if the count
+        # increased from any baseline traffic (e.g., from server startup or other requests).
+        print("\nGenerating traffic (health check request)...")
         requests.get("http://localhost:8099/health", timeout=5)
 
         # Small delay to allow metrics to update
@@ -263,16 +262,7 @@ def test_histogram_buckets():
                     le_end = line.index('"', le_start)
                     le_values.add(line[le_start:le_end])
 
-            # Safe sorting function for bucket boundaries
-            def safe_float_key(x):
-                if x == '+Inf':
-                    return float('inf')
-                try:
-                    return float(x)
-                except ValueError:
-                    return float('inf')  # Treat invalid values as infinity
-
-            print(f"  Bucket boundaries: {sorted(le_values, key=safe_float_key)}")
+            print(f"  Bucket boundaries: {sorted(le_values, key=lambda x: float(x) if x != '+Inf' else float('inf'))}")
             return True
         else:
             print("⚠ No histogram buckets found (may not have request data yet)")
