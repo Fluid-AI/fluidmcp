@@ -62,7 +62,7 @@ test-*.json
 .fmcp-packages/
 
 # Temporary server directories (created when running from config files)
-.temp_servers/.coverage
+.temp_servers/
 
 # Test coverage reports
 .coverage
