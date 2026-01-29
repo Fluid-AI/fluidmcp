@@ -9,24 +9,42 @@ Provides REST API for:
 """
 from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 import os
+import re
+import asyncio
+
+from ..auth import get_token, security
+
+# Environment variable validation patterns and constants
+ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
+ENV_VALUE_MAX_LENGTH = 10000
+
+# Validation error messages
+ENV_NAME_INVALID_MSG = "Invalid environment variable name '{}'. Must start with A-Z or underscore, followed by A-Z, 0-9, or underscores only."
+ENV_VALUE_NULL_BYTE_MSG = "Environment variable value cannot contain null bytes"
+ENV_VALUE_TOO_LONG_MSG = f"Environment variable value exceeds maximum length of {ENV_VALUE_MAX_LENGTH} characters"
 
 router = APIRouter()
-security = HTTPBearer(auto_error=False)
 
 
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+def sanitize_error_message(error_msg: str) -> str:
+    """
+    Sanitize error messages to prevent exposure of sensitive information.
 
-    if not secure_mode:
-        return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
+    - Removes absolute file paths
+    - Removes user directories
+    - Keeps only generic error information
+    """
+    # Remove absolute paths (e.g., /home/user/... or C:\Users\...)
+    sanitized = re.sub(r'(/[a-zA-Z0-9_/.-]+/|[A-Z]:\\[a-zA-Z0-9_\\.-]+\\)', '<path>/', error_msg)
+
+    # Remove common sensitive patterns
+    sanitized = re.sub(r'File ".*?"', 'File "<sanitized>"', sanitized)
+    sanitized = re.sub(r'at /.+?:\d+', 'at <sanitized>', sanitized)
+
+    return sanitized
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
@@ -51,11 +69,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return "anonymous"
 
     # For now, use token as user ID (simple approach)
-    # In production, decode JWT and extract user_id/email claim
+    # TODO: Implement proper JWT authentication with role claims
+    # Current implementation uses first 8 chars of token (~33 bits entropy)
+    # which is insufficient for production security. Replace with JWT decode
+    # to extract user_id/email/role claims.
     token = credentials.credentials
 
     # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users
+    # This ensures different tokens = different users but provides weak security
     user_id = f"user_{token[:8]}"
 
     return user_id
@@ -325,7 +346,7 @@ async def get_server(request: Request, id: str):
         id: Server identifier
 
     Returns:
-        Server config and status
+        Server config and status (with masked env values for security)
     """
     manager = get_server_manager(request)
 
@@ -339,10 +360,18 @@ async def get_server(request: Request, id: str):
     # Get status
     status = await manager.get_server_status(id)
 
+    # Mask env values for security (never expose credentials in config)
+    config_copy = config.copy()
+    if "env" in config_copy and config_copy["env"]:
+        config_copy["env"] = {
+            key: "****" if value else None
+            for key, value in config_copy["env"].items()
+        }
+
     return {
         "id": id,
         "name": config.get("name"),
-        "config": config,
+        "config": config_copy,
         "status": status
     }
 
@@ -450,12 +479,15 @@ async def delete_server(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Authorization: Only allow in anonymous mode for now
-    # In production, check if user has admin role
+    # Authorization: Only allow in anonymous mode (no authentication) for now
+    # This is intentionally restrictive - deletion is a destructive operation.
+    # TODO: Implement proper role-based access control (RBAC) with admin roles
+    # when JWT authentication with role claims is added. Current token-based
+    # auth (user_id = first 8 chars of token) is too weak for delete permissions.
     if user_id != "anonymous":
         raise HTTPException(
             403,
-            "Forbidden: Only administrators can delete server configurations. Contact your admin."
+            "Server deletion requires administrator privileges"
         )
 
     # Stop server if running
@@ -559,6 +591,7 @@ async def stop_server(
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
+            logger.warning(f"Authorization failed: User '{user_id}' attempted to stop server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
                 f"Forbidden: Server '{id}' was started by another user. Only the user who started it can stop it."
@@ -610,6 +643,7 @@ async def restart_server(
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
+            logger.warning(f"Authorization failed: User '{user_id}' attempted to restart server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
                 f"Forbidden: Server '{id}' was started by another user. Only the user who started it can restart it."
@@ -628,6 +662,243 @@ async def restart_server(
     return {
         "message": f"Server '{id}' restarted successfully",
         "pid": pid
+    }
+
+
+def _get_env_metadata(config: Dict[str, Any], env_key: str) -> Dict[str, Any]:
+    """
+    Get metadata for a specific environment variable from config.
+
+    Args:
+        config: Server configuration dict
+        env_key: Environment variable name (e.g., "API_KEY")
+
+    Returns:
+        Dict with 'required' and 'description' fields.
+        Defaults to False and "" if no metadata found.
+    """
+    # Look for optional env_metadata field in config
+    env_metadata = config.get("env_metadata", {})
+
+    if env_key in env_metadata:
+        meta = env_metadata[env_key]
+        return {
+            "required": meta.get("required", False),
+            "description": meta.get("description", "")
+        }
+
+    # No metadata found - return defaults
+    return {
+        "required": False,
+        "description": ""
+    }
+
+
+@router.get("/servers/{id}/instance/env")
+async def get_server_instance_env(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Get environment variable METADATA for server instance.
+
+    IMPORTANT: This endpoint returns ONLY metadata, NEVER raw secret values.
+    This is a security-first design to prevent credential leakage.
+
+    For each environment variable, returns:
+    - present: bool - whether the variable has a configured value
+    - required: bool - whether it's marked as required (from config)
+    - masked: str - "****" if present, null otherwise (no actual value shown)
+    - description: str - help text from config (if available)
+
+    Args:
+        id: Server identifier
+        user_id: Current user (from token)
+
+    Returns:
+        Dict mapping env variable names to their metadata objects.
+        Example: {"API_KEY": {"present": true, "required": true, "masked": "****", "description": "..."}}
+
+    Security:
+        Raw environment variable values are NEVER returned by this endpoint.
+        Frontend must use empty inputs for editing (user re-enters values).
+    """
+    manager = get_server_manager(request)
+
+    # Get server config for template env keys
+    config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Get instance for configured env keys
+    instance = await manager.db.get_instance_state(id)
+
+    # Build metadata response
+    # Config uses flat structure with env at root level
+    config_env = config.get("env", {}) or {}
+    # Handle case where instance.env exists but is None
+    instance_env = (instance.get("env") or {}) if instance else {}
+
+    env_metadata = {}
+
+    # Process all env keys from config template
+    for key in config_env.keys():
+        # Empty strings are valid env values (some tools use them)
+        value_present = key in instance_env and instance_env[key] is not None
+        # Get metadata for this env var (required, description)
+        metadata = _get_env_metadata(config, key)
+        env_metadata[key] = {
+            "present": value_present,
+            "required": metadata["required"],
+            "masked": "****" if value_present else None,
+            "description": metadata["description"]
+        }
+
+    # Add any extra keys from instance env (custom vars)
+    for key in instance_env.keys():
+        if key not in env_metadata:
+            value = instance_env[key]
+            # Empty strings are valid env values (some tools use them)
+            value_present = value is not None
+            # Get metadata for this env var (will return defaults if not in config)
+            metadata = _get_env_metadata(config, key)
+            env_metadata[key] = {
+                "present": value_present,
+                "required": metadata["required"],
+                "masked": "****" if value_present else None,
+                "description": metadata["description"]
+            }
+
+    logger.debug(f"Retrieved instance env metadata for '{id}'")
+    return env_metadata
+
+
+@router.put("/servers/{id}/instance/env")
+async def update_server_instance_env(
+    request: Request,
+    id: str,
+    env_data: Dict[str, str] = Body(...),
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Update environment variables for server instance (auto-restarts if running).
+
+    This updates ONLY the instance-level env variables, never the server config.
+    If the server is currently running, it will be automatically restarted to apply changes.
+
+    Validation:
+    - Names: STRICT - must be uppercase alphanumeric + underscore (e.g., API_KEY)
+    - Values: LOOSE - allows =, /, +, -, ., :, @, % (API keys/JWTs compatible)
+    - Rejects: null bytes, values > 10k chars
+
+    Authorization:
+        Users can only update env for servers they started (or in anonymous mode).
+
+    Args:
+        id: Server identifier
+        env_data: Dict of environment variables to set (e.g., {"API_KEY": "sk-..."})
+        user_id: Current user (from token)
+
+    Returns:
+        Success message with restart status
+
+    Behavior:
+        - If running: stops server → updates env in DB → restarts with new env
+        - If stopped: updates env in DB → will be used on next start
+    """
+    manager = get_server_manager(request)
+
+    # Validate env_data types (FastAPI type hints don't guarantee runtime type safety)
+    for key, value in env_data.items():
+        if not isinstance(key, str):
+            raise HTTPException(400, f"Environment variable name must be string, got {type(key).__name__}")
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(400, f"Environment variable '{key}' value must be string, got {type(value).__name__}")
+
+    # Validate env variable names STRICTLY
+    for key in env_data.keys():
+        if not ENV_NAME_PATTERN.match(key):
+            raise HTTPException(
+                400,
+                ENV_NAME_INVALID_MSG.format(key)
+            )
+
+    # Validate env variable values LOOSELY
+    for key, value in env_data.items():
+        if value is None:
+            continue
+
+        # Reject null bytes
+        if '\x00' in value:
+            raise HTTPException(400, ENV_VALUE_NULL_BYTE_MSG)
+
+        # Max length check
+        if len(value) > ENV_VALUE_MAX_LENGTH:
+            raise HTTPException(400, ENV_VALUE_TOO_LONG_MSG)
+
+    # Check if server exists
+    config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Get instance state and check if running
+    instance = await manager.db.get_instance_state(id)
+    is_running = id in manager.processes and manager.processes[id].poll() is None
+
+    # Authorization: Check ownership if instance exists (regardless of running state)
+    if instance:
+        started_by = instance.get("started_by")
+        # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
+        if started_by and started_by != user_id and user_id != "anonymous":
+            logger.warning(f"Authorization failed: User '{user_id}' attempted to update env for server '{id}' started by '{started_by}'")
+            raise HTTPException(
+                403,
+                f"Forbidden: Server '{id}' environment was configured by another user."
+            )
+
+    # Update instance env in database
+    success = await manager.db.update_instance_env(id, env_data)
+    if not success:
+        # If instance doesn't exist yet, create it
+        # Don't set started_by - will be set when server actually starts
+        await manager.db.save_instance_state({
+            "server_id": id,
+            "state": "stopped",
+            "env": env_data
+        })
+
+    # If server is running, restart with new env
+    restart_message = ""
+    if is_running:
+        # Double-check process exists and is still alive (race condition guard)
+        if id not in manager.processes or manager.processes[id].poll() is not None:
+            raise HTTPException(409, f"Server '{id}' stopped before restart could complete")
+
+        logger.info(f"Server '{id}' is running, restarting with new env...")
+
+        # Stop server
+        await manager.stop_server(id)
+
+        # Start server with new env
+        success = await manager.start_server(id, config=config, user_id=user_id, env_overrides=env_data)
+        if not success:
+            raise HTTPException(500, f"Failed to restart server '{id}' with new environment")
+
+        # Get new PID
+        process = manager.processes.get(id)
+        pid = process.pid if process else None
+
+        restart_message = f" Server restarted with PID {pid}."
+    else:
+        restart_message = " Server is stopped. Environment will be applied on next start."
+
+    logger.info(f"Updated instance env for '{id}' via API")
+    return {
+        "message": f"Environment variables updated for server '{id}'.{restart_message}",
+        "env_updated": True
     }
 
 
@@ -841,7 +1112,14 @@ async def run_tool(
         response = json.loads(response_line.strip())
 
         if "error" in response:
-            raise HTTPException(500, f"Tool execution error: {response['error']}")
+            # Handle error object properly - JSON-RPC error format
+            error_obj = response['error']
+            if isinstance(error_obj, dict):
+                error_message = error_obj.get('message', str(error_obj))
+            else:
+                error_message = str(error_obj)
+            sanitized_message = sanitize_error_message(error_message)
+            raise HTTPException(500, f"Tool execution error: {sanitized_message}")
 
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
@@ -849,7 +1127,290 @@ async def run_tool(
     except asyncio.TimeoutError:
         raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
-        raise HTTPException(500, f"Failed to parse tool response: {str(e)}")
+        sanitized_error = sanitize_error_message(str(e))
+        raise HTTPException(500, f"Failed to parse tool response: {sanitized_error}")
     except Exception as e:
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
-        raise HTTPException(500, f"Tool execution failed: {str(e)}")
+        sanitized_error = sanitize_error_message(str(e))
+        raise HTTPException(500, f"Tool execution failed: {sanitized_error}")
+
+
+# ==================== LLM Management ====================
+
+def get_llm_processes():
+    """Get LLM processes from run_servers module."""
+    # Import here to avoid circular dependency
+    from ..services import get_llm_processes as _get_llm_processes
+    return _get_llm_processes()
+
+
+@router.get("/llm/models")
+async def list_llm_models(
+    token: str = Depends(get_token)
+):
+    """
+    List all configured LLM models with their status.
+
+    Returns:
+        List of LLM models with status information
+    """
+    llm_processes = get_llm_processes()
+
+    models = []
+    for model_id, process in llm_processes.items():
+        is_healthy, health_msg = await process.check_health()
+        models.append({
+            "id": model_id,
+            "is_running": process.is_running(),
+            "is_healthy": is_healthy,
+            "health_message": health_msg,
+            "restart_policy": process.restart_policy,
+            "restart_count": process.restart_count,
+            "max_restarts": process.max_restarts,
+            "consecutive_health_failures": process.consecutive_health_failures,
+            "uptime_seconds": process.get_uptime(),
+            "last_restart_time": process.last_restart_time,
+            "last_health_check_time": process.last_health_check_time
+        })
+
+    return {
+        "models": models,
+        "total": len(models)
+    }
+
+
+@router.get("/llm/models/{model_id}")
+async def get_llm_model_status(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get detailed status for a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Detailed model status
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+    is_healthy, health_msg = await process.check_health()
+
+    return {
+        "id": model_id,
+        "is_running": process.is_running(),
+        "is_healthy": is_healthy,
+        "health_message": health_msg,
+        "restart_policy": process.restart_policy,
+        "restart_count": process.restart_count,
+        "max_restarts": process.max_restarts,
+        "consecutive_health_failures": process.consecutive_health_failures,
+        "uptime_seconds": process.get_uptime(),
+        "last_restart_time": process.last_restart_time,
+        "last_health_check_time": process.last_health_check_time,
+        "has_cuda_oom": process.check_for_cuda_oom()
+    }
+
+
+@router.post("/llm/models/{model_id}/restart")
+async def restart_llm_model(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Manually restart a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Restart result
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+
+    # Check if restart is allowed
+    if not process.can_restart():
+        raise HTTPException(
+            400,
+            f"Cannot restart model '{model_id}': restart policy is '{process.restart_policy}' "
+            f"or max restarts ({process.max_restarts}) reached"
+        )
+
+    logger.info(f"Manual restart requested for LLM model '{model_id}'")
+
+    # Attempt restart
+    success = await process.attempt_restart()
+
+    if success:
+        return {
+            "message": f"LLM model '{model_id}' restarted successfully",
+            "restart_count": process.restart_count,
+            "uptime_seconds": process.get_uptime()
+        }
+    else:
+        raise HTTPException(
+            500,
+            f"Failed to restart LLM model '{model_id}'. Check logs for details."
+        )
+
+
+@router.post("/llm/models/{model_id}/stop")
+async def stop_llm_model(
+    request: Request,
+    model_id: str,
+    force: bool = Query(False, description="Force kill the process"),
+    token: str = Depends(get_token)
+):
+    """
+    Stop a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+        force: If true, force kill the process (SIGKILL)
+
+    Returns:
+        Stop result
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+
+    if not process.is_running():
+        return {"message": f"LLM model '{model_id}' is already stopped"}
+
+    logger.info(f"Stop requested for LLM model '{model_id}' (force={force})")
+
+    try:
+        # Run blocking stop/kill operations in thread to avoid blocking event loop
+        if force:
+            await asyncio.to_thread(process.force_kill)
+            return {"message": f"LLM model '{model_id}' force killed"}
+        else:
+            await asyncio.to_thread(process.stop)
+            return {"message": f"LLM model '{model_id}' stopped gracefully"}
+    except Exception as e:
+        logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)
+        raise HTTPException(500, "Failed to stop LLM model")
+
+
+@router.get("/llm/models/{model_id}/logs")
+async def get_llm_model_logs(
+    model_id: str,
+    lines: int = Query(100, description="Number of recent lines to retrieve", ge=1, le=10000),
+    token: str = Depends(get_token)
+):
+    """
+    Get recent stderr logs for a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+        lines: Number of recent lines to retrieve (1-10000)
+
+    Returns:
+        Log lines
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+    log_path = process.get_stderr_log_path()
+
+    if not os.path.exists(log_path):
+        return {
+            "model_id": model_id,
+            "log_path": log_path,
+            "lines": [],
+            "message": "Log file does not exist yet"
+        }
+
+    try:
+        # Efficiently read only the last N lines using backwards seeking
+        # This avoids loading large log files entirely into memory
+        # TODO: For very large files (>100MB), consider mmap for better performance
+        block_size = 8192
+        buffer = b""
+        newline_count = 0
+
+        with open(log_path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            position = file_size
+
+            # Read backwards until we have enough lines or reach start of file
+            while position > 0 and newline_count <= lines:
+                read_size = block_size if position >= block_size else position
+                position -= read_size
+                f.seek(position)
+                data = f.read(read_size)
+                buffer = data + buffer
+                newline_count = buffer.count(b"\n")
+
+        # Decode and split into lines
+        text = buffer.decode("utf-8", errors="ignore")
+        all_lines_read = text.splitlines(keepends=True)
+        recent_lines = all_lines_read[-lines:] if len(all_lines_read) > lines else all_lines_read
+
+        # Note: total_lines is approximate when file is larger than what we read
+        total_lines_approx = len(all_lines_read)
+
+        return {
+            "model_id": model_id,
+            "lines": recent_lines,
+            "total_lines": total_lines_approx,
+            "returned_lines": len(recent_lines)
+        }
+    except Exception as e:
+        logger.error(f"Error reading logs for '{model_id}': {e}", exc_info=True)
+        raise HTTPException(500, "Failed to read logs")
+
+
+@router.post("/llm/models/{model_id}/health-check")
+async def trigger_health_check(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Manually trigger a health check for a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Health check result
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+
+    logger.info(f"Manual health check triggered for LLM model '{model_id}'")
+
+    is_healthy, error_msg = await process.check_health()
+
+    return {
+        "model_id": model_id,
+        "is_healthy": is_healthy,
+        "health_message": error_msg,
+        "consecutive_health_failures": process.consecutive_health_failures,
+        "last_health_check_time": process.last_health_check_time,
+        "has_cuda_oom": process.check_for_cuda_oom()
+    }

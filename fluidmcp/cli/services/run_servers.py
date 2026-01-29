@@ -10,13 +10,16 @@ import atexit
 import asyncio
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from loguru import logger
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import httpx
+import subprocess
+import threading
 
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
@@ -24,14 +27,10 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
-from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
+from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
-from fastapi.responses import JSONResponse
-from typing import Dict
-import subprocess
-import threading
+from .frontend_utils import setup_frontend_routes
+from ..auth import verify_token
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -74,11 +73,17 @@ _llm_processes: Dict[str, LLMProcess] = {}
 # LLM endpoint configurations
 _llm_endpoints: Dict[str, Dict[str, str]] = {}
 
+# LLM health monitor
+_llm_health_monitor: Optional[LLMHealthMonitor] = None
+
 # Getter functions for management API (avoids circular import issues)
 def get_llm_processes() -> Dict[str, LLMProcess]:
     """Get the LLM processes registry. Used by management API."""
     return _llm_processes
 
+def get_llm_health_monitor() -> Optional[LLMHealthMonitor]:
+    """Get the LLM health monitor instance. Used by management API."""
+    return _llm_health_monitor
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 
@@ -121,6 +126,37 @@ def _initialize_server_metrics(server_name: str) -> None:
     collector.set_uptime(0.0)
 
     logger.debug(f"Initialized metrics for server: {server_name}")
+
+
+async def _start_llm_health_monitor_async():
+    """
+    Start background health monitor for LLM processes (async version).
+
+    Only starts if there are LLM processes with restart policies enabled.
+    This is called during FastAPI startup event when event loop is running.
+    """
+    global _llm_health_monitor
+
+    # Check if there are any processes with restart policies
+    processes_with_restart = {
+        model_id: process
+        for model_id, process in _llm_processes.items()
+        if process.restart_policy != "no"
+    }
+
+    if not processes_with_restart:
+        logger.info("No LLM processes with restart policies, health monitor not started")
+        return
+
+    # Stop existing monitor if running
+    if _llm_health_monitor and _llm_health_monitor.is_running():
+        logger.info("Stopping existing LLM health monitor...")
+        await _llm_health_monitor.stop()
+
+    # Create and start new health monitor (only monitor processes with restart policies)
+    logger.info(f"Starting health monitor for {len(processes_with_restart)} LLM process(es) with restart policies")
+    _llm_health_monitor = LLMHealthMonitor(processes_with_restart)
+    _llm_health_monitor.start()
 
 
 def _extract_port_from_args(args) -> int:
@@ -220,6 +256,10 @@ def run_servers(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Serve frontend from backend (single-port deployment)
+    setup_frontend_routes(app, host="0.0.0.0", port=port)
+
     # Launch each server and add its router
     launched_servers = 0
     logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
@@ -332,8 +372,17 @@ def run_servers(
         else:
             logger.warning("No LLM models started successfully - skipping proxy routes")
 
+        # Register startup event to start health monitor after event loop is running
+        @app.on_event("startup")
+        async def startup_health_monitor():
+            """Start LLM health monitor when FastAPI server starts."""
+            await _start_llm_health_monitor_async()
+
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
+
+    # Add health check endpoint
+    _add_health_endpoint(app)
 
     # Add Prometheus metrics endpoint
     _add_metrics_endpoint(app)
@@ -847,6 +896,62 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
         return JSONResponse(content=response)
 
 
+def _add_health_endpoint(app: FastAPI) -> None:
+    """
+    Add GET /health endpoint for health checks.
+
+    Args:
+        app: FastAPI application instance
+    """
+    @app.get("/health", tags=["monitoring"])
+    async def health_check() -> JSONResponse:
+        """
+        Health check endpoint.
+
+        Returns server health status with appropriate HTTP status codes:
+        - 200 OK: Server is healthy (at least one server running)
+        - 503 Service Unavailable: Server is degraded or unhealthy
+
+        Returns:
+            JSONResponse with health status, server count, and running server count
+        """
+        try:
+            processes = _get_server_processes()
+            if processes is None:
+                processes = {}
+
+            # Count running servers (check if process is not None and still alive)
+            running_count = sum(1 for p in processes.values() if p and p.poll() is None)
+
+            # Determine health status
+            status = "healthy" if running_count > 0 else "degraded"
+            status_code = 200 if running_count > 0 else 503
+
+            response_data = {
+                "status": status,
+                "servers": len(processes),
+                "running_servers": running_count,
+            }
+
+            return JSONResponse(
+                status_code=status_code,
+                content=response_data
+            )
+
+        except Exception as e:
+            # Log full error for debugging but return generic message to client
+            logger.error(f"Health check failed: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "unhealthy",
+                    "error": "Internal server error during health check",
+                    "servers": 0,
+                    "running_servers": 0
+                }
+            )
+
+
 def _add_metrics_endpoint(app: FastAPI) -> None:
     """
     Add GET /metrics endpoint for Prometheus-compatible metrics.
@@ -857,10 +962,13 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
     from fastapi.responses import PlainTextResponse
     from .metrics import get_registry, MetricsCollector
 
-    @app.get("/metrics", tags=["monitoring"])
+    @app.get("/metrics", tags=["monitoring"], dependencies=[Depends(verify_token)])
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
+
+        Requires bearer token authentication when FMCP_SECURE_MODE=true.
+        Public access when secure mode is disabled.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
@@ -870,12 +978,15 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
         - Streaming request metrics
         """
         # Update uptime for all running servers before rendering metrics
+        # Compute uptimes under lock (fast), then update metrics outside (can be slow)
         with _server_start_times_lock:
             current_time = time.monotonic()
-            for server_name, start_time in _server_start_times.items():
-                uptime = current_time - start_time
-                collector = MetricsCollector(server_name)
-                collector.set_uptime(uptime)
+            uptimes = {name: current_time - start for name, start in _server_start_times.items()}
+
+        # Update metrics outside lock to minimize lock duration
+        for server_name, uptime in uptimes.items():
+            collector = MetricsCollector(server_name)
+            collector.set_uptime(uptime)
 
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
@@ -1014,11 +1125,26 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
 
 def _cleanup_resources():
     """Cleanup all LLM processes on shutdown (thread-safe, idempotent)."""
-    global _cleanup_done, _http_client
+    global _cleanup_done, _http_client, _llm_health_monitor
 
     with _cleanup_lock:
         if _cleanup_done:
             return
+
+        # Stop health monitor if running
+        # Note: This is called from atexit/signal handler (not async context)
+        # The monitor task runs on uvicorn's loop, so we signal it to stop
+        # and let it clean up naturally rather than forcing from different loop
+        if _llm_health_monitor and _llm_health_monitor.is_running():
+            logger.info("Stopping LLM health monitor...")
+            try:
+                # Set the stop flag - the monitor will clean up on its loop
+                _llm_health_monitor._running = False
+                logger.info("Health monitor stop signal sent")
+            except Exception as e:
+                logger.warning(f"Error stopping health monitor: {e}")
+            finally:
+                _llm_health_monitor = None
 
         if _llm_processes:
             logger.info("Shutting down LLM processes...")

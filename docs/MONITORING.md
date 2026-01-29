@@ -576,16 +576,16 @@ sum by (error_type) (rate(fluidmcp_errors_total{error_type="io_error"}[5m]))
 
 # Streaming sessions ending due to client disconnect / broken pipe
 # Use for: Understanding how and why individual SSE streams end
-sum by (server_name) (
+sum by (server_id) (
   rate(fluidmcp_streaming_requests_total{completion_status="broken_pipe"}[5m])
 )
 
 # Compare I/O errors vs streaming terminations in a dashboard
 # Panel A: Global I/O errors (includes broken pipes, network issues, file I/O)
-fluidmcp_errors_total{error_type="io_error", server_name="your-server"}
+fluidmcp_errors_total{error_type="io_error", server_id="your-server"}
 
 # Panel B: Streaming-specific terminations (only SSE endpoint)
-fluidmcp_streaming_requests_total{completion_status!="success", server_name="your-server"}
+fluidmcp_streaming_requests_total{completion_status!="success", server_id="your-server"}
 ```
 
 **Example: BrokenPipeError appears in both dimensions**

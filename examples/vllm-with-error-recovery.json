@@ -1,0 +1,25 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port",
+        "8001",
+        "--gpu-memory-utilization",
+        "0.9"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      },
+      "restart_policy": "on-failure",
+      "max_restarts": 3,
+      "restart_delay": 5
+    }
+  }
+}
