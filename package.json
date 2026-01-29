@@ -2,9 +2,8 @@
   "name": "fluidmcp",
   "private": true,
   "scripts": {
-    "airbnb-dev": "concurrently -n MCP,Frontend \"fmcp run Airbnb/airbnb@0.1.0 --start-server\" \"npm run dev --prefix fluidmcp/frontend\""
-  },
-  "dependencies": {
-    "concurrently": "^9.2.1"
+    "dev": "fmcp serve --allow-insecure",
+    "build:frontend": "npm run build --prefix fluidmcp/frontend",
+    "prod": "npm run build:frontend && fmcp serve --allow-insecure"
   }
 }
