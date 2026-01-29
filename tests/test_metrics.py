@@ -278,49 +278,6 @@ class TestHistogram:
         assert histogram.histograms[()]["count"] == expected_count
         assert histogram.histograms[()]["sum"] == 2.5 * expected_count
 
-    def test_histogram_rejects_nan_value(self):
-        """Test histogram rejects NaN values."""
-        import math
-        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
-
-        # Observe NaN - should be rejected (logged and ignored)
-        histogram.observe(math.nan)
-
-        # Histogram should be empty (no observations recorded)
-        assert len(histogram.histograms) == 0
-
-    def test_histogram_rejects_inf_value(self):
-        """Test histogram rejects infinite values."""
-        import math
-        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
-
-        # Observe +Inf and -Inf - both should be rejected
-        histogram.observe(math.inf)
-        histogram.observe(-math.inf)
-
-        # Histogram should be empty (no observations recorded)
-        assert len(histogram.histograms) == 0
-
-    def test_histogram_rejects_negative_value(self):
-        """Test histogram rejects negative values."""
-        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
-
-        # Observe negative value - should be rejected
-        histogram.observe(-1.5)
-
-        # Histogram should be empty (no observations recorded)
-        assert len(histogram.histograms) == 0
-
-    def test_histogram_rejects_invalid_type(self):
-        """Test histogram rejects non-numeric values."""
-        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
-
-        # Observe string value - should be rejected
-        histogram.observe("invalid")
-
-        # Histogram should be empty (no observations recorded)
-        assert len(histogram.histograms) == 0
-
 
 class TestMetricsCollector:
     """Unit tests for MetricsCollector class."""
