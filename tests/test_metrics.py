@@ -26,6 +26,29 @@ from fluidmcp.cli.services.metrics import (
 )
 
 
+@pytest.fixture(autouse=True)
+def reset_global_registry():
+    """
+    Reset global metrics registry before each test to ensure test isolation.
+
+    This fixture prevents test pollution by ensuring each test starts with
+    a fresh metrics registry. Without this, metrics accumulate across tests
+    leading to flaky assertions that depend on specific values.
+    """
+    import fluidmcp.cli.services.metrics as metrics_module
+
+    # Save original registry
+    original_registry = metrics_module._registry
+
+    # Create fresh registry for this test
+    metrics_module._registry = MetricsRegistry()
+
+    yield
+
+    # Restore original registry after test
+    metrics_module._registry = original_registry
+
+
 class TestMetricsRegistry:
     """Unit tests for MetricsRegistry class."""
 
