@@ -255,7 +255,8 @@ async def add_server(
             "working_dir": "/tmp",
             "install_path": "/tmp",
             "restart_policy": "on-failure",
-            "max_restarts": 3
+            "max_restarts": 3,
+            "tool_timeout": 30
         }
     ),
     token: str = Depends(get_token)
@@ -273,6 +274,7 @@ async def add_server(
         install_path (str): Installation path
         restart_policy (str): 'no', 'on-failure', or 'always'
         max_restarts (int): Maximum restart attempts
+        tool_timeout (int, optional): Tool execution timeout in seconds (default: 30, ai-council: 120)
     """
     manager = get_server_manager(request)
 
@@ -1095,14 +1097,25 @@ async def run_tool(
             }
         }
 
-        logger.info(f"Executing tool '{tool_name}' on server '{id}'")
+        # Determine timeout: use config value or apply special defaults
+        config = manager.configs.get(id, {})
+        timeout = config.get("tool_timeout")
+
+        # If no explicit timeout, check for known slow servers
+        if timeout is None:
+            if "ai-council" in id or "agents-council" in id:
+                timeout = 120.0  # AI council needs more time for multi-model queries
+            else:
+                timeout = 30.0  # Default timeout
+
+        logger.info(f"Executing tool '{tool_name}' on server '{id}' with {timeout}s timeout")
         process.stdin.write(json.dumps(tool_request) + "\n")
         process.stdin.flush()
 
-        # Read response with 30 second timeout
+        # Read response with configurable timeout
         response_line = await asyncio.wait_for(
             asyncio.to_thread(process.stdout.readline),
-            timeout=30.0
+            timeout=timeout
         )
 
         response = json.loads(response_line.strip())
@@ -1121,7 +1134,11 @@ async def run_tool(
         return response.get("result", {})
 
     except asyncio.TimeoutError:
-        raise HTTPException(504, "Tool execution timeout (>30s)")
+        config = manager.configs.get(id, {})
+        timeout = config.get("tool_timeout", 30.0)
+        if "ai-council" in id or "agents-council" in id:
+            timeout = config.get("tool_timeout", 120.0)
+        raise HTTPException(504, f"Tool execution timeout (>{int(timeout)}s)")
     except json.JSONDecodeError as e:
         sanitized_error = sanitize_error_message(str(e))
         raise HTTPException(500, f"Failed to parse tool response: {sanitized_error}")
