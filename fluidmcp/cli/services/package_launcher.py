@@ -337,6 +337,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
     @router.post(f"/{package_name}/mcp", tags=[package_name])
     async def proxy_jsonrpc(
+        http_request: Request,
         request: Dict[str, Any] = Body(
             ...,
             example={
@@ -354,19 +355,46 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         # Track request with metrics
         with RequestTimer(collector, method):
             try:
+                # Extract all headers from incoming HTTP request
+                all_headers = dict(http_request.headers)
+
+                logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
+
+                # Only inject headers if this is a tools/call request
+                if request.get("method") == "tools/call" and all_headers:
+                    params = request.get("params", {})
+                    if "arguments" not in params:
+                        params["arguments"] = {}
+
+                    logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
+                    logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
+
+                    params["arguments"]["headers"] = all_headers
+                    request["params"] = params
+
+                    logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
+
                 # Thread-safe communication with MCP server
                 with process_lock:
                     msg = json.dumps(request)
+                    logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
+
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
+
+                    logger.debug(f"[{package_name}] Waiting for response from stdout...")
                     response_line = process.stdout.readline()
+                    logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
+
                 return JSONResponse(content=json.loads(response_line))
             except Exception as e:
+                logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
                 return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
     @router.post(f"/{package_name}/sse", tags=[package_name])
     async def sse_stream(
+        http_request: Request,
         request: Dict[str, Any] = Body(
             ...,
             example={
@@ -377,6 +405,17 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             }
         ), token: str = Depends(get_token)
     ):
+        # Extract all headers from incoming HTTP request
+        all_headers = dict(http_request.headers)
+
+        # Only inject headers if this is a tools/call request
+        if request.get("method") == "tools/call" and all_headers:
+            params = request.get("params", {})
+            if "arguments" not in params:
+                params["arguments"] = {}
+            params["arguments"]["headers"] = all_headers
+            request["params"] = params
+
         # Initialize metrics collector
         collector = MetricsCollector(package_name)
 
@@ -463,14 +502,16 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         
     
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
-    async def call_tool(request_body: Dict[str, Any] = Body(
-        ...,
-        alias="params",
-        example={
-            "name": "",
-        }
-    ), token: str = Depends(get_token)
-):
+    async def call_tool(
+        http_request: Request,
+        request_body: Dict[str, Any] = Body(
+            ...,
+            alias="params",
+            example={
+                "name": "",
+            }
+        ), token: str = Depends(get_token)
+    ):
         params = request_body
 
         # Initialize metrics collector
@@ -486,6 +527,15 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                         status_code=400,
                         content={"error": "Tool name is required"}
                     )
+
+                # Extract all headers from incoming HTTP request
+                all_headers = dict(http_request.headers)
+
+                # Only inject if headers actually exist
+                if all_headers:
+                    if "arguments" not in params:
+                        params["arguments"] = {}
+                    params["arguments"]["headers"] = all_headers
 
                 # Construct complete JSON-RPC request
                 request_payload = {

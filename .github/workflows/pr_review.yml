@@ -1,0 +1,383 @@
+# Claude AI PR Review Workflow
+#
+# This workflow automatically reviews pull requests using Claude AI.
+# It triggers on PR opened, synchronize, and reopened events.
+#
+# Required Secrets:
+# - AWS_ACCESS_KEY_ID: AWS access key for Claude Bedrock access
+# - AWS_SECRET_ACCESS_KEY: AWS secret key for Claude Bedrock access
+#
+# Manual Trigger: Use workflow_dispatch with pr_number input
+name: PR Review with Claude Code
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  call-claude-review:
+    uses: Fluid-AI/fluid-ai-gpt-github-actions/.github/workflows/reusable-claude-pr-review.yml@main
+    with:
+      aws-region: 'us-east-1'
+      claude-model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
+      review-prompt: |
+        REPO: ${{ github.repository }}
+        PR NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+
+        **CRITICAL WORKFLOW**: Use GitHub CLI (`gh`) commands with Pull Request Review system (NOT general PR comments). Follow this exact workflow:
+
+        1. **Check PR and get diff**: Use `gh pr view <PR_NUM> --json files,reviews` to get current state and previous reviews
+        2. **Read changed files**: Use `gh pr diff <PR_NUM>` to see all changes and `cat` or file reading tools to examine specific files
+        3. **Create inline review comments**: For each issue found, prepare review comments with:
+           - File path and line number
+           - Detailed explanation of the issue
+           - Code suggestions when applicable
+           - Severity indicator (🔴 Critical, 🟡 Major, 🟢 Minor)
+        4. **Submit review with comments**: Use `gh pr review <PR_NUM> --request-changes` (or `--approve`) with:
+           - `--body` for comprehensive summary
+           - Multiple `--comment` flags for inline comments: `--comment "file.py:123: Issue description"`
+           - Example: `gh pr review <PR_NUM> --request-changes --body "Summary..." --comment "fluidai_mcp/cli.py:298: Function too large"`
+
+        **Why this matters**:
+        - Pull request review comments can be resolved by the PR author when fixed
+        - They provide a better UX than general comments
+        - REQUEST_CHANGES formally blocks the PR from merging until addressed
+        - The review system groups all feedback together in a single reviewable unit
+
+        **RE-REVIEW WORKFLOW**: This system is also capable of re-reviewing PRs after developers make changes:
+
+        1. **Check for Previous Reviews**: Use `gh pr view <PR_NUM> --json reviews` to check if you (Claude/this workflow) have already reviewed this PR
+        2. **Identify Your Previous Review Comments**: Use `gh api repos/<REPO>/pulls/<PR_NUM>/comments` to get all review comments
+        3. **Check Current Code**: Use `gh pr diff <PR_NUM>` and `gh pr view <PR_NUM> --json files` to examine the current state of the code
+        4. **Compare Against Previous Comments**: For each previous review comment, check if the issue has been addressed in the current code:
+           - If the issue is **RESOLVED**: Acknowledge in your new review: "✅ Resolved: [previous issue]"
+           - If the issue **PERSISTS**: Add a new comment referencing the previous unresolved issue
+           - If **NEW ISSUES** are found: Add new review comments for them
+        5. **Determine Final Review Status**:
+           - **ALL issues resolved + NO new issues found** → Use `gh pr review <PR_NUM> --approve --body "✅ All previously requested changes have been addressed. The code looks good!"`
+           - **SOME issues resolved but NEW issues found** → Use `gh pr review <PR_NUM> --request-changes` with summary: "✅ Previous issues resolved | 🔴 New issues found"
+           - **Previous issues NOT resolved** → Use `gh pr review <PR_NUM> --request-changes` noting which issues remain unresolved
+
+        **Re-Review Best Practices**:
+        - Always acknowledge what was fixed: "✅ Fixed: Function size reduced from 217 to 85 lines"
+        - Be specific about remaining issues: "⚠️ Still pending: Security issue in tool call parsing (line 420)"
+        - If approving, summarize the improvements made since last review
+        - Track comment resolution systematically - do not miss any previous feedback
+
+        ## PR Complexity Analysis
+
+        The comprehensive summary when submitting the review should include:
+        - **Overall Complexity**: Low/Medium/High/Very High
+        - **Risk Level**: Low/Medium/High
+
+        ---
+
+        You are reviewing a PR for FluidMCP, a Python CLI tool for orchestrating multiple MCP (Model Context Protocol) servers through a unified FastAPI gateway.
+
+        ## Tech Stack Context
+        - **Framework**: FastAPI 0.115.12, Uvicorn 0.34.2, Python 3.6+ (officially 3.10+)
+        - **Protocol**: Model Context Protocol (MCP) v1.7.1 with JSON-RPC 2.0 over STDIO
+        - **CLI Framework**: Click 8.1.8, argparse for command-line interface
+        - **Data Validation**: Pydantic 2.11.4 for request/response models
+        - **Cloud Services**: boto3 1.38.10 for S3 operations, AWS credential management
+        - **Async/HTTP**: httpx 0.28.1, httpx-sse 0.4.0, sse-starlette 2.3.4
+        - **Utilities**: loguru 0.7.3 (logging), psutil 7.0.0 (process management), python-dotenv 1.1.0
+        - **Testing**: No test framework currently (gap to address)
+
+        ## Project Structure
+        ```
+        fluidai_mcp/
+        ├── cli.py                     # CLI entry point (929 lines)
+        ├── services/
+        │   ├── package_installer.py   # Package installation & registry interaction (205 lines)
+        │   ├── package_launcher.py    # MCP server launching & FastAPI proxy (322 lines)
+        │   ├── package_list.py        # Version management (21 lines)
+        │   ├── env_manager.py         # Environment variable management (304 lines)
+        │   ├── network_utils.py       # Port management & process control (86 lines)
+        │   └── s3_utils.py            # S3 operations for config management (100 lines)
+        ```
+
+        ## Critical Review Areas
+
+        ### 1. Python & Type Safety
+        - :white_check_mark: Python 3.6+ compatibility maintained (officially supports 3.10+)
+        - :white_check_mark: Type hints used for function parameters and return types
+        - :white_check_mark: Pydantic models for data validation (requests/responses)
+        - :white_check_mark: Proper use of `Optional`, `Union`, `Dict`, `List` type hints
+        - :white_check_mark: Path handling with `pathlib.Path` objects (not string concatenation)
+        - :warning: Check for missing type hints in new functions
+        - :warning: Avoid using `Any` type - be specific with types
+        - :warning: Ensure proper error types in exception handling
+
+        ### 2. FastAPI & Async Patterns
+        - :white_check_mark: Proper async/await usage in FastAPI routes
+        - :white_check_mark: Use `Depends()` for dependency injection (e.g., authentication)
+        - :white_check_mark: Pydantic models for request/response validation
+        - :white_check_mark: Proper HTTP status codes (200, 201, 400, 401, 404, 500)
+        - :white_check_mark: Router naming: Unique prefixes per package (`/{package-name}/`)
+        - :white_check_mark: SSE streaming: Proper cleanup of `StreamingResponse` objects
+        - :white_check_mark: Error responses use `HTTPException` with descriptive messages
+        - :warning: Ensure async functions don't block the event loop (no blocking I/O)
+        - :warning: Use `async with` for proper resource cleanup
+        - :warning: Check for proper handling of request timeouts
+
+        ### 3. MCP Protocol & STDIO Communication
+        - :white_check_mark: JSON-RPC 2.0 compliance: Proper `jsonrpc`, `id`, `method`, `params` structure
+        - :white_check_mark: MCP protocol version: Currently `2024-11-05`
+        - :white_check_mark: Initialization handshake: Call `initialize_mcp_server()` before use
+        - :white_check_mark: STDIO communication: Line-based message framing with `\n` delimiter
+        - :white_check_mark: Subprocess management: Proper cleanup with `process.terminate()`
+        - :white_check_mark: Tool calls: Validate parameters match MCP tool schema
+        - :white_check_mark: Response handling: Parse JSON responses, handle errors gracefully
+        - :warning: Check for proper handling of malformed JSON from subprocess
+        - :warning: Ensure proper timeout handling for slow MCP servers
+        - :warning: Validate subprocess is still alive before sending requests
+
+        ### 4. Security & Authentication
+        - :lock: **Bearer Token Auth**: Validate token in secure mode (`FMCP_SECURE_MODE=true`)
+        - :lock: **Token Generation**: Use `secrets.token_urlsafe(32)` for secure random tokens
+        - :lock: **Environment Variables**: Never commit secrets, API keys, or `.env` files
+        - :lock: **S3 Credentials**: Validate `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+        - :lock: **Input Sanitization**: Validate package strings with regex pattern `^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+$`
+        - :lock: **Command Injection**: Never pass unsanitized input to `subprocess.Popen()`
+        - :lock: **Path Traversal**: Validate file paths before reading/writing (use `Path.resolve()`)
+        - :lock: **Registry URLs**: Only allow HTTPS for registry endpoints
+        - :lock: **Masked Logging**: API keys containing "API", "KEY", "TOKEN" should be masked in logs
+        - :warning: Check for secrets in log messages (use loguru masking)
+        - :warning: Ensure pre-signed S3 URLs have expiration times
+        - :warning: Validate JSON input before parsing to prevent injection
+
+        ### 5. Code Quality & Standards
+        - :white_check_mark: **Logging**: Use loguru with structured logging: `logger.info()`, `logger.error()`, `logger.debug()`
+        - :white_check_mark: **Error Handling**: Use try/except with specific exceptions (avoid bare `except:`)
+        - :white_check_mark: **Docstrings**: All functions should have docstrings (many currently missing - add them!)
+        - :white_check_mark: **Naming Conventions**:
+          - Classes: PascalCase (e.g., `PackageInstaller`)
+          - Functions/variables: snake_case (e.g., `install_package`)
+          - Constants: UPPER_SNAKE_CASE (e.g., `DEFAULT_PORT`)
+          - Private functions: prefix with `_` (e.g., `_parse_metadata`)
+        - :white_check_mark: **Path Handling**: Use `pathlib.Path` objects, not `os.path.join()`
+        - :white_check_mark: **JSON Handling**: Use `json.loads()` with error handling, not `eval()`
+        - :white_check_mark: **No Print Statements**: Use loguru logger instead of `print()`
+        - :white_check_mark: **Function Size**: Keep functions under 100 lines (flag large functions)
+        - :white_check_mark: **Architecture**: Ensure major coding logic is in service modules, not directly in CLI
+        - :warning: Check for code duplication (DRY principle)
+        - :warning: Ensure proper resource cleanup (files, processes, connections)
+
+        ### 5.1. Function Size and Complexity
+        - Flag functions that are too large (>100 lines or >3 levels of nesting)
+        - Functions should have a single, clear responsibility
+        - Large functions should be broken down into smaller, more manageable pieces
+        - If a function is difficult to understand at a glance, suggest refactoring
+
+        ### 5.2. Naming Conventions
+        - Verify that function, class, and variable names clearly describe their purpose
+        - Flag ambiguous names like "tool", "handler", "processor" without context
+        - Names should be self-documenting (e.g., "process_user_data" not "process")
+        - Suggest more descriptive names when the current name doesn't convey intent
+
+        ### 5.3. Documentation Organization
+        - All documentation files (*.md, *.txt) should be co-located with the code they document
+        - Flag any documentation files in separate "docs/" folders that should be moved next to their corresponding code
+        - Each module/tool should have its documentation in the same directory
+        - Exception: Root-level README.md and project-wide documentation can remain at the root
+
+        ### 6. Architecture & Patterns
+        - :white_check_mark: **Service-Oriented**: Business logic in `services/` modules, not in `cli.py`
+        - :white_check_mark: **Single Responsibility**: Each service module has one clear purpose
+        - :white_check_mark: **Configuration Files**: JSON-based with `mcpServers` key structure
+        - :white_check_mark: **Package Structure**: `.fmcp-packages/Author/Package/Version/`
+        - :white_check_mark: **Dynamic Routing**: FastAPI routers created dynamically per package
+        - :white_check_mark: **Port Management**: Use `find_free_port()` for dynamic allocation (8100-9000 range)
+        - :white_check_mark: **Registry Pattern**: Fetch metadata from `registry.fluidmcp.com`
+        - :white_check_mark: **Multi-Tenant Support**: S3-based centralized configuration with master mode
+        - :white_check_mark: **Subprocess Pattern**: External MCP servers as subprocesses with STDIO
+        - :warning: Ensure no circular dependencies between modules
+        - :warning: Check for proper separation of concerns (CLI vs business logic)
+        - :warning: Validate new features don't break existing modes (local, master, file, S3)
+
+        ### 7. Environment Variables & Configuration
+        - :white_check_mark: **Default Values**: Always provide defaults with `os.getenv(key, default)`
+        - :white_check_mark: **Required Variables**: Prompt during install if `required: true` in metadata
+        - :white_check_mark: **Environment Files**: Support `.env` files with `python-dotenv`
+        - :white_check_mark: **Variable Names**: Clear, descriptive names (e.g., `MCP_INSTALLATION_DIR`)
+        - :white_check_mark: **Configuration Locations**:
+          - `MCP_INSTALLATION_DIR` (default: `./.fmcp-packages`)
+          - `MCP_FASTAPI_DIR` (default: `./client_server`)
+          - `MCP_FASTAPI_ALL_DIR` (default: `./client_server_all`)
+          - `MCP_CLIENT_SERVER_PORT` (default: 8090)
+          - `MCP_CLIENT_SERVER_ALL_PORT` (default: 8099)
+        - :white_check_mark: **S3 Configuration**: `S3_BUCKET_NAME`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION`
+        - :warning: Ensure all env vars have sensible defaults to prevent runtime errors
+        - :warning: Validate required env vars are set before use (especially AWS credentials)
+
+        ### 8. Package Management & Registry
+        - :white_check_mark: **Package String Format**: `Author/Package@Version` validated with regex
+        - :white_check_mark: **Registry Endpoints**:
+          - Production: `https://registry.fluidmcp.com/fetch-mcp-package`
+          - Dev: `https://registry-dev.fluidmcp.com/fetch-metadata`
+        - :white_check_mark: **Download Formats**: Support tar.gz and JSON metadata files
+        - :white_check_mark: **Version Management**: Store multiple versions in separate directories
+        - :white_check_mark: **Metadata Structure**: Follow `mcpServers` schema with `command`, `args`, `env`
+        - :white_check_mark: **Preprocessing**: `preprocess_metadata_file()` expands package references
+        - :white_check_mark: **Environment Prompts**: Interactive prompts during install for required keys
+        - :warning: Check for proper error handling when registry is unavailable
+        - :warning: Validate downloaded packages before extraction (checksums if available)
+        - :warning: Ensure atomic installations (no partial state on failure)
+
+        ### 9. Process Management & Networking
+        - :white_check_mark: **Subprocess Creation**: Use `subprocess.Popen()` with proper arguments
+        - :white_check_mark: **Process Cleanup**: Call `process.terminate()` and `process.wait()` on exit
+        - :white_check_mark: **Port Allocation**: Check port availability before binding
+        - :white_check_mark: **Process Tracking**: Store process PIDs for management
+        - :white_check_mark: **Graceful Shutdown**: Handle SIGTERM and SIGINT signals
+        - :white_check_mark: **Port Range**: Use 8100-9000 for dynamic allocation
+        - :white_check_mark: **Network Timeouts**: Set reasonable timeouts for HTTP requests
+        - :warning: Check for zombie processes (proper wait() calls)
+        - :warning: Ensure ports are released on failure
+        - :warning: Handle process crashes gracefully (restart logic if needed)
+
+        ### 10. S3 & Cloud Operations
+        - :white_check_mark: **boto3 Usage**: Proper session and client management
+        - :white_check_mark: **Pre-signed URLs**: Generate with expiration times
+        - :white_check_mark: **Bucket Operations**: Validate bucket exists before operations
+        - :white_check_mark: **Error Handling**: Catch `botocore.exceptions.ClientError`
+        - :white_check_mark: **Credential Validation**: Check AWS credentials before S3 operations
+        - :white_check_mark: **Master Mode**: S3-based `s3_metadata_all.json` for centralized config
+        - :warning: Check for proper error messages when S3 operations fail
+        - :warning: Ensure S3 operations don't block the main thread (use async if possible)
+        - :warning: Validate S3 URLs before downloading
+
+        ### 11. Testing & Quality Assurance
+        - :rotating_light: **CRITICAL GAP**: No tests currently exist in the repository
+        - :white_check_mark: PRs adding new features MUST include tests
+        - :white_check_mark: Test coverage should include:
+          - Unit tests for service modules (package_installer, package_launcher, etc.)
+          - Integration tests for FastAPI endpoints
+          - STDIO communication tests with mock MCP servers
+          - CLI command tests
+          - S3 operations tests (with mocking)
+        - :white_check_mark: Use pytest framework (recommended for Python)
+        - :white_check_mark: Mock external dependencies (registry, S3, subprocesses)
+        - :white_check_mark: Test error cases, not just happy paths
+        - :warning: Flag PRs that add features without tests
+        - :warning: Ensure tests are deterministic (no flaky tests)
+
+        ### 12. Documentation & Comments
+        - :white_check_mark: **Docstrings**: All functions should have docstrings (many currently missing)
+        - :white_check_mark: **Docstring Format**: Use Google-style or NumPy-style format
+        - :white_check_mark: **README Updates**: Update README.md for new features or changes
+        - :white_check_mark: **Inline Comments**: Explain complex logic, not obvious code
+        - :white_check_mark: **API Documentation**: FastAPI auto-generates docs at `/docs`
+        - :white_check_mark: **Configuration Examples**: Provide example `config.json` files
+        - :white_check_mark: **CLI Help**: Ensure `--help` text is accurate and helpful
+        - :warning: Check for outdated documentation
+        - :warning: Ensure code comments match actual implementation
+
+        ### 13. Performance & Optimization
+        - :white_check_mark: **Async Operations**: Use async/await for I/O-bound operations
+        - :white_check_mark: **Connection Pooling**: Reuse HTTP connections with `httpx.Client()`
+        - :white_check_mark: **Caching**: Cache package metadata to avoid repeated registry calls
+        - :white_check_mark: **Lazy Loading**: Don't load all packages at startup
+        - :white_check_mark: **Resource Limits**: Set limits on subprocess memory/CPU if needed
+        - :white_check_mark: **JSON Parsing**: Use `json.loads()` efficiently (no repeated parsing)
+        - :warning: Check for memory leaks in long-running processes
+        - :warning: Ensure large file downloads don't exhaust memory (stream to disk)
+        - :warning: Profile CPU usage for complex operations
+
+        ### 14. Git & Commit Hygiene
+        - :white_check_mark: Clear, descriptive commit messages (imperative mood)
+        - :white_check_mark: Small, focused changes (single responsibility per PR)
+        - :white_check_mark: No merge conflicts
+        - :white_check_mark: No commented-out code blocks (delete or use feature flags)
+        - :white_check_mark: Dependencies updated in `requirements.txt` and `setup.py` if needed
+        - :white_check_mark: No large binary files or accidentally committed files
+        - :white_check_mark: `.gitignore` properly configured for Python (`.pyc`, `__pycache__`, `.env`, etc.)
+        - :warning: Check for accidentally committed `.fmcp-packages/` directories
+        - :warning: Ensure no temporary files or logs committed
+
+        ### 15. Docker & Containerization
+        - :white_check_mark: **Dockerfile**: Use multi-stage builds if applicable
+        - :white_check_mark: **Base Image**: Python 3.10-slim + Node.js 20.x
+        - :white_check_mark: **Entrypoint**: `entrypoint.sh` script handles initialization
+        - :white_check_mark: **Port Exposure**: Expose necessary ports (8099 by default)
+        - :white_check_mark: **Environment Variables**: Pass through required env vars
+        - :white_check_mark: **Volume Mounts**: Consider volumes for persistent data
+        - :warning: Check for proper signal handling in containers
+        - :warning: Ensure container images are minimal (remove unnecessary packages)
+
+        ## Review Submission Format
+
+        **IMPORTANT**: Always use `gh pr review` for submitting reviews, NOT `gh pr comment`.
+
+        - Use `gh pr review <PR_NUM>` to submit reviews with inline comments
+        - Add inline comments using multiple `--comment` flags: `--comment "file.py:LINE: Description"`
+        - Submit using appropriate flag:
+          - `--request-changes` - For initial review or when issues are found
+          - `--approve` - For re-reviews when all issues are resolved
+          - `--comment` - For neutral feedback without blocking merge
+        - Always include `--body "..."` with comprehensive summary containing PR Complexity Analysis and overview of all issues
+        - Example: `gh pr review <PR_NUM> --request-changes --body "Summary here" --comment "fluidai_mcp/cli.py:10: Issue 1" --comment "fluidai_mcp/services/package_installer.py:25: Issue 2"`
+        - DO NOT use `gh pr comment` for reviews - always use `gh pr review` with inline comments
+
+        **Important Notes**:
+        - Each inline review comment should include file path and line number (format: "file.py:LINE: Description")
+        - For multi-line issues, specify the line range in the description (e.g., "file.py:298-514: Function too large")
+        - Categorize issues by severity: 🔴 Critical, 🟡 Major, 🟢 Minor
+        - Always provide actionable recommendations, not just problem identification
+        - For re-reviews: Explicitly track and acknowledge resolved issues in your review summary
+        - When approving after re-review, include a section listing what was fixed since the last review
+
+        ## Review Output Format
+        Please structure your review as follows:
+
+        ### :dart: Summary
+        - Brief overview of changes (1-2 sentences)
+        - Overall assessment (Approve / Request Changes / Comment)
+
+        ### :white_check_mark: Strengths
+        - List positive aspects and good practices
+
+        ### :warning: Issues Found (if any)
+        - **Critical**: Security vulnerabilities, data loss, protocol violations, breaking changes
+        - **Major**: Bugs, missing error handling, async/await issues, missing tests
+        - **Minor**: Code quality, missing docstrings, naming conventions, logging
+
+        ### :wrench: Recommendations
+        - Specific, actionable suggestions with code examples
+        - Link to relevant files and line numbers
+
+        ### :clipboard: Checklist
+        - [ ] Python 3.6+ compatibility maintained
+        - [ ] Type hints added for new functions
+        - [ ] Proper async/await usage in FastAPI routes
+        - [ ] MCP protocol compliance (JSON-RPC 2.0)
+        - [ ] Security checks passed (no secrets, input validation)
+        - [ ] Environment variables have defaults
+        - [ ] Process/resource cleanup implemented
+        - [ ] Error handling with specific exceptions
+        - [ ] Logging with loguru (no print statements)
+        - [ ] Docstrings added for new functions
+        - [ ] Tests added for new features (critical gap to address)
+        - [ ] README updated if needed
+
+        Be thorough but constructive. Focus on teaching Python/FastAPI best practices, ensuring MCP protocol compliance, and improving overall code quality. Since testing is a gap, strongly encourage adding tests for any new functionality.
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
