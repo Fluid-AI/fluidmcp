@@ -5,6 +5,7 @@ import { TextResultView } from './TextResultView';
 import { TableResultView } from './TableResultView';
 import { McpContentView } from './McpContentView';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { showError } from '../../services/toast';
 
 const ResultFormat = {
   MCP_CONTENT: 'mcp_content',
@@ -170,7 +171,7 @@ export const ToolResult: React.FC<ToolResultProps> = ({
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Failed to download:', err);
-      alert('Failed to download result. It may contain circular references.');
+      showError('Failed to download result. It may contain circular references.');
     }
   };
 
