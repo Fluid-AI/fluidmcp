@@ -16,6 +16,7 @@ import re
 import asyncio
 
 from ..auth import get_token, security
+from ..auth.dependencies import get_current_user
 
 # Environment variable validation patterns and constants
 ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
@@ -45,41 +46,6 @@ def sanitize_error_message(error_msg: str) -> str:
     sanitized = re.sub(r'at /.+?:\d+', 'at <sanitized>', sanitized)
 
     return sanitized
-
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """
-    Extract user identifier from bearer token.
-
-    For now, uses a simple approach:
-    - In secure mode: Uses the token itself as user ID (simple but works)
-    - In non-secure mode: Returns "anonymous"
-
-    Future: Parse JWT tokens to extract user email/ID from claims
-
-    Returns:
-        User identifier string
-    """
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
-    if not secure_mode:
-        return "anonymous"
-
-    if not credentials or not credentials.credentials:
-        return "anonymous"
-
-    # For now, use token as user ID (simple approach)
-    # TODO: Implement proper JWT authentication with role claims
-    # Current implementation uses first 8 chars of token (~33 bits entropy)
-    # which is insufficient for production security. Replace with JWT decode
-    # to extract user_id/email/role claims.
-    token = credentials.credentials
-
-    # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users but provides weak security
-    user_id = f"user_{token[:8]}"
-
-    return user_id
 
 
 def get_server_manager(request: Request):
@@ -455,7 +421,7 @@ async def delete_server(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Delete server configuration (stops server if running).
@@ -465,11 +431,12 @@ async def delete_server(
 
     Args:
         id: Server identifier
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -515,18 +482,19 @@ async def start_server(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Start an MCP server.
 
     Args:
         id: Server identifier
-        user_id: User identifier (extracted from token)
+        user: User context (extracted from token)
 
     Returns:
         Success message with PID
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -564,7 +532,7 @@ async def stop_server(
     id: str,
     force: bool = Query(False, description="Use SIGKILL instead of SIGTERM"),
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Stop a running MCP server.
@@ -574,11 +542,12 @@ async def stop_server(
     Args:
         id: Server identifier
         force: If true, use SIGKILL
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message with exit code
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server is running
@@ -614,7 +583,7 @@ async def restart_server(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Restart an MCP server.
@@ -623,11 +592,12 @@ async def restart_server(
 
     Args:
         id: Server identifier
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message with new PID
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -699,7 +669,7 @@ async def get_server_instance_env(
     request: Request,
     id: str,
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Get environment variable METADATA for server instance.
@@ -715,7 +685,7 @@ async def get_server_instance_env(
 
     Args:
         id: Server identifier
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Dict mapping env variable names to their metadata objects.
@@ -725,6 +695,7 @@ async def get_server_instance_env(
         Raw environment variable values are NEVER returned by this endpoint.
         Frontend must use empty inputs for editing (user re-enters values).
     """
+    user_id = user["user_id"]  # Extract user ID from context (for future auth checks)
     manager = get_server_manager(request)
 
     # Get server config for template env keys
@@ -781,7 +752,7 @@ async def update_server_instance_env(
     id: str,
     env_data: Dict[str, str] = Body(...),
     token: str = Depends(get_token),
-    user_id: str = Depends(get_current_user)
+    user: dict = Depends(get_current_user)
 ):
     """
     Update environment variables for server instance (auto-restarts if running).
@@ -800,7 +771,7 @@ async def update_server_instance_env(
     Args:
         id: Server identifier
         env_data: Dict of environment variables to set (e.g., {"API_KEY": "sk-..."})
-        user_id: Current user (from token)
+        user: Current user context (from token)
 
     Returns:
         Success message with restart status
@@ -809,6 +780,7 @@ async def update_server_instance_env(
         - If running: stops server → updates env in DB → restarts with new env
         - If stopped: updates env in DB → will be used on next start
     """
+    user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
     # Validate env_data types (FastAPI type hints don't guarantee runtime type safety)

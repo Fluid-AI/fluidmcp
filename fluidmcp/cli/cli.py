@@ -587,6 +587,7 @@ def main():
     run_parser.add_argument("--master", action="store_true", help="Use master metadata file from S3")
     run_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     run_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    run_parser.add_argument("--auth0", action="store_true", help="Enable OAuth0 (Auth0) authentication (mutually exclusive with --secure)")
     run_parser.add_argument("--file", action="store_true", help="Treat package argument as path to a local JSON configuration file")
     run_parser.add_argument("--s3", action="store_true", help="Treat package argument as path to S3 URL to a JSON file containing server configurations (format: s3://bucket-name/key)")
     run_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
@@ -622,6 +623,7 @@ def main():
     github_parser.add_argument("--force-reload", action="store_true", help="Force reload by killing process on the port without prompt")
     github_parser.add_argument("--secure", action="store_true", help="Enable secure mode with bearer token authentication")
     github_parser.add_argument("--token", type=str, help="Bearer token for secure mode (if not provided, a token will be generated)")
+    github_parser.add_argument("--auth0", action="store_true", help="Enable OAuth0 (Auth0) authentication (mutually exclusive with --secure)")
     github_parser.add_argument("--verbose", action="store_true", help="Enable verbose logging (DEBUG level)")
 
     # serve command - NEW: Run as standalone API server
@@ -639,6 +641,8 @@ def main():
                               help="Explicitly allow running without authentication (NOT RECOMMENDED)")
     serve_parser.add_argument("--token", type=str,
                               help="Bearer token for secure mode (will be generated if not provided)")
+    serve_parser.add_argument("--auth0", action="store_true",
+                              help="Enable OAuth0 (Auth0) authentication (mutually exclusive with --secure)")
     serve_parser.add_argument("--allowed-origins", type=str,
                               help="Comma-separated list of allowed CORS origins")
     serve_parser.add_argument("--allow-all-origins", action="store_true",
@@ -683,6 +687,28 @@ def main():
         os.environ["FMCP_SECURE_MODE"] = "true"
         logger.info(f"Secure mode enabled. Bearer token (prefix: {token[:8]}...)")
 
+    # OAuth0 mode logic
+    auth0_mode = getattr(args, "auth0", False)
+
+    # Validate authentication modes (mutually exclusive)
+    if secure_mode and auth0_mode:
+        logger.error("❌ Cannot use --secure and --auth0 together. Choose one authentication method.")
+        logger.info("   --secure: Bearer token authentication (simple, for CI/CD)")
+        logger.info("   --auth0:  OAuth0 authentication (multi-user, SSO)")
+        sys.exit(1)
+
+    # Validate Auth0 configuration if enabled
+    if auth0_mode:
+        required_vars = ["FMCP_AUTH0_DOMAIN", "FMCP_AUTH0_CLIENT_ID", "FMCP_AUTH0_CLIENT_SECRET"]
+        missing = [v for v in required_vars if not os.getenv(v)]
+        if missing:
+            logger.error(f"❌ Auth0 mode requires environment variables: {', '.join(missing)}")
+            logger.info("   Set these environment variables or create auth0-config.json")
+            logger.info("   See .env.example for configuration template")
+            sys.exit(1)
+        os.environ["FMCP_AUTH0_MODE"] = "true"
+        logger.info(f"✓ OAuth0 enabled with domain: {os.getenv('FMCP_AUTH0_DOMAIN')}")
+
     # version flag
     if args.version:
         print_version_info()
@@ -716,10 +742,11 @@ def main():
         else:
             token_parser.print_help()
     elif args.command == "serve":
-        # Check authentication requirements
-        if not args.secure and not getattr(args, 'allow_insecure', False):
+        # Check authentication requirements (either --secure or --auth0 or --allow-insecure)
+        if not args.secure and not auth0_mode and not getattr(args, 'allow_insecure', False):
             logger.error("❌ ERROR: Server requires authentication for security")
-            logger.error("❌ Use --secure to enable authentication (recommended)")
+            logger.error("❌ Use --secure to enable bearer token authentication (recommended for scripts/CI/CD)")
+            logger.error("❌ Or use --auth0 to enable OAuth0 authentication (recommended for multi-user)")
             logger.error("❌ Or use --allow-insecure to explicitly disable (NOT recommended)")
             sys.exit(1)
 
