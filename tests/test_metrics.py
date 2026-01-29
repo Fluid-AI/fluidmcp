@@ -278,6 +278,49 @@ class TestHistogram:
         assert histogram.histograms[()]["count"] == expected_count
         assert histogram.histograms[()]["sum"] == 2.5 * expected_count
 
+    def test_histogram_rejects_nan_value(self):
+        """Test histogram rejects NaN values."""
+        import math
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe NaN - should be rejected (logged and ignored)
+        histogram.observe(math.nan)
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
+    def test_histogram_rejects_inf_value(self):
+        """Test histogram rejects infinite values."""
+        import math
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe +Inf and -Inf - both should be rejected
+        histogram.observe(math.inf)
+        histogram.observe(-math.inf)
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
+    def test_histogram_rejects_negative_value(self):
+        """Test histogram rejects negative values."""
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe negative value - should be rejected
+        histogram.observe(-1.5)
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
+    def test_histogram_rejects_invalid_type(self):
+        """Test histogram rejects non-numeric values."""
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe string value - should be rejected
+        histogram.observe("invalid")
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
 
 class TestMetricsCollector:
     """Unit tests for MetricsCollector class."""
@@ -401,6 +444,81 @@ class TestRequestTimer:
         errors = collector.registry.get_metric("fluidmcp_errors_total")
         output = errors.render()
         assert 'error_type="client_error"' in output  # ValueError categorized as client_error
+
+    def test_request_timer_categorizes_broken_pipe_error(self):
+        """Test RequestTimer categorizes BrokenPipeError as io_error."""
+        collector = MetricsCollector(server_id="test_server_pipe")
+
+        try:
+            with RequestTimer(collector, method="POST"):
+                raise BrokenPipeError("Connection broken")
+        except BrokenPipeError:
+            pass
+
+        # Error should be categorized as io_error
+        errors = collector.registry.get_metric("fluidmcp_errors_total")
+        output = errors.render()
+        assert 'error_type="io_error"' in output
+
+    def test_request_timer_categorizes_timeout_error(self):
+        """Test RequestTimer categorizes TimeoutError as network_error."""
+        collector = MetricsCollector(server_id="test_server_timeout")
+
+        try:
+            with RequestTimer(collector, method="GET"):
+                raise TimeoutError("Request timeout")
+        except TimeoutError:
+            pass
+
+        # Error should be categorized as network_error
+        errors = collector.registry.get_metric("fluidmcp_errors_total")
+        output = errors.render()
+        assert 'error_type="network_error"' in output
+
+    def test_request_timer_categorizes_connection_error(self):
+        """Test RequestTimer categorizes ConnectionError as network_error."""
+        collector = MetricsCollector(server_id="test_server_conn")
+
+        try:
+            with RequestTimer(collector, method="GET"):
+                raise ConnectionError("Connection failed")
+        except ConnectionError:
+            pass
+
+        # Error should be categorized as network_error
+        errors = collector.registry.get_metric("fluidmcp_errors_total")
+        output = errors.render()
+        assert 'error_type="network_error"' in output
+
+    def test_request_timer_categorizes_permission_error(self):
+        """Test RequestTimer categorizes PermissionError as auth_error."""
+        collector = MetricsCollector(server_id="test_server_perm")
+
+        try:
+            with RequestTimer(collector, method="GET"):
+                raise PermissionError("Permission denied")
+        except PermissionError:
+            pass
+
+        # Error should be categorized as auth_error
+        errors = collector.registry.get_metric("fluidmcp_errors_total")
+        output = errors.render()
+        assert 'error_type="auth_error"' in output
+
+    def test_request_timer_categorizes_type_error(self):
+        """Test RequestTimer categorizes TypeError as client_error."""
+        collector = MetricsCollector(server_id="test_server_type")
+
+        try:
+            with RequestTimer(collector, method="GET"):
+                raise TypeError("Type mismatch")
+        except TypeError:
+            pass
+
+        # Error should be categorized as client_error
+        errors = collector.registry.get_metric("fluidmcp_errors_total")
+        output = errors.render()
+        assert 'error_type="client_error"' in output
 
 
 class TestToolTimer:
