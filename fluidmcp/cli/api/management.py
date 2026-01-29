@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 import os
 import re
+import asyncio
 
 from ..auth import get_token, security
 
@@ -132,6 +133,16 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
                 "name": f"Bearer User {token[:8]}",
                 "auth_method": "bearer"
             }
+    # For now, use token as user ID (simple approach)
+    # TODO: Implement proper JWT authentication with role claims
+    # Current implementation uses first 8 chars of token (~33 bits entropy)
+    # which is insufficient for production security. Replace with JWT decode
+    # to extract user_id/email/role claims.
+    token = credentials.credentials
+
+    # Simple user extraction: use first 8 chars of token as user ID
+    # This ensures different tokens = different users but provides weak security
+    user_id = f"user_{token[:8]}"
 
     # No valid authentication method succeeded
     raise HTTPException(
@@ -538,12 +549,15 @@ async def delete_server(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Authorization: Only allow in anonymous mode for now
-    # In production, check if user has admin role
+    # Authorization: Only allow in anonymous mode (no authentication) for now
+    # This is intentionally restrictive - deletion is a destructive operation.
+    # TODO: Implement proper role-based access control (RBAC) with admin roles
+    # when JWT authentication with role claims is added. Current token-based
+    # auth (user_id = first 8 chars of token) is too weak for delete permissions.
     if user_id != "anonymous":
         raise HTTPException(
             403,
-            "Forbidden: Only administrators can delete server configurations. Contact your admin."
+            "Server deletion requires administrator privileges"
         )
 
     # Stop server if running
@@ -1194,3 +1208,284 @@ async def run_tool(
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
         sanitized_error = sanitize_error_message(str(e))
         raise HTTPException(500, f"Tool execution failed: {sanitized_error}")
+
+
+# ==================== LLM Management ====================
+
+def get_llm_processes():
+    """Get LLM processes from run_servers module."""
+    # Import here to avoid circular dependency
+    from ..services import get_llm_processes as _get_llm_processes
+    return _get_llm_processes()
+
+
+@router.get("/llm/models")
+async def list_llm_models(
+    token: str = Depends(get_token)
+):
+    """
+    List all configured LLM models with their status.
+
+    Returns:
+        List of LLM models with status information
+    """
+    llm_processes = get_llm_processes()
+
+    models = []
+    for model_id, process in llm_processes.items():
+        is_healthy, health_msg = await process.check_health()
+        models.append({
+            "id": model_id,
+            "is_running": process.is_running(),
+            "is_healthy": is_healthy,
+            "health_message": health_msg,
+            "restart_policy": process.restart_policy,
+            "restart_count": process.restart_count,
+            "max_restarts": process.max_restarts,
+            "consecutive_health_failures": process.consecutive_health_failures,
+            "uptime_seconds": process.get_uptime(),
+            "last_restart_time": process.last_restart_time,
+            "last_health_check_time": process.last_health_check_time
+        })
+
+    return {
+        "models": models,
+        "total": len(models)
+    }
+
+
+@router.get("/llm/models/{model_id}")
+async def get_llm_model_status(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get detailed status for a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Detailed model status
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+    is_healthy, health_msg = await process.check_health()
+
+    return {
+        "id": model_id,
+        "is_running": process.is_running(),
+        "is_healthy": is_healthy,
+        "health_message": health_msg,
+        "restart_policy": process.restart_policy,
+        "restart_count": process.restart_count,
+        "max_restarts": process.max_restarts,
+        "consecutive_health_failures": process.consecutive_health_failures,
+        "uptime_seconds": process.get_uptime(),
+        "last_restart_time": process.last_restart_time,
+        "last_health_check_time": process.last_health_check_time,
+        "has_cuda_oom": process.check_for_cuda_oom()
+    }
+
+
+@router.post("/llm/models/{model_id}/restart")
+async def restart_llm_model(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Manually restart a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Restart result
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+
+    # Check if restart is allowed
+    if not process.can_restart():
+        raise HTTPException(
+            400,
+            f"Cannot restart model '{model_id}': restart policy is '{process.restart_policy}' "
+            f"or max restarts ({process.max_restarts}) reached"
+        )
+
+    logger.info(f"Manual restart requested for LLM model '{model_id}'")
+
+    # Attempt restart
+    success = await process.attempt_restart()
+
+    if success:
+        return {
+            "message": f"LLM model '{model_id}' restarted successfully",
+            "restart_count": process.restart_count,
+            "uptime_seconds": process.get_uptime()
+        }
+    else:
+        raise HTTPException(
+            500,
+            f"Failed to restart LLM model '{model_id}'. Check logs for details."
+        )
+
+
+@router.post("/llm/models/{model_id}/stop")
+async def stop_llm_model(
+    request: Request,
+    model_id: str,
+    force: bool = Query(False, description="Force kill the process"),
+    token: str = Depends(get_token)
+):
+    """
+    Stop a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+        force: If true, force kill the process (SIGKILL)
+
+    Returns:
+        Stop result
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+
+    if not process.is_running():
+        return {"message": f"LLM model '{model_id}' is already stopped"}
+
+    logger.info(f"Stop requested for LLM model '{model_id}' (force={force})")
+
+    try:
+        # Run blocking stop/kill operations in thread to avoid blocking event loop
+        if force:
+            await asyncio.to_thread(process.force_kill)
+            return {"message": f"LLM model '{model_id}' force killed"}
+        else:
+            await asyncio.to_thread(process.stop)
+            return {"message": f"LLM model '{model_id}' stopped gracefully"}
+    except Exception as e:
+        logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)
+        raise HTTPException(500, "Failed to stop LLM model")
+
+
+@router.get("/llm/models/{model_id}/logs")
+async def get_llm_model_logs(
+    model_id: str,
+    lines: int = Query(100, description="Number of recent lines to retrieve", ge=1, le=10000),
+    token: str = Depends(get_token)
+):
+    """
+    Get recent stderr logs for a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+        lines: Number of recent lines to retrieve (1-10000)
+
+    Returns:
+        Log lines
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+    log_path = process.get_stderr_log_path()
+
+    if not os.path.exists(log_path):
+        return {
+            "model_id": model_id,
+            "log_path": log_path,
+            "lines": [],
+            "message": "Log file does not exist yet"
+        }
+
+    try:
+        # Efficiently read only the last N lines using backwards seeking
+        # This avoids loading large log files entirely into memory
+        # TODO: For very large files (>100MB), consider mmap for better performance
+        block_size = 8192
+        buffer = b""
+        newline_count = 0
+
+        with open(log_path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            position = file_size
+
+            # Read backwards until we have enough lines or reach start of file
+            while position > 0 and newline_count <= lines:
+                read_size = block_size if position >= block_size else position
+                position -= read_size
+                f.seek(position)
+                data = f.read(read_size)
+                buffer = data + buffer
+                newline_count = buffer.count(b"\n")
+
+        # Decode and split into lines
+        text = buffer.decode("utf-8", errors="ignore")
+        all_lines_read = text.splitlines(keepends=True)
+        recent_lines = all_lines_read[-lines:] if len(all_lines_read) > lines else all_lines_read
+
+        # Note: total_lines is approximate when file is larger than what we read
+        total_lines_approx = len(all_lines_read)
+
+        return {
+            "model_id": model_id,
+            "lines": recent_lines,
+            "total_lines": total_lines_approx,
+            "returned_lines": len(recent_lines)
+        }
+    except Exception as e:
+        logger.error(f"Error reading logs for '{model_id}': {e}", exc_info=True)
+        raise HTTPException(500, "Failed to read logs")
+
+
+@router.post("/llm/models/{model_id}/health-check")
+async def trigger_health_check(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Manually trigger a health check for a specific LLM model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Health check result
+    """
+    llm_processes = get_llm_processes()
+
+    if model_id not in llm_processes:
+        raise HTTPException(404, f"LLM model '{model_id}' not found")
+
+    process = llm_processes[model_id]
+
+    logger.info(f"Manual health check triggered for LLM model '{model_id}'")
+
+    is_healthy, error_msg = await process.check_health()
+
+    return {
+        "model_id": model_id,
+        "is_healthy": is_healthy,
+        "health_message": error_msg,
+        "consecutive_health_failures": process.consecutive_health_failures,
+        "last_health_check_time": process.last_health_check_time,
+        "has_cuda_oom": process.check_for_cuda_oom()
+    }

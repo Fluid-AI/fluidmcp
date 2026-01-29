@@ -27,7 +27,7 @@ from .package_list import get_latest_version_dir
 from .package_launcher import launch_mcp_using_fastapi_proxy
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
-from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess
+from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
@@ -73,11 +73,17 @@ _llm_processes: Dict[str, LLMProcess] = {}
 # LLM endpoint configurations
 _llm_endpoints: Dict[str, Dict[str, str]] = {}
 
+# LLM health monitor
+_llm_health_monitor: Optional[LLMHealthMonitor] = None
+
 # Getter functions for management API (avoids circular import issues)
 def get_llm_processes() -> Dict[str, LLMProcess]:
     """Get the LLM processes registry. Used by management API."""
     return _llm_processes
 
+def get_llm_health_monitor() -> Optional[LLMHealthMonitor]:
+    """Get the LLM health monitor instance. Used by management API."""
+    return _llm_health_monitor
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 
@@ -120,6 +126,37 @@ def _initialize_server_metrics(server_name: str) -> None:
     collector.set_uptime(0.0)
 
     logger.debug(f"Initialized metrics for server: {server_name}")
+
+
+async def _start_llm_health_monitor_async():
+    """
+    Start background health monitor for LLM processes (async version).
+
+    Only starts if there are LLM processes with restart policies enabled.
+    This is called during FastAPI startup event when event loop is running.
+    """
+    global _llm_health_monitor
+
+    # Check if there are any processes with restart policies
+    processes_with_restart = {
+        model_id: process
+        for model_id, process in _llm_processes.items()
+        if process.restart_policy != "no"
+    }
+
+    if not processes_with_restart:
+        logger.info("No LLM processes with restart policies, health monitor not started")
+        return
+
+    # Stop existing monitor if running
+    if _llm_health_monitor and _llm_health_monitor.is_running():
+        logger.info("Stopping existing LLM health monitor...")
+        await _llm_health_monitor.stop()
+
+    # Create and start new health monitor (only monitor processes with restart policies)
+    logger.info(f"Starting health monitor for {len(processes_with_restart)} LLM process(es) with restart policies")
+    _llm_health_monitor = LLMHealthMonitor(processes_with_restart)
+    _llm_health_monitor.start()
 
 
 def _extract_port_from_args(args) -> int:
@@ -334,6 +371,12 @@ def run_servers(
             _add_llm_proxy_routes(app)
         else:
             logger.warning("No LLM models started successfully - skipping proxy routes")
+
+        # Register startup event to start health monitor after event loop is running
+        @app.on_event("startup")
+        async def startup_health_monitor():
+            """Start LLM health monitor when FastAPI server starts."""
+            await _start_llm_health_monitor_async()
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
@@ -1082,11 +1125,26 @@ def _update_env_from_common_env(dest_dir: Path, pkg: dict) -> None:
 
 def _cleanup_resources():
     """Cleanup all LLM processes on shutdown (thread-safe, idempotent)."""
-    global _cleanup_done, _http_client
+    global _cleanup_done, _http_client, _llm_health_monitor
 
     with _cleanup_lock:
         if _cleanup_done:
             return
+
+        # Stop health monitor if running
+        # Note: This is called from atexit/signal handler (not async context)
+        # The monitor task runs on uvicorn's loop, so we signal it to stop
+        # and let it clean up naturally rather than forcing from different loop
+        if _llm_health_monitor and _llm_health_monitor.is_running():
+            logger.info("Stopping LLM health monitor...")
+            try:
+                # Set the stop flag - the monitor will clean up on its loop
+                _llm_health_monitor._running = False
+                logger.info("Health monitor stop signal sent")
+            except Exception as e:
+                logger.warning(f"Error stopping health monitor: {e}")
+            finally:
+                _llm_health_monitor = None
 
         if _llm_processes:
             logger.info("Shutting down LLM processes...")

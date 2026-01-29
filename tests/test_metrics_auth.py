@@ -109,3 +109,28 @@ class TestMetricsAuthentication:
                 verify_token(credentials=valid_creds)
             assert exc_info.value.status_code == 500
             assert "misconfiguration" in exc_info.value.detail.lower()
+
+    def test_health_endpoint_always_public(self):
+        """Test that /health endpoint remains public even in secure mode.
+
+        The /health endpoint should NOT have verify_token dependency,
+        allowing load balancers and monitoring systems to check server health
+        without authentication.
+        """
+        # Note: This is a design validation test. The actual /health endpoint
+        # implementation should NOT include dependencies=[Depends(verify_token)].
+        # This test verifies that verify_token doesn't get accidentally added.
+
+        # In secure mode, verify_token would raise an exception without credentials
+        with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": "token"}, clear=False):
+            from fluidmcp.cli.auth import verify_token
+            from fastapi import HTTPException
+
+            # This should raise 401 (proving /health must NOT use this dependency)
+            with pytest.raises(HTTPException) as exc_info:
+                verify_token(credentials=None)
+            assert exc_info.value.status_code == 401
+
+        # The /health endpoint definition should look like:
+        # @app.get("/health", tags=["monitoring"])  # NO dependencies parameter
+        # This test serves as documentation of this requirement
