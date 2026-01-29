@@ -30,10 +30,45 @@ class Metric:
         self._lock = Lock()
 
     def _get_label_key(self, label_values: Dict[str, str]) -> tuple:
-        """Convert label dict to hashable key."""
+        """
+        Convert label dictionary to hashable tuple key for samples dict.
+
+        Args:
+            label_values: Dictionary mapping label names to values
+
+        Returns:
+            Tuple of label values in same order as self.labels.
+            Missing labels default to empty string.
+            Returns empty tuple if metric has no labels.
+        """
         if not self.labels:
             return ()
         return tuple(label_values.get(label, "") for label in self.labels)
+
+    def _render_simple_metric(self, metric_type: str) -> str:
+        """
+        Common rendering logic for counter and gauge metrics.
+
+        Args:
+            metric_type: The Prometheus metric type ("counter" or "gauge")
+
+        Returns:
+            Prometheus exposition format string
+        """
+        lines = [
+            f"# HELP {self.name} {self.description}",
+            f"# TYPE {self.name} {metric_type}"
+        ]
+
+        with self._lock:
+            for key, value in sorted(self.samples.items()):
+                if self.labels:
+                    label_str = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
+                    lines.append(f"{self.name}{{{label_str}}} {value}")
+                else:
+                    lines.append(f"{self.name} {value}")
+
+        return "\n".join(lines)
 
     def render(self) -> str:
         """Render metric in Prometheus exposition format."""
@@ -59,20 +94,7 @@ class Counter(Metric):
 
     def render(self) -> str:
         """Render counter in Prometheus format."""
-        lines = [
-            f"# HELP {self.name} {self.description}",
-            f"# TYPE {self.name} counter"
-        ]
-
-        with self._lock:
-            for key, value in sorted(self.samples.items()):
-                if self.labels:
-                    label_str = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
-                    lines.append(f"{self.name}{{{label_str}}} {value}")
-                else:
-                    lines.append(f"{self.name} {value}")
-
-        return "\n".join(lines)
+        return self._render_simple_metric("counter")
 
 
 class Gauge(Metric):
@@ -103,20 +125,7 @@ class Gauge(Metric):
 
     def render(self) -> str:
         """Render gauge in Prometheus format."""
-        lines = [
-            f"# HELP {self.name} {self.description}",
-            f"# TYPE {self.name} gauge"
-        ]
-
-        with self._lock:
-            for key, value in sorted(self.samples.items()):
-                if self.labels:
-                    label_str = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
-                    lines.append(f"{self.name}{{{label_str}}} {value}")
-                else:
-                    lines.append(f"{self.name} {value}")
-
-        return "\n".join(lines)
+        return self._render_simple_metric("gauge")
 
 
 class Histogram(Metric):
@@ -128,7 +137,12 @@ class Histogram(Metric):
     def __init__(self, name: str, description: str, labels: Optional[List[str]] = None,
                  buckets: Optional[List[float]] = None):
         super().__init__(name, description, labels)
-        self.buckets = sorted(buckets or self.DEFAULT_BUCKETS)
+
+        # Validate and sort buckets
+        buckets = buckets or self.DEFAULT_BUCKETS
+        if not all(isinstance(b, (int, float)) and b > 0 and not math.isnan(b) and not math.isinf(b) for b in buckets):
+            raise ValueError(f"Histogram buckets must be positive finite numbers, got: {buckets}")
+        self.buckets = sorted(buckets)
 
         # Store: {label_key: {"sum": float, "count": int, buckets: {le: count}}}
         self.histograms: Dict[tuple, Dict[str, Any]] = defaultdict(lambda: {
@@ -150,11 +164,16 @@ class Histogram(Metric):
         """
         # Validate input type
         if not isinstance(value, (int, float)):
-            return  # Silently ignore invalid types
+            logger.debug(f"Histogram.observe: Invalid type {type(value).__name__} for metric {self.name}, ignoring value")
+            return
+
+        # Convert int to float for validation (math.isnan/isinf only work on floats)
+        float_value = float(value)
 
         # Reject NaN, Inf, and negative values
-        if math.isnan(value) or math.isinf(value) or value < 0:
-            return  # Silently ignore invalid values
+        if math.isnan(float_value) or math.isinf(float_value) or float_value < 0:
+            logger.debug(f"Histogram.observe: Invalid value {float_value} for metric {self.name} (NaN/Inf/negative), ignoring")
+            return
 
         label_values = label_values or {}
         key = self._get_label_key(label_values)
@@ -162,7 +181,7 @@ class Histogram(Metric):
         with self._lock:
             # Use defaultdict factory to initialize histogram entry on first access
             hist = self.histograms[key]
-            hist["sum"] += value
+            hist["sum"] += float_value
             hist["count"] += 1
 
             # Update bucket counts: increment only the smallest matching bucket.
@@ -180,7 +199,7 @@ class Histogram(Metric):
             # Note: Values exceeding all buckets don't increment any specific bucket counter.
             # The +Inf bucket (rendered in render()) shows hist["count"], which includes all observations.
             for bucket in self.buckets:
-                if value <= bucket:
+                if float_value <= bucket:
                     hist["buckets"][bucket] += 1
                     break  # intentional: only increment the first matching bucket; cumulative counts are computed in render()
 

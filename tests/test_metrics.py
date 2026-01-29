@@ -11,6 +11,7 @@ Tests cover:
 - Thread safety under concurrent access
 """
 
+import math
 import pytest
 import time
 import threading
@@ -346,7 +347,6 @@ class TestHistogram:
 
     def test_histogram_rejects_nan_value(self):
         """Test histogram rejects NaN values."""
-        import math
         histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
 
         # Observe NaN - should be rejected (silently ignored)
@@ -357,7 +357,6 @@ class TestHistogram:
 
     def test_histogram_rejects_inf_value(self):
         """Test histogram rejects infinite values."""
-        import math
         histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
 
         # Observe +Inf and -Inf - both should be rejected
@@ -386,6 +385,54 @@ class TestHistogram:
 
         # Histogram should be empty (no observations recorded)
         assert len(histogram.histograms) == 0
+
+    def test_histogram_accepts_integer_values(self):
+        """Test histogram accepts integer values and converts them to float."""
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0, 10.0])
+
+        # Observe integer values - should be accepted and converted to float
+        histogram.observe(3)
+        histogram.observe(7)
+
+        # Histogram should have recorded the observations
+        assert len(histogram.histograms) == 1
+        hist_data = histogram.histograms[()]
+        assert hist_data["count"] == 2
+        assert hist_data["sum"] == 10.0  # 3 + 7 = 10
+
+    def test_histogram_value_exceeds_all_buckets(self):
+        """Test histogram handles values exceeding all buckets."""
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0, 10.0])
+
+        # Observe value exceeding all buckets
+        histogram.observe(100.0)
+
+        # Should increment count and sum, but no specific bucket
+        key = ()
+        assert histogram.histograms[key]["count"] == 1
+        assert histogram.histograms[key]["sum"] == 100.0
+
+        # Render should show value in +Inf bucket
+        output = histogram.render()
+        assert 'le="+Inf"} 1' in output
+
+    def test_histogram_invalid_buckets_raises_error(self):
+        """Test histogram raises error for invalid bucket values."""
+        # Test negative bucket
+        with pytest.raises(ValueError, match="positive finite numbers"):
+            Histogram("test", "desc", buckets=[1.0, -5.0, 10.0])
+
+        # Test NaN bucket
+        with pytest.raises(ValueError, match="positive finite numbers"):
+            Histogram("test", "desc", buckets=[1.0, math.nan, 10.0])
+
+        # Test Inf bucket
+        with pytest.raises(ValueError, match="positive finite numbers"):
+            Histogram("test", "desc", buckets=[1.0, math.inf, 10.0])
+
+        # Test non-numeric bucket
+        with pytest.raises(ValueError, match="positive finite numbers"):
+            Histogram("test", "desc", buckets=[1.0, "invalid", 10.0])
 
 
 class TestMetricsCollector:
@@ -704,22 +751,27 @@ class TestThreadSafety:
     """Thread safety tests for metrics under concurrent access."""
 
     def test_concurrent_counter_increments(self):
-        """Test counter handles concurrent increments from multiple threads."""
-        counter = Counter("test", "desc")
+        """Test counter with labels handles concurrent increments from multiple threads."""
+        counter = Counter("test", "desc", labels=["thread_id"])
         num_threads = 10
         increments = 100
 
-        def worker():
+        def worker(thread_id):
             for _ in range(increments):
-                counter.inc()
+                counter.inc({"thread_id": str(thread_id)})
 
-        threads = [threading.Thread(target=worker) for _ in range(num_threads)]
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
 
-        assert counter.samples[()] == num_threads * increments
+        # Each thread should have its own labeled counter with the correct count
+        assert len(counter.samples) == num_threads
+        for value in counter.samples.values():
+            assert value == increments
+        # And the total across all labels should equal num_threads * increments
+        assert sum(counter.samples.values()) == num_threads * increments
 
     def test_concurrent_histogram_observations(self):
         """Test histogram handles concurrent observations."""
