@@ -137,7 +137,27 @@ class Histogram(Metric):
         })
 
     def observe(self, value: float, label_values: Optional[Dict[str, str]] = None):
-        """Record an observation."""
+        """Record an observation.
+
+        Args:
+            value: The value to observe. Must be a valid non-negative float.
+            label_values: Optional dictionary of label values.
+
+        Note:
+            Invalid values (NaN, Inf, negative, or non-numeric) are silently ignored
+            to prevent corrupting metric data. This follows Prometheus best practices.
+        """
+        # Validate input type
+        if not isinstance(value, (int, float)):
+            return  # Silently ignore invalid types
+
+        # Import math for validation
+        import math
+
+        # Reject NaN, Inf, and negative values
+        if math.isnan(value) or math.isinf(value) or value < 0:
+            return  # Silently ignore invalid values
+
         label_values = label_values or {}
         key = self._get_label_key(label_values)
 

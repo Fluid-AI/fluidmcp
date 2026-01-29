@@ -19,9 +19,75 @@ from fluidmcp.cli.services.metrics import (
     Gauge,
     Histogram,
     MetricsCollector,
+    MetricsRegistry,
     RequestTimer,
     ToolTimer,
 )
+
+
+class TestMetricsRegistry:
+    """Unit tests for MetricsRegistry class."""
+
+    def test_register_metric(self):
+        """Test registering a metric."""
+        registry = MetricsRegistry()
+        counter = Counter("test_counter", "Test counter")
+
+        registry.register(counter)
+
+        # Verify metric was registered
+        retrieved = registry.get_metric("test_counter")
+        assert retrieved is counter
+
+    def test_register_duplicate_metric_logs_warning(self):
+        """Test registering duplicate metric logs warning."""
+        registry = MetricsRegistry()
+        counter1 = Counter("duplicate_metric", "First counter")
+        counter2 = Counter("duplicate_metric", "Second counter")
+
+        registry.register(counter1)
+        registry.register(counter2)  # Should log warning
+
+        # Second metric should replace first
+        retrieved = registry.get_metric("duplicate_metric")
+        assert retrieved is counter2
+
+    def test_get_nonexistent_metric(self):
+        """Test getting non-existent metric returns None."""
+        registry = MetricsRegistry()
+
+        result = registry.get_metric("nonexistent")
+
+        assert result is None
+
+    def test_render_all_metrics(self):
+        """Test rendering all metrics in Prometheus format."""
+        registry = MetricsRegistry()
+
+        counter = Counter("test_counter", "Test counter")
+        counter.inc()
+        registry.register(counter)
+
+        gauge = Gauge("test_gauge", "Test gauge")
+        gauge.set(42.0)
+        registry.register(gauge)
+
+        output = registry.render_all()
+
+        # Should contain both metrics
+        assert "test_counter" in output
+        assert "test_gauge" in output
+        assert "# HELP test_counter Test counter" in output
+        assert "# HELP test_gauge Test gauge" in output
+
+    def test_render_all_empty_registry(self):
+        """Test rendering empty registry."""
+        registry = MetricsRegistry()
+
+        output = registry.render_all()
+
+        # Should return empty string or minimal output
+        assert isinstance(output, str)
 
 
 class TestCounter:
@@ -278,6 +344,49 @@ class TestHistogram:
         assert histogram.histograms[()]["count"] == expected_count
         assert histogram.histograms[()]["sum"] == 2.5 * expected_count
 
+    def test_histogram_rejects_nan_value(self):
+        """Test histogram rejects NaN values."""
+        import math
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe NaN - should be rejected (silently ignored)
+        histogram.observe(math.nan)
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
+    def test_histogram_rejects_inf_value(self):
+        """Test histogram rejects infinite values."""
+        import math
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe +Inf and -Inf - both should be rejected
+        histogram.observe(math.inf)
+        histogram.observe(-math.inf)
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
+    def test_histogram_rejects_negative_value(self):
+        """Test histogram rejects negative values."""
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe negative value - should be rejected
+        histogram.observe(-1.5)
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
+    def test_histogram_rejects_invalid_type(self):
+        """Test histogram rejects invalid data types."""
+        histogram = Histogram("test_histogram", "Test description", buckets=[1.0, 5.0])
+
+        # Observe string value - should be rejected
+        histogram.observe("invalid")
+
+        # Histogram should be empty (no observations recorded)
+        assert len(histogram.histograms) == 0
+
 
 class TestMetricsCollector:
     """Unit tests for MetricsCollector class."""
@@ -347,6 +456,84 @@ class TestMetricsCollector:
         output = restarts.render()
         assert 'server_id="test_server"' in output
         assert 'reason="crash"' in output
+
+    def test_set_server_uptime(self):
+        """Test setting server uptime."""
+        collector = MetricsCollector(server_id="test_server_uptime")
+        collector.set_uptime(uptime_seconds=3600.5)
+
+        uptime = collector.registry.get_metric("fluidmcp_server_uptime_seconds")
+        output = uptime.render()
+        assert 'server_id="test_server_uptime"' in output
+        assert "3600.5" in output
+
+    def test_set_gpu_memory(self):
+        """Test setting GPU memory usage."""
+        collector = MetricsCollector(server_id="test_server_gpu")
+        collector.set_gpu_memory(gpu_index=0, memory_bytes=4294967296.0)  # 4GB
+
+        gpu_mem = collector.registry.get_metric("fluidmcp_gpu_memory_bytes")
+        output = gpu_mem.render()
+        assert 'server_id="test_server_gpu"' in output
+        assert 'gpu_index="0"' in output
+        assert "4294967296.0" in output
+
+    def test_set_gpu_utilization(self):
+        """Test setting GPU utilization."""
+        collector = MetricsCollector(server_id="test_server_gpu_util")
+        collector.set_gpu_utilization(utilization=0.75)
+
+        gpu_util = collector.registry.get_metric("fluidmcp_gpu_memory_utilization_ratio")
+        output = gpu_util.render()
+        assert 'server_id="test_server_gpu_util"' in output
+        assert "0.75" in output
+
+    def test_record_tool_call(self):
+        """Test recording tool calls."""
+        collector = MetricsCollector(server_id="test_server_tool")
+        collector.record_tool_call(tool_name="read_file", status="success", duration=0.123)
+
+        # Check tool call counter
+        tool_calls = collector.registry.get_metric("fluidmcp_tool_calls_total")
+        output = tool_calls.render()
+        assert 'server_id="test_server_tool"' in output
+        assert 'tool_name="read_file"' in output
+        assert 'status="success"' in output
+
+        # Check tool duration histogram
+        tool_duration = collector.registry.get_metric("fluidmcp_tool_execution_seconds")
+        output = tool_duration.render()
+        assert 'server_id="test_server_tool"' in output
+        assert 'tool_name="read_file"' in output
+
+    def test_record_streaming_request(self):
+        """Test recording streaming requests."""
+        collector = MetricsCollector(server_id="test_server_stream")
+        collector.record_streaming_request(completion_status="completed")
+
+        streaming = collector.registry.get_metric("fluidmcp_streaming_requests_total")
+        output = streaming.render()
+        assert 'server_id="test_server_stream"' in output
+        assert 'completion_status="completed"' in output
+
+    def test_increment_active_streams(self):
+        """Test incrementing active streams."""
+        collector = MetricsCollector(server_id="test_server_active_stream")
+        collector.increment_active_streams()
+
+        streams = collector.registry.get_metric("fluidmcp_active_streams")
+        output = streams.render()
+        assert 'server_id="test_server_active_stream"' in output
+
+    def test_decrement_active_streams(self):
+        """Test decrementing active streams."""
+        collector = MetricsCollector(server_id="test_server_dec_stream")
+        collector.increment_active_streams()
+        collector.increment_active_streams()
+        collector.decrement_active_streams()
+
+        streams = collector.registry.get_metric("fluidmcp_active_streams")
+        assert streams.samples[("test_server_dec_stream",)] == 1.0
 
 
 class TestRequestTimer:
