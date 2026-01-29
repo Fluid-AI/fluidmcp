@@ -9,9 +9,7 @@ import asyncio
 import subprocess
 import json
 import time
-import math
 import atexit
-import threading
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -38,10 +36,6 @@ class ServerManager:
         self.processes: Dict[str, subprocess.Popen] = {}
         self.configs: Dict[str, Dict[str, Any]] = {}
         self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
-
-        # Thread-safe access locks
-        self._registry_lock = threading.Lock()  # Protects processes and configs dicts
-        self._start_times_lock = threading.Lock()  # Thread-safe access to start_times
 
         # Event loop for async operations
         self._loop = None
@@ -92,10 +86,7 @@ class ServerManager:
                         process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         # Intentional: timeout during cleanup is acceptable - process will be reaped by OS
-                        logger.debug(
-                            f"Timeout while reaping server '{server_id}' (PID: {process.pid}) "
-                            "during cleanup; relying on OS to reap the process."
-                        )
+                        pass
 
             except Exception as e:
                 logger.error(f"Error cleaning up server '{server_id}': {e}")
@@ -120,7 +111,7 @@ class ServerManager:
 
     # ==================== Server Lifecycle Methods ====================
 
-    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None, env_overrides: Optional[Dict[str, str]] = None) -> bool:
+    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
         Start an MCP server.
 
@@ -128,7 +119,6 @@ class ServerManager:
             id: Unique server identifier
             config: Server configuration (if None, loads from database)
             user_id: User who is starting the server (for tracking)
-            env_overrides: Instance-specific environment variables (overrides config env)
 
         Returns:
             True if started successfully, False otherwise
@@ -152,24 +142,22 @@ class ServerManager:
                     logger.error(f"No configuration found for server '{id}'")
                     return False
 
-            # Store config (thread-safe)
-            with self._registry_lock:
-                self.configs[id] = config
+            # Store config
+            self.configs[id] = config
 
             # Get display name from config
             name = config.get("name", id)
 
             # Spawn the MCP process
             logger.info(f"Starting server '{name}' (id: {id})...")
-            process = await self._spawn_mcp_process(id, config, instance_env=env_overrides)
+            process = await self._spawn_mcp_process(id, config)
 
             if not process:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
                 return False
 
-            # Store process (thread-safe)
-            with self._registry_lock:
-                self.processes[id] = process
+            # Store process
+            self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
             # Save state to database with user tracking
@@ -183,17 +171,15 @@ class ServerManager:
                 "restart_count": 0,
                 "last_health_check": datetime.utcnow(),
                 "health_check_failures": 0,
-                "started_by": user_id,  # Track who started this instance
-                "env": env_overrides  # Store instance-specific environment variables
+                "started_by": user_id  # Track who started this instance
             })
 
             # Update metrics - server is now running (status code: 2)
             # Note: Metrics update after database save to ensure state consistency
             collector.set_server_status(2)  # 2 = running
 
-            # Store start time for dynamic uptime calculation (thread-safe)
-            with self._start_times_lock:
-                self.start_times[id] = time.monotonic()
+            # Store start time for dynamic uptime calculation
+            self.start_times[id] = time.monotonic()
             collector.set_uptime(0.0)  # Just started
 
             return True
@@ -234,10 +220,10 @@ class ServerManager:
                 logger.warning(f"Server '{id}' is not running")
                 return False
 
-            # Get process and config (thread-safe)
-            with self._registry_lock:
-                process = self.processes[id]
-                config = self.configs.get(id, {})
+            process = self.processes[id]
+
+            # Get display name from config
+            config = self.configs.get(id, {})
             name = config.get("name", id)
 
             # Check if already dead
@@ -291,9 +277,8 @@ class ServerManager:
         Returns:
             True if restarted successfully
         """
-        # Get current config before stopping (thread-safe)
-        with self._registry_lock:
-            config = self.configs.get(id)
+        # Get current config before stopping
+        config = self.configs.get(id)
         if not config:
             config = await self.db.get_server_config(id)
 
@@ -464,14 +449,13 @@ class ServerManager:
 
     # ==================== Private Helper Methods ====================
 
-    async def _spawn_mcp_process(self, id: str, config: Dict[str, Any], instance_env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
+    async def _spawn_mcp_process(self, id: str, config: Dict[str, Any]) -> Optional[subprocess.Popen]:
         """
         Spawn MCP server process.
 
         Args:
             id: Server identifier
             config: Server configuration
-            instance_env: Instance-specific environment variables (overrides config env)
 
         Returns:
             Popen process or None if failed
@@ -496,22 +480,10 @@ class ServerManager:
             # Build command list
             cmd_list = [command] + args
 
-            # Merge environment variables with priority order:
-            # 1. Shell environment (highest priority)
-            # 2. Instance env (user-provided, from instance_env parameter)
-            # 3. Config env (lowest priority - templates/defaults)
+            # Merge environment variables (shell env takes precedence)
             env = dict(os.environ)
-
-            # Add config env (templates) if not in shell env and not placeholder
             for key, value in env_vars.items():
                 if key not in env and value and not self._is_placeholder(value):
-                    env[key] = value
-
-            # Override with instance env (actual user-provided values)
-            # Note: We set values even if empty - user intent matters
-            # Validation happens at API level, not here
-            if instance_env:
-                for key, value in instance_env.items():
                     env[key] = value
 
             # Determine working directory
@@ -645,15 +617,11 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
         """
-        # Remove from registry (thread-safe)
-        with self._registry_lock:
-            if id in self.processes:
-                del self.processes[id]
-            if id in self.configs:
-                del self.configs[id]
-        with self._start_times_lock:
-            if id in self.start_times:
-                del self.start_times[id]
+        # Remove from registry
+        if id in self.processes:
+            del self.processes[id]
+        if id in self.start_times:
+            del self.start_times[id]
 
         # Update database
         await self.db.save_instance_state({
@@ -676,22 +644,9 @@ class ServerManager:
         Returns:
             Uptime in seconds since server start, or None if server not running
         """
-        with self._start_times_lock:
-            if server_id not in self.start_times:
-                return None
-            start_time = self.start_times[server_id]
-
-        # Calculate uptime (outside lock to minimize lock duration)
-        try:
-            uptime = time.monotonic() - start_time
-            # Validate uptime is reasonable (non-negative, not NaN/Inf)
-            if uptime < 0 or math.isnan(uptime) or math.isinf(uptime):
-                logger.warning(f"Invalid uptime calculated for {server_id}: {uptime}")
-                return None
-            return uptime
-        except Exception as e:
-            logger.error(f"Error calculating uptime for {server_id}: {e}")
+        if server_id not in self.start_times:
             return None
+        return time.monotonic() - self.start_times[server_id]
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:
