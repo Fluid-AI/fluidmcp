@@ -62,4 +62,9 @@ test-*.json
 .fmcp-packages/
 
 # Temporary server directories (created when running from config files)
-.temp_servers/
+.temp_servers/.coverage
+
+# Test coverage reports
+.coverage
+htmlcov/
+.pytest_cache/

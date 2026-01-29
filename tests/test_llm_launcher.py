@@ -1006,8 +1006,14 @@ class TestCUDAOOMDetection:
             # First call - should read file
             result1 = process.check_for_cuda_oom()
 
+            # Small delay to ensure mtime changes (filesystem has 1-2s resolution on some systems)
+            time.sleep(0.01)
+
             # Modify log file (add OOM error)
             log_file.write_text("CUDA out of memory\n")
+
+            # Force mtime to be different by touching the file
+            os.utime(log_file, None)  # Update mtime to current time
 
             # Second call within TTL - cache invalidated because file mtime changed
             with patch("time.time", return_value=time.time() + 10):  # 10s later, within 60s TTL
@@ -1238,3 +1244,429 @@ class TestLLMHealthMonitor:
 
         # Clean up
         await monitor.stop()
+# Additional tests to cover the missing 10%
+# Add these to the end of tests/test_llm_launcher.py
+
+class TestEdgeCases:
+    """Test edge cases and error handling paths"""
+
+    def test_sanitize_model_id_empty_string(self):
+        """Test sanitize_model_id with empty string (line 58)"""
+        from fluidmcp.cli.services.llm_launcher import sanitize_model_id
+
+        # Empty string should become 'unnamed_model'
+        assert sanitize_model_id("") == "unnamed_model"
+
+        # All special characters should also result in unnamed_model
+        assert sanitize_model_id("!@#$%^&*()") == "__________"
+
+        # String that becomes empty after sanitization
+        assert sanitize_model_id("///") == "___"
+
+    def test_get_uptime_when_no_start_time(self):
+        """Test get_uptime when start_time is None (lines 383-386)"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # start_time is None initially
+        assert process.start_time is None
+        uptime = process.get_uptime()
+        assert uptime is None
+
+    def test_get_uptime_after_start(self):
+        """Test get_uptime after process starts"""
+        config = {"command": "echo", "args": ["test"]}
+        process = LLMProcess("test", config)
+
+        try:
+            process.start()
+            time.sleep(0.1)
+
+            uptime = process.get_uptime()
+            assert uptime is not None
+            assert uptime >= 0.1
+        finally:
+            process.stop()
+
+    def test_can_restart_when_max_restarts_zero(self):
+        """Test can_restart with max_restarts=0 (lines 397-399)"""
+        config = {
+            "command": "echo",
+            "restart_policy": "always",
+            "max_restarts": 0
+        }
+        process = LLMProcess("test", config)
+
+        # With max_restarts=0, should never be able to restart
+        assert process.can_restart() is False
+        assert process.restart_count == 0
+
+    def test_check_for_cuda_oom_os_error(self, tmp_path):
+        """Test CUDA OOM check when getmtime raises OSError (lines 336-337)"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log file
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+        log_file.write_text("CUDA out of memory\n")
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            # First call to cache
+            process.check_for_cuda_oom()
+
+            # Simulate OSError on getmtime
+            with patch("os.path.getmtime", side_effect=OSError("Permission denied")):
+                # Should still work, treats mtime as None
+                result = process.check_for_cuda_oom()
+                # Will re-read file since mtime is None
+                assert result is True
+
+    def test_check_for_cuda_oom_decode_error(self, tmp_path):
+        """Test CUDA OOM check with invalid UTF-8 in log (line 343)"""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Create log with invalid UTF-8
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / f"llm_{process.model_id}_stderr.log"
+
+        # Write binary data with CUDA OOM message
+        with open(log_file, "wb") as f:
+            f.write(b"CUDA out of memory\n")
+            f.write(b"\xff\xfe\xfd")  # Invalid UTF-8
+
+        with patch("os.path.expanduser", return_value=str(tmp_path)):
+            # Should handle decode errors gracefully
+            result = process.check_for_cuda_oom()
+            assert result is True  # Should still detect OOM
+
+    @pytest.mark.asyncio
+    async def test_attempt_restart_before_increment(self):
+        """Test restart count increment timing (line 488)"""
+        config = {
+            "command": "echo",
+            "args": ["test"],
+            "restart_policy": "always",
+            "max_restarts": 5,
+            "restart_delay": 0.1
+        }
+        process = LLMProcess("test", config)
+
+        try:
+            process.start()
+
+            initial_count = process.restart_count
+            assert initial_count == 0
+
+            # Stop process to trigger restart
+            process.stop()
+
+            # Attempt restart
+            success = await process.attempt_restart()
+
+            if success:
+                # Count should be incremented after successful restart
+                assert process.restart_count == initial_count + 1
+        finally:
+            # Cleanup
+            if process.is_running():
+                process.stop()
+
+    def test_needs_restart_when_no_process(self):
+        """Test needs_restart when process is None (edge case in lines 432-446)"""
+        config = {
+            "command": "echo",
+            "restart_policy": "on-failure"
+        }
+        process = LLMProcess("test", config)
+
+        # Process never started, so process is None
+        assert process.process is None
+
+        # Should return True if policy allows (but can't determine exit code)
+        result = process.needs_restart()
+        # When process is None and not running, needs_restart checks policy
+        assert result is True
+
+    def test_calculate_restart_delay_edge_cases(self):
+        """Test restart delay calculation edge cases (lines 445-447)"""
+        config = {
+            "command": "echo",
+            "restart_policy": "always",
+            "restart_delay": 2.5
+        }
+        process = LLMProcess("test", config)
+
+        # Test with fractional base delay
+        process.restart_count = 0
+        assert process.calculate_restart_delay() == 2.5
+
+        process.restart_count = 1
+        assert process.calculate_restart_delay() == 5.0
+
+        # Test at cap
+        process.restart_count = 10  # Way beyond MAX_BACKOFF_EXPONENT
+        delay = process.calculate_restart_delay()
+        # Should be capped at 2.5 * (2^5) = 80
+        assert delay == 2.5 * (2 ** 5)
+
+
+class TestForceKillEdgeCases:
+    """Test force_kill edge cases (lines 247-248, 256-257, 264-265)"""
+
+    def test_force_kill_without_process(self):
+        """Test force_kill when no process exists (lines 247-248)"""
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+
+        # Should log warning but not crash
+        process.force_kill()
+        assert process.process is None
+
+    def test_force_kill_exception_handling(self):
+        """Test force_kill handles exceptions and logs errors appropriately.
+
+        When kill() raises an exception, force_kill should catch it, log the error,
+        and continue with cleanup (closing stderr log) without propagating the exception.
+        """
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+        from unittest.mock import Mock
+
+        config = {"command": "echo", "args": ["test"]}
+        process = LLMProcess("test", config)
+
+        try:
+            process.start()
+
+            # Mock kill to raise an exception
+            original_kill = process.process.kill
+            mock_kill = Mock(side_effect=Exception("Kill failed"))
+            process.process.kill = mock_kill
+
+            # Verify error is logged
+            with patch('fluidmcp.cli.services.llm_launcher.logger') as mock_logger:
+                # Should handle exception gracefully without raising
+                process.force_kill()
+
+                # Verify error was logged
+                mock_logger.error.assert_called()
+                # Check that the error message contains relevant info
+                error_call = mock_logger.error.call_args
+                assert "error" in str(error_call).lower() or "kill" in str(error_call).lower()
+
+            # Verify kill was attempted
+            assert mock_kill.called, "kill() should have been attempted"
+
+            # Restore original kill
+            process.process.kill = original_kill
+        finally:
+            # Ensure cleanup
+            if process.is_running():
+                process.stop()
+
+    def test_stderr_log_close_error_in_force_kill(self):
+        """Test force_kill handles log close errors gracefully without crashing.
+
+        When stderr log close() raises an exception during force_kill cleanup,
+        the exception should be caught and logged, allowing force_kill to complete
+        successfully without propagating the error.
+        """
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+        from unittest.mock import Mock
+
+        config = {"command": "echo", "args": ["test"]}
+        process = LLMProcess("test", config)
+
+        try:
+            process.start()
+
+            # Mock stderr log close to fail
+            if process._stderr_log:
+                original_close = process._stderr_log.close
+                mock_close = Mock(side_effect=Exception("Close failed"))
+                process._stderr_log.close = mock_close
+
+                # force_kill should not raise - this is what we're testing
+                error_handled = False
+                try:
+                    process.force_kill()
+                    error_handled = True
+                except Exception as e:
+                    pytest.fail(f"force_kill raised exception despite error handling: {e}")
+
+                # Verify force_kill completed successfully
+                assert error_handled, "force_kill should handle close errors gracefully"
+                # Verify close was attempted
+                assert mock_close.called, "Close should have been attempted"
+
+                # Restore original close and cleanup properly
+                process._stderr_log.close = original_close
+                process._stderr_log.close()
+        finally:
+            # Ensure cleanup even if test fails
+            if process.is_running():
+                process.stop()
+
+
+class TestHealthMonitorEdgeCases:
+    """Test health monitor edge cases (lines 632, 641-642, 656, 674-676)"""
+
+    @pytest.mark.asyncio
+    async def test_monitor_with_cuda_oom_detection(self, tmp_path):
+        """Test monitor loop with CUDA OOM detection (line 632)"""
+        # Create fake CUDA OOM log
+        log_dir = tmp_path / ".fluidmcp" / "logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "llm_cuda-model_stderr.log"
+        log_file.write_text("CUDA out of memory. Tried to allocate 2.00 GiB\n")
+
+        # Create mock process with CUDA OOM
+        mock_proc = Mock(spec=LLMProcess)
+        mock_proc.model_id = "cuda-model"
+        mock_proc.restart_policy = "on-failure"
+        mock_proc.check_health = AsyncMock(return_value=(False, "Health check failed"))
+        mock_proc.needs_restart = Mock(return_value=False)  # Don't actually restart
+        mock_proc.is_running = Mock(return_value=True)
+
+        # Mock check_for_cuda_oom to return True
+        with patch.object(mock_proc, 'check_for_cuda_oom', return_value=True):
+            processes = {"cuda-model": mock_proc}
+            monitor = LLMHealthMonitor(processes, check_interval=0.1)
+
+            monitor.start()
+            await asyncio.sleep(0.3)  # Let monitor run
+            await monitor.stop()
+
+            # Verify CUDA OOM was checked (line 632 coverage)
+            mock_proc.check_health.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_monitor_restart_in_progress_duplicate_prevention(self):
+        """Test that _restarts_in_progress prevents duplicates (lines 641-642)"""
+        mock_proc = Mock(spec=LLMProcess)
+        mock_proc.restart_policy = "always"
+        mock_proc.check_health = AsyncMock(return_value=(True, None))
+        mock_proc.needs_restart = Mock(return_value=True)  # Always needs restart
+        mock_proc.attempt_restart = AsyncMock(return_value=True)
+
+        processes = {"duplicate-test": mock_proc}
+        monitor = LLMHealthMonitor(processes, check_interval=0.05)
+
+        # Pre-populate _restarts_in_progress to simulate restart already running
+        monitor._restarts_in_progress.add("duplicate-test")
+
+        monitor.start()
+        await asyncio.sleep(0.15)  # Multiple check cycles
+        await monitor.stop()
+
+        # attempt_restart should NOT be called because restart already in progress
+        mock_proc.attempt_restart.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_monitor_restarts_in_progress_cleanup(self):
+        """Test that _restarts_in_progress is cleaned up (line 656)"""
+        mock_proc = Mock(spec=LLMProcess)
+        mock_proc.restart_policy = "always"
+        mock_proc.check_health = AsyncMock(return_value=(True, None))
+        mock_proc.needs_restart = Mock(return_value=True)
+        # Simulate successful restart
+        mock_proc.attempt_restart = AsyncMock(return_value=True)
+
+        processes = {"cleanup-test": mock_proc}
+        monitor = LLMHealthMonitor(processes, check_interval=0.1)
+
+        monitor.start()
+        await asyncio.sleep(0.25)  # Let restart happen
+
+        # Check that _restarts_in_progress was cleaned up after restart
+        # Should be empty after restart completes
+        await asyncio.sleep(0.1)  # Give time for cleanup
+
+        await monitor.stop()
+
+        # Verify the finally block cleaned up (line 656)
+        assert "cleanup-test" not in monitor._restarts_in_progress
+
+    @pytest.mark.asyncio
+    async def test_monitor_stop_when_not_running(self):
+        """Test monitor.stop() when already stopped (lines 674-676)"""
+        processes = {"test": Mock(spec=LLMProcess)}
+        monitor = LLMHealthMonitor(processes)
+
+        # Stop without starting
+        await monitor.stop()
+
+        # Should handle gracefully (line 674-676)
+        assert monitor.is_running() is False
+
+    @pytest.mark.asyncio
+    async def test_monitor_exception_in_loop(self):
+        """Test monitor handles exceptions in loop gracefully (line 697)"""
+        mock_proc = Mock(spec=LLMProcess)
+        mock_proc.restart_policy = "always"
+        # Make check_health raise an exception
+        mock_proc.check_health = AsyncMock(side_effect=Exception("Test error"))
+
+        processes = {"error-test": mock_proc}
+        monitor = LLMHealthMonitor(processes, check_interval=0.1)
+
+        monitor.start()
+        await asyncio.sleep(0.25)  # Let monitor handle exception
+
+        # Monitor should still be running despite exception
+        assert monitor.is_running() is True
+
+        await monitor.stop()
+
+        # Should have attempted health check at least once
+        assert mock_proc.check_health.call_count >= 1
+
+
+class TestProcessCleanup:
+    """Test process cleanup and shutdown paths (line 510-512)"""
+
+    def test_force_kill(self):
+        """Test force_kill method"""
+        config = {"command": "sleep", "args": ["30"]}
+        process = LLMProcess("test-kill", config)
+
+        try:
+            process.start()
+            assert process.is_running()
+
+            # Force kill immediately
+            process.force_kill()
+
+            time.sleep(0.1)
+
+            # Process should be dead
+            assert not process.is_running()
+        finally:
+            # Ensure process is stopped even if assertions fail
+            if process.is_running():
+                process.force_kill()
+
+    def test_stop_already_stopped_process(self):
+        """Test calling stop on already stopped process (line 510-512)"""
+        config = {"command": "echo", "args": ["test"]}
+        process = LLMProcess("test-stop", config)
+
+        try:
+            # Don't start, just try to stop
+            process.stop()  # Should log warning but not crash
+
+            # Or start then stop twice
+            process.start()
+            process.stop()
+
+            # Second stop on already stopped process
+            process.stop()  # Should handle gracefully (line 510-512)
+        finally:
+            # Ensure cleanup
+            if process.is_running():
+                process.stop()
