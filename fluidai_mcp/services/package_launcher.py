@@ -159,7 +159,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
 
     @router.post(f"/{package_name}/mcp", tags=[package_name])
     async def proxy_jsonrpc(
-        request: Dict[str, Any] = Body(
+        request: Request,
+        request_body: Dict[str, Any] = Body(
             ...,
             example={
                 "jsonrpc": "2.0",
@@ -167,22 +168,50 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ),
+        token: str = Depends(get_token)
     ):
         try:
+            # Extract all headers from incoming HTTP request
+            all_headers = dict(request.headers)
+
+            logger.info(f"[{package_name}] Received request: method={request_body.get('method')}, has_headers={bool(all_headers)}")
+
+            # Only inject headers if this is a tools/call request
+            if request_body.get("method") == "tools/call" and all_headers:
+                params = request_body.get("params", {})
+                if "arguments" not in params:
+                    params["arguments"] = {}
+
+                logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
+                logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
+
+                params["arguments"]["headers"] = all_headers
+                request_body["params"] = params
+
+                logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
+
             # Convert dict to JSON string
-            msg = json.dumps(request)
+            msg = json.dumps(request_body)
+            logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
+
             process.stdin.write(msg + "\n")
             process.stdin.flush()
+
+            logger.debug(f"[{package_name}] Waiting for response from stdout...")
             response_line = process.stdout.readline()
+            logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
+
             return JSONResponse(content=json.loads(response_line))
         except Exception as e:
+            logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
             return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
     @router.post(f"/{package_name}/sse", tags=[package_name])
     async def sse_stream(
-        request: Dict[str, Any] = Body(
+        request: Request,
+        request_body: Dict[str, Any] = Body(
             ...,
             example={
                 "jsonrpc": "2.0",
@@ -190,12 +219,24 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
                 "method": "",
                 "params": {}
             }
-        ), token: str = Depends(get_token)
+        ),
+        token: str = Depends(get_token)
     ):
+        # Extract all headers from incoming HTTP request
+        all_headers = dict(request.headers)
+
+        # Only inject headers if this is a tools/call request
+        if request_body.get("method") == "tools/call" and all_headers:
+            params = request_body.get("params", {})
+            if "arguments" not in params:
+                params["arguments"] = {}
+            params["arguments"]["headers"] = all_headers
+            request_body["params"] = params
+
         async def event_generator() -> Iterator[str]:
             try:
                 # Convert dict to JSON string and send to MCP server
-                msg = json.dumps(request)
+                msg = json.dumps(request_body)
                 process.stdin.write(msg + "\n")
                 process.stdin.flush()
                 
@@ -256,24 +297,36 @@ def create_mcp_router(package_name: str, process: subprocess.Popen) -> APIRouter
         
     
     @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
-    async def call_tool(request_body: Dict[str, Any] = Body(
-        ...,
-        alias="params",
-        example={
-            "name": "", 
-        }
-    ), token: str = Depends(get_token)
-):      
+    async def call_tool(
+        request: Request,
+        request_body: Dict[str, Any] = Body(
+            ...,
+            alias="params",
+            example={
+                "name": "",
+            }
+        ),
+        token: str = Depends(get_token)
+    ):      
         params = request_body
 
         try:
             # Validate required fields
             if "name" not in params:
                 return JSONResponse(
-                    status_code=400, 
+                    status_code=400,
                     content={"error": "Tool name is required"}
                 )
-            
+
+            # Extract all headers from incoming HTTP request
+            all_headers = dict(request.headers)
+
+            # Only inject if headers actually exist
+            if all_headers:
+                if "arguments" not in params:
+                    params["arguments"] = {}
+                params["arguments"]["headers"] = all_headers
+
             # Construct complete JSON-RPC request
             request_payload = {
                 "jsonrpc": "2.0",
