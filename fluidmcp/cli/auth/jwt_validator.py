@@ -6,6 +6,7 @@ with caching to minimize external API calls.
 """
 
 import os
+import threading
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -28,6 +29,7 @@ class JWKSCache:
         self.ttl = timedelta(seconds=ttl_seconds)
         self._keys: Optional[Dict] = None
         self._expires_at: Optional[datetime] = None
+        self._lock = threading.Lock()  # Thread safety for cache access
 
     def get_signing_key(self, kid: str):
         """
@@ -42,14 +44,15 @@ class JWKSCache:
         Raises:
             ValueError: If key ID not found in JWKS
         """
-        # Refresh keys if cache is empty or expired
-        if self._keys is None or self._expires_at is None or datetime.utcnow() >= self._expires_at:
-            self._refresh_keys()
+        with self._lock:
+            # Refresh keys if cache is empty or expired
+            if self._keys is None or self._expires_at is None or datetime.utcnow() >= self._expires_at:
+                self._refresh_keys()
 
-        # Find key with matching kid
-        for key_data in self._keys.get("keys", []):
-            if key_data.get("kid") == kid:
-                return jwk.construct(key_data)
+            # Find key with matching kid
+            for key_data in self._keys.get("keys", []):
+                if key_data.get("kid") == kid:
+                    return jwk.construct(key_data)
 
         raise ValueError(f"Key ID {kid} not found in JWKS")
 
@@ -64,12 +67,13 @@ class JWKSCache:
             raise ValueError(f"Failed to fetch JWKS from {self.jwks_url}: {e}")
 
 
-# Global JWKS cache instance
+# Global JWKS cache instance with thread safety
 _jwks_cache: Optional[JWKSCache] = None
+_cache_lock = threading.Lock()
 
 
 def _get_jwks_cache() -> JWKSCache:
-    """Get or create global JWKS cache instance"""
+    """Get or create global JWKS cache instance (thread-safe)"""
     global _jwks_cache
 
     domain = os.getenv("FMCP_AUTH0_DOMAIN")
@@ -78,18 +82,29 @@ def _get_jwks_cache() -> JWKSCache:
 
     jwks_url = f"https://{domain}/.well-known/jwks.json"
 
-    if _jwks_cache is None or _jwks_cache.jwks_url != jwks_url:
-        _jwks_cache = JWKSCache(jwks_url)
+    with _cache_lock:
+        # Check if cache needs refresh (None, different URL, or expired)
+        needs_refresh = (
+            _jwks_cache is None or
+            _jwks_cache.jwks_url != jwks_url
+        )
 
-    return _jwks_cache
+        if needs_refresh:
+            _jwks_cache = JWKSCache(jwks_url)
+
+        return _jwks_cache
 
 
-async def validate_oauth_jwt(token: str) -> Dict[str, str]:
+async def validate_oauth_jwt(token: str, retry_on_key_error: bool = True) -> Dict[str, str]:
     """
     Validate Auth0 JWT token using JWKS endpoint.
 
+    If validation fails due to missing key, will refresh JWKS cache
+    and retry once to handle Auth0 key rotation.
+
     Args:
         token: JWT access token from Auth0
+        retry_on_key_error: If True, retry once on key not found errors (default: True)
 
     Returns:
         User context dictionary with:
@@ -138,6 +153,23 @@ async def validate_oauth_jwt(token: str) -> Dict[str, str]:
             "auth_method": "oauth"
         }
 
+    except ValueError as e:
+        # Handle stale JWKS cache - Auth0 may have rotated keys
+        if "Key ID" in str(e) and "not found" in str(e) and retry_on_key_error:
+            from loguru import logger
+            logger.warning(f"Key not found in JWKS cache, refreshing and retrying: {e}")
+
+            # Force cache refresh by invalidating cached keys
+            cache = _get_jwks_cache()
+            with cache._lock:
+                cache._keys = None
+                cache._expires_at = None
+
+            # Retry validation once with fresh keys
+            return await validate_oauth_jwt(token, retry_on_key_error=False)
+
+        # Re-raise for other ValueError cases or after retry
+        raise
     except ExpiredSignatureError:
         raise ValueError("Token has expired")
     except JWTClaimsError as e:

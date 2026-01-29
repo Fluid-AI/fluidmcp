@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, Response
 from loguru import logger
-from jose import jwt
 from .config import Auth0Config
 from .oauth_client import Auth0Client
 from .dependencies import get_current_user
@@ -51,22 +50,6 @@ def validate_state(state: str) -> bool:
         del _state_store[state]
         return True
     return False
-
-
-def create_jwt_token(user_info: dict) -> str:
-    """Create custom JWT token for authenticated user"""
-    jwt_secret = os.getenv("FMCP_JWT_SECRET", secrets.token_urlsafe(32))
-
-    payload = {
-        "sub": user_info.get("sub", user_info.get("user_id", "")),
-        "email": user_info.get("email", ""),
-        "name": user_info.get("name", ""),
-        "exp": datetime.utcnow() + timedelta(hours=24),
-        "iat": datetime.utcnow()
-    }
-
-    token = jwt.encode(payload, jwt_secret, algorithm="HS256")
-    return token
 
 
 def is_local_development() -> bool:
@@ -144,8 +127,12 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         # Get user info from Auth0
         user_info = oauth_client.get_user_info(tokens['access_token'])
 
-        # Create our custom JWT token
-        access_token = create_jwt_token(user_info)
+        # Use Auth0's id_token directly (RS256 signed by Auth0)
+        # This allows jwt_validator.py to validate it properly using JWKS
+        access_token = tokens.get('id_token') or tokens.get('access_token')
+
+        if not access_token:
+            raise ValueError("No id_token or access_token returned from Auth0")
 
         logger.info(f"OAuth login successful for user: {user_info.get('email', user_info.get('sub'))}")
 

@@ -11,7 +11,7 @@ import secrets
 import signal
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
@@ -121,7 +121,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     # Auto-expand CORS for OAuth environments
     if auth0_mode:
         from .auth.url_utils import get_cors_origins
-        auto_origins = get_cors_origins(8099)
+        auto_origins = get_cors_origins(port)
         allowed_origins = list(set((allowed_origins or []) + auto_origins))
         logger.info(f"OAuth mode: Auto-detected CORS origins: {auto_origins}")
 
@@ -408,7 +408,7 @@ async def main(args):
         secure_mode=args.secure,
         token=args.token,
         allowed_origins=allowed_origins,
-        auth0_mode=auth0_mode
+        auth0_mode=auth0_mode,
         host=args.host,
         port=args.port
     )
@@ -562,24 +562,34 @@ def run():
 
     # Generate and save token if secure mode enabled but no token provided
     if args.secure and not args.token:
-        args.token = secrets.token_urlsafe(32)
-        logger.info(f"Generated bearer token: {args.token}")
+        # Check if token file exists first (for persistence across restarts)
+        token_file = Path.home() / ".fmcp" / "tokens" / "current_token.txt"
 
-        # Save to secure file
-        token_file = save_token_to_file(args.token)
+        if token_file.exists():
+            # Use existing token
+            args.token = token_file.read_text().strip()
+            logger.info(f"Using existing bearer token from: {token_file}")
+            logger.info(f"Token (starts with: {args.token[:4]}****)")
+        else:
+            # Generate new token
+            args.token = secrets.token_urlsafe(32)
+            logger.info(f"Generated bearer token: {args.token}")
 
-        # Print full token to console (NOT in logs)
-        print("\n" + "="*70)
-        print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-        print("="*70)
-        print(f"\n{args.token}\n")
-        print("="*70)
-        print(f"Token saved to: {token_file}")
-        print("To retrieve later: fluidmcp token show")
-        print("="*70 + "\n")
+            # Save to secure file
+            token_file = save_token_to_file(args.token)
 
-        # Only log masked version
-        logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
+            # Print full token to console (NOT in logs)
+            print("\n" + "="*70)
+            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
+            print("="*70)
+            print(f"\n{args.token}\n")
+            print("="*70)
+            print(f"Token saved to: {token_file}")
+            print("To retrieve later: fluidmcp token show")
+            print("="*70 + "\n")
+
+            # Only log masked version
+            logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
 
     try:
         asyncio.run(main(args))

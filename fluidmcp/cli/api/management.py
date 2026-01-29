@@ -16,6 +16,7 @@ import re
 import asyncio
 
 from ..auth import get_token, security
+from ..auth.dependencies import get_current_user
 
 # Environment variable validation patterns and constants
 ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
@@ -45,110 +46,6 @@ def sanitize_error_message(error_msg: str) -> str:
     sanitized = re.sub(r'at /.+?:\d+', 'at <sanitized>', sanitized)
 
     return sanitized
-
-
-def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate bearer token if secure mode is enabled"""
-    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
-    if not secure_mode:
-        return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
-        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
-    return credentials.credentials
-
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """
-    Extract user from OAuth JWT or bearer token.
-
-    Returns user context dict with user_id, email, name, auth_method.
-
-    This dependency checks for both OAuth and bearer token authentication
-    modes and validates tokens accordingly.
-
-    Returns:
-        User context dictionary with:
-        - user_id: Unique user identifier
-        - email: User's email address (None for bearer tokens)
-        - name: User's display name
-        - auth_method: 'oauth', 'bearer', or 'none'
-    """
-    import asyncio
-    from typing import Dict, Optional
-
-    auth0_mode = os.environ.get("FMCP_AUTH0_MODE") == "true"
-    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
-    # Anonymous mode - no authentication required
-    if not auth0_mode and not secure_mode:
-        return {
-            "user_id": "anonymous",
-            "email": None,
-            "name": "Anonymous",
-            "auth_method": "none"
-        }
-
-    # Authentication required but no credentials provided
-    if not credentials:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required. Please provide a valid token."
-        )
-
-    token = credentials.credentials
-
-    # Try OAuth JWT validation first (if enabled)
-    if auth0_mode:
-        try:
-            from ..auth.jwt_validator import validate_oauth_jwt
-            user = await validate_oauth_jwt(token)
-            logger.debug(f"OAuth authentication successful for user: {user['user_id']}")
-            return user
-        except Exception as e:
-            logger.warning(f"OAuth JWT validation failed: {e}")
-            # Fall through to try bearer token if secure mode also enabled
-            if not secure_mode:
-                raise HTTPException(
-                    status_code=401,
-                    detail=f"Invalid or expired OAuth token: {str(e)}"
-                )
-
-    # Try bearer token validation (if enabled)
-    if secure_mode:
-        bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
-        if not bearer_token:
-            raise HTTPException(
-                status_code=500,
-                detail="Bearer token authentication is enabled but FMCP_BEARER_TOKEN is not set"
-            )
-
-        if token == bearer_token:
-            logger.debug("Bearer token authentication successful")
-            return {
-                "user_id": f"bearer_{token[:8]}",
-                "email": None,
-                "name": f"Bearer User {token[:8]}",
-                "auth_method": "bearer"
-            }
-    # For now, use token as user ID (simple approach)
-    # TODO: Implement proper JWT authentication with role claims
-    # Current implementation uses first 8 chars of token (~33 bits entropy)
-    # which is insufficient for production security. Replace with JWT decode
-    # to extract user_id/email/role claims.
-    token = credentials.credentials
-
-    # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users but provides weak security
-    user_id = f"user_{token[:8]}"
-
-    # No valid authentication method succeeded
-    raise HTTPException(
-        status_code=401,
-        detail="Invalid or expired token"
-    )
 
 
 def get_server_manager(request: Request):

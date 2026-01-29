@@ -5,7 +5,6 @@ This module handles URL generation for local, Codespaces, and remote environment
 """
 
 import os
-from typing import Optional
 
 
 def get_base_url(port: int = 8099) -> str:
