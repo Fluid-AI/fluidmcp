@@ -10,6 +10,7 @@ Metrics exposed:
 - Histograms: request_duration_seconds, tool_execution_seconds
 """
 
+import math
 import time
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
@@ -150,9 +151,6 @@ class Histogram(Metric):
         # Validate input type
         if not isinstance(value, (int, float)):
             return  # Silently ignore invalid types
-
-        # Import math for validation
-        import math
 
         # Reject NaN, Inf, and negative values
         if math.isnan(value) or math.isinf(value) or value < 0:
