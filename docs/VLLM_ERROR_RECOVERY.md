@@ -50,7 +50,7 @@ Configure restart behavior in your FluidMCP configuration:
 **`restart_policy`** (string, default: `"no"`)
 - `"no"` - Never restart automatically
 - `"on-failure"` - Restart only on crashes or health check failures
-- `"always"` - Restart whenever process stops (planned for future)
+- `"always"` - Restart whenever process stops, regardless of exit reason
 
 **`max_restarts`** (integer, default: `3`)
 - Maximum number of restart attempts
@@ -59,8 +59,13 @@ Configure restart behavior in your FluidMCP configuration:
 
 **`restart_delay`** (integer, default: `5`)
 - Base delay in seconds between restarts
-- Actual delay uses exponential backoff: `delay * (2 ^ attempt)`
-- Example: 5s, 10s, 20s, 40s, 80s, 160s
+- Actual delay uses exponential backoff: `restart_delay * (2 ^ (attempt - 1))`
+- Where `attempt` is the restart attempt number starting at 1
+- Example with restart_delay=5:
+  - Attempt 1 → 5s (5 * 2^0)
+  - Attempt 2 → 10s (5 * 2^1)
+  - Attempt 3 → 20s (5 * 2^2)
+  - Attempt 4 → 40s (5 * 2^3)
 
 **`health_check_timeout`** (float, default: `10.0`)
 - Timeout in seconds for health check HTTP requests

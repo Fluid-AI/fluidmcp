@@ -8,6 +8,7 @@ Includes error recovery, health checks, and automatic restart capabilities.
 """
 
 import os
+import re
 import subprocess
 import time
 import asyncio
@@ -25,6 +26,37 @@ MAX_BACKOFF_EXPONENT = 5  # Maximum exponential backoff exponent (caps at 2^5 = 
 HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
+
+
+def sanitize_model_id(model_id: str) -> str:
+    """
+    Sanitize model ID to prevent path traversal attacks.
+
+    Removes or replaces characters that could be used for directory traversal
+    or other malicious file system operations.
+
+    Args:
+        model_id: Raw model identifier from user input
+
+    Returns:
+        Sanitized model ID safe for use in file paths
+
+    Examples:
+        >>> sanitize_model_id("../../etc/passwd")
+        '______etc_passwd'
+        >>> sanitize_model_id("normal-model_123")
+        'normal-model_123'
+        >>> sanitize_model_id("")
+        'unnamed_model'
+    """
+    # Replace any character that's not alphanumeric, underscore, or hyphen
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', model_id)
+    # Extra safety: replace any remaining .. sequences
+    sanitized = sanitized.replace('..', '_')
+    # Ensure we have a non-empty result
+    if not sanitized:
+        sanitized = 'unnamed_model'
+    return sanitized
 
 
 class LLMProcess:
@@ -122,10 +154,13 @@ class LLMProcess:
         logger.debug(f"Command: {' '.join(full_command)}")
 
         # Create log file for stderr to aid debugging startup failures
+        # Sanitize model_id to prevent path traversal attacks (Issue #1)
+        safe_model_id = sanitize_model_id(self.model_id)
         log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
         os.makedirs(log_dir, exist_ok=True)
-        stderr_log_path = os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+        stderr_log_path = os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
+        # Fix Issue #4: Properly handle file handle leak if Popen fails
         stderr_log = None
         try:
             # Open stderr log file for capturing process errors
@@ -140,6 +175,7 @@ class LLMProcess:
 
             # Store log file handle for cleanup in stop()
             self._stderr_log = stderr_log
+            stderr_log = None  # Transfer ownership, don't close in finally
 
             # Track start time for uptime calculation
             self.start_time = time.time()
@@ -149,17 +185,16 @@ class LLMProcess:
             return self.process
 
         except FileNotFoundError:
-            # Close file handle if Popen failed before it could take ownership
-            if stderr_log and not self._stderr_log:
-                stderr_log.close()
             logger.error(f"Command '{command}' not found. Is {command} installed?")
             raise
         except Exception as e:
-            # Close file handle if Popen failed before it could take ownership
-            if stderr_log and not self._stderr_log:
-                stderr_log.close()
             logger.error(f"Failed to start LLM model '{self.model_id}': {e}")
             raise
+        finally:
+            # Issue #4 fix: Close file handle if it wasn't transferred to self._stderr_log
+            # This ensures no file handle leak if Popen fails
+            if stderr_log is not None:
+                stderr_log.close()
 
     def stop(self, timeout: Optional[int] = None):
         """
@@ -394,8 +429,22 @@ class LLMProcess:
 
         # Check if process is dead
         if not self.is_running():
-            if self.restart_policy in ("on-failure", "always"):
+            # Issue #6 fix: "always" restarts regardless of exit code
+            if self.restart_policy == "always":
                 return True
+
+            # Issue #6 fix: "on-failure" only restarts on non-zero exit (actual failure)
+            if self.restart_policy == "on-failure":
+                if self.process and self.process.poll() is not None:
+                    returncode = self.process.poll()
+                    # Only restart on non-zero exit code (failure)
+                    if returncode != 0:
+                        logger.info(f"Process '{self.model_id}' exited with code {returncode}, restarting...")
+                        return True
+                    else:
+                        logger.info(f"Process '{self.model_id}' exited cleanly (code 0), not restarting")
+                        return False
+                return True  # If we can't determine exit code, restart to be safe
 
         # Check if consecutive health failures exceeded threshold
         if self.consecutive_health_failures >= HEALTH_CHECK_FAILURES_THRESHOLD:
@@ -553,6 +602,8 @@ class LLMHealthMonitor:
         self.check_interval = check_interval
         self._monitor_task: Optional[asyncio.Task] = None
         self._running = False
+        # Issue #5 fix: Track restarts in progress to prevent multiple simultaneous restarts
+        self._restarts_in_progress: set = set()
 
     async def _monitor_loop(self):
         """Main monitoring loop - runs continuously until stopped."""
@@ -585,18 +636,30 @@ class LLMHealthMonitor:
 
                         # Check if restart is needed
                         if process.needs_restart():
+                            # Issue #5 fix: Only start restart if not already in progress
+                            if model_id in self._restarts_in_progress:
+                                logger.debug(f"Restart already in progress for '{model_id}', skipping")
+                                continue
+
                             logger.warning(f"LLM model '{model_id}' needs restart")
 
-                            # Attempt automatic restart
-                            success = await process.attempt_restart()
+                            # Mark restart as in progress
+                            self._restarts_in_progress.add(model_id)
 
-                            if success:
-                                logger.info(f"LLM model '{model_id}' recovered successfully")
-                            else:
-                                logger.error(
+                            try:
+                                # Attempt automatic restart
+                                success = await process.attempt_restart()
+
+                                if success:
+                                    logger.info(f"LLM model '{model_id}' recovered successfully")
+                                else:
+                                    logger.error(
                                     f"LLM model '{model_id}' failed to recover. "
                                     f"Restart count: {process.restart_count}/{process.max_restarts}"
                                 )
+                            finally:
+                                # Issue #5 fix: Always remove from in-progress set
+                                self._restarts_in_progress.discard(model_id)
 
                     except Exception as e:
                         logger.error(f"Error monitoring LLM model '{model_id}': {e}", exc_info=True)

@@ -1009,12 +1009,12 @@ class TestCUDAOOMDetection:
             # Modify log file (add OOM error)
             log_file.write_text("CUDA out of memory\n")
 
-            # Second call within TTL - should use cache (still returns False)
+            # Second call within TTL - cache invalidated because file mtime changed
             with patch("time.time", return_value=time.time() + 10):  # 10s later, within 60s TTL
                 result2 = process.check_for_cuda_oom()
 
         assert result1 is False
-        assert result2 is False  # Cache hit, doesn't see new OOM error
+        assert result2 is True  # Cache invalidated due to file modification, detects OOM
 
     def test_check_for_cuda_oom_cache_invalidation_after_ttl(self, tmp_path):
         """Test cache invalidation after 60s TTL"""

@@ -940,7 +940,8 @@ async def get_llm_model_status(
         "uptime_seconds": process.get_uptime(),
         "last_restart_time": process.last_restart_time,
         "last_health_check_time": process.last_health_check_time,
-        "has_cuda_oom": process.check_for_cuda_oom()
+        # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
+        "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }
 
 
@@ -1138,5 +1139,6 @@ async def trigger_health_check(
         "health_message": error_msg,
         "consecutive_health_failures": process.consecutive_health_failures,
         "last_health_check_time": process.last_health_check_time,
-        "has_cuda_oom": process.check_for_cuda_oom()
+        # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
+        "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }
