@@ -6,6 +6,7 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
 import { ServerEnvForm } from "../components/ServerEnvForm";
 import apiClient from "../services/api";
+import { showSuccess, showError, showInfo, showLoading } from "../services/toast";
 
 export default function ServerDetails() {
   const { serverId } = useParams<{ serverId: string }>();
@@ -57,33 +58,51 @@ export default function ServerDetails() {
   const shouldExpandEnvForm = needsEnv && !hasInstanceEnv;
 
   const handleStartServer = async () => {
+    const toastId = `server-${serverId}`;
+    const serverName = serverDetails?.name || serverId;
+
     setActionLoading('start');
+    showLoading(`Starting server "${serverName}"...`, toastId);
+
     try {
       await startServer();
+      showSuccess(`Server "${serverName}" started successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to start server');
+      showError(err instanceof Error ? err.message : 'Failed to start server', toastId);
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleStopServer = async () => {
+    const toastId = `server-${serverId}`;
+    const serverName = serverDetails?.name || serverId;
+
     setActionLoading('stop');
+    showLoading(`Stopping server "${serverName}"...`, toastId);
+
     try {
       await stopServer();
+      showSuccess(`Server "${serverName}" stopped successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to stop server');
+      showError(err instanceof Error ? err.message : 'Failed to stop server', toastId);
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleRestartServer = async () => {
+    const toastId = `server-${serverId}`;
+    const serverName = serverDetails?.name || serverId;
+
     setActionLoading('restart');
+    showLoading(`Restarting server "${serverName}"...`, toastId);
+
     try {
       await restartServer();
+      showSuccess(`Server "${serverName}" restarted successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to restart server');
+      showError(err instanceof Error ? err.message : 'Failed to restart server', toastId);
     } finally {
       setActionLoading(null);
     }
@@ -92,7 +111,10 @@ export default function ServerDetails() {
   const handleEnvSubmit = async (env: Record<string, string>) => {
     if (!serverId) return;
 
+    const toastId = `env-${serverId}`;
+
     setEnvSubmitting(true);
+    showLoading('Saving environment variables and restarting server...', toastId);
 
     try {
       await updateEnv(env);
@@ -125,13 +147,13 @@ export default function ServerDetails() {
       // Collapse form after successful update
       setEnvFormExpanded(false);
 
-      if (toolsFound) {
-        alert('Environment variables saved and server restarted successfully. Tools are now available!');
-      } else {
-        alert('Environment variables saved and server restarted successfully. Tools may take a moment to appear.');
-      }
+      // Show success toast
+      showSuccess('Environment variables saved and server restarted successfully', toastId);
+
+      // Show info toast about tools
+      showInfo('Tools may take a few seconds to appear.');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update environment variables');
+      showError(err instanceof Error ? err.message : 'Failed to update environment variables', toastId);
       throw err; // Re-throw so form knows it failed
     } finally {
       setEnvSubmitting(false);
