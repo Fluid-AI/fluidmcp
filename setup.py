@@ -18,20 +18,23 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Fluid-AI/fluidmcp",
-    packages=find_packages(),
+    packages=['fluidmcp', 'fluidmcp.services', 'fluidmcp.models'],
+    package_dir={'fluidmcp': 'fluidmcp/cli'},
     include_package_data=True,
     install_requires=[
         "requests",
         "loguru",
         "pathlib",
         "psutil",
-        "boto3"  # Added boto3 for S3 operations
+        "boto3",  # Added boto3 for S3 operations
+        "fastapi",
+        "uvicorn"
     ],
     entry_points={
         'console_scripts': [
-            'fluidai-mcp=fluidai_mcp.cli:main',
-            'fluidmcp=fluidai_mcp.cli:main',
-            'fmcp=fluidai_mcp.cli:main',
+            'fluidai-mcp=fluidmcp:main',
+            'fluidmcp=fluidmcp:main',
+            'fmcp=fluidmcp:main',
         ]
     },
     classifiers=[

@@ -1,11 +1,13 @@
 annotated-types==0.7.0
 anyio==4.9.0
+asyncio==3.4.3
 boto3==1.38.10
 botocore==1.38.10
 certifi==2025.4.26
 charset-normalizer==3.4.2
 click==8.1.8
 distro==1.9.0
+dnspython==2.4.2
 exceptiongroup==1.2.2
 fastapi==0.115.12
 h11==0.16.0
@@ -17,12 +19,18 @@ jiter==0.9.0
 jmespath==1.0.1
 loguru==0.7.3
 mcp==1.7.1
+motor==3.7.1
 openai==1.77.0
 pathlib==1.0.1
 psutil==7.0.0
 pydantic==2.11.4
+pytest==8.3.4
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+pytest-xdist==3.6.1
 pydantic-settings==2.9.1
 pydantic_core==2.33.2
+pymongo==4.11.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
 python-multipart==0.0.20
@@ -38,4 +46,3 @@ typing_extensions==4.13.2
 urllib3==2.4.0
 uvicorn==0.34.2
 uv==0.7.2
-asyncio==3.4.3
