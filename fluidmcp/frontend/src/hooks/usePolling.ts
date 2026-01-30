@@ -52,7 +52,6 @@ export function usePolling(): PollingResult {
 
       return new Promise((resolve) => {
         setIsPolling(true);
-        const startTime = Date.now();
 
         // Timeout handler
         timeoutRef.current = setTimeout(() => {
@@ -71,13 +70,6 @@ export function usePolling(): PollingResult {
               onSuccess?.();
               resolve(true);
               return;
-            }
-
-            // Check if timeout exceeded
-            if (Date.now() - startTime >= timeout) {
-              stopPolling();
-              onTimeout?.();
-              resolve(false);
             }
           } catch (error) {
             stopPolling();

@@ -1,5 +1,5 @@
 import { usePolling } from './usePolling';
-import { apiClient } from '../services/api';
+import apiClient from '../services/api';
 
 interface ServerPollingOptions {
   expectedState?: 'running' | 'stopped';

@@ -48,14 +48,6 @@ export default function ServerDetails() {
   const hasInstanceEnv = envMetadata && needsEnv &&
     Object.keys(configEnv).every(key => envMetadata[key]?.present === true);
 
-  // Debug logging
-  console.log('[ServerDetails] Env Check:', {
-    needsEnv,
-    hasInstanceEnv,
-    configEnvKeys: Object.keys(configEnv),
-    envMetadata
-  });
-
   // Auto-expand env form if server needs env but doesn't have instance env yet
   const shouldExpandEnvForm = needsEnv && !hasInstanceEnv;
 
