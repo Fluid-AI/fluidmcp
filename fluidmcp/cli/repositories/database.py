@@ -584,6 +584,9 @@ class DatabaseManager(PersistenceBackend):
         """
         Update environment variables in server instance.
 
+        Creates an instance record if it doesn't exist yet (upsert).
+        This allows setting env vars before the server is first started.
+
         Args:
             server_id: Server identifier
             env: Dict of environment variables to set
@@ -598,15 +601,20 @@ class DatabaseManager(PersistenceBackend):
                     "$set": {
                         "env": env,
                         "updated_at": datetime.utcnow()
+                    },
+                    "$setOnInsert": {
+                        "server_id": server_id,
+                        "created_at": datetime.utcnow()
                     }
-                }
+                },
+                upsert=True
             )
 
-            if result.matched_count == 0:
-                logger.warning(f"No instance found for server '{server_id}'")
-                return False
+            if result.upserted_id:
+                logger.debug(f"Created new instance with env for server: {server_id}")
+            else:
+                logger.debug(f"Updated instance env for server: {server_id}")
 
-            logger.debug(f"Updated instance env for server: {server_id}")
             return True
 
         except Exception as e:

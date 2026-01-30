@@ -470,6 +470,13 @@ class ServerManager:
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
 
+            # Load instance-specific env vars (user's API keys, etc.)
+            # These override config env vars
+            instance_env = await self.db.get_instance_env(id)
+            if instance_env:
+                logger.debug(f"Merging instance env for server '{id}': {len(instance_env)} vars")
+                env_vars = {**env_vars, **instance_env}
+
             # Get display name
             name = config.get("name", id)
 

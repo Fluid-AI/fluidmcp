@@ -852,13 +852,11 @@ async def update_server_instance_env(
         if not isinstance(key, str) or not isinstance(value, str):
             raise HTTPException(400, "Environment variable keys and values must be strings")
 
-    # Update instance env in database
+    # Update instance env in database (upserts if instance doesn't exist)
     success = await manager.db.update_instance_env(id, env)
 
     if not success:
-        # If no instance exists yet, we still return success
-        # The env will be used when the server starts
-        logger.info(f"No instance exists yet for '{id}', env will be used on next start")
+        raise HTTPException(500, "Failed to update environment variables")
 
     logger.info(f"Updated instance env for server '{id}'")
     return {
