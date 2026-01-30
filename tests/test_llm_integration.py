@@ -1,12 +1,13 @@
 """
-Integration tests for LLM launcher module.
+Integration tests for the LLM launcher module.
 
-Tests the complete lifecycle of LLM servers including startup, health checks,
-error recovery, and graceful shutdown with mock processes.
+Tests the lifecycle of LLM servers using mock processes, including startup,
+graceful shutdown, process state tracking, configuration validation, environment
+filtering, and basic command/log handling.
 
 Note: These tests verify core functionality that exists in the actual implementation.
-Some advanced features may not be fully tested here as they require the complete
-runtime environment.
+Some advanced features (such as health checks and advanced error recovery) may not
+be fully tested here as they require the complete runtime environment.
 """
 
 import pytest
@@ -134,11 +135,12 @@ class TestLLMProcessLifecycle:
         # Should not raise any errors
         assert not llm_process.is_running()
 
+    @patch('fluidmcp.cli.services.llm_launcher.logger')
     @patch('subprocess.Popen')
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_command_sanitization_in_logs(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
+    def test_command_sanitization_in_logs(self, mock_chmod, mock_open, mock_makedirs, mock_popen, mock_logger):
         """Test that sensitive data in commands is sanitized in logs."""
         config = {
             "command": "vllm",
@@ -155,9 +157,15 @@ class TestLLMProcessLifecycle:
         llm_process = LLMProcess("test", config)
         llm_process.start()
 
-        # Command should have been sanitized before logging
-        # (This is verified by the command sanitization tests in test_llm_security.py)
-        assert mock_popen.called
+        # Verify logger.debug was called with sanitized command
+        mock_logger.debug.assert_called()
+        debug_calls = [str(call) for call in mock_logger.debug.call_args_list]
+        logged_output = ' '.join(debug_calls)
+
+        # Sensitive values should be redacted
+        assert "secret123" not in logged_output
+        assert "abc" not in logged_output
+        assert "***REDACTED***" in logged_output
 
 
 class TestProcessState:

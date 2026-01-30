@@ -506,7 +506,7 @@ Consider rate limiting management APIs in production:
 
 FluidMCP automatically sanitizes sensitive data in logs to prevent credential leakage:
 
-**Automatic Sanitization (v1.0+):**
+**Automatic Sanitization:**
 - Command-line arguments containing API keys, tokens, passwords are redacted
 - Sensitive patterns detected: `api-key`, `token`, `secret`, `password`, `auth`, `credential`
 - Supports both `--flag value` and `--flag=value` formats

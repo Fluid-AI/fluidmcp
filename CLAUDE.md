@@ -297,9 +297,9 @@ Add LLM models to your config using the `llmModels` section:
 - User-provided env vars from config always included (explicit configuration)
 
 **Log Security**:
-- Stderr logs stored in `~/.fluidmcp/logs/llm_{model_id}_stderr.log`
+- Stderr logs stored in `~/.fluidmcp/logs/llm_{sanitized_model_id}_stderr.log`
 - File permissions set to `0o600` (owner read/write only)
-- Model ID sanitized to prevent path traversal attacks
+- Model ID sanitized (and used in the filename) to prevent path traversal attacks
 
 ### Example Configurations
 
