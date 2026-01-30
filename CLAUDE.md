@@ -292,8 +292,9 @@ Add LLM models to your config using the `llmModels` section:
 - Example: `vllm serve --api-key sk-secret123` → `vllm serve --api-key ***REDACTED***`
 
 **Environment Filtering**:
-- Only allowlisted system environment variables passed to subprocess
-- Allowlist: `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- Only allowlisted system environment variables passed to subprocess (case-insensitive matching)
+- Allowlist (Unix-like): `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- Additional Windows allowlist entries: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`
 - User-provided env vars from config always included (explicit configuration)
 
 **Log Security**:

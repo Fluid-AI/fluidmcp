@@ -54,7 +54,19 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         >>> sanitize_command_for_logging(["vllm", "--api-key", "secret123"])
         'vllm --api-key ***REDACTED***'
     """
-    sensitive_patterns = ['key', 'token', 'secret', 'password', 'auth', 'credential']
+    # Specific credential-related patterns to avoid false positives
+    # These patterns match complete segments after hyphens/underscores
+    sensitive_patterns = [
+        'api-key', 'apikey', 'api_key',           # API keys
+        'access-key', 'accesskey', 'access_key',  # Access keys
+        'secret-key', 'secretkey', 'secret_key',  # Secret keys
+        'auth-key', 'authkey', 'auth_key',        # Auth keys
+        'token', 'auth-token', 'access-token',    # Tokens
+        'secret',                                  # Secrets
+        'password', 'passwd', 'pwd',              # Passwords
+        'auth', 'authentication',                 # Authentication
+        'credential', 'credentials',              # Credentials
+    ]
 
     safe_command = []
     redact_next = False
@@ -368,7 +380,7 @@ class LLMProcess:
 
     async def check_health(self) -> Tuple[bool, Optional[str]]:
         """
-        Check if the vLLM server is healthy by querying HTTP endpoints.
+        Check if the LLM server is healthy by querying HTTP endpoints.
 
         Returns:
             Tuple of (is_healthy, error_message)
@@ -413,7 +425,8 @@ class LLMProcess:
     def get_stderr_log_path(self) -> str:
         """Get the path to the stderr log file."""
         log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
-        return os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+        safe_model_id = sanitize_model_id(self.model_id)
+        return os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
     def check_for_cuda_oom(self) -> bool:
         """
@@ -656,7 +669,7 @@ def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
             else:
                 # Only add successfully running processes
                 processes[model_id] = process
-                logger.info(f"✓ LLM model '{model_id}' is running")
+                logger.info(f"LLM model '{model_id}' is running")
 
         except Exception as e:
             logger.error(f"Failed to launch LLM model '{model_id}': {e}")
@@ -756,9 +769,9 @@ class LLMHealthMonitor:
                                     logger.info(f"LLM model '{model_id}' recovered successfully")
                                 else:
                                     logger.error(
-                                    f"LLM model '{model_id}' failed to recover. "
-                                    f"Restart count: {process.restart_count}/{process.max_restarts}"
-                                )
+                                        f"LLM model '{model_id}' failed to recover. "
+                                        f"Restart count: {process.restart_count}/{process.max_restarts}"
+                                    )
                             finally:
                                 # Issue #5 fix: Always remove from in-progress set
                                 self._restarts_in_progress.discard(model_id)

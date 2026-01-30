@@ -255,10 +255,10 @@ POST /api/llm/models/{model_id}/health-check
 The system automatically detects CUDA OOM errors in stderr logs:
 
 ```python
-# Detection patterns:
+# Detection patterns (case-insensitive):
 - "cuda out of memory"
-- "cudaerror"
-- "out of memory"
+- "cudaerror: out of memory"
+- "cuda error: out of memory"
 ```
 
 When detected:
@@ -309,7 +309,7 @@ See [MONITORING.md](MONITORING.md) for complete metrics documentation.
 
 **Check restart count:**
 ```bash
-curl http://localhost:8099/llm/models/vllm
+curl http://localhost:8099/api/llm/models/vllm
 ```
 
 If `restart_count >= max_restarts`:
@@ -322,7 +322,7 @@ If `restart_count >= max_restarts`:
 
 **Check for OOM:**
 ```bash
-curl http://localhost:8099/llm/models/vllm | jq '.has_cuda_oom'
+curl http://localhost:8099/api/llm/models/vllm | jq '.has_cuda_oom'
 ```
 
 **Solutions:**
@@ -340,7 +340,7 @@ curl http://localhost:8099/llm/models/vllm | jq '.has_cuda_oom'
 
 **Manual health check:**
 ```bash
-curl -X POST http://localhost:8099/llm/models/vllm/health-check
+curl -X POST http://localhost:8099/api/llm/models/vllm/health-check
 ```
 
 **Common causes:**
@@ -376,7 +376,7 @@ curl -X POST http://localhost:8099/llm/models/vllm/health-check
 
 ```bash
 # Cron job to check health every 5 minutes
-*/5 * * * * curl -sf http://localhost:8099/llm/models/vllm | jq '.is_healthy' || echo "vLLM unhealthy!"
+*/5 * * * * curl -sf http://localhost:8099/api/llm/models/vllm | jq '.is_healthy' || echo "vLLM unhealthy!"
 ```
 
 ### 3. Set Up Alerts
@@ -390,20 +390,20 @@ Use Prometheus + Alertmanager to alert on:
 
 ```bash
 # Get recent errors
-curl http://localhost:8099/llm/models/vllm/logs?lines=100 | jq -r '.lines[]' | grep ERROR
+curl http://localhost:8099/api/llm/models/vllm/logs?lines=100 | jq -r '.lines[]' | grep ERROR
 ```
 
 ### 5. Test Recovery Scenarios
 
 ```bash
 # Test crash recovery
-curl -X POST "http://localhost:8099/llm/models/vllm/stop?force=true"
+curl -X POST "http://localhost:8099/api/llm/models/vllm/stop?force=true"
 
 # Wait 30 seconds for health check
 sleep 30
 
 # Verify automatic restart
-curl http://localhost:8099/llm/models/vllm | jq '.restart_count'
+curl http://localhost:8099/api/llm/models/vllm | jq '.restart_count'
 ```
 
 ## Architecture
@@ -493,7 +493,7 @@ export FMCP_BEARER_TOKEN="your-secret-token"
 export FMCP_SECURE_MODE="true"
 
 curl -H "Authorization: Bearer your-secret-token" \
-  http://localhost:8099/llm/models
+  http://localhost:8099/api/llm/models
 ```
 
 ### Rate Limiting
@@ -513,8 +513,9 @@ FluidMCP automatically sanitizes sensitive data in logs to prevent credential le
 - Example: `vllm serve --api-key sk-secret123` → `vllm serve --api-key ***REDACTED***`
 
 **Environment Variable Filtering:**
-- System environment variables filtered to allowlist only
-- Allowlist: `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- System environment variables filtered to an allowlist only (case-insensitive matching)
+- Allowlist (Unix-like): `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- Additional Windows allowlist entries: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`
 - User-provided env vars from config always included (explicit configuration)
 
 **Log File Security:**
