@@ -774,6 +774,20 @@ async def get_server_instance_env(request: Request, id: str):
     Returns:
         Dict of env var names to metadata
     """
+    def is_placeholder(value: str) -> bool:
+        """Check if environment variable value is a placeholder."""
+        if not isinstance(value, str):
+            return False
+        placeholder_indicators = [
+            '<' in value and '>' in value,
+            'xxxx' in value.lower(),
+            'placeholder' in value.lower(),
+            value.startswith('<') and value.endswith('>'),
+            'your-' in value.lower(),
+            'my-' in value.lower(),
+        ]
+        return any(placeholder_indicators)
+
     manager = get_server_manager(request)
 
     # Get server config to determine required env vars
@@ -794,7 +808,9 @@ async def get_server_instance_env(request: Request, id: str):
 
     # Add all config env vars (these are the ones we expect)
     for key in config_env.keys():
-        has_value = key in instance_env and instance_env[key]
+        # Check if key exists in instance env with a non-empty, non-placeholder value
+        value = instance_env.get(key, "")
+        has_value = bool(value and value.strip() and not is_placeholder(value))
         metadata[key] = {
             "present": has_value,
             "required": True,  # All env vars in config are considered required
@@ -803,12 +819,13 @@ async def get_server_instance_env(request: Request, id: str):
         }
 
     # Add any instance env vars not in config (user-added)
-    for key in instance_env.keys():
+    for key, value in instance_env.items():
         if key not in metadata:
+            has_value = bool(value and value.strip() and not is_placeholder(value))
             metadata[key] = {
-                "present": True,
+                "present": has_value,
                 "required": False,
-                "masked": "****",
+                "masked": "****" if has_value else None,
                 "description": "Custom environment variable"
             }
 
@@ -852,16 +869,97 @@ async def update_server_instance_env(
         if not isinstance(key, str) or not isinstance(value, str):
             raise HTTPException(400, "Environment variable keys and values must be strings")
 
+    # Filter out placeholder values before saving
+    # This prevents saving config defaults like "YOUR_API_KEY_HERE"
+    def is_placeholder(value: str) -> bool:
+        """Check if environment variable value is a placeholder."""
+        if not isinstance(value, str):
+            return False
+        placeholder_indicators = [
+            '<' in value and '>' in value,
+            'xxxx' in value.lower(),
+            'placeholder' in value.lower(),
+            value.startswith('<') and value.endswith('>'),
+            'your-' in value.lower(),
+            'my-' in value.lower(),
+        ]
+        return any(placeholder_indicators)
+
+    # Only save non-placeholder, non-empty values
+    filtered_env = {
+        k: v for k, v in env.items()
+        if v and v.strip() and not is_placeholder(v)
+    }
+
+    if not filtered_env:
+        raise HTTPException(400, "No valid environment variables provided (all values were empty or placeholders)")
+
     # Update instance env in database (upserts if instance doesn't exist)
-    success = await manager.db.update_instance_env(id, env)
+    success = await manager.db.update_instance_env(id, filtered_env)
 
     if not success:
         raise HTTPException(500, "Failed to update environment variables")
 
     logger.info(f"Updated instance env for server '{id}'")
+
+    # If server is running, restart it to apply new env vars
+    if id in manager.processes:
+        process = manager.processes[id]
+        if process.poll() is None:  # Still running
+            logger.info(f"Restarting server '{id}' to apply new environment variables")
+            restart_success = await manager.restart_server(id)
+            if not restart_success:
+                raise HTTPException(500, f"Failed to restart server '{id}' after updating env")
+
     return {
         "message": f"Environment variables updated for server '{id}'",
         "env_updated": True
+    }
+
+
+@router.delete("/servers/{id}/instance/env")
+async def delete_server_instance_env(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Delete all environment variables from a server instance.
+
+    This clears user-configured env vars, useful for testing or resetting.
+    Does not affect the server_config template.
+
+    Args:
+        id: Server identifier
+
+    Returns:
+        Success message
+    """
+    manager = get_server_manager(request)
+
+    # Check if server exists
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Clear instance env by deleting the env field from the instance
+    try:
+        result = await manager.db.db.fluidmcp_server_instances.update_one(
+            {"server_id": id},
+            {"$unset": {"env": ""}}
+        )
+        if result.matched_count == 0:
+            logger.warning(f"No instance found for server '{id}', nothing to clear")
+    except Exception as e:
+        logger.error(f"Error clearing instance env: {e}")
+        raise HTTPException(500, "Failed to clear environment variables")
+
+    logger.info(f"Cleared instance env for server '{id}'")
+    return {
+        "message": f"Environment variables cleared for server '{id}'",
+        "env_cleared": True
     }
 
 
