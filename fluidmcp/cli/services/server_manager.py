@@ -37,6 +37,9 @@ class ServerManager:
         self.configs: Dict[str, Dict[str, Any]] = {}
         self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
 
+        # Operation locks to prevent concurrent operations on same server
+        self._operation_locks: Dict[str, asyncio.Lock] = {}
+
         # Event loop for async operations
         self._loop = None
 
@@ -115,6 +118,8 @@ class ServerManager:
         """
         Start an MCP server.
 
+        Uses a lock to prevent concurrent start operations on the same server.
+
         Args:
             id: Unique server identifier
             config: Server configuration (if None, loads from database)
@@ -123,17 +128,25 @@ class ServerManager:
         Returns:
             True if started successfully, False otherwise
         """
-        # Initialize name and collector early for exception handler
-        name = id
-        collector = MetricsCollector(id)
+        # Check for concurrent operations - fail fast
+        lock = self._get_operation_lock(id)
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
 
-        try:
-            # Check if already running
-            if id in self.processes:
-                process = self.processes[id]
-                if process.poll() is None:
-                    logger.warning(f"Server '{id}' is already running (PID: {process.pid})")
-                    return False
+        # Acquire lock for this operation
+        async with lock:
+            # Initialize name and collector early for exception handler
+            name = id
+            collector = MetricsCollector(id)
+
+            try:
+                # Check if already running
+                if id in self.processes:
+                    process = self.processes[id]
+                    if process.poll() is None:
+                        logger.warning(f"Server '{id}' is already running (PID: {process.pid})")
+                        return False
 
             # Load config from database if not provided
             if config is None:
@@ -204,6 +217,8 @@ class ServerManager:
         """
         Stop a running MCP server.
 
+        Uses a lock to prevent concurrent stop operations on the same server.
+
         Args:
             id: Server identifier
             force: If True, use SIGKILL instead of SIGTERM
@@ -211,13 +226,21 @@ class ServerManager:
         Returns:
             True if stopped successfully, False otherwise
         """
-        # Initialize metrics collector early for consistent error tracking
-        collector = MetricsCollector(id)
+        # Check for concurrent operations - fail fast
+        lock = self._get_operation_lock(id)
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
 
-        try:
-            # Check if server exists
-            if id not in self.processes:
-                logger.warning(f"Server '{id}' is not running")
+        # Acquire lock for this operation
+        async with lock:
+            # Initialize metrics collector early for consistent error tracking
+            collector = MetricsCollector(id)
+
+            try:
+                # Check if server exists
+                if id not in self.processes:
+                    logger.warning(f"Server '{id}' is not running")
                 return False
 
             process = self.processes[id]
@@ -267,9 +290,27 @@ class ServerManager:
             collector.record_error("stop_failed")
             return False
 
+    def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
+        """
+        Get or create an operation lock for a server.
+
+        Prevents concurrent operations (start/stop/restart) on the same server.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Asyncio lock for the server
+        """
+        if server_id not in self._operation_locks:
+            self._operation_locks[server_id] = asyncio.Lock()
+        return self._operation_locks[server_id]
+
     async def restart_server(self, id: str) -> bool:
         """
         Restart an MCP server.
+
+        Uses a lock to prevent concurrent restart operations on the same server.
 
         Args:
             id: Server identifier
@@ -277,14 +318,23 @@ class ServerManager:
         Returns:
             True if restarted successfully
         """
-        # Get current config before stopping
-        config = self.configs.get(id)
-        if not config:
-            config = await self.db.get_server_config(id)
+        # Acquire lock to prevent concurrent operations
+        lock = self._get_operation_lock(id)
 
-        # Get display name
-        name = config.get("name", id) if config else id
-        logger.info(f"Restarting server '{name}' (id: {id})...")
+        # Try to acquire lock without waiting - fail fast if operation in progress
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
+
+        async with lock:
+            # Get current config before stopping
+            config = self.configs.get(id)
+            if not config:
+                config = await self.db.get_server_config(id)
+
+            # Get display name
+            name = config.get("name", id) if config else id
+            logger.info(f"Restarting server '{name}' (id: {id})...")
 
         # Stop server
         if id in self.processes:
