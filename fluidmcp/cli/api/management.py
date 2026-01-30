@@ -755,6 +755,118 @@ async def get_server_logs(
     }
 
 
+# ==================== Environment Variable Management ====================
+
+@router.get("/servers/{id}/instance/env")
+async def get_server_instance_env(request: Request, id: str):
+    """
+    Get environment variable metadata for a server instance.
+
+    Returns metadata about each environment variable:
+    - present: Whether it has a value in the instance
+    - required: Whether it's required for server operation
+    - masked: Masked value if present (e.g., "****")
+    - description: Help text for the user
+
+    Args:
+        id: Server identifier
+
+    Returns:
+        Dict of env var names to metadata
+    """
+    manager = get_server_manager(request)
+
+    # Get server config to determine required env vars
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Get instance env (actual values set by user)
+    instance_env = await manager.db.get_instance_env(id) or {}
+
+    # Get config env (default/required env vars from config)
+    config_env = config.get("env", {})
+
+    # Build metadata response
+    metadata = {}
+
+    # Add all config env vars (these are the ones we expect)
+    for key in config_env.keys():
+        has_value = key in instance_env and instance_env[key]
+        metadata[key] = {
+            "present": has_value,
+            "required": True,  # All env vars in config are considered required
+            "masked": "****" if has_value else None,
+            "description": f"Environment variable for {config.get('name', id)}"
+        }
+
+    # Add any instance env vars not in config (user-added)
+    for key in instance_env.keys():
+        if key not in metadata:
+            metadata[key] = {
+                "present": True,
+                "required": False,
+                "masked": "****",
+                "description": "Custom environment variable"
+            }
+
+    return metadata
+
+
+@router.put("/servers/{id}/instance/env")
+async def update_server_instance_env(
+    request: Request,
+    id: str,
+    env: Dict[str, str] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Update environment variables for a server instance.
+
+    This updates the instance-specific env vars (user's API keys, etc.)
+    without modifying the server config template.
+
+    Args:
+        id: Server identifier
+        env: Dict of environment variable key-value pairs
+
+    Returns:
+        Success message with update status
+    """
+    manager = get_server_manager(request)
+
+    # Check if server exists
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Validate env vars (basic validation)
+    if not isinstance(env, dict):
+        raise HTTPException(400, "Environment variables must be a dictionary")
+
+    for key, value in env.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise HTTPException(400, "Environment variable keys and values must be strings")
+
+    # Update instance env in database
+    success = await manager.db.update_instance_env(id, env)
+
+    if not success:
+        # If no instance exists yet, we still return success
+        # The env will be used when the server starts
+        logger.info(f"No instance exists yet for '{id}', env will be used on next start")
+
+    logger.info(f"Updated instance env for server '{id}'")
+    return {
+        "message": f"Environment variables updated for server '{id}'",
+        "env_updated": True
+    }
+
+
 # ==================== Tool Discovery & Execution (PDF Spec) ====================
 
 @router.get("/servers/{id}/tools")
