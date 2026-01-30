@@ -39,14 +39,15 @@ class ApiClient {
 
   private async request<T>(
     endpoint: string,
-    options?: RequestInit & { signal?: AbortSignal }
+    options?: RequestInit & { signal?: AbortSignal; timeout?: number }
   ): Promise<T> {
     // AbortController lifecycle is owned by hooks/components, not apiClient
     // This method accepts optional signal for request cancellation
 
-    // Create timeout controller (30 seconds default)
+    // Create timeout controller with configurable timeout (30 seconds default)
+    const timeoutMs = options?.timeout || 30000;
     const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort(), 30000);
+    const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
 
     // Merge external signal with timeout signal (if provided)
     const signal = options?.signal
@@ -78,7 +79,8 @@ class ApiClient {
 
       // Handle timeout errors specifically
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new Error('Request timeout - please try again');
+        const timeoutSec = Math.round(timeoutMs / 1000);
+        throw new Error(`Request timeout (${timeoutSec}s) - please try again`);
       }
 
       throw err;
@@ -120,11 +122,18 @@ class ApiClient {
     toolName: string,
     params: ToolExecutionRequest
   ): Promise<ToolExecutionResponse> {
+    // Determine timeout based on server type
+    // AI council servers need more time for multi-model queries
+    const timeout = serverId.includes('ai-council') || serverId.includes('agents-council')
+      ? 120000  // 120 seconds for council servers
+      : 30000;  // 30 seconds for others
+
     return this.request<ToolExecutionResponse>(
       `/api/servers/${serverId}/tools/${toolName}/run`,
       {
         method: 'POST',
         body: JSON.stringify(params),
+        timeout,
       }
     );
   }

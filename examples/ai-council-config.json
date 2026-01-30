@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ai-council": {
+      "command": "uvx",
+      "args": ["ai-council"],
+      "env": {
+        "OPENROUTER_API_KEY": "your-openrouter-api-key-here"
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "ai-council-advanced": {
+      "command": "uvx",
+      "args": [
+        "ai-council",
+        "--max-models", "3",
+        "--parallel-timeout", "90",
+        "--log-level", "INFO"
+      ],
+      "env": {
+        "OPENROUTER_API_KEY": "your-openrouter-api-key-here",
+        "OPENAI_API_KEY": "your-openai-api-key-here"
+      }
+    }
+  }
+}
