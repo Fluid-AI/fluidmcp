@@ -68,12 +68,25 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         'credential', 'credentials',              # Credentials
     ]
 
+    def matches_sensitive_pattern(text: str) -> bool:
+        """Check if text matches any sensitive pattern using segment-based matching."""
+        text_lower = text.lower()
+        # Split on hyphens and underscores to get segments
+        segments = re.split(r'[-_]', text_lower)
+
+        for pattern in sensitive_patterns:
+            # Check if pattern matches any segment exactly
+            pattern_segments = re.split(r'[-_]', pattern)
+            # Check if all pattern segments are present consecutively
+            for i in range(len(segments) - len(pattern_segments) + 1):
+                if segments[i:i+len(pattern_segments)] == pattern_segments:
+                    return True
+        return False
+
     safe_command = []
     redact_next = False
 
     for part in command_parts:
-        part_lower = part.lower()
-
         if redact_next:
             # Previous argument indicated this value is sensitive
             safe_command.append("***REDACTED***")
@@ -83,8 +96,7 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         # Handle key=value style arguments by inspecting only the key name
         if '=' in part:
             key, _ = part.split('=', 1)
-            key_lower = key.lower()
-            if any(pattern in key_lower for pattern in sensitive_patterns):
+            if matches_sensitive_pattern(key):
                 safe_command.append(f"{key}=***REDACTED***")
             else:
                 safe_command.append(part)
@@ -92,7 +104,7 @@ def sanitize_command_for_logging(command_parts: list) -> str:
 
         # For non key=value arguments, only treat flag-like args as potential
         # indicators of sensitive values (e.g., --api-key, -token, etc.).
-        if part.startswith('-') and any(pattern in part_lower for pattern in sensitive_patterns):
+        if part.startswith('-') and matches_sensitive_pattern(part):
             # This is a flag like --api-key; redact the next value
             safe_command.append(part)
             redact_next = True
@@ -132,7 +144,14 @@ def filter_safe_env_vars(system_env: Dict[str, str], additional_env: Dict[str, s
     safe_env = {k: v for k, v in system_env.items() if k.upper() in ENV_VAR_ALLOWLIST}
 
     # User-provided env vars are always included (explicitly configured)
-    safe_env.update(additional_env)
+    # Use case-insensitive merge to avoid duplicate keys (e.g., Path vs PATH on Windows)
+    for key, value in additional_env.items():
+        # Remove any existing key with same name (case-insensitive)
+        keys_to_remove = [k for k in safe_env.keys() if k.upper() == key.upper()]
+        for k in keys_to_remove:
+            del safe_env[k]
+        # Add the user-provided key with its original casing
+        safe_env[key] = value
 
     return safe_env
 

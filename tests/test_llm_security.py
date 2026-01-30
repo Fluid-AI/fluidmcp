@@ -89,6 +89,43 @@ class TestCommandSanitization:
         result = sanitize_command_for_logging(command)
         assert result == "ls -la /tmp"
 
+    def test_sanitize_no_false_positives(self):
+        """Test that segment-based matching avoids false positives."""
+        # These should NOT be redacted (contain "token"/"key" as substring but not segment)
+        command = [
+            "vllm", "serve", "model",
+            "--tokenizer=/path/to/tokenizer",  # "token" is part of "tokenizer"
+            "--monkey=123",                     # "key" is part of "monkey"
+            "--keyboard-layout=us",             # "key" is part of "keyboard"
+            "--port", "8001"                    # Safe value
+        ]
+        result = sanitize_command_for_logging(command)
+
+        # These should be preserved (not redacted)
+        assert "--tokenizer=/path/to/tokenizer" in result
+        assert "--monkey=123" in result
+        assert "--keyboard-layout=us" in result
+        assert "8001" in result
+        assert "***REDACTED***" not in result
+
+    def test_sanitize_true_positives(self):
+        """Test that segment-based matching catches true sensitive patterns."""
+        command = [
+            "vllm", "serve",
+            "--api-key", "secret1",           # Should redact
+            "--auth-token=secret2",           # Should redact
+            "--access_key", "secret3",        # Should redact
+            "--my-api-key", "secret4",        # Should redact (api-key is a segment)
+        ]
+        result = sanitize_command_for_logging(command)
+
+        # All secrets should be redacted
+        assert "secret1" not in result
+        assert "secret2" not in result
+        assert "secret3" not in result
+        assert "secret4" not in result
+        assert result.count("***REDACTED***") == 4
+
 
 class TestEnvVarFiltering:
     """Test environment variable filtering for subprocess."""
@@ -133,6 +170,18 @@ class TestEnvVarFiltering:
         result = filter_safe_env_vars(system_env, user_env)
 
         assert result["PATH"] == "/custom/path"
+
+    def test_filter_user_override_case_insensitive(self):
+        """Test that user env overrides system env case-insensitively (no duplicate keys)."""
+        system_env = {"Path": "C:\\Windows\\System32"}  # Windows-style casing
+        user_env = {"PATH": "/custom/path"}             # Unix-style casing
+
+        result = filter_safe_env_vars(system_env, user_env)
+
+        # Should have only ONE PATH key (user's version), not both
+        assert len(result) == 1
+        assert result["PATH"] == "/custom/path"
+        assert "Path" not in result  # System's key should be removed
 
     def test_filter_empty_envs(self):
         """Test filtering with empty environments."""

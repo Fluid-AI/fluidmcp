@@ -524,7 +524,7 @@ FluidMCP automatically sanitizes sensitive data in logs to prevent credential le
 - Model IDs are sanitized before being used in filenames to prevent path traversal attacks, and the same sanitized model id is used consistently by both the log writer and log-access APIs
 
 **Additional Recommendations:**
-- Restrict `/llm/models/{id}/logs` endpoint access
+- Restrict `/api/llm/models/{id}/logs` endpoint access
 - Rotate logs regularly
 - Review logs periodically for any sensitive data that wasn't caught
 
@@ -533,9 +533,9 @@ FluidMCP automatically sanitizes sensitive data in logs to prevent credential le
 FluidMCP includes comprehensive test coverage for vLLM functionality:
 
 **Security Tests** ([tests/test_llm_security.py](../tests/test_llm_security.py)):
-- 15 tests covering command sanitization and environment filtering
+- 18 tests covering command sanitization and environment filtering
 - 100% passing
-- Tests for API key redaction, password filtering, env allowlisting
+- Tests for API key redaction, password filtering, env allowlisting, false positive prevention, and case-insensitive env var merging
 
 **Integration Tests** ([tests/test_llm_integration.py](../tests/test_llm_integration.py)):
 - 10 tests covering process lifecycle, configuration validation, and state tracking

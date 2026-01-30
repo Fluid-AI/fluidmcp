@@ -28,7 +28,7 @@ fluidai-mcp <command>
 pytest
 
 # Run specific test suites
-pytest tests/test_llm_security.py      # Security tests (15 tests)
+pytest tests/test_llm_security.py      # Security tests (18 tests)
 pytest tests/test_llm_integration.py   # Integration tests (10 tests)
 
 # Run with coverage
