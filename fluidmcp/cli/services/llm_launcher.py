@@ -58,19 +58,30 @@ def sanitize_command_for_logging(command_parts: list) -> str:
     redact_next = False
 
     for part in command_parts:
+        part_lower = part.lower()
+
         if redact_next:
             # Previous argument indicated this value is sensitive
             safe_command.append("***REDACTED***")
             redact_next = False
-        elif any(pattern in part.lower() for pattern in sensitive_patterns):
-            # Check if this is key=value format
-            if '=' in part:
-                key, _ = part.split('=', 1)
+            continue
+
+        # Handle key=value style arguments by inspecting only the key name
+        if '=' in part:
+            key, _ = part.split('=', 1)
+            key_lower = key.lower()
+            if any(pattern in key_lower for pattern in sensitive_patterns):
                 safe_command.append(f"{key}=***REDACTED***")
             else:
-                # This is a flag like --api-key, redact next value
                 safe_command.append(part)
-                redact_next = True
+            continue
+
+        # For non key=value arguments, only treat flag-like args as potential
+        # indicators of sensitive values (e.g., --api-key, -token, etc.).
+        if part.startswith('-') and any(pattern in part_lower for pattern in sensitive_patterns):
+            # This is a flag like --api-key; redact the next value
+            safe_command.append(part)
+            redact_next = True
         else:
             safe_command.append(part)
 

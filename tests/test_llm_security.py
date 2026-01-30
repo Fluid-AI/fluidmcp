@@ -5,7 +5,6 @@ Tests sanitization of commands and environment variables to prevent
 credential leakage in logs and subprocess environments.
 """
 
-import pytest
 from fluidmcp.cli.services.llm_launcher import (
     sanitize_command_for_logging,
     filter_safe_env_vars

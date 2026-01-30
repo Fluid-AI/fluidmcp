@@ -518,9 +518,9 @@ FluidMCP automatically sanitizes sensitive data in logs to prevent credential le
 - User-provided env vars from config always included (explicit configuration)
 
 **Log File Security:**
-- Stderr logs stored in `~/.fluidmcp/logs/llm_{model_id}_stderr.log`
+- Stderr logs stored in `~/.fluidmcp/logs/llm_{sanitized_model_id}_stderr.log` (using the sanitized model id)
 - File permissions automatically set to `0o600` (owner read/write only)
-- Model IDs sanitized to prevent path traversal attacks
+- Model IDs are sanitized before being used in filenames to prevent path traversal attacks, and the same sanitized model id is used consistently by both the log writer and log-access APIs
 
 **Additional Recommendations:**
 - Restrict `/llm/models/{id}/logs` endpoint access

@@ -21,7 +21,21 @@ fmcp <command>
 fluidai-mcp <command>
 ```
 
-There are no automated tests in this repository currently. Manual testing can be done using sample configurations in the `examples/` directory.
+## Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test suites
+pytest tests/test_llm_security.py      # Security tests (14 tests)
+pytest tests/test_llm_integration.py   # Integration tests (9 tests)
+
+# Run with coverage
+pytest --cov=fluidmcp
+```
+
+Manual testing can also be done using sample configurations in the `examples/` directory.
 
 ## Architecture
 
@@ -51,7 +65,7 @@ There are no automated tests in this repository currently. Manual testing can be
 - `llm_launcher.py` - LLM inference server lifecycle management (vLLM, Ollama, LM Studio)
   - `LLMProcess` - Process lifecycle with secure logging and environment filtering
   - `LLMHealthMonitor` - Health checks with automatic restart on failure
-  - `LLMManager` - Multi-model orchestration with error recovery
+  - `launch_llm_models()` / `stop_all_llm_models()` - Multi-model orchestration with error recovery
 
 ### Key Data Structures
 
@@ -248,7 +262,7 @@ Add LLM models to your config using the `llmModels` section:
 **Supported Restart Policies**:
 - `"on-failure"` - Restart only on non-zero exit codes
 - `"always"` - Restart on any termination (including success)
-- `"no"` or `null` - No automatic restart
+- `"no"` - No automatic restart
 
 ### Configuration Options
 

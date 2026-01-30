@@ -11,10 +11,7 @@ runtime environment.
 
 import pytest
 from unittest.mock import Mock, patch
-from fluidmcp.cli.services.llm_launcher import (
-    LLMProcess,
-    LLMHealthMonitor
-)
+from fluidmcp.cli.services.llm_launcher import LLMProcess
 
 
 @pytest.fixture
