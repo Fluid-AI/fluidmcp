@@ -39,16 +39,6 @@ def vllm_config():
     }
 
 
-@pytest.fixture
-def basic_config():
-    """Basic LLM configuration without restart policy."""
-    return {
-        "command": "python",
-        "args": ["-m", "http.server", "8001"],
-        "endpoints": {"base_url": "http://localhost:8001"}
-    }
-
-
 class TestLLMProcessLifecycle:
     """Test LLM process startup and shutdown."""
 

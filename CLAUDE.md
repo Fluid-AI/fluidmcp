@@ -364,6 +364,6 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 ### Implementation Files
 
 - [fluidmcp/cli/services/llm_launcher.py](fluidmcp/cli/services/llm_launcher.py) - Core implementation
-- [tests/test_llm_security.py](tests/test_llm_security.py) - Security tests (15 tests, 100% passing)
+- [tests/test_llm_security.py](tests/test_llm_security.py) - Security tests (18 tests, 100% passing)
 - [tests/test_llm_integration.py](tests/test_llm_integration.py) - Integration tests (10 tests, 100% passing)
 - [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.json) - Example config

@@ -285,11 +285,10 @@ class LLMProcess:
         logger.debug(f"Command: {safe_command}")
 
         # Create log file for stderr to aid debugging startup failures
-        # Sanitize model_id to prevent path traversal attacks (Issue #1)
-        safe_model_id = sanitize_model_id(self.model_id)
-        log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
+        # Use get_stderr_log_path() to ensure consistent path construction
+        stderr_log_path = self.get_stderr_log_path()
+        log_dir = os.path.dirname(stderr_log_path)
         os.makedirs(log_dir, exist_ok=True)
-        stderr_log_path = os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
         # Fix Issue #4: Properly handle file handle leak if Popen fails
         stderr_log = None
