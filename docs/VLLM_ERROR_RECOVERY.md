@@ -532,12 +532,12 @@ FluidMCP automatically sanitizes sensitive data in logs to prevent credential le
 FluidMCP includes comprehensive test coverage for vLLM functionality:
 
 **Security Tests** ([tests/test_llm_security.py](../tests/test_llm_security.py)):
-- 14 tests covering command sanitization and environment filtering
+- 15 tests covering command sanitization and environment filtering
 - 100% passing
 - Tests for API key redaction, password filtering, env allowlisting
 
 **Integration Tests** ([tests/test_llm_integration.py](../tests/test_llm_integration.py)):
-- 9 tests covering process lifecycle, configuration validation, and state tracking
+- 10 tests covering process lifecycle, configuration validation, and state tracking
 - 100% passing
 - Tests for startup, shutdown, error handling, and environment management
 

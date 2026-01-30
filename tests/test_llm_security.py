@@ -188,3 +188,25 @@ class TestEnvVarFiltering:
         assert result["PATH"] == "/usr/local/bin:/usr/bin"
         assert result["CUDA_VISIBLE_DEVICES"] == "0,1,2,3"
         assert result["API_KEY"] == "test-key-123"
+
+    def test_filter_case_insensitive_windows(self):
+        """Test that filtering is case-insensitive (Windows compatibility)."""
+        system_env = {
+            "Path": "C:\\Windows",          # Windows uses 'Path' not 'PATH'
+            "SystemRoot": "C:\\Windows",    # Windows-specific
+            "TEMP": "C:\\Temp",             # Windows temp dir
+            "SECRET_KEY": "sensitive"
+        }
+        user_env = {}
+
+        result = filter_safe_env_vars(system_env, user_env)
+
+        # Case-insensitive matching should work
+        assert "Path" in result
+        assert result["Path"] == "C:\\Windows"
+        assert "SystemRoot" in result
+        assert result["SystemRoot"] == "C:\\Windows"
+        assert "TEMP" in result
+
+        # Non-allowlisted should still be filtered
+        assert "SECRET_KEY" not in result

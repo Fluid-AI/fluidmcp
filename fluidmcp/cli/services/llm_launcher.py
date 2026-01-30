@@ -27,12 +27,14 @@ HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
-# Environment variable allowlist for subprocess
-ENV_VAR_ALLOWLIST = [
+# Environment variable allowlist for subprocess (uppercase for case-insensitive matching)
+ENV_VAR_ALLOWLIST = {
     'PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'LC_ALL',
     'CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER',
-    'LD_LIBRARY_PATH', 'PYTHONPATH', 'VIRTUAL_ENV'
-]
+    'LD_LIBRARY_PATH', 'PYTHONPATH', 'VIRTUAL_ENV',
+    # Windows-specific required variables
+    'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP'
+}
 
 
 def sanitize_command_for_logging(command_parts: list) -> str:
@@ -109,9 +111,13 @@ def filter_safe_env_vars(system_env: Dict[str, str], additional_env: Dict[str, s
         ...     {"MY_VAR": "value"}
         ... )
         {'PATH': '/usr/bin', 'MY_VAR': 'value'}  # SECRET_KEY filtered out
+
+    Note:
+        Environment variable matching is case-insensitive to support Windows
+        where variables like 'Path' and 'PATH' are equivalent.
     """
-    # Only include allowlisted system environment variables
-    safe_env = {k: v for k, v in system_env.items() if k in ENV_VAR_ALLOWLIST}
+    # Only include allowlisted system environment variables (case-insensitive)
+    safe_env = {k: v for k, v in system_env.items() if k.upper() in ENV_VAR_ALLOWLIST}
 
     # User-provided env vars are always included (explicitly configured)
     safe_env.update(additional_env)

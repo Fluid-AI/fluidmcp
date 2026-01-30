@@ -212,6 +212,45 @@ class TestConfigurationValidation:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
+    def test_unsafe_model_id_sanitization(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
+        """Test that unsafe model IDs are sanitized in log paths."""
+        config = {
+            "command": "vllm",
+            "args": ["serve", "model"],
+            "endpoints": {"base_url": "http://localhost:8001/v1"}
+        }
+
+        mock_process = Mock()
+        mock_process.pid = 12345
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+        mock_file = Mock()
+        mock_open.return_value = mock_file
+
+        # Test with path traversal attack
+        llm_process = LLMProcess("../../etc/passwd", config)
+        llm_process.start()
+
+        # Verify the log path was sanitized (no ../ sequences)
+        open_call_args = mock_open.call_args[0]
+        log_path = open_call_args[0]
+        assert "../" not in log_path
+        assert "______etc_passwd" in log_path
+
+        # Test with spaces and special characters
+        llm_process2 = LLMProcess("my model name!", config)
+        llm_process2.start()
+
+        open_call_args2 = mock_open.call_args[0]
+        log_path2 = open_call_args2[0]
+        assert " " not in log_path2
+        assert "!" not in log_path2
+        assert "my_model_name_" in log_path2
+
+    @patch('subprocess.Popen')
+    @patch('os.makedirs')
+    @patch('builtins.open')
+    @patch('os.chmod')
     def test_config_with_optional_fields(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
         """Test configuration with all optional fields."""
         config = {
