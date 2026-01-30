@@ -27,6 +27,86 @@ HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
+# Environment variable allowlist for subprocess
+ENV_VAR_ALLOWLIST = [
+    'PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'LC_ALL',
+    'CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER',
+    'LD_LIBRARY_PATH', 'PYTHONPATH', 'VIRTUAL_ENV'
+]
+
+
+def sanitize_command_for_logging(command_parts: list) -> str:
+    """
+    Sanitize command arguments for safe logging.
+
+    Redacts sensitive patterns like API keys, tokens, passwords to prevent
+    credential leakage in log files.
+
+    Args:
+        command_parts: List of command arguments
+
+    Returns:
+        Sanitized command string safe for logging
+
+    Example:
+        >>> sanitize_command_for_logging(["vllm", "--api-key", "secret123"])
+        'vllm --api-key ***REDACTED***'
+    """
+    sensitive_patterns = ['key', 'token', 'secret', 'password', 'auth', 'credential']
+
+    safe_command = []
+    redact_next = False
+
+    for part in command_parts:
+        if redact_next:
+            # Previous argument indicated this value is sensitive
+            safe_command.append("***REDACTED***")
+            redact_next = False
+        elif any(pattern in part.lower() for pattern in sensitive_patterns):
+            # Check if this is key=value format
+            if '=' in part:
+                key, _ = part.split('=', 1)
+                safe_command.append(f"{key}=***REDACTED***")
+            else:
+                # This is a flag like --api-key, redact next value
+                safe_command.append(part)
+                redact_next = True
+        else:
+            safe_command.append(part)
+
+    return ' '.join(safe_command)
+
+
+def filter_safe_env_vars(system_env: Dict[str, str], additional_env: Dict[str, str]) -> Dict[str, str]:
+    """
+    Filter system environment variables to only safe, allowlisted variables.
+
+    This prevents accidental leakage of sensitive system environment variables
+    into subprocess environments. User-provided environment variables are always
+    included as they are explicitly configured.
+
+    Args:
+        system_env: System environment variables (typically os.environ)
+        additional_env: User-provided environment variables from config
+
+    Returns:
+        Combined environment with only allowlisted system vars + all user vars
+
+    Example:
+        >>> filter_safe_env_vars(
+        ...     {"PATH": "/usr/bin", "SECRET_KEY": "sensitive"},
+        ...     {"MY_VAR": "value"}
+        ... )
+        {'PATH': '/usr/bin', 'MY_VAR': 'value'}  # SECRET_KEY filtered out
+    """
+    # Only include allowlisted system environment variables
+    safe_env = {k: v for k, v in system_env.items() if k in ENV_VAR_ALLOWLIST}
+
+    # User-provided env vars are always included (explicitly configured)
+    safe_env.update(additional_env)
+
+    return safe_env
+
 
 def sanitize_model_id(model_id: str) -> str:
     """
@@ -147,11 +227,14 @@ class LLMProcess:
 
         command = self.config["command"]
         args = self.config.get("args", [])
-        env = {**os.environ, **self.config.get("env", {})}
+        # Security: Filter system env vars to allowlist, user env always included
+        env = filter_safe_env_vars(os.environ, self.config.get("env", {}))
 
         full_command = [command] + args
         logger.info(f"Starting LLM model '{self.model_id}'")
-        logger.debug(f"Command: {' '.join(full_command)}")
+        # Security: Sanitize command to prevent credential leakage in logs
+        safe_command = sanitize_command_for_logging(full_command)
+        logger.debug(f"Command: {safe_command}")
 
         # Create log file for stderr to aid debugging startup failures
         # Sanitize model_id to prevent path traversal attacks (Issue #1)
@@ -165,6 +248,8 @@ class LLMProcess:
         try:
             # Open stderr log file for capturing process errors
             stderr_log = open(stderr_log_path, "a")
+            # Security: Set restrictive permissions (owner read/write only)
+            os.chmod(stderr_log_path, 0o600)
 
             self.process = subprocess.Popen(
                 full_command,

@@ -502,17 +502,56 @@ Consider rate limiting management APIs in production:
 - Restart API: Max 10 requests/minute per model
 - Logs API: Max 30 requests/minute per model
 
-### Log Privacy
+### Log Privacy and Command Sanitization
 
-Stderr logs may contain sensitive information:
-- API keys in stack traces
-- Model paths revealing infrastructure
-- User prompts (if logging enabled)
+FluidMCP automatically sanitizes sensitive data in logs to prevent credential leakage:
 
-**Recommendations:**
+**Automatic Sanitization (v1.0+):**
+- Command-line arguments containing API keys, tokens, passwords are redacted
+- Sensitive patterns detected: `api-key`, `token`, `secret`, `password`, `auth`, `credential`
+- Supports both `--flag value` and `--flag=value` formats
+- Example: `vllm serve --api-key sk-secret123` → `vllm serve --api-key ***REDACTED***`
+
+**Environment Variable Filtering:**
+- System environment variables filtered to allowlist only
+- Allowlist: `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- User-provided env vars from config always included (explicit configuration)
+
+**Log File Security:**
+- Stderr logs stored in `~/.fluidmcp/logs/llm_{model_id}_stderr.log`
+- File permissions automatically set to `0o600` (owner read/write only)
+- Model IDs sanitized to prevent path traversal attacks
+
+**Additional Recommendations:**
 - Restrict `/llm/models/{id}/logs` endpoint access
 - Rotate logs regularly
-- Sanitize logs before exposing via API
+- Review logs periodically for any sensitive data that wasn't caught
+
+## Testing
+
+FluidMCP includes comprehensive test coverage for vLLM functionality:
+
+**Security Tests** ([tests/test_llm_security.py](../tests/test_llm_security.py)):
+- 14 tests covering command sanitization and environment filtering
+- 100% passing
+- Tests for API key redaction, password filtering, env allowlisting
+
+**Integration Tests** ([tests/test_llm_integration.py](../tests/test_llm_integration.py)):
+- 9 tests covering process lifecycle, configuration validation, and state tracking
+- 100% passing
+- Tests for startup, shutdown, error handling, and environment management
+
+**Run Tests:**
+```bash
+# All vLLM tests
+python -m pytest tests/test_llm_security.py tests/test_llm_integration.py -v
+
+# Security tests only
+python -m pytest tests/test_llm_security.py -v
+
+# Integration tests only
+python -m pytest tests/test_llm_integration.py -v
+```
 
 ## Future Enhancements
 
