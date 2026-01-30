@@ -35,9 +35,18 @@ export function useServerPolling(serverId: string) {
           }
 
           return true; // All conditions met
-        } catch (error) {
-          // Server not ready yet, keep polling
-          return false;
+        } catch (error: any) {
+          // Distinguish between expected errors (server not ready) and unexpected errors
+          const status = error?.response?.status;
+
+          // Expected errors - server is starting up or not ready yet
+          if (status === 404 || status === 503 || status === 502) {
+            return false; // Keep polling
+          }
+
+          // Unexpected errors - network failures, auth failures, server crashes
+          // These should not be silently swallowed
+          throw error;
         }
       },
       {
