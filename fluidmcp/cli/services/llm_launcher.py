@@ -27,6 +27,134 @@ HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
+# Environment variable allowlist for subprocess (uppercase for case-insensitive matching)
+ENV_VAR_ALLOWLIST = {
+    'PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'LC_ALL',
+    'CUDA_VISIBLE_DEVICES', 'CUDA_DEVICE_ORDER',
+    'LD_LIBRARY_PATH', 'PYTHONPATH', 'VIRTUAL_ENV',
+    # Windows-specific required variables
+    'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP'
+}
+
+
+def sanitize_command_for_logging(command_parts: list) -> str:
+    """
+    Sanitize command arguments for safe logging.
+
+    Redacts sensitive patterns like API keys, tokens, passwords to prevent
+    credential leakage in log files.
+
+    Args:
+        command_parts: List of command arguments
+
+    Returns:
+        Sanitized command string safe for logging
+
+    Example:
+        >>> sanitize_command_for_logging(["vllm", "--api-key", "secret123"])
+        'vllm --api-key ***REDACTED***'
+    """
+    # Specific credential-related patterns to avoid false positives
+    # These patterns match complete segments after hyphens/underscores
+    sensitive_patterns = [
+        'api-key', 'apikey', 'api_key',           # API keys
+        'access-key', 'accesskey', 'access_key',  # Access keys
+        'secret-key', 'secretkey', 'secret_key',  # Secret keys
+        'auth-key', 'authkey', 'auth_key',        # Auth keys
+        'token', 'auth-token', 'access-token',    # Tokens
+        'secret',                                  # Secrets
+        'password', 'passwd', 'pwd',              # Passwords
+        'auth', 'authentication',                 # Authentication
+        'credential', 'credentials',              # Credentials
+    ]
+
+    def matches_sensitive_pattern(text: str) -> bool:
+        """Check if text matches any sensitive pattern using segment-based matching."""
+        text_lower = text.lower()
+        # Split on hyphens and underscores to get segments
+        segments = re.split(r'[-_]', text_lower)
+
+        for pattern in sensitive_patterns:
+            # Check if pattern matches any segment exactly
+            pattern_segments = re.split(r'[-_]', pattern)
+            # Check if all pattern segments are present consecutively
+            for i in range(len(segments) - len(pattern_segments) + 1):
+                if segments[i:i+len(pattern_segments)] == pattern_segments:
+                    return True
+        return False
+
+    safe_command = []
+    redact_next = False
+
+    for part in command_parts:
+        if redact_next:
+            # Previous argument indicated this value is sensitive
+            safe_command.append("***REDACTED***")
+            redact_next = False
+            continue
+
+        # Handle key=value style arguments by inspecting only the key name
+        if '=' in part:
+            key, _ = part.split('=', 1)
+            if matches_sensitive_pattern(key):
+                safe_command.append(f"{key}=***REDACTED***")
+            else:
+                safe_command.append(part)
+            continue
+
+        # For non key=value arguments, only treat flag-like args as potential
+        # indicators of sensitive values (e.g., --api-key, -token, etc.).
+        if part.startswith('-') and matches_sensitive_pattern(part):
+            # This is a flag like --api-key; redact the next value
+            safe_command.append(part)
+            redact_next = True
+        else:
+            safe_command.append(part)
+
+    return ' '.join(safe_command)
+
+
+def filter_safe_env_vars(system_env: Dict[str, str], additional_env: Dict[str, str]) -> Dict[str, str]:
+    """
+    Filter system environment variables to only safe, allowlisted variables.
+
+    This prevents accidental leakage of sensitive system environment variables
+    into subprocess environments. User-provided environment variables are always
+    included as they are explicitly configured.
+
+    Args:
+        system_env: System environment variables (typically os.environ)
+        additional_env: User-provided environment variables from config
+
+    Returns:
+        Combined environment with only allowlisted system vars + all user vars
+
+    Example:
+        >>> filter_safe_env_vars(
+        ...     {"PATH": "/usr/bin", "SECRET_KEY": "sensitive"},
+        ...     {"MY_VAR": "value"}
+        ... )
+        {'PATH': '/usr/bin', 'MY_VAR': 'value'}  # SECRET_KEY filtered out
+
+    Note:
+        Environment variable matching is case-insensitive to support Windows
+        where variables like 'Path' and 'PATH' are equivalent.
+    """
+    # Only include allowlisted system environment variables (case-insensitive)
+    safe_env = {k: v for k, v in system_env.items() if k.upper() in ENV_VAR_ALLOWLIST}
+
+    # User-provided env vars are always included (explicitly configured)
+    # Use case-insensitive merge to avoid duplicate keys (e.g., Path vs PATH on Windows)
+    for key, value in additional_env.items():
+        # Remove any existing key with same name (case-insensitive)
+        keys_to_remove = [k for k in safe_env.keys() if k.upper() == key.upper()]
+        for k in keys_to_remove:
+            del safe_env[k]
+        # Add the user-provided key with its original casing
+        safe_env[key] = value
+
+    return safe_env
+
 
 def sanitize_model_id(model_id: str) -> str:
     """
@@ -147,24 +275,28 @@ class LLMProcess:
 
         command = self.config["command"]
         args = self.config.get("args", [])
-        env = {**os.environ, **self.config.get("env", {})}
+        # Security: Filter system env vars to allowlist, user env always included
+        env = filter_safe_env_vars(os.environ, self.config.get("env", {}))
 
         full_command = [command] + args
         logger.info(f"Starting LLM model '{self.model_id}'")
-        logger.debug(f"Command: {' '.join(full_command)}")
+        # Security: Sanitize command to prevent credential leakage in logs
+        safe_command = sanitize_command_for_logging(full_command)
+        logger.debug(f"Command: {safe_command}")
 
         # Create log file for stderr to aid debugging startup failures
-        # Sanitize model_id to prevent path traversal attacks (Issue #1)
-        safe_model_id = sanitize_model_id(self.model_id)
-        log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
+        # Use get_stderr_log_path() to ensure consistent path construction
+        stderr_log_path = self.get_stderr_log_path()
+        log_dir = os.path.dirname(stderr_log_path)
         os.makedirs(log_dir, exist_ok=True)
-        stderr_log_path = os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
         # Fix Issue #4: Properly handle file handle leak if Popen fails
         stderr_log = None
         try:
             # Open stderr log file for capturing process errors
             stderr_log = open(stderr_log_path, "a")
+            # Security: Set restrictive permissions (owner read/write only)
+            os.chmod(stderr_log_path, 0o600)
 
             self.process = subprocess.Popen(
                 full_command,
@@ -266,7 +398,7 @@ class LLMProcess:
 
     async def check_health(self) -> Tuple[bool, Optional[str]]:
         """
-        Check if the vLLM server is healthy by querying HTTP endpoints.
+        Check if the LLM server is healthy by querying HTTP endpoints.
 
         Returns:
             Tuple of (is_healthy, error_message)
@@ -311,7 +443,8 @@ class LLMProcess:
     def get_stderr_log_path(self) -> str:
         """Get the path to the stderr log file."""
         log_dir = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
-        return os.path.join(log_dir, f"llm_{self.model_id}_stderr.log")
+        safe_model_id = sanitize_model_id(self.model_id)
+        return os.path.join(log_dir, f"llm_{safe_model_id}_stderr.log")
 
     def check_for_cuda_oom(self) -> bool:
         """
@@ -554,7 +687,7 @@ def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
             else:
                 # Only add successfully running processes
                 processes[model_id] = process
-                logger.info(f"✓ LLM model '{model_id}' is running")
+                logger.info(f"LLM model '{model_id}' is running")
 
         except Exception as e:
             logger.error(f"Failed to launch LLM model '{model_id}': {e}")
@@ -654,9 +787,9 @@ class LLMHealthMonitor:
                                     logger.info(f"LLM model '{model_id}' recovered successfully")
                                 else:
                                     logger.error(
-                                    f"LLM model '{model_id}' failed to recover. "
-                                    f"Restart count: {process.restart_count}/{process.max_restarts}"
-                                )
+                                        f"LLM model '{model_id}' failed to recover. "
+                                        f"Restart count: {process.restart_count}/{process.max_restarts}"
+                                    )
                             finally:
                                 # Issue #5 fix: Always remove from in-progress set
                                 self._restarts_in_progress.discard(model_id)
