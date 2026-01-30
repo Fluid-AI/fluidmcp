@@ -163,6 +163,7 @@ Available sample files:
 - `examples/sample-config.json` - Basic config with filesystem & memory servers
 - `examples/sample-metadata.json` - Package metadata example
 - `examples/sample-config-with-api-keys.json` - Config with API keys
+- `examples/replicate-inference.json` - Replicate cloud inference models
 - `examples/README.md` - Detailed testing guide
 
 ## Environment Variables
@@ -179,10 +180,130 @@ MCP_TOKEN
 FMCP_GITHUB_TOKEN  # Default GitHub token
 GITHUB_TOKEN       # Alternative environment variable
 
+# Replicate API access (for cloud inference)
+REPLICATE_API_TOKEN  # Replicate API token for model inference
+
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
 
 # Server startup configuration
 MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (default: 5)
+```
+
+## Replicate Cloud Inference
+
+FluidMCP supports running AI models via **Replicate's cloud API** for inference without local GPU requirements.
+
+### Key Features
+
+- **Inference-only** - No local model deployment or GPU required
+- **Simple setup** - Just API key needed
+- **Wide model selection** - Access to thousands of models (Llama, Mistral, CodeLlama, etc.)
+- **Automatic retries** - Built-in error recovery
+- **Streaming support** - Real-time output generation
+
+### Quick Start
+
+```bash
+# Get your Replicate API token from https://replicate.com/account/api-tokens
+export REPLICATE_API_TOKEN="r8_..."
+
+# Create config with Replicate models
+cat > replicate-config.json << 'EOF'
+{
+  "replicateModels": {
+    "llama-2-70b": {
+      "model": "meta/llama-2-70b-chat",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 1000
+      }
+    }
+  }
+}
+EOF
+
+# Run FluidMCP
+fluidmcp run replicate-config.json --file --start-server
+
+# Test the model
+curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "prompt": "Explain quantum computing in simple terms"
+    }
+  }'
+```
+
+### Configuration Format
+
+```json
+{
+  "replicateModels": {
+    "model-id": {
+      "model": "owner/model-name",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 1000
+      },
+      "timeout": 120,
+      "max_retries": 3
+    }
+  }
+}
+```
+
+### Available Models
+
+Find models at [replicate.com/explore](https://replicate.com/explore):
+- `meta/llama-2-70b-chat` - Meta's Llama 2 70B
+- `mistralai/mistral-7b-instruct-v0.2` - Mistral 7B
+- `meta/codellama-34b-instruct` - CodeLlama 34B
+- And thousands more...
+
+### Documentation
+
+See [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) for complete documentation including:
+- API endpoints
+- Error handling and retries
+- Streaming predictions
+- Cost management tips
+- Security best practices
+- Troubleshooting guide
+
+### Example Config
+
+See [examples/replicate-inference.json](examples/replicate-inference.json) for a complete working example with multiple models.
+
+### Testing
+
+```bash
+# Run Replicate client tests (22 tests)
+pytest tests/test_replicate_client.py -v
+
+# Run with coverage
+pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_client
+```
+
+### Comparison: Replicate vs vLLM
+
+| Feature | Replicate | vLLM |
+|---------|-----------|------|
+| Deployment | Cloud (Replicate) | Local (your hardware) |
+| GPU Required | No | Yes |
+| Setup | Simple (API key) | Complex (GPU, drivers) |
+| Cost | Pay-per-use | Hardware + electricity |
+| Privacy | Data sent to Replicate | Data stays local |
+| Best For | Prototyping, low volume | Production, high volume |
+
+### Implementation Files
+
+- [fluidmcp/cli/services/replicate_client.py](fluidmcp/cli/services/replicate_client.py) - Core HTTP client
+- [tests/test_replicate_client.py](tests/test_replicate_client.py) - Comprehensive tests (22 tests)
+- [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) - Complete documentation
+- [examples/replicate-inference.json](examples/replicate-inference.json) - Example configuration
 ```

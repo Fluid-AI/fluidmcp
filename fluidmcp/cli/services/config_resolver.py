@@ -37,10 +37,11 @@ region = os.environ.get("S3_REGION")
 
 @dataclass
 class ServerConfig:
-    """Unified configuration for running MCP servers and LLM models."""
+    """Unified configuration for running MCP servers, LLM models, and Replicate models."""
 
     servers: Dict[str, dict] = field(default_factory=dict)  # mcpServers config
     llm_models: Dict[str, dict] = field(default_factory=dict)  # llmModels config
+    replicate_models: Dict[str, dict] = field(default_factory=dict)  # replicateModels config
     needs_install: bool = False  # Whether to install packages first
     sync_to_s3: bool = False  # Whether to sync metadata to S3
     source_type: str = "package"  # For logging: package, installed, file, s3_url, s3_master
@@ -176,6 +177,7 @@ def resolve_from_file(file_path: str) -> ServerConfig:
 
     servers = config.get("mcpServers", {})
     llm_models = config.get("llmModels", {})  # Extract LLM models section
+    replicate_models = config.get("replicateModels", {})  # Extract Replicate models section
     needs_install = False
 
     # Get default GitHub token from config or environment
@@ -225,6 +227,7 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     return ServerConfig(
         servers=servers,
         llm_models=llm_models,  # Include LLM models in config
+        replicate_models=replicate_models,  # Include Replicate models in config
         needs_install=needs_install,
         sync_to_s3=False,
         source_type="file",

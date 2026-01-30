@@ -29,6 +29,7 @@ from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
+from .replicate_client import initialize_replicate_models, stop_all_replicate_models, get_replicate_client, list_replicate_models
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 
@@ -377,6 +378,23 @@ def run_servers(
         async def startup_health_monitor():
             """Start LLM health monitor when FastAPI server starts."""
             await _start_llm_health_monitor_async()
+
+    # Initialize Replicate models if configured
+    if config.replicate_models:
+        logger.info(f"Initializing {len(config.replicate_models)} Replicate model(s)...")
+
+        # Register startup event to initialize Replicate clients
+        @app.on_event("startup")
+        async def startup_replicate_models():
+            """Initialize Replicate models when FastAPI server starts."""
+            try:
+                replicate_clients = await initialize_replicate_models(config.replicate_models)
+                if replicate_clients:
+                    logger.info(f"Successfully initialized {len(replicate_clients)} Replicate model(s)")
+                else:
+                    logger.warning("No Replicate models initialized successfully")
+            except Exception as e:
+                logger.error(f"Error initializing Replicate models: {e}")
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
@@ -1150,6 +1168,18 @@ def _cleanup_resources():
             logger.info("Shutting down LLM processes...")
             stop_all_llm_models(_llm_processes)
             _llm_processes.clear()
+
+        # Stop all Replicate clients
+        logger.info("Shutting down Replicate clients...")
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(stop_all_replicate_models())
+            logger.debug("Replicate clients stopped successfully")
+        except Exception as e:
+            logger.warning(f"Error during Replicate clients cleanup: {e}")
+        finally:
+            loop.close()
 
         # Close shared HTTP client
         if _http_client is not None:
