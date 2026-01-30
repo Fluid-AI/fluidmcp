@@ -20,6 +20,7 @@ from .services.server_manager import ServerManager
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
+from .services.frontend_utils import setup_frontend_routes
 
 
 def save_token_to_file(token: str) -> Path:
@@ -45,7 +46,7 @@ def save_token_to_file(token: str) -> Path:
     return token_file
 
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None) -> FastAPI:
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -107,6 +108,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     mcp_router = create_dynamic_router(server_manager)
     app.include_router(mcp_router, tags=["mcp"])
     logger.info("Dynamic MCP router mounted")
+
+    # Serve frontend from backend (single-port deployment)
+    setup_frontend_routes(app, host="0.0.0.0", port=port)
 
     # Add a health check endpoint with actual connection verification
     # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
@@ -278,7 +282,8 @@ async def main(args):
         server_manager=server_manager,
         secure_mode=args.secure,
         token=args.token,
-        allowed_origins=allowed_origins
+        allowed_origins=allowed_origins,
+        port=args.port
     )
 
     # 3. Setup graceful shutdown with comprehensive signal handlers
