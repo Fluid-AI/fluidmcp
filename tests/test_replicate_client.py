@@ -105,6 +105,54 @@ class TestReplicateClientInitialization:
         with pytest.raises(ValueError, match="missing 'api_key' in config"):
             ReplicateClient("test", config)
 
+    @pytest.mark.asyncio
+    async def test_env_var_expansion_success(self, monkeypatch):
+        """Test that environment variables in api_key are expanded correctly."""
+        # Set environment variable
+        monkeypatch.setenv("REPLICATE_API_TOKEN", "r8_expanded_key_12345")
+
+        config = {
+            "model": "meta/llama-2-70b-chat",
+            "api_key": "${REPLICATE_API_TOKEN}"
+        }
+
+        client = ReplicateClient("test", config)
+
+        try:
+            assert client.api_key == "r8_expanded_key_12345"
+        finally:
+            await client.close()
+
+    def test_env_var_expansion_unset_raises_error(self, monkeypatch):
+        """Test that unresolved environment variables raise a clear error."""
+        # Ensure variable is NOT set
+        monkeypatch.delenv("REPLICATE_UNSET_TOKEN", raising=False)
+
+        config = {
+            "model": "meta/llama-2-70b-chat",
+            "api_key": "${REPLICATE_UNSET_TOKEN}"
+        }
+
+        with pytest.raises(ValueError, match="unresolved environment variable.*REPLICATE_UNSET_TOKEN"):
+            ReplicateClient("test", config)
+
+    @pytest.mark.asyncio
+    async def test_env_var_expansion_alternative_format(self, monkeypatch):
+        """Test that $VAR format (without braces) also works."""
+        monkeypatch.setenv("REPLICATE_KEY", "r8_alt_format_key")
+
+        config = {
+            "model": "meta/llama-2-70b-chat",
+            "api_key": "$REPLICATE_KEY"
+        }
+
+        client = ReplicateClient("test", config)
+
+        try:
+            assert client.api_key == "r8_alt_format_key"
+        finally:
+            await client.close()
+
 
 class TestReplicateClientPredictions:
     """Test prediction creation and retrieval."""

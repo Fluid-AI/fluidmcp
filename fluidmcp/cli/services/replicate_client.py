@@ -17,6 +17,7 @@ from loguru import logger
 # Constants
 DEFAULT_TIMEOUT = 60.0  # Default timeout for API requests (seconds)
 DEFAULT_MAX_RETRIES = 3  # Default maximum retry attempts for failed requests
+DEFAULT_MAX_STREAM_SECONDS = 600  # Default maximum time for streaming predictions (10 minutes)
 REPLICATE_API_BASE = "https://api.replicate.com/v1"
 
 
@@ -238,7 +239,8 @@ class ReplicateClient:
     async def stream_prediction(
         self,
         input_data: Dict[str, Any],
-        version: Optional[str] = None
+        version: Optional[str] = None,
+        max_stream_seconds: Optional[float] = None
     ) -> AsyncIterator[Any]:
         """
         Stream prediction output as it's generated.
@@ -246,12 +248,14 @@ class ReplicateClient:
         Args:
             input_data: Input parameters for the model
             version: Optional specific model version to use
+            max_stream_seconds: Maximum time to wait for prediction (default: 600 seconds)
 
         Yields:
             Chunks of model output as they're generated (type depends on model)
 
         Raises:
             httpx.HTTPError: If API request fails
+            asyncio.TimeoutError: If prediction exceeds max_stream_seconds
         """
         # Create prediction (polling-based incremental output)
         prediction = await self.predict(input_data, version=version, stream=False)
@@ -262,41 +266,57 @@ class ReplicateClient:
         # Track last output to avoid duplicates
         last_output = None
 
-        # Poll for updates
-        while True:
-            status = await self.get_prediction(prediction_id)
-            current_output = status.get("output", "")
+        # Set timeout
+        if max_stream_seconds is None:
+            max_stream_seconds = DEFAULT_MAX_STREAM_SECONDS
 
-            if status["status"] == "succeeded":
-                # Yield only new output
-                if current_output and current_output != last_output:
-                    yield current_output
-                break
+        # Poll for updates with timeout
+        try:
+            async with asyncio.timeout(max_stream_seconds):
+                while True:
+                    status = await self.get_prediction(prediction_id)
+                    current_output = status.get("output", "")
 
-            elif status["status"] == "failed":
-                error_msg = status.get("error", "Unknown error")
-                logger.error(f"Prediction {prediction_id} failed: {error_msg}")
-                raise RuntimeError(f"Prediction failed: {error_msg}")
+                    if status["status"] == "succeeded":
+                        # Yield only new output
+                        if current_output and current_output != last_output:
+                            yield current_output
+                        break
 
-            elif status["status"] in ["starting", "processing"]:
-                # Only yield if output has changed
-                if current_output and current_output != last_output:
-                    yield current_output
-                    last_output = current_output
+                    elif status["status"] == "failed":
+                        error_msg = status.get("error", "Unknown error")
+                        logger.error(f"Prediction {prediction_id} failed: {error_msg}")
+                        raise RuntimeError(f"Prediction failed: {error_msg}")
 
-                # Wait before next poll
-                await asyncio.sleep(0.5)
+                    elif status["status"] in ["starting", "processing"]:
+                        # Only yield if output has changed
+                        if current_output and current_output != last_output:
+                            yield current_output
+                            last_output = current_output
 
-            else:
-                logger.warning(f"Unknown prediction status: {status['status']}")
-                await asyncio.sleep(0.5)
+                        # Wait before next poll
+                        await asyncio.sleep(0.5)
+
+                    else:
+                        logger.warning(f"Unknown prediction status: {status['status']}")
+                        await asyncio.sleep(0.5)
+        except asyncio.TimeoutError:
+            logger.error(f"Prediction {prediction_id} exceeded max stream time of {max_stream_seconds}s")
+            # Attempt to cancel the prediction
+            try:
+                await self.cancel_prediction(prediction_id)
+            except Exception as e:
+                logger.warning(f"Failed to cancel prediction {prediction_id}: {e}")
+            raise asyncio.TimeoutError(f"Prediction exceeded maximum stream time of {max_stream_seconds}s")
 
     async def list_predictions(
         self,
         cursor: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List predictions for this model.
+        List all predictions for your Replicate account (not filtered by model).
+
+        Note: This returns account-wide predictions, not just predictions for this model instance.
 
         Args:
             cursor: Pagination cursor from previous response

@@ -405,8 +405,8 @@ def _merge_replicate_into_llm_models(llm_models: Dict[str, dict], replicate_mode
             )
             continue
 
-        # Add type field
-        merged[model_id] = {"type": "replicate", **model_config}
+        # Add type field, ensuring any incoming 'type' in model_config cannot override it
+        merged[model_id] = {**model_config, "type": "replicate"}
         logger.debug(f"Merged Replicate model '{model_id}' into llmModels with type='replicate'")
 
     return merged

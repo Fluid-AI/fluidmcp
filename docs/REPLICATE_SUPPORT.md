@@ -582,7 +582,7 @@ All tests use mocked HTTP responses (no actual Replicate API calls).
 
 2. Use streaming instead:
    ```bash
-   curl -X POST .../stream  # Streaming doesn't timeout
+   curl -X POST .../stream  # Streaming avoids single-request timeout; long-lived connections may still be cut off by client/proxy timeouts
    ```
 
 3. Check Replicate status:
