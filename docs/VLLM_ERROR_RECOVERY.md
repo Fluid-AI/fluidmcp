@@ -255,10 +255,10 @@ POST /api/llm/models/{model_id}/health-check
 The system automatically detects CUDA OOM errors in stderr logs:
 
 ```python
-# Detection patterns:
+# Detection patterns (case-insensitive):
 - "cuda out of memory"
-- "cudaerror"
-- "out of memory"
+- "cudaerror: out of memory"
+- "cuda error: out of memory"
 ```
 
 When detected:
@@ -309,7 +309,7 @@ See [MONITORING.md](MONITORING.md) for complete metrics documentation.
 
 **Check restart count:**
 ```bash
-curl http://localhost:8099/llm/models/vllm
+curl http://localhost:8099/api/llm/models/vllm
 ```
 
 If `restart_count >= max_restarts`:
@@ -322,7 +322,7 @@ If `restart_count >= max_restarts`:
 
 **Check for OOM:**
 ```bash
-curl http://localhost:8099/llm/models/vllm | jq '.has_cuda_oom'
+curl http://localhost:8099/api/llm/models/vllm | jq '.has_cuda_oom'
 ```
 
 **Solutions:**
@@ -340,7 +340,7 @@ curl http://localhost:8099/llm/models/vllm | jq '.has_cuda_oom'
 
 **Manual health check:**
 ```bash
-curl -X POST http://localhost:8099/llm/models/vllm/health-check
+curl -X POST http://localhost:8099/api/llm/models/vllm/health-check
 ```
 
 **Common causes:**
@@ -376,7 +376,7 @@ curl -X POST http://localhost:8099/llm/models/vllm/health-check
 
 ```bash
 # Cron job to check health every 5 minutes
-*/5 * * * * curl -sf http://localhost:8099/llm/models/vllm | jq '.is_healthy' || echo "vLLM unhealthy!"
+*/5 * * * * curl -sf http://localhost:8099/api/llm/models/vllm | jq '.is_healthy' || echo "vLLM unhealthy!"
 ```
 
 ### 3. Set Up Alerts
@@ -390,20 +390,20 @@ Use Prometheus + Alertmanager to alert on:
 
 ```bash
 # Get recent errors
-curl http://localhost:8099/llm/models/vllm/logs?lines=100 | jq -r '.lines[]' | grep ERROR
+curl http://localhost:8099/api/llm/models/vllm/logs?lines=100 | jq -r '.lines[]' | grep ERROR
 ```
 
 ### 5. Test Recovery Scenarios
 
 ```bash
 # Test crash recovery
-curl -X POST "http://localhost:8099/llm/models/vllm/stop?force=true"
+curl -X POST "http://localhost:8099/api/llm/models/vllm/stop?force=true"
 
 # Wait 30 seconds for health check
 sleep 30
 
 # Verify automatic restart
-curl http://localhost:8099/llm/models/vllm | jq '.restart_count'
+curl http://localhost:8099/api/llm/models/vllm | jq '.restart_count'
 ```
 
 ## Architecture
@@ -493,7 +493,7 @@ export FMCP_BEARER_TOKEN="your-secret-token"
 export FMCP_SECURE_MODE="true"
 
 curl -H "Authorization: Bearer your-secret-token" \
-  http://localhost:8099/llm/models
+  http://localhost:8099/api/llm/models
 ```
 
 ### Rate Limiting
@@ -502,17 +502,57 @@ Consider rate limiting management APIs in production:
 - Restart API: Max 10 requests/minute per model
 - Logs API: Max 30 requests/minute per model
 
-### Log Privacy
+### Log Privacy and Command Sanitization
 
-Stderr logs may contain sensitive information:
-- API keys in stack traces
-- Model paths revealing infrastructure
-- User prompts (if logging enabled)
+FluidMCP automatically sanitizes sensitive data in logs to prevent credential leakage:
 
-**Recommendations:**
-- Restrict `/llm/models/{id}/logs` endpoint access
+**Automatic Sanitization:**
+- Command-line arguments containing API keys, tokens, passwords are redacted
+- Sensitive patterns detected: `api-key`, `token`, `secret`, `password`, `auth`, `credential`
+- Supports both `--flag value` and `--flag=value` formats
+- Example: `vllm serve --api-key sk-secret123` → `vllm serve --api-key ***REDACTED***`
+
+**Environment Variable Filtering:**
+- System environment variables filtered to an allowlist only (case-insensitive matching)
+- Allowlist (Unix-like): `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- Additional Windows allowlist entries: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`
+- User-provided env vars from config always included (explicit configuration)
+
+**Log File Security:**
+- Stderr logs stored in `~/.fluidmcp/logs/llm_{sanitized_model_id}_stderr.log` (using the sanitized model id)
+- File permissions automatically set to `0o600` (owner read/write only)
+- Model IDs are sanitized before being used in filenames to prevent path traversal attacks, and the same sanitized model id is used consistently by both the log writer and log-access APIs
+
+**Additional Recommendations:**
+- Restrict `/api/llm/models/{id}/logs` endpoint access
 - Rotate logs regularly
-- Sanitize logs before exposing via API
+- Review logs periodically for any sensitive data that wasn't caught
+
+## Testing
+
+FluidMCP includes comprehensive test coverage for vLLM functionality:
+
+**Security Tests** ([tests/test_llm_security.py](../tests/test_llm_security.py)):
+- 18 tests covering command sanitization and environment filtering
+- 100% passing
+- Tests for API key redaction, password filtering, env allowlisting, false positive prevention, and case-insensitive env var merging
+
+**Integration Tests** ([tests/test_llm_integration.py](../tests/test_llm_integration.py)):
+- 10 tests covering process lifecycle, configuration validation, and state tracking
+- 100% passing
+- Tests for startup, shutdown, error handling, and environment management
+
+**Run Tests:**
+```bash
+# All vLLM tests
+python -m pytest tests/test_llm_security.py tests/test_llm_integration.py -v
+
+# Security tests only
+python -m pytest tests/test_llm_security.py -v
+
+# Integration tests only
+python -m pytest tests/test_llm_integration.py -v
+```
 
 ## Future Enhancements
 
