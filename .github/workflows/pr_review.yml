@@ -12,7 +12,7 @@ name: PR Review with Claude Code
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:

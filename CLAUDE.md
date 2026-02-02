@@ -21,7 +21,21 @@ fmcp <command>
 fluidai-mcp <command>
 ```
 
-There are no automated tests in this repository currently. Manual testing can be done using sample configurations in the `examples/` directory.
+## Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run specific test suites
+pytest tests/test_llm_security.py      # Security tests (18 tests)
+pytest tests/test_llm_integration.py   # Integration tests (10 tests)
+
+# Run with coverage
+pytest --cov=fluidmcp
+```
+
+Manual testing can also be done using sample configurations in the `examples/` directory.
 
 ## Architecture
 
@@ -48,6 +62,10 @@ There are no automated tests in this repository currently. Manual testing can be
 - `s3_utils.py` - S3 upload/download for master mode configuration
 - `network_utils.py` - Port management utilities
 - `package_list.py` - Package version resolution
+- `llm_launcher.py` - LLM inference server lifecycle management (vLLM, Ollama, LM Studio)
+  - `LLMProcess` - Process lifecycle with secure logging and environment filtering
+  - `LLMHealthMonitor` - Health checks with automatic restart on failure
+  - `launch_llm_models()` / `stop_all_llm_models()` - Multi-model orchestration with error recovery
 
 ### Key Data Structures
 
@@ -252,6 +270,35 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
       },
       "timeout": 120,
       "max_retries": 3
+## LLM Inference Servers (vLLM, Ollama, LM Studio)
+
+FluidMCP supports running LLM inference servers with automatic error recovery and health monitoring.
+
+### Configuration Format
+
+Add LLM models to your config using the `llmModels` section:
+
+```json
+{
+  "mcpServers": {},
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "facebook/opt-125m",
+        "--port", "8001",
+        "--gpu-memory-utilization", "0.9"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      },
+      "restart_policy": "on-failure",
+      "max_restarts": 3,
+      "restart_delay": 5
     }
   }
 }
@@ -307,3 +354,131 @@ pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_clie
 - [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) - Complete documentation
 - [examples/replicate-inference.json](examples/replicate-inference.json) - Example configuration
 ```
+### Key Features
+
+**Process Lifecycle**:
+- Secure command logging (redacts API keys, tokens, passwords)
+- Environment variable filtering (allowlist approach)
+- Secure log file permissions (0o600)
+- Graceful shutdown with force-kill fallback
+
+**Error Recovery**:
+- Automatic restart on failure (configurable policy)
+- Exponential backoff between restart attempts
+- CUDA OOM detection from stderr logs
+- Maximum restart limits to prevent infinite loops
+
+**Health Monitoring**:
+- Periodic HTTP health checks to `/health` or `/v1/models`
+- Configurable check intervals and failure thresholds
+- Automatic restart trigger on consecutive failures
+- Resource tracking and metrics
+
+**Supported Restart Policies**:
+- `"on-failure"` - Restart only on non-zero exit codes
+- `"always"` - Restart on any termination (including success)
+- `"no"` - No automatic restart
+
+### Configuration Options
+
+```json
+{
+  "command": "vllm",              // Required: Command to execute
+  "args": ["serve", "model"],     // Optional: Command arguments
+  "env": {                         // Optional: Environment variables
+    "CUDA_VISIBLE_DEVICES": "0"
+  },
+  "endpoints": {                   // Required: Health check endpoint
+    "base_url": "http://localhost:8001/v1"
+  },
+  "restart_policy": "on-failure", // Optional: "on-failure", "always", "no" (default: "no")
+  "max_restarts": 3,              // Optional: Max restart attempts (default: 3)
+  "restart_delay": 5,             // Optional: Base delay between restarts in seconds (default: 5)
+  "health_check_interval": 30,   // Optional: Seconds between health checks (default: 30)
+  "health_check_failures": 2     // Optional: Failures before restart (default: 2)
+}
+```
+
+### Security Features
+
+**Command Sanitization**:
+- Automatically redacts sensitive patterns in logs: `api-key`, `token`, `secret`, `password`, `auth`, `credential`
+- Handles both `--flag value` and `--flag=value` formats
+- Example: `vllm serve --api-key sk-secret123` → `vllm serve --api-key ***REDACTED***`
+
+**Environment Filtering**:
+- Only allowlisted system environment variables passed to subprocess (case-insensitive matching)
+- Allowlist (Unix-like): `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- Additional Windows allowlist entries: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`
+- User-provided env vars from config always included (explicit configuration)
+
+**Log Security**:
+- Stderr logs stored in `~/.fluidmcp/logs/llm_{sanitized_model_id}_stderr.log`
+- File permissions set to `0o600` (owner read/write only)
+- Model ID sanitized (and used in the filename) to prevent path traversal attacks
+
+### Example Configurations
+
+See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.json) for a complete working example.
+
+**Minimal vLLM**:
+```json
+{
+  "llmModels": {
+    "vllm": {
+      "command": "vllm",
+      "args": ["serve", "facebook/opt-125m", "--port", "8001"],
+      "endpoints": {"base_url": "http://localhost:8001/v1"}
+    }
+  }
+}
+```
+
+**Production vLLM with Full Error Recovery**:
+```json
+{
+  "llmModels": {
+    "vllm-production": {
+      "command": "vllm",
+      "args": [
+        "serve",
+        "meta-llama/Llama-2-7b-hf",
+        "--port", "8001",
+        "--gpu-memory-utilization", "0.9",
+        "--max-model-len", "4096"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1",
+        "HF_TOKEN": "hf_..."
+      },
+      "endpoints": {"base_url": "http://localhost:8001/v1"},
+      "restart_policy": "on-failure",
+      "max_restarts": 5,
+      "restart_delay": 10,
+      "health_check_interval": 60,
+      "health_check_failures": 3
+    }
+  }
+}
+```
+
+**Ollama**:
+```json
+{
+  "llmModels": {
+    "ollama": {
+      "command": "ollama",
+      "args": ["serve"],
+      "endpoints": {"base_url": "http://localhost:11434"},
+      "restart_policy": "on-failure"
+    }
+  }
+}
+```
+
+### Implementation Files
+
+- [fluidmcp/cli/services/llm_launcher.py](fluidmcp/cli/services/llm_launcher.py) - Core implementation
+- [tests/test_llm_security.py](tests/test_llm_security.py) - Security tests (18 tests, 100% passing)
+- [tests/test_llm_integration.py](tests/test_llm_integration.py) - Integration tests (10 tests, 100% passing)
+- [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.json) - Example config
