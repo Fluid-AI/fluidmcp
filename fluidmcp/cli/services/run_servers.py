@@ -313,8 +313,8 @@ def run_servers(
             logger.exception(f"Error launching server '{server_name}'")
 
     logger.debug(f"Total MCP servers launched: {launched_servers}")
-    if launched_servers == 0 and not config.llm_models and not config.replicate_models:
-        logger.warning("No servers, LLM models, or Replicate models configured - nothing to launch")
+    if launched_servers == 0 and not config.llm_models:
+        logger.warning("No servers or LLM models configured - nothing to launch")
         return
 
     if launched_servers > 0:
@@ -327,7 +327,6 @@ def run_servers(
         # Separate models by type
         vllm_models = {}
         replicate_models = {}
-        unsupported_models = {}
 
         for model_id, model_config in config.llm_models.items():
             model_type = model_config.get("type", "vllm")  # Default to vllm for backward compat
@@ -337,7 +336,6 @@ def run_servers(
             elif model_type == "replicate":
                 replicate_models[model_id] = model_config
             else:
-                unsupported_models[model_id] = model_type
                 logger.warning(f"Model '{model_id}' has unsupported type '{model_type}', skipping")
 
         # Launch vLLM models

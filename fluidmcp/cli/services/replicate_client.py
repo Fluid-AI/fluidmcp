@@ -28,7 +28,8 @@ class ReplicateClient:
     Replicate-hosted models.
 
     Attributes:
-        model_id: Replicate model identifier (e.g., "meta/llama-2-70b-chat")
+        model_id: Local registry key for this model instance (e.g., "llama-2-70b")
+        model_name: Replicate model path (e.g., "meta/llama-2-70b-chat")
         api_key: Replicate API authentication token
         config: Model configuration including endpoints and default parameters
     """
@@ -238,7 +239,7 @@ class ReplicateClient:
         self,
         input_data: Dict[str, Any],
         version: Optional[str] = None
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[Any]:
         """
         Stream prediction output as it's generated.
 
@@ -247,7 +248,7 @@ class ReplicateClient:
             version: Optional specific model version to use
 
         Yields:
-            Chunks of model output as they're generated
+            Chunks of model output as they're generated (type depends on model)
 
         Raises:
             httpx.HTTPError: If API request fails

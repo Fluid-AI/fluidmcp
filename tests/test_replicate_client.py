@@ -60,28 +60,36 @@ async def mock_http_client():
 class TestReplicateClientInitialization:
     """Test Replicate client initialization."""
 
-    def test_successful_initialization(self, replicate_config):
+    @pytest.mark.asyncio
+    async def test_successful_initialization(self, replicate_config):
         """Test successful client initialization with full config."""
         client = ReplicateClient("test-model", replicate_config)
 
-        assert client.model_id == "test-model"
-        assert client.model_name == "meta/llama-2-70b-chat"
-        assert client.api_key == "r8_test_key_12345"
-        assert client.base_url == "https://api.replicate.com/v1"
-        assert client.default_params == {"temperature": 0.7, "max_tokens": 1000}
-        assert client.timeout == 60.0
-        assert client.max_retries == 3
+        try:
+            assert client.model_id == "test-model"
+            assert client.model_name == "meta/llama-2-70b-chat"
+            assert client.api_key == "r8_test_key_12345"
+            assert client.base_url == "https://api.replicate.com/v1"
+            assert client.default_params == {"temperature": 0.7, "max_tokens": 1000}
+            assert client.timeout == 60.0
+            assert client.max_retries == 3
+        finally:
+            await client.close()
 
-    def test_minimal_initialization(self, minimal_config):
+    @pytest.mark.asyncio
+    async def test_minimal_initialization(self, minimal_config):
         """Test initialization with minimal config uses defaults."""
         client = ReplicateClient("minimal", minimal_config)
 
-        assert client.model_id == "minimal"
-        assert client.model_name == "meta/llama-2-7b-chat"
-        assert client.base_url == "https://api.replicate.com/v1"  # Default
-        assert client.default_params == {}  # Default empty
-        assert client.timeout == 60.0  # Default
-        assert client.max_retries == 3  # Default
+        try:
+            assert client.model_id == "minimal"
+            assert client.model_name == "meta/llama-2-7b-chat"
+            assert client.base_url == "https://api.replicate.com/v1"  # Default
+            assert client.default_params == {}  # Default empty
+            assert client.timeout == 60.0  # Default
+            assert client.max_retries == 3  # Default
+        finally:
+            await client.close()
 
     def test_missing_model_raises_error(self):
         """Test that missing 'model' field raises ValueError."""
