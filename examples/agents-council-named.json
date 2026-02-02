@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "agents-council-opus": {
+      "command": "npx",
+      "args": ["-y", "agents-council@latest", "mcp", "-n", "Opus"],
+      "env": {}
+    },
+    "agents-council-codex": {
+      "command": "npx",
+      "args": ["-y", "agents-council@latest", "mcp", "-n", "Codex"],
+      "env": {}
+    },
+    "agents-council-gemini": {
+      "command": "npx",
+      "args": ["-y", "agents-council@latest", "mcp", "-n", "Gemini"],
+      "env": {}
+    }
+  }
+}
