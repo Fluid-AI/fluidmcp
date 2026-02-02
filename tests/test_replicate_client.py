@@ -39,6 +39,16 @@ def minimal_config():
     }
 
 
+@pytest.fixture(autouse=True)
+async def cleanup_replicate_registry():
+    """Clean up the global Replicate registry before/after each test."""
+    # Cleanup before test
+    await stop_all_replicate_models()
+    yield
+    # Cleanup after test
+    await stop_all_replicate_models()
+
+
 @pytest.fixture
 def mock_http_client():
     """Create a mock httpx AsyncClient."""
@@ -136,11 +146,11 @@ class TestReplicateClientPredictions:
 
     @pytest.mark.asyncio
     async def test_prediction_retry_on_failure(self, replicate_config, mock_http_client):
-        """Test retry logic on HTTP errors."""
-        # First two calls fail, third succeeds
+        """Test retry logic on transient errors (network errors and 5xx)."""
+        # First two calls fail with retryable errors, third succeeds
         mock_http_client.post.side_effect = [
-            httpx.HTTPError("Network error"),
-            httpx.HTTPError("Network error"),
+            httpx.RequestError("Network error"),
+            httpx.RequestError("Network error"),
             Mock(json=lambda: {"id": "pred_123", "status": "starting"}, raise_for_status=Mock())
         ]
 
@@ -155,15 +165,15 @@ class TestReplicateClientPredictions:
 
     @pytest.mark.asyncio
     async def test_prediction_fails_after_max_retries(self, replicate_config, mock_http_client):
-        """Test that prediction fails after max retries."""
-        # All calls fail
-        mock_http_client.post.side_effect = httpx.HTTPError("Network error")
+        """Test that prediction fails after max retries on transient errors."""
+        # All calls fail with retryable errors
+        mock_http_client.post.side_effect = httpx.RequestError("Network error")
 
         client = ReplicateClient("test", replicate_config)
         client.client = mock_http_client
 
         # Should raise after max_retries attempts
-        with pytest.raises(httpx.HTTPError):
+        with pytest.raises(httpx.RequestError):
             await client.predict({"prompt": "Test"})
 
         assert mock_http_client.post.call_count == 3  # max_retries

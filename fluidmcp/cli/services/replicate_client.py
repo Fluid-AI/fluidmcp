@@ -61,7 +61,17 @@ class ReplicateClient:
         self.model_name = config["model"]
         # Expand environment variables in API key (e.g., ${REPLICATE_API_TOKEN})
         api_key_raw = config["api_key"]
-        self.api_key = os.path.expandvars(api_key_raw) if isinstance(api_key_raw, str) else api_key_raw
+        if isinstance(api_key_raw, str):
+            api_key_expanded = os.path.expandvars(api_key_raw)
+            # Check if environment variable was not resolved
+            if "$" in api_key_raw and api_key_expanded == api_key_raw:
+                raise ValueError(
+                    f"Replicate model '{model_id}' has unresolved environment variable "
+                    f"in 'api_key': {api_key_raw!r}. Make sure the environment variable is set."
+                )
+            self.api_key = api_key_expanded
+        else:
+            self.api_key = api_key_raw
         self.base_url = config.get("endpoints", {}).get("base_url", REPLICATE_API_BASE)
         self.default_params = config.get("default_params", {})
         self.timeout = config.get("timeout", DEFAULT_TIMEOUT)
@@ -109,14 +119,21 @@ class ReplicateClient:
         merged_input = {**self.default_params, **input_data}
 
         payload = {
-            "version": version or self.model_name,
             "input": merged_input
         }
+
+        # Only include version if explicitly provided (version ID, not model name)
+        if version:
+            payload["version"] = version
 
         if webhook:
             payload["webhook"] = webhook
         if stream:
             payload["stream"] = True
+
+        # Use model-scoped endpoint (accepts owner/name) if no version specified
+        # Otherwise use version-scoped endpoint
+        endpoint = f"/models/{self.model_name}/predictions" if not version else "/predictions"
 
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
@@ -124,28 +141,60 @@ class ReplicateClient:
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                response = await self.client.post("/predictions", json=payload)
+                response = await self.client.post(endpoint, json=payload)
                 response.raise_for_status()
                 result = response.json()
 
                 logger.info(f"Prediction created for model '{self.model_id}': {result.get('id')} (status: {result.get('status')})")
                 return result
 
-            except httpx.HTTPError as e:
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                status_code = e.response.status_code
+
+                # Only retry on transient errors (429 rate limit and 5xx server errors)
+                should_retry = status_code == 429 or (500 <= status_code < 600)
+
+                if should_retry:
+                    logger.warning(
+                        f"Transient error {status_code} for model '{self.model_id}' "
+                        f"(attempt {attempt + 1}/{self.max_retries}): {e}"
+                    )
+
+                    if attempt < self.max_retries - 1:
+                        # Exponential backoff: 0s, 2s, 4s, 8s
+                        wait_time = 0 if attempt == 0 else (2 ** attempt)
+                        if wait_time > 0:
+                            await asyncio.sleep(wait_time)
+                else:
+                    # Don't retry on client errors (400, 401, 403, 404, 422, etc.)
+                    logger.error(
+                        f"Non-retryable error {status_code} for model '{self.model_id}': {e}"
+                    )
+                    raise e
+
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                # Network errors and timeouts - retry these
                 last_error = e
                 logger.warning(
-                    f"Prediction request failed for model '{self.model_id}' "
+                    f"Network/timeout error for model '{self.model_id}' "
                     f"(attempt {attempt + 1}/{self.max_retries}): {e}"
                 )
 
                 if attempt < self.max_retries - 1:
-                    # Exponential backoff
-                    wait_time = 2 ** attempt
-                    await asyncio.sleep(wait_time)
+                    # Exponential backoff: 0s, 2s, 4s, 8s
+                    wait_time = 0 if attempt == 0 else (2 ** attempt)
+                    if wait_time > 0:
+                        await asyncio.sleep(wait_time)
 
         # All retries failed
         logger.error(f"All retry attempts failed for model '{self.model_id}'")
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"Prediction request failed for model '{self.model_id}', "
+            "but no error was captured."
+        )
 
     async def get_prediction(self, prediction_id: str) -> Dict[str, Any]:
         """
@@ -206,15 +255,18 @@ class ReplicateClient:
 
         logger.debug(f"Streaming prediction {prediction_id} for model '{self.model_id}'")
 
+        # Track last output to avoid duplicates
+        last_output = None
+
         # Poll for updates
         while True:
             status = await self.get_prediction(prediction_id)
+            current_output = status.get("output", "")
 
             if status["status"] == "succeeded":
-                # Yield final output
-                output = status.get("output", "")
-                if output:
-                    yield output
+                # Yield only new output
+                if current_output and current_output != last_output:
+                    yield current_output
                 break
 
             elif status["status"] == "failed":
@@ -223,10 +275,10 @@ class ReplicateClient:
                 raise Exception(f"Prediction failed: {error_msg}")
 
             elif status["status"] in ["starting", "processing"]:
-                # Check for partial output
-                output = status.get("output", "")
-                if output:
-                    yield output
+                # Only yield if output has changed
+                if current_output and current_output != last_output:
+                    yield current_output
+                    last_output = current_output
 
                 # Wait before next poll
                 await asyncio.sleep(0.5)

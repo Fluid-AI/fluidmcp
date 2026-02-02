@@ -8,7 +8,7 @@ Provides REST API for:
 - Listing all configured servers
 - Replicate model inference
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials

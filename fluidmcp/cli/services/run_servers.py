@@ -29,7 +29,7 @@ from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
-from .replicate_client import initialize_replicate_models, stop_all_replicate_models, get_replicate_client, list_replicate_models
+from .replicate_client import initialize_replicate_models, stop_all_replicate_models
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 
