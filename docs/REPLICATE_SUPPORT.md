@@ -345,8 +345,8 @@ Failed requests are automatically retried with exponential backoff:
     "model-id": {
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
-      "max_retries": 5,  // Retry up to 5 times
-      "timeout": 120      // 2 minute timeout
+      "max_retries": 5,
+      "timeout": 120    
     }
   }
 }
@@ -405,7 +405,7 @@ Replicate charges based on compute time. Tips to manage costs:
    ```json
    {
      "default_params": {
-       "max_tokens": 500  // Limit output length
+       "max_tokens": 500
      }
    }
    ```
@@ -555,7 +555,7 @@ All tests use mocked HTTP responses (no actual Replicate API calls).
 1. Increase timeout:
    ```json
    {
-     "timeout": 300  // 5 minutes
+     "timeout": 300
    }
    ```
 
@@ -602,7 +602,7 @@ All tests use mocked HTTP responses (no actual Replicate API calls).
    ```json
    {
      "default_params": {
-       "max_tokens": 100  // Limit output
+       "max_tokens": 100
      }
    }
    ```

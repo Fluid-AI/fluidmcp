@@ -172,11 +172,11 @@ class TestReplicateClientPredictions:
         client = ReplicateClient("test", replicate_config)
         client.client = mock_http_client
 
-        # Should raise after max_retries attempts
+        # Should raise after max_retries attempts (3 retries + 1 initial = 4 total)
         with pytest.raises(httpx.RequestError):
             await client.predict({"prompt": "Test"})
 
-        assert mock_http_client.post.call_count == 3  # max_retries
+        assert mock_http_client.post.call_count == 4  # 1 initial + max_retries (3)
 
     @pytest.mark.asyncio
     async def test_get_prediction(self, replicate_config, mock_http_client):

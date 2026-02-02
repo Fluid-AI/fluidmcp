@@ -63,12 +63,15 @@ class ReplicateClient:
         api_key_raw = config["api_key"]
         if isinstance(api_key_raw, str):
             api_key_expanded = os.path.expandvars(api_key_raw)
-            # Check if environment variable was not resolved
-            if "$" in api_key_raw and api_key_expanded == api_key_raw:
-                raise ValueError(
-                    f"Replicate model '{model_id}' has unresolved environment variable "
-                    f"in 'api_key': {api_key_raw!r}. Make sure the environment variable is set."
-                )
+            # Check if ${VAR} or $VAR pattern was not resolved
+            # Only check for our supported patterns to avoid false positives
+            import re
+            if re.search(r'\$\{[^}]+\}|\$[A-Z_][A-Z0-9_]*', api_key_raw):
+                if api_key_expanded == api_key_raw:
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has unresolved environment variable "
+                        f"in 'api_key': {api_key_raw!r}. Make sure the environment variable is set."
+                    )
             self.api_key = api_key_expanded
         else:
             self.api_key = api_key_raw
@@ -137,9 +140,9 @@ class ReplicateClient:
 
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
-        # Retry logic
+        # Retry logic (max_retries = number of retries AFTER initial attempt)
         last_error = None
-        for attempt in range(self.max_retries):
+        for attempt in range(self.max_retries + 1):
             try:
                 response = await self.client.post(endpoint, json=payload)
                 response.raise_for_status()
@@ -158,10 +161,10 @@ class ReplicateClient:
                 if should_retry:
                     logger.warning(
                         f"Transient error {status_code} for model '{self.model_id}' "
-                        f"(attempt {attempt + 1}/{self.max_retries}): {e}"
+                        f"(attempt {attempt + 1}/{self.max_retries + 1}): {e}"
                     )
 
-                    if attempt < self.max_retries - 1:
+                    if attempt < self.max_retries:
                         # Exponential backoff: 0s, 2s, 4s, 8s
                         wait_time = 0 if attempt == 0 else (2 ** attempt)
                         if wait_time > 0:
@@ -178,10 +181,10 @@ class ReplicateClient:
                 last_error = e
                 logger.warning(
                     f"Network/timeout error for model '{self.model_id}' "
-                    f"(attempt {attempt + 1}/{self.max_retries}): {e}"
+                    f"(attempt {attempt + 1}/{self.max_retries + 1}): {e}"
                 )
 
-                if attempt < self.max_retries - 1:
+                if attempt < self.max_retries:
                     # Exponential backoff: 0s, 2s, 4s, 8s
                     wait_time = 0 if attempt == 0 else (2 ** attempt)
                     if wait_time > 0:
@@ -249,8 +252,8 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
         """
-        # Create prediction with streaming enabled
-        prediction = await self.predict(input_data, version=version, stream=True)
+        # Create prediction (polling-based incremental output)
+        prediction = await self.predict(input_data, version=version, stream=False)
         prediction_id = prediction["id"]
 
         logger.debug(f"Streaming prediction {prediction_id} for model '{self.model_id}'")
@@ -272,7 +275,7 @@ class ReplicateClient:
             elif status["status"] == "failed":
                 error_msg = status.get("error", "Unknown error")
                 logger.error(f"Prediction {prediction_id} failed: {error_msg}")
-                raise Exception(f"Prediction failed: {error_msg}")
+                raise RuntimeError(f"Prediction failed: {error_msg}")
 
             elif status["status"] in ["starting", "processing"]:
                 # Only yield if output has changed

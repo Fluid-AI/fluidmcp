@@ -1422,8 +1422,9 @@ async def create_prediction(
         raise HTTPException(500, f"Failed to create prediction: {str(e)}")
 
 
-@router.get("/replicate/predictions/{prediction_id}")
+@router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
 async def get_prediction_status(
+    model_id: str,
     prediction_id: str,
     token: str = Depends(get_token)
 ):
@@ -1431,33 +1432,29 @@ async def get_prediction_status(
     Get the status and output of a prediction.
 
     Args:
+        model_id: Model identifier that created the prediction
         prediction_id: ID of the prediction
 
     Returns:
         Prediction status and output
     """
-    from ..services.replicate_client import list_replicate_models, get_replicate_client
+    from ..services.replicate_client import get_replicate_client
 
-    # Try to find which client owns this prediction by checking all clients
-    models = list_replicate_models()
-    if not models:
-        raise HTTPException(404, "No Replicate models initialized")
-
-    # Use the first available client (predictions are global across a Replicate account)
-    client = get_replicate_client(models[0])
+    client = get_replicate_client(model_id)
     if not client:
-        raise HTTPException(500, "No Replicate client available")
+        raise HTTPException(404, f"Replicate model '{model_id}' not found")
 
     try:
         result = await client.get_prediction(prediction_id)
         return result
     except Exception as e:
-        logger.error(f"Error getting prediction '{prediction_id}': {e}")
+        logger.error(f"Error getting prediction '{prediction_id}' for model '{model_id}': {e}")
         raise HTTPException(500, f"Failed to get prediction: {str(e)}")
 
 
-@router.post("/replicate/predictions/{prediction_id}/cancel")
+@router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
 async def cancel_prediction(
+    model_id: str,
     prediction_id: str,
     token: str = Depends(get_token)
 ):
@@ -1465,27 +1462,24 @@ async def cancel_prediction(
     Cancel a running prediction.
 
     Args:
+        model_id: Model identifier that created the prediction
         prediction_id: ID of the prediction to cancel
 
     Returns:
         Cancellation response
     """
-    from ..services.replicate_client import list_replicate_models, get_replicate_client
+    from ..services.replicate_client import get_replicate_client
 
-    models = list_replicate_models()
-    if not models:
-        raise HTTPException(404, "No Replicate models initialized")
-
-    client = get_replicate_client(models[0])
+    client = get_replicate_client(model_id)
     if not client:
-        raise HTTPException(500, "No Replicate client available")
+        raise HTTPException(404, f"Replicate model '{model_id}' not found")
 
     try:
         result = await client.cancel_prediction(prediction_id)
-        logger.info(f"Cancelled prediction '{prediction_id}'")
+        logger.info(f"Cancelled prediction '{prediction_id}' for model '{model_id}'")
         return result
     except Exception as e:
-        logger.error(f"Error cancelling prediction '{prediction_id}': {e}")
+        logger.error(f"Error cancelling prediction '{prediction_id}' for model '{model_id}': {e}")
         raise HTTPException(500, f"Failed to cancel prediction: {str(e)}")
 
 
@@ -1522,12 +1516,16 @@ async def stream_prediction(
 
     async def generate():
         """Generate server-sent events for streaming."""
+        import json
         try:
             async for chunk in client.stream_prediction(input_data, version):
-                yield f"data: {chunk}\n\n"
+                # JSON-encode the chunk to handle newlines and special characters
+                encoded_chunk = json.dumps({"chunk": chunk})
+                yield f"data: {encoded_chunk}\n\n"
         except Exception as e:
             logger.error(f"Error streaming prediction for '{model_id}': {e}")
-            yield f"data: [ERROR] {str(e)}\n\n"
+            error_payload = json.dumps({"error": str(e)})
+            yield f"data: {error_payload}\n\n"
 
     return StreamingResponse(
         generate(),
