@@ -447,7 +447,11 @@ async def stop_all_replicate_models() -> None:
 
     logger.info(f"Stopping {len(_replicate_clients)} Replicate client(s)")
 
-    for model_id, client in _replicate_clients.items():
+    # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
+    # await client.close() yields control, allowing concurrent modifications
+    clients_snapshot = list(_replicate_clients.items())
+
+    for model_id, client in clients_snapshot:
         try:
             await client.close()
             logger.info(f"Stopped Replicate client for model '{model_id}'")

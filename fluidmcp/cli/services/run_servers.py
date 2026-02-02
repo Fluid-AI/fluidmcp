@@ -414,6 +414,16 @@ def run_servers(
                 except Exception as e:
                     logger.error(f"Error initializing Replicate models: {e}")
 
+            # Register shutdown event to cleanup Replicate clients on same event loop
+            @app.on_event("shutdown")
+            async def shutdown_replicate_models():
+                """Cleanup Replicate models when FastAPI server shuts down."""
+                try:
+                    await stop_all_replicate_models()
+                    logger.info("Replicate clients shutdown completed")
+                except Exception as e:
+                    logger.error(f"Error during Replicate clients shutdown: {e}")
+
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
 
@@ -1187,15 +1197,16 @@ def _cleanup_resources():
             stop_all_llm_models(_llm_processes)
             _llm_processes.clear()
 
-        # Stop all Replicate clients
-        logger.info("Shutting down Replicate clients...")
+        # Stop all Replicate clients (fallback - should be handled by FastAPI shutdown event)
+        # This is only reached if atexit is triggered before FastAPI shutdown
+        logger.debug("Attempting fallback Replicate clients cleanup...")
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(stop_all_replicate_models())
-            logger.debug("Replicate clients stopped successfully")
+            logger.debug("Replicate clients stopped successfully (fallback)")
         except Exception as e:
-            logger.warning(f"Error during Replicate clients cleanup: {e}")
+            logger.warning(f"Error during Replicate clients cleanup (fallback): {e}")
         finally:
             loop.close()
 

@@ -1421,8 +1421,20 @@ async def create_prediction(
     except httpx.HTTPStatusError as e:
         # Preserve upstream Replicate API status codes
         status_code = e.response.status_code
-        logger.error(f"Replicate API error {status_code} for model '{model_id}': {e}")
-        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+        request_id = e.response.headers.get("X-Request-ID", "unknown")
+
+        # Log full upstream response details server-side for debugging
+        response_text = e.response.text if e.response else ""
+        logger.error(
+            f"Replicate API error {status_code} for model '{model_id}' "
+            f"(request_id={request_id}): {response_text}"
+        )
+
+        # Return sanitized error message to client (avoid leaking upstream details)
+        raise HTTPException(
+            status_code,
+            f"Replicate API returned an error while creating prediction. Reference ID: {request_id}"
+        )
     except (httpx.RequestError, httpx.TimeoutException) as e:
         # Network/timeout errors = 502 Bad Gateway
         logger.error(f"Network error creating prediction for '{model_id}': {e}")
@@ -1459,8 +1471,16 @@ async def get_prediction_status(
         return result
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code
-        logger.error(f"Replicate API error {status_code} getting prediction '{prediction_id}': {e}")
-        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+        request_id = e.response.headers.get("X-Request-ID", "unknown")
+        response_text = e.response.text if e.response else ""
+        logger.error(
+            f"Replicate API error {status_code} getting prediction '{prediction_id}' "
+            f"(request_id={request_id}): {response_text}"
+        )
+        raise HTTPException(
+            status_code,
+            f"Replicate API returned an error while getting prediction. Reference ID: {request_id}"
+        )
     except (httpx.RequestError, httpx.TimeoutException) as e:
         logger.error(f"Network error getting prediction '{prediction_id}': {e}")
         raise HTTPException(502, "Failed to connect to Replicate API")
@@ -1497,8 +1517,16 @@ async def cancel_prediction(
         return result
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code
-        logger.error(f"Replicate API error {status_code} cancelling prediction '{prediction_id}': {e}")
-        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+        request_id = e.response.headers.get("X-Request-ID", "unknown")
+        response_text = e.response.text if e.response else ""
+        logger.error(
+            f"Replicate API error {status_code} cancelling prediction '{prediction_id}' "
+            f"(request_id={request_id}): {response_text}"
+        )
+        raise HTTPException(
+            status_code,
+            f"Replicate API returned an error while cancelling prediction. Reference ID: {request_id}"
+        )
     except (httpx.RequestError, httpx.TimeoutException) as e:
         logger.error(f"Network error cancelling prediction '{prediction_id}': {e}")
         raise HTTPException(502, "Failed to connect to Replicate API")
@@ -1547,9 +1575,14 @@ async def stream_prediction(
                 encoded_chunk = json.dumps({"chunk": chunk})
                 yield f"data: {encoded_chunk}\n\n"
         except Exception as e:
-            logger.error(f"Error streaming prediction for '{model_id}': {e}")
-            error_payload = json.dumps({"error": str(e)})
-            yield f"data: {error_payload}\n\n"
+            # Log full exception details server-side for debugging
+            logger.exception(f"Error streaming prediction for '{model_id}'")
+            # Send generic error to client (avoid leaking internal details)
+            error_payload = json.dumps({
+                "error": "An internal error occurred while streaming prediction.",
+                "event_type": "error"
+            })
+            yield f"event: error\ndata: {error_payload}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -1582,8 +1615,16 @@ async def get_model_info(
         return result
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code
-        logger.error(f"Replicate API error {status_code} getting model info for '{model_id}': {e}")
-        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+        request_id = e.response.headers.get("X-Request-ID", "unknown")
+        response_text = e.response.text if e.response else ""
+        logger.error(
+            f"Replicate API error {status_code} getting model info for '{model_id}' "
+            f"(request_id={request_id}): {response_text}"
+        )
+        raise HTTPException(
+            status_code,
+            f"Replicate API returned an error while getting model info. Reference ID: {request_id}"
+        )
     except (httpx.RequestError, httpx.TimeoutException) as e:
         logger.error(f"Network error getting model info for '{model_id}': {e}")
         raise HTTPException(502, "Failed to connect to Replicate API")
