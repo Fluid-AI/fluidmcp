@@ -28,7 +28,8 @@ setup(
         "psutil",
         "boto3",  # Added boto3 for S3 operations
         "fastapi",
-        "uvicorn"
+        "uvicorn",
+        "httpx"  # Required for Replicate client
     ],
     entry_points={
         'console_scripts': [
