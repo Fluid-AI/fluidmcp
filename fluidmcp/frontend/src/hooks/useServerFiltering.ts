@@ -17,6 +17,7 @@ export interface UseServerFilteringResult {
   setSortBy: (sort: string) => void;
   setFilterBy: (filter: string) => void;
   setCurrentPage: (page: number) => void;
+  clearFilters: () => void;
 
   // Computed
   filteredServers: Server[];
@@ -103,6 +104,14 @@ export function useServerFiltering(
     setCurrentPage(1);
   }, [searchQuery, filterBy, sortBy]);
 
+  // Clear all filters
+  const clearFilters = () => {
+    setSearchQuery('');
+    setSortBy('name-asc');
+    setFilterBy('all');
+    setCurrentPage(1);
+  };
+
   return {
     searchQuery,
     sortBy,
@@ -112,6 +121,7 @@ export function useServerFiltering(
     setSortBy: (sort) => setSortBy(sort as any),
     setFilterBy: (filter) => setFilterBy(filter as any),
     setCurrentPage,
+    clearFilters,
     filteredServers,
     paginatedServers,
     totalPages,
