@@ -37,6 +37,9 @@ class ServerManager:
         self.configs: Dict[str, Dict[str, Any]] = {}
         self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
 
+        # Operation locks to prevent concurrent operations on same server
+        self._operation_locks: Dict[str, asyncio.Lock] = {}
+
         # Event loop for async operations
         self._loop = None
 
@@ -111,9 +114,13 @@ class ServerManager:
 
     # ==================== Server Lifecycle Methods ====================
 
-    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
+    async def _start_server_unlocked(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
-        Start an MCP server.
+        Internal method to start a server without acquiring a lock.
+
+        ⚠️ IMPORTANT: This method does NOT acquire operation locks.
+        - Only call from restart_server() which holds the lock for the entire operation
+        - DO NOT call directly from public APIs
 
         Args:
             id: Unique server identifier
@@ -200,9 +207,37 @@ class ServerManager:
 
             return False
 
-    async def stop_server(self, id: str, force: bool = False) -> bool:
+    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
-        Stop a running MCP server.
+        Start an MCP server.
+
+        Uses a lock to prevent concurrent start operations on the same server.
+
+        Args:
+            id: Unique server identifier
+            config: Server configuration (if None, loads from database)
+            user_id: User who is starting the server (for tracking)
+
+        Returns:
+            True if started successfully, False otherwise
+        """
+        # Check for concurrent operations - fail fast
+        lock = self._get_operation_lock(id)
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
+
+        # Acquire lock for this operation
+        async with lock:
+            return await self._start_server_unlocked(id, config, user_id)
+
+    async def _stop_server_unlocked(self, id: str, force: bool = False) -> bool:
+        """
+        Internal method to stop a server without acquiring a lock.
+
+        ⚠️ IMPORTANT: This method does NOT acquire operation locks.
+        - Only call from restart_server() which holds the lock for the entire operation
+        - DO NOT call directly from public APIs
 
         Args:
             id: Server identifier
@@ -267,9 +302,51 @@ class ServerManager:
             collector.record_error("stop_failed")
             return False
 
+    async def stop_server(self, id: str, force: bool = False) -> bool:
+        """
+        Stop a running MCP server.
+
+        Uses a lock to prevent concurrent stop operations on the same server.
+
+        Args:
+            id: Server identifier
+            force: If True, use SIGKILL instead of SIGTERM
+
+        Returns:
+            True if stopped successfully, False otherwise
+        """
+        # Check for concurrent operations - fail fast
+        lock = self._get_operation_lock(id)
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
+
+        # Acquire lock for this operation
+        async with lock:
+            return await self._stop_server_unlocked(id, force)
+
+    def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
+        """
+        Get or create an operation lock for a server.
+
+        Prevents concurrent operations (start/stop/restart) on the same server.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Asyncio lock for the server
+        """
+        if server_id not in self._operation_locks:
+            self._operation_locks[server_id] = asyncio.Lock()
+        return self._operation_locks[server_id]
+
     async def restart_server(self, id: str) -> bool:
         """
-        Restart an MCP server.
+        Restart an MCP server atomically.
+
+        Uses a lock to prevent concurrent restart operations on the same server.
+        The lock is held for the entire restart operation (stop + start) to ensure atomicity.
 
         Args:
             id: Server identifier
@@ -277,43 +354,55 @@ class ServerManager:
         Returns:
             True if restarted successfully
         """
-        # Get current config before stopping
-        config = self.configs.get(id)
-        if not config:
-            config = await self.db.get_server_config(id)
+        # Acquire lock to prevent concurrent operations
+        lock = self._get_operation_lock(id)
 
-        # Get display name
-        name = config.get("name", id) if config else id
-        logger.info(f"Restarting server '{name}' (id: {id})...")
+        # Try to acquire lock without waiting - fail fast if operation in progress
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
 
-        # Stop server
-        if id in self.processes:
-            await self.stop_server(id)
+        async with lock:
+            # Get current config before stopping
+            config = self.configs.get(id)
+            if not config:
+                config = await self.db.get_server_config(id)
 
-        # Increment restart count
-        instance = await self.db.get_instance_state(id)
-        restart_count = instance.get("restart_count", 0) if instance else 0
+            # Get display name
+            name = config.get("name", id) if config else id
+            logger.info(f"Restarting server '{name}' (id: {id})...")
 
-        # Update config with new restart count
-        if config:
-            config["_restart_count"] = restart_count + 1
+            # Stop server (using internal unlocked method - lock already held)
+            if id in self.processes:
+                stop_success = await self._stop_server_unlocked(id)
+                if not stop_success:
+                    logger.error(f"Failed to stop server '{name}' (id: {id}) during restart")
+                    return False
 
-        # Start server
-        success = await self.start_server(id, config)
+            # Increment restart count
+            instance = await self.db.get_instance_state(id)
+            restart_count = instance.get("restart_count", 0) if instance else 0
 
-        if success:
-            # Update restart count in database
-            await self.db.save_instance_state({
-                "server_id": id,
-                "restart_count": restart_count + 1
-            })
+            # Update config with new restart count
+            if config:
+                config["_restart_count"] = restart_count + 1
 
-            # Record restart in metrics
-            collector = MetricsCollector(id)
-            collector.record_restart("manual_restart")
-            # Note: Status already set to 2 (running) by start_server() - no need to override
+            # Start server (using internal unlocked method - lock already held)
+            success = await self._start_server_unlocked(id, config)
 
-        return success
+            if success:
+                # Update restart count in database
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "restart_count": restart_count + 1
+                })
+
+                # Record restart in metrics
+                collector = MetricsCollector(id)
+                collector.record_restart("manual_restart")
+                # Note: Status already set to 2 (running) by start_server() - no need to override
+
+            return success
 
     async def get_server_status(self, id: str) -> Dict[str, Any]:
         """

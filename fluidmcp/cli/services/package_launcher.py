@@ -13,37 +13,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
+from ..utils.env_utils import is_placeholder
+
 security = HTTPBearer(auto_error=False)
-
-def is_placeholder_value(value: str) -> bool:
-    """
-    Detect if an environment variable value is a placeholder.
-
-    Common placeholder patterns:
-    - Contains angle brackets: <your-username>, <password>
-    - Contains 'xxxx' pattern: xxxx.databases.neo4j.io
-    - Contains 'placeholder' keyword
-    - Generic patterns: 'your-*', 'my-*'
-
-    Args:
-        value: The environment variable value to check
-
-    Returns:
-        True if the value appears to be a placeholder, False otherwise
-    """
-    if not isinstance(value, str):
-        return False
-
-    placeholder_indicators = [
-        '<' in value and '>' in value,  # <your-username>
-        'xxxx' in value.lower(),         # xxxx.example.com
-        'placeholder' in value.lower(),  # placeholder-value
-        value.startswith('<') and value.endswith('>'),
-        'your-' in value.lower(),        # your-password
-        'my-' in value.lower(),          # my-api-key
-    ]
-
-    return any(placeholder_indicators)
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
@@ -126,7 +98,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         placeholders_found = []
         for key, value in env_vars.items():
             if key not in env:  # Only add if not already in shell env
-                if is_placeholder_value(value):
+                if is_placeholder(value):
                     placeholders_found.append((key, value))
                     logger.warning(
                         f"Skipping placeholder value for {key}='{value}'. "

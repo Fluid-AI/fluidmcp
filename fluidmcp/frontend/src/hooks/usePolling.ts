@@ -53,11 +53,21 @@ export function usePolling(): PollingResult {
       return new Promise((resolve) => {
         setIsPolling(true);
 
+        // Track if promise has been resolved to prevent race conditions
+        let hasResolved = false;
+
+        const resolveOnce = (value: boolean) => {
+          if (!hasResolved) {
+            hasResolved = true;
+            resolve(value);
+          }
+        };
+
         // Timeout handler
         timeoutRef.current = setTimeout(() => {
           stopPolling();
           onTimeout?.();
-          resolve(false);
+          resolveOnce(false);
         }, timeout);
 
         // Polling interval
@@ -68,13 +78,13 @@ export function usePolling(): PollingResult {
             if (isDone) {
               stopPolling();
               onSuccess?.();
-              resolve(true);
+              resolveOnce(true);
               return;
             }
           } catch (error) {
             stopPolling();
             onError?.(error instanceof Error ? error : new Error(String(error)));
-            resolve(false);
+            resolveOnce(false);
           }
         };
 
