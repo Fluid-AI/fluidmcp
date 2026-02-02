@@ -78,8 +78,8 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
     }
   }'
 
-# Check prediction status
-curl http://localhost:8099/api/replicate/predictions/{prediction_id}
+# Check prediction status (use the prediction ID from above and model ID)
+curl http://localhost:8099/api/replicate/models/llama-2-70b/predictions/{prediction_id}
 
 # Stream predictions
 curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/stream \
@@ -267,10 +267,14 @@ Returns:
 
 ### Get Prediction Status
 ```
-GET /api/replicate/predictions/{prediction_id}
+GET /api/replicate/models/{model_id}/predictions/{prediction_id}
 ```
 
-Returns:
+**Parameters:**
+- `model_id`: The model identifier that created the prediction (e.g., `llama-2-70b`)
+- `prediction_id`: The prediction ID returned from the create prediction call
+
+**Returns:**
 ```json
 {
   "id": "pred_abc123",
@@ -300,10 +304,14 @@ Returns server-sent events (SSE) stream of output chunks.
 
 ### Cancel Prediction
 ```
-POST /api/replicate/predictions/{prediction_id}/cancel
+POST /api/replicate/models/{model_id}/predictions/{prediction_id}/cancel
 ```
 
-Returns:
+**Parameters:**
+- `model_id`: The model identifier that created the prediction
+- `prediction_id`: The prediction ID to cancel
+
+**Returns:**
 ```json
 {
   "id": "pred_abc123",
@@ -422,7 +430,7 @@ Replicate charges based on compute time. Tips to manage costs:
 
 5. **Cancel unnecessary predictions**:
    ```bash
-   curl -X POST http://localhost:8099/api/replicate/predictions/{id}/cancel
+   curl -X POST http://localhost:8099/api/replicate/models/{model_id}/predictions/{id}/cancel
    ```
 
 ## Security Best Practices
@@ -574,7 +582,7 @@ All tests use mocked HTTP responses (no actual Replicate API calls).
 **Solutions:**
 1. Check error message:
    ```bash
-   curl http://localhost:8099/api/replicate/predictions/{id}
+   curl http://localhost:8099/api/replicate/models/{model_id}/predictions/{id}
    ```
 
 2. Verify input format matches model requirements:

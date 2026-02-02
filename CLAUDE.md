@@ -270,6 +270,11 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
       },
       "timeout": 120,
       "max_retries": 3
+    }
+  }
+}
+```
+
 ## LLM Inference Servers (vLLM, Ollama, LM Studio)
 
 FluidMCP supports running LLM inference servers with automatic error recovery and health monitoring.
