@@ -148,70 +148,70 @@ class ServerManager:
                         logger.warning(f"Server '{id}' is already running (PID: {process.pid})")
                         return False
 
-            # Load config from database if not provided
-            if config is None:
-                config = await self.db.get_server_config(id)
-                if not config:
-                    logger.error(f"No configuration found for server '{id}'")
+                # Load config from database if not provided
+                if config is None:
+                    config = await self.db.get_server_config(id)
+                    if not config:
+                        logger.error(f"No configuration found for server '{id}'")
+                        return False
+
+                # Store config
+                self.configs[id] = config
+
+                # Get display name from config
+                name = config.get("name", id)
+
+                # Spawn the MCP process
+                logger.info(f"Starting server '{name}' (id: {id})...")
+                process = await self._spawn_mcp_process(id, config)
+
+                if not process:
+                    logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
                     return False
 
-            # Store config
-            self.configs[id] = config
+                # Store process
+                self.processes[id] = process
+                logger.info(f"Server '{name}' started (PID: {process.pid})")
 
-            # Get display name from config
-            name = config.get("name", id)
+                # Save state to database with user tracking
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "state": "running",
+                    "pid": process.pid,
+                    "start_time": datetime.utcnow(),
+                    "stop_time": None,
+                    "exit_code": None,
+                    "restart_count": 0,
+                    "last_health_check": datetime.utcnow(),
+                    "health_check_failures": 0,
+                    "started_by": user_id  # Track who started this instance
+                })
 
-            # Spawn the MCP process
-            logger.info(f"Starting server '{name}' (id: {id})...")
-            process = await self._spawn_mcp_process(id, config)
+                # Update metrics - server is now running (status code: 2)
+                # Note: Metrics update after database save to ensure state consistency
+                collector.set_server_status(2)  # 2 = running
 
-            if not process:
-                logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
+                # Store start time for dynamic uptime calculation
+                self.start_times[id] = time.monotonic()
+                collector.set_uptime(0.0)  # Just started
+
+                return True
+
+            except Exception as e:
+                logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
+
+                # Update metrics - server failed to start (status code: 3)
+                collector.set_server_status(3)  # 3 = error
+                collector.record_error("start_failed")
+
+                # Save error to instance state (PDF spec: last_error field)
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "state": "failed",
+                    "last_error": str(e)
+                })
+
                 return False
-
-            # Store process
-            self.processes[id] = process
-            logger.info(f"Server '{name}' started (PID: {process.pid})")
-
-            # Save state to database with user tracking
-            await self.db.save_instance_state({
-                "server_id": id,
-                "state": "running",
-                "pid": process.pid,
-                "start_time": datetime.utcnow(),
-                "stop_time": None,
-                "exit_code": None,
-                "restart_count": 0,
-                "last_health_check": datetime.utcnow(),
-                "health_check_failures": 0,
-                "started_by": user_id  # Track who started this instance
-            })
-
-            # Update metrics - server is now running (status code: 2)
-            # Note: Metrics update after database save to ensure state consistency
-            collector.set_server_status(2)  # 2 = running
-
-            # Store start time for dynamic uptime calculation
-            self.start_times[id] = time.monotonic()
-            collector.set_uptime(0.0)  # Just started
-
-            return True
-
-        except Exception as e:
-            logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
-
-            # Update metrics - server failed to start (status code: 3)
-            collector.set_server_status(3)  # 3 = error
-            collector.record_error("start_failed")
-
-            # Save error to instance state (PDF spec: last_error field)
-            await self.db.save_instance_state({
-                "server_id": id,
-                "state": "failed",
-                "last_error": str(e)
-            })
-
-            return False
 
     async def stop_server(self, id: str, force: bool = False) -> bool:
         """
@@ -241,54 +241,54 @@ class ServerManager:
                 # Check if server exists
                 if id not in self.processes:
                     logger.warning(f"Server '{id}' is not running")
-                return False
+                    return False
 
-            process = self.processes[id]
+                process = self.processes[id]
 
-            # Get display name from config
-            config = self.configs.get(id, {})
-            name = config.get("name", id)
+                # Get display name from config
+                config = self.configs.get(id, {})
+                name = config.get("name", id)
 
-            # Check if already dead
-            if process.poll() is not None:
-                logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
-                await self._cleanup_server(id, process.returncode)
+                # Check if already dead
+                if process.poll() is not None:
+                    logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
+                    await self._cleanup_server(id, process.returncode)
+                    return True
+
+                # Terminate process
+                logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
+
+                if force:
+                    process.kill()  # SIGKILL
+                    logger.info(f"Sent SIGKILL to server '{name}' (id: {id})")
+                else:
+                    process.terminate()  # SIGTERM
+                    logger.info(f"Sent SIGTERM to server '{name}' (id: {id})")
+
+                # Wait for process to exit (with timeout)
+                try:
+                    exit_code = await asyncio.wait_for(
+                        asyncio.to_thread(process.wait),
+                        timeout=10.0
+                    )
+                    logger.info(f"Server '{name}' (id: {id}) stopped (exit code: {exit_code})")
+                except asyncio.TimeoutError:
+                    logger.warning(f"Server '{name}' (id: {id}) did not stop gracefully, forcing kill...")
+                    process.kill()
+                    exit_code = await asyncio.to_thread(process.wait)
+
+                # Cleanup
+                await self._cleanup_server(id, exit_code)
+
+                # Update metrics - server is now stopped (status code: 0)
+                collector.set_server_status(0)  # 0 = stopped
+
                 return True
 
-            # Terminate process
-            logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
-
-            if force:
-                process.kill()  # SIGKILL
-                logger.info(f"Sent SIGKILL to server '{name}' (id: {id})")
-            else:
-                process.terminate()  # SIGTERM
-                logger.info(f"Sent SIGTERM to server '{name}' (id: {id})")
-
-            # Wait for process to exit (with timeout)
-            try:
-                exit_code = await asyncio.wait_for(
-                    asyncio.to_thread(process.wait),
-                    timeout=10.0
-                )
-                logger.info(f"Server '{name}' (id: {id}) stopped (exit code: {exit_code})")
-            except asyncio.TimeoutError:
-                logger.warning(f"Server '{name}' (id: {id}) did not stop gracefully, forcing kill...")
-                process.kill()
-                exit_code = await asyncio.to_thread(process.wait)
-
-            # Cleanup
-            await self._cleanup_server(id, exit_code)
-
-            # Update metrics - server is now stopped (status code: 0)
-            collector.set_server_status(0)  # 0 = stopped
-
-            return True
-
-        except Exception as e:
-            logger.exception(f"Error stopping server '{id}': {e}")
-            collector.record_error("stop_failed")
-            return False
+            except Exception as e:
+                logger.exception(f"Error stopping server '{id}': {e}")
+                collector.record_error("stop_failed")
+                return False
 
     def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
         """
