@@ -320,81 +320,101 @@ def run_servers(
     if launched_servers > 0:
         logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
-    # Launch LLM models if configured
+    # Launch LLM models if configured (supports multiple types: vllm, replicate, etc.)
     if config.llm_models:
-        logger.info(f"Validating and transforming {len(config.llm_models)} LLM model config(s)...")
-        try:
-            # Validate and transform high-level configs to vLLM args
-            validated_llm_config = validate_and_transform_llm_config(config.llm_models)
-            logger.info(f"✓ LLM configuration validated successfully")
-        except VLLMConfigError as e:
-            logger.error(f"LLM configuration validation failed: {e}")
-            logger.error("Fix the configuration errors and try again")
-            if launched_servers > 0:
-                logger.warning(
-                    f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
-                    "These servers remain running and must be stopped manually. "
-                    "Use 'ps aux | grep mcp' (Unix) or Task Manager (Windows) to locate processes, "
-                    "then terminate with 'kill'/'pkill' (Unix) or Task Manager/'taskkill' (Windows)."
-                )
-            return
+        logger.info(f"Processing {len(config.llm_models)} LLM model(s)...")
 
-        logger.info(f"Launching {len(validated_llm_config)} LLM model(s)...")
-        llm_processes = launch_llm_models(validated_llm_config)
+        # Separate models by type
+        vllm_models = {}
+        replicate_models = {}
+        unsupported_models = {}
 
-        # Thread-safe update of LLM registries
-        with _llm_registry_lock:
-            _llm_processes.update(llm_processes)
+        for model_id, model_config in config.llm_models.items():
+            model_type = model_config.get("type", "vllm")  # Default to vllm for backward compat
 
-            # Register LLM endpoints only for successfully running processes
-            for model_id in llm_processes.keys():
-                model_config = validated_llm_config[model_id]
-                endpoints = model_config.get("endpoints", {})
+            if model_type == "vllm":
+                vllm_models[model_id] = model_config
+            elif model_type == "replicate":
+                replicate_models[model_id] = model_config
+            else:
+                unsupported_models[model_id] = model_type
+                logger.warning(f"Model '{model_id}' has unsupported type '{model_type}', skipping")
 
-                # Determine base_url with smart port extraction
-                base_url = endpoints.get("base_url")
-                if not base_url:
-                    # Try to extract port from command args
-                    port = _extract_port_from_args(model_config.get("args", []))
-                    base_url = f"http://localhost:{port}/v1"
-                    logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
-
-                _llm_endpoints[model_id] = {
-                    "base_url": base_url,
-                    "chat": endpoints.get("chat", "/chat/completions"),
-                    "completions": endpoints.get("completions", "/completions"),
-                    "models": endpoints.get("models", "/models"),
-                }
-                logger.info(f"Registered LLM endpoints for '{model_id}' at {base_url}")
-
-        # Add OpenAI proxy routes if any models started successfully
-        if _llm_endpoints:
-            _add_llm_proxy_routes(app)
-        else:
-            logger.warning("No LLM models started successfully - skipping proxy routes")
-
-        # Register startup event to start health monitor after event loop is running
-        @app.on_event("startup")
-        async def startup_health_monitor():
-            """Start LLM health monitor when FastAPI server starts."""
-            await _start_llm_health_monitor_async()
-
-    # Initialize Replicate models if configured
-    if config.replicate_models:
-        logger.info(f"Initializing {len(config.replicate_models)} Replicate model(s)...")
-
-        # Register startup event to initialize Replicate clients
-        @app.on_event("startup")
-        async def startup_replicate_models():
-            """Initialize Replicate models when FastAPI server starts."""
+        # Launch vLLM models
+        if vllm_models:
+            logger.info(f"Validating and transforming {len(vllm_models)} vLLM model config(s)...")
             try:
-                replicate_clients = await initialize_replicate_models(config.replicate_models)
-                if replicate_clients:
-                    logger.info(f"Successfully initialized {len(replicate_clients)} Replicate model(s)")
-                else:
-                    logger.warning("No Replicate models initialized successfully")
-            except Exception as e:
-                logger.error(f"Error initializing Replicate models: {e}")
+                # Validate and transform high-level configs to vLLM args
+                validated_llm_config = validate_and_transform_llm_config(vllm_models)
+                logger.info(f"✓ vLLM configuration validated successfully")
+            except VLLMConfigError as e:
+                logger.error(f"vLLM configuration validation failed: {e}")
+                logger.error("Fix the configuration errors and try again")
+                if launched_servers > 0:
+                    logger.warning(
+                        f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
+                        "These servers remain running and must be stopped manually. "
+                        "Use 'ps aux | grep mcp' (Unix) or Task Manager (Windows) to locate processes, "
+                        "then terminate with 'kill'/'pkill' (Unix) or Task Manager/'taskkill' (Windows)."
+                    )
+                return
+
+            logger.info(f"Launching {len(validated_llm_config)} vLLM model(s)...")
+            llm_processes = launch_llm_models(validated_llm_config)
+
+            # Thread-safe update of LLM registries
+            with _llm_registry_lock:
+                _llm_processes.update(llm_processes)
+
+                # Register LLM endpoints only for successfully running processes
+                for model_id in llm_processes.keys():
+                    model_config = validated_llm_config[model_id]
+                    endpoints = model_config.get("endpoints", {})
+
+                    # Determine base_url with smart port extraction
+                    base_url = endpoints.get("base_url")
+                    if not base_url:
+                        # Try to extract port from command args
+                        port = _extract_port_from_args(model_config.get("args", []))
+                        base_url = f"http://localhost:{port}/v1"
+                        logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
+
+                    _llm_endpoints[model_id] = {
+                        "base_url": base_url,
+                        "chat": endpoints.get("chat", "/chat/completions"),
+                        "completions": endpoints.get("completions", "/completions"),
+                        "models": endpoints.get("models", "/models"),
+                    }
+                    logger.info(f"Registered vLLM endpoints for '{model_id}' at {base_url}")
+
+            # Add OpenAI proxy routes if any models started successfully
+            if _llm_endpoints:
+                _add_llm_proxy_routes(app)
+            else:
+                logger.warning("No vLLM models started successfully - skipping proxy routes")
+
+            # Register startup event to start health monitor after event loop is running
+            @app.on_event("startup")
+            async def startup_health_monitor():
+                """Start LLM health monitor when FastAPI server starts."""
+                await _start_llm_health_monitor_async()
+
+        # Initialize Replicate models
+        if replicate_models:
+            logger.info(f"Initializing {len(replicate_models)} Replicate model(s)...")
+
+            # Register startup event to initialize Replicate clients
+            @app.on_event("startup")
+            async def startup_replicate_models():
+                """Initialize Replicate models when FastAPI server starts."""
+                try:
+                    replicate_clients = await initialize_replicate_models(replicate_models)
+                    if replicate_clients:
+                        logger.info(f"Successfully initialized {len(replicate_clients)} Replicate model(s)")
+                    else:
+                        logger.warning("No Replicate models initialized successfully")
+                except Exception as e:
+                    logger.error(f"Error initializing Replicate models: {e}")
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)

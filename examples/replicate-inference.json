@@ -1,7 +1,8 @@
 {
   "mcpServers": {},
-  "replicateModels": {
+  "llmModels": {
     "llama-2-70b": {
+      "type": "replicate",
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
@@ -13,6 +14,7 @@
       "max_retries": 3
     },
     "mistral-7b": {
+      "type": "replicate",
       "model": "mistralai/mistral-7b-instruct-v0.2",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
@@ -21,6 +23,7 @@
       }
     },
     "codellama-34b": {
+      "type": "replicate",
       "model": "meta/codellama-34b-instruct",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {

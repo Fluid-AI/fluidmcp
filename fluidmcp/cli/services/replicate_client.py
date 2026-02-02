@@ -8,6 +8,7 @@ Includes error handling, retry logic, and streaming support.
 """
 
 import os
+import re
 import httpx
 import asyncio
 from typing import Dict, Any, Optional, AsyncIterator, List
@@ -65,7 +66,6 @@ class ReplicateClient:
             api_key_expanded = os.path.expandvars(api_key_raw)
             # Check if ${VAR} or $VAR pattern was not resolved
             # Only check for our supported patterns to avoid false positives
-            import re
             if re.search(r'\$\{[^}]+\}|\$[A-Z_][A-Z0-9_]*', api_key_raw):
                 if api_key_expanded == api_key_raw:
                     raise ValueError(
@@ -165,7 +165,7 @@ class ReplicateClient:
                     )
 
                     if attempt < self.max_retries:
-                        # Exponential backoff: 0s, 2s, 4s, 8s
+                        # Exponential backoff: 0s, 2s, 4s (0 on first retry, then 2^attempt)
                         wait_time = 0 if attempt == 0 else (2 ** attempt)
                         if wait_time > 0:
                             await asyncio.sleep(wait_time)
@@ -185,7 +185,7 @@ class ReplicateClient:
                 )
 
                 if attempt < self.max_retries:
-                    # Exponential backoff: 0s, 2s, 4s, 8s
+                    # Exponential backoff: 0s, 2s, 4s (0 on first retry, then 2^attempt)
                     wait_time = 0 if attempt == 0 else (2 ** attempt)
                     if wait_time > 0:
                         await asyncio.sleep(wait_time)

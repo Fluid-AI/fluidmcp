@@ -50,10 +50,11 @@ async def cleanup_replicate_registry():
 
 
 @pytest.fixture
-def mock_http_client():
-    """Create a mock httpx AsyncClient."""
+async def mock_http_client():
+    """Create a mock httpx AsyncClient (tests must manually assign to avoid resource leak)."""
     client = AsyncMock(spec=httpx.AsyncClient)
-    return client
+    client.aclose = AsyncMock()  # Ensure aclose is mockable
+    yield client
 
 
 class TestReplicateClientInitialization:
@@ -113,7 +114,9 @@ class TestReplicateClientPredictions:
         mock_response.raise_for_status = Mock()
         mock_http_client.post.return_value = mock_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         # Create prediction
@@ -131,7 +134,9 @@ class TestReplicateClientPredictions:
         mock_response.raise_for_status = Mock()
         mock_http_client.post.return_value = mock_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         # Create prediction with partial input
@@ -154,7 +159,9 @@ class TestReplicateClientPredictions:
             Mock(json=lambda: {"id": "pred_123", "status": "starting"}, raise_for_status=Mock())
         ]
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         # Should eventually succeed after retries
@@ -169,7 +176,9 @@ class TestReplicateClientPredictions:
         # All calls fail with retryable errors
         mock_http_client.post.side_effect = httpx.RequestError("Network error")
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         # Should raise after max_retries attempts (3 retries + 1 initial = 4 total)
@@ -190,7 +199,9 @@ class TestReplicateClientPredictions:
         mock_response.raise_for_status = Mock()
         mock_http_client.get.return_value = mock_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         result = await client.get_prediction("pred_abc123")
@@ -210,7 +221,9 @@ class TestReplicateClientPredictions:
         mock_response.raise_for_status = Mock()
         mock_http_client.post.return_value = mock_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         result = await client.cancel_prediction("pred_abc123")
@@ -250,7 +263,9 @@ class TestReplicateClientStreaming:
         mock_http_client.post.return_value = create_response
         mock_http_client.get.side_effect = [status_response_1, status_response_2]
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         # Stream prediction
@@ -281,7 +296,9 @@ class TestReplicateClientStreaming:
         mock_http_client.post.return_value = create_response
         mock_http_client.get.return_value = status_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         # Should raise exception on failure
@@ -308,7 +325,9 @@ class TestReplicateClientModelInfo:
         mock_response.raise_for_status = Mock()
         mock_http_client.get.return_value = mock_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         result = await client.get_model_info()
@@ -322,7 +341,6 @@ class TestReplicateClientModelInfo:
         """Test that invalid model format raises error."""
         config = {**replicate_config, "model": "invalid-format"}
         client = ReplicateClient("test", config)
-        client.client = mock_http_client
 
         with pytest.raises(ValueError, match="Invalid model format"):
             await client.get_model_info()
@@ -339,7 +357,9 @@ class TestReplicateClientHealthCheck:
         mock_response.raise_for_status = Mock()
         mock_http_client.get.return_value = mock_response
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         result = await client.health_check()
@@ -351,7 +371,9 @@ class TestReplicateClientHealthCheck:
         """Test health check handles errors."""
         mock_http_client.get.side_effect = httpx.HTTPError("API unavailable")
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         result = await client.health_check()
@@ -367,7 +389,9 @@ class TestReplicateClientContextManager:
         """Test client can be used as async context manager."""
         mock_http_client.aclose = AsyncMock()
 
-        client = ReplicateClient("test", replicate_config)
+        original_client = ReplicateClient("test", replicate_config)
+        await original_client.client.aclose()  # Close original to prevent leak
+        client = original_client
         client.client = mock_http_client
 
         async with client as c:

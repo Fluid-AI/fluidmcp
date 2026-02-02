@@ -230,8 +230,10 @@ export REPLICATE_API_TOKEN="r8_..."
 # Create config with Replicate models
 cat > replicate-config.json << 'EOF'
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "llama-2-70b": {
+      "type": "replicate",
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
@@ -260,8 +262,10 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
 
 ```json
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "model-id": {
+      "type": "replicate",
       "model": "owner/model-name",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {

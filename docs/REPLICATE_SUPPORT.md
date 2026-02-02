@@ -42,8 +42,10 @@ Create `replicate-config.json`:
 
 ```json
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "llama-2-70b": {
+      "type": "replicate",
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
@@ -98,8 +100,9 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/stream \
 ```json
 {
   "mcpServers": {},
-  "replicateModels": {
+  "llmModels": {
     "model-id": {
+      "type": "replicate",
       "model": "owner/model-name",
       "api_key": "${REPLICATE_API_TOKEN}",
       "endpoints": {
@@ -147,8 +150,10 @@ Find models at: https://replicate.com/explore
 
 ```json
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "llama-chat": {
+      "type": "replicate",
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
@@ -176,8 +181,10 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-chat/predict \
 
 ```json
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "codellama": {
+      "type": "replicate",
       "model": "meta/codellama-34b-instruct",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
@@ -206,18 +213,22 @@ You can run multiple Replicate models simultaneously:
 
 ```json
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "llama-70b": {
+      "type": "replicate",
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {"temperature": 0.7}
     },
     "mistral-7b": {
+      "type": "replicate",
       "model": "mistralai/mistral-7b-instruct-v0.2",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {"temperature": 0.5}
     },
     "codellama": {
+      "type": "replicate",
       "model": "meta/codellama-34b-instruct",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {"temperature": 0.2}
@@ -349,12 +360,14 @@ Failed requests are automatically retried with exponential backoff:
 
 ```json
 {
-  "replicateModels": {
+  "mcpServers": {},
+  "llmModels": {
     "model-id": {
+      "type": "replicate",
       "model": "meta/llama-2-70b-chat",
       "api_key": "${REPLICATE_API_TOKEN}",
       "max_retries": 5,
-      "timeout": 120    
+      "timeout": 120
     }
   }
 }

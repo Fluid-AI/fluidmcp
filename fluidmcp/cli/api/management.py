@@ -15,6 +15,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
 import asyncio
+import httpx
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1417,9 +1418,18 @@ async def create_prediction(
         )
         logger.info(f"Created prediction {result.get('id')} for model '{model_id}'")
         return result
+    except httpx.HTTPStatusError as e:
+        # Preserve upstream Replicate API status codes
+        status_code = e.response.status_code
+        logger.error(f"Replicate API error {status_code} for model '{model_id}': {e}")
+        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+    except (httpx.RequestError, httpx.TimeoutException) as e:
+        # Network/timeout errors = 502 Bad Gateway
+        logger.error(f"Network error creating prediction for '{model_id}': {e}")
+        raise HTTPException(502, "Failed to connect to Replicate API")
     except Exception as e:
-        logger.error(f"Error creating prediction for '{model_id}': {e}")
-        raise HTTPException(500, f"Failed to create prediction: {str(e)}")
+        logger.error(f"Unexpected error creating prediction for '{model_id}': {e}")
+        raise HTTPException(500, "Internal server error")
 
 
 @router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
@@ -1447,9 +1457,16 @@ async def get_prediction_status(
     try:
         result = await client.get_prediction(prediction_id)
         return result
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        logger.error(f"Replicate API error {status_code} getting prediction '{prediction_id}': {e}")
+        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+    except (httpx.RequestError, httpx.TimeoutException) as e:
+        logger.error(f"Network error getting prediction '{prediction_id}': {e}")
+        raise HTTPException(502, "Failed to connect to Replicate API")
     except Exception as e:
-        logger.error(f"Error getting prediction '{prediction_id}' for model '{model_id}': {e}")
-        raise HTTPException(500, f"Failed to get prediction: {str(e)}")
+        logger.error(f"Unexpected error getting prediction '{prediction_id}': {e}")
+        raise HTTPException(500, "Internal server error")
 
 
 @router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
@@ -1478,9 +1495,16 @@ async def cancel_prediction(
         result = await client.cancel_prediction(prediction_id)
         logger.info(f"Cancelled prediction '{prediction_id}' for model '{model_id}'")
         return result
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        logger.error(f"Replicate API error {status_code} cancelling prediction '{prediction_id}': {e}")
+        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+    except (httpx.RequestError, httpx.TimeoutException) as e:
+        logger.error(f"Network error cancelling prediction '{prediction_id}': {e}")
+        raise HTTPException(502, "Failed to connect to Replicate API")
     except Exception as e:
-        logger.error(f"Error cancelling prediction '{prediction_id}' for model '{model_id}': {e}")
-        raise HTTPException(500, f"Failed to cancel prediction: {str(e)}")
+        logger.error(f"Unexpected error cancelling prediction '{prediction_id}': {e}")
+        raise HTTPException(500, "Internal server error")
 
 
 @router.post("/replicate/models/{model_id}/stream")
@@ -1556,9 +1580,16 @@ async def get_model_info(
     try:
         result = await client.get_model_info()
         return result
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        logger.error(f"Replicate API error {status_code} getting model info for '{model_id}': {e}")
+        raise HTTPException(status_code, f"Replicate API error: {e.response.text[:200]}")
+    except (httpx.RequestError, httpx.TimeoutException) as e:
+        logger.error(f"Network error getting model info for '{model_id}': {e}")
+        raise HTTPException(502, "Failed to connect to Replicate API")
     except Exception as e:
-        logger.error(f"Error getting model info for '{model_id}': {e}")
-        raise HTTPException(500, f"Failed to get model info: {str(e)}")
+        logger.error(f"Unexpected error getting model info for '{model_id}': {e}")
+        raise HTTPException(500, "Internal server error")
 
 
 @router.get("/replicate/models/{model_id}/health")
