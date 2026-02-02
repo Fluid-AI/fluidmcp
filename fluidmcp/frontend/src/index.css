@@ -481,21 +481,43 @@ button:disabled {
 
 /* Server List Controls */
 .server-list-controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr auto;
   gap: 1rem;
   margin-bottom: 1.5rem;
   padding: 1rem;
   background: #1a1a1a;
   border-radius: 8px;
-  flex-wrap: wrap;
+  align-items: end;
+}
+
+/* Tablet: Search on first row, others on second row */
+@media (max-width: 1024px) {
+  .server-list-controls {
+    grid-template-columns: 1fr 1fr auto;
+  }
+
+  .server-list-controls .control-group:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Phone: All stacked */
+@media (max-width: 640px) {
+  .server-list-controls {
+    grid-template-columns: 1fr;
+    padding: 0.75rem;
+  }
+
+  .server-list-controls .control-group:first-child {
+    grid-column: auto;
+  }
 }
 
 .control-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  flex: 1;
-  min-width: 200px;
 }
 
 .control-group label {
@@ -504,9 +526,33 @@ button:disabled {
   color: #a0a0a0;
 }
 
+.control-group-button {
+  flex: 0 0 auto;
+  min-width: auto;
+}
+
+.clear-filters-btn {
+  padding: 0.5rem 1rem;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  margin-top: 0;
+}
+
+.clear-filters-btn:hover {
+  background: #dc2626;
+}
+
 .search-input,
 .sort-select,
 .filter-select {
+  width: 100%;
+  max-width: 100%;
   padding: 0.5rem 0.75rem;
   background: #2a2a2a;
   border: 1px solid #404040;
@@ -514,6 +560,7 @@ button:disabled {
   color: #ffffff;
   font-size: 0.875rem;
   margin-top: 0;
+  box-sizing: border-box;
 }
 
 .search-input:focus,

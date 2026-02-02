@@ -7,6 +7,7 @@ export interface ServerListControlsProps {
   onSortChange: (sort: string) => void;
   filterBy: 'all' | 'running' | 'stopped' | 'error';
   onFilterChange: (filter: string) => void;
+  onClearFilters?: () => void;
 }
 
 export const ServerListControls: React.FC<ServerListControlsProps> = ({
@@ -16,7 +17,10 @@ export const ServerListControls: React.FC<ServerListControlsProps> = ({
   onSortChange,
   filterBy,
   onFilterChange,
+  onClearFilters,
 }) => {
+  const hasActiveFilters = searchQuery !== '' || sortBy !== 'name-asc' || filterBy !== 'all';
+
   return (
     <div className="server-list-controls">
       <div className="control-group">
@@ -60,6 +64,15 @@ export const ServerListControls: React.FC<ServerListControlsProps> = ({
           <option value="error">Errors only</option>
         </select>
       </div>
+
+      {hasActiveFilters && onClearFilters && (
+        <div className="control-group control-group-button">
+          <label>&nbsp;</label>
+          <button onClick={onClearFilters} className="clear-filters-btn">
+            Clear Filters
+          </button>
+        </div>
+      )}
     </div>
   );
 };

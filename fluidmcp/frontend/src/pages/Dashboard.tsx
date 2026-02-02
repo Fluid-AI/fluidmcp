@@ -28,10 +28,11 @@ export default function Dashboard() {
     setSortBy,
     setFilterBy,
     setCurrentPage,
+    clearFilters,
     paginatedServers,
     totalPages,
     totalFilteredCount,
-  } = useServerFiltering(servers, { itemsPerPage: 20 });
+  } = useServerFiltering(servers, { itemsPerPage: 6 });
 
   const handleStartServer = async (serverId: string) => {
     // Silent guard - prevent concurrent operations
@@ -153,6 +154,7 @@ export default function Dashboard() {
               onSortChange={setSortBy}
               filterBy={filterBy}
               onFilterChange={setFilterBy}
+              onClearFilters={clearFilters}
             />
 
             {totalFilteredCount === 0 ? (
@@ -181,7 +183,7 @@ export default function Dashboard() {
                   currentPage={currentPage}
                   totalPages={totalPages}
                   totalItems={totalFilteredCount}
-                  itemsPerPage={20}
+                  itemsPerPage={6}
                   onPageChange={setCurrentPage}
                   itemName="servers"
                 />
