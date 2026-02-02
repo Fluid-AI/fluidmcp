@@ -347,15 +347,14 @@ def run_servers(
                 logger.info(f"✓ vLLM configuration validated successfully")
             except VLLMConfigError as e:
                 logger.error(f"vLLM configuration validation failed: {e}")
-                logger.error("Fix the configuration errors and try again")
+                logger.error("Skipping vLLM models - will continue with other model types if configured")
                 if launched_servers > 0:
-                    logger.warning(
-                        f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
-                        "These servers remain running and must be stopped manually. "
-                        "Use 'ps aux | grep mcp' (Unix) or Task Manager (Windows) to locate processes, "
-                        "then terminate with 'kill'/'pkill' (Unix) or Task Manager/'taskkill' (Windows)."
+                    logger.info(
+                        f"Note: {launched_servers} MCP server(s) were launched successfully. "
+                        "They will continue running."
                     )
-                return
+                # Don't return - continue to initialize Replicate models if configured
+                vllm_models = {}  # Clear to skip vLLM launch
 
             logger.info(f"Launching {len(validated_llm_config)} vLLM model(s)...")
             llm_processes = launch_llm_models(validated_llm_config)
@@ -423,6 +422,14 @@ def run_servers(
                     logger.info("Replicate clients shutdown completed")
                 except Exception as e:
                     logger.error(f"Error during Replicate clients shutdown: {e}")
+
+        # Final check: warn if no models of any type were successfully configured
+        if not vllm_models and not replicate_models:
+            if launched_servers == 0:
+                logger.error("No MCP servers or LLM models successfully configured - aborting")
+                return
+            else:
+                logger.warning("No LLM models successfully configured, but MCP servers are running")
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)

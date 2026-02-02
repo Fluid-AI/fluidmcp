@@ -293,6 +293,11 @@ class ReplicateClient:
                     logger.error(f"Prediction {prediction_id} failed: {error_msg}")
                     raise RuntimeError(f"Prediction failed: {error_msg}")
 
+                elif status["status"] in ["canceled", "cancelled"]:
+                    # Prediction was canceled - stop streaming immediately
+                    logger.info(f"Prediction {prediction_id} was canceled")
+                    break
+
                 elif status["status"] in ["starting", "processing"]:
                     # Only yield if output has changed
                     if current_output and current_output != last_output:
