@@ -313,8 +313,8 @@ def run_servers(
             logger.exception(f"Error launching server '{server_name}'")
 
     logger.debug(f"Total MCP servers launched: {launched_servers}")
-    if launched_servers == 0 and not config.llm_models:
-        logger.warning("No servers or LLM models configured - nothing to launch")
+    if launched_servers == 0 and not config.llm_models and not config.replicate_models:
+        logger.warning("No servers, LLM models, or Replicate models configured - nothing to launch")
         return
 
     if launched_servers > 0:

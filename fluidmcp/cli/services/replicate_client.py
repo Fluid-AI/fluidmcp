@@ -7,6 +7,7 @@ enabling users to run AI models via Replicate's cloud API without local GPU requ
 Includes error handling, retry logic, and streaming support.
 """
 
+import os
 import httpx
 import asyncio
 from typing import Dict, Any, Optional, AsyncIterator, List
@@ -58,7 +59,9 @@ class ReplicateClient:
             raise ValueError(f"Replicate model '{model_id}' missing 'api_key' in config")
 
         self.model_name = config["model"]
-        self.api_key = config["api_key"]
+        # Expand environment variables in API key (e.g., ${REPLICATE_API_TOKEN})
+        api_key_raw = config["api_key"]
+        self.api_key = os.path.expandvars(api_key_raw) if isinstance(api_key_raw, str) else api_key_raw
         self.base_url = config.get("endpoints", {}).get("base_url", REPLICATE_API_BASE)
         self.default_params = config.get("default_params", {})
         self.timeout = config.get("timeout", DEFAULT_TIMEOUT)

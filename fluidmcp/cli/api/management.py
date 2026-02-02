@@ -1379,9 +1379,7 @@ async def list_replicate_models(
 @router.post("/replicate/models/{model_id}/predict")
 async def create_prediction(
     model_id: str,
-    input_data: Dict[str, Any] = Body(...),
-    version: Optional[str] = Body(None),
-    webhook: Optional[str] = Body(None),
+    request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
@@ -1389,12 +1387,17 @@ async def create_prediction(
 
     Args:
         model_id: Model identifier
-        input_data: Input parameters for the model
-        version: Optional specific model version
-        webhook: Optional webhook URL for completion notification
+        request_body: Request body with 'input', optional 'version', and 'webhook'
 
     Returns:
         Prediction response with ID and status
+
+    Example request body:
+        {
+            "input": {"prompt": "Hello world"},
+            "version": "optional-version-string",
+            "webhook": "optional-webhook-url"
+        }
     """
     from ..services.replicate_client import get_replicate_client
 
@@ -1403,6 +1406,10 @@ async def create_prediction(
         raise HTTPException(404, f"Replicate model '{model_id}' not found")
 
     try:
+        input_data = request_body.get("input", {})
+        version = request_body.get("version")
+        webhook = request_body.get("webhook")
+
         result = await client.predict(
             input_data=input_data,
             version=version,
@@ -1485,8 +1492,7 @@ async def cancel_prediction(
 @router.post("/replicate/models/{model_id}/stream")
 async def stream_prediction(
     model_id: str,
-    input_data: Dict[str, Any] = Body(...),
-    version: Optional[str] = Body(None),
+    request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
@@ -1494,17 +1500,25 @@ async def stream_prediction(
 
     Args:
         model_id: Model identifier
-        input_data: Input parameters for the model
-        version: Optional specific model version
+        request_body: Request body with 'input' and optional 'version'
 
     Returns:
         Server-sent events stream of output chunks
+
+    Example request body:
+        {
+            "input": {"prompt": "Count to 5"},
+            "version": "optional-version-string"
+        }
     """
     from ..services.replicate_client import get_replicate_client
 
     client = get_replicate_client(model_id)
     if not client:
         raise HTTPException(404, f"Replicate model '{model_id}' not found")
+
+    input_data = request_body.get("input", {})
+    version = request_body.get("version")
 
     async def generate():
         """Generate server-sent events for streaming."""
