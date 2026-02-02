@@ -35,11 +35,16 @@ def validate_env_variables(env: Dict[str, str], max_vars: int = 100, max_key_len
     """
     Validate environment variables to prevent injection attacks and DoS.
 
+    Security context:
+    - Environment variables are passed to subprocess.Popen() with shell=False
+    - This means shell metacharacters (;, |, &, etc.) are NOT interpreted
+    - Values are passed directly to the child process, no shell injection risk
+
     Security checks:
-    - Prevent MongoDB injection (keys starting with $)
-    - Prevent shell injection (dangerous characters in values)
+    - Prevent MongoDB injection (keys starting with $ or containing dots)
     - Prevent DoS via excessive data (length limits)
-    - Validate key format (alphanumeric + underscore only)
+    - Validate key format (POSIX standard: alphanumeric + underscore only)
+    - Check for null bytes (can cause issues in C-based processes)
 
     Args:
         env: Environment variables dict to validate
@@ -77,21 +82,14 @@ def validate_env_variables(env: Dict[str, str], max_vars: int = 100, max_key_len
         if '.' in key:
             raise HTTPException(400, f"Invalid environment variable key (contains dot): {key}")
 
-        # Key format validation - only alphanumeric, underscore, and hyphen
-        # Standard env var naming convention
-        if not re.match(r'^[A-Za-z_][A-Za-z0-9_-]*$', key):
-            raise HTTPException(400, f"Invalid environment variable key format: {key}. Must start with letter or underscore and contain only alphanumeric, underscore, or hyphen characters.")
+        # Key format validation - only alphanumeric and underscore
+        # Standard POSIX env var naming convention (no hyphens - not supported by bash/sh)
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+            raise HTTPException(400, f"Invalid environment variable key format: {key}. Must start with letter or underscore and contain only alphanumeric and underscore characters.")
 
-        # Shell injection prevention - check for dangerous characters
-        # While env vars are generally safe, we validate to be defensive
-        dangerous_chars = [';', '|', '&', '`', '$', '\n', '\r', '\0']
-        for char in dangerous_chars:
-            if char in value:
-                raise HTTPException(400, f"Environment variable value contains dangerous character '{repr(char)}' for key: {key}")
-
-        # XSS prevention - check for script tags (defense in depth)
-        if '<script' in value.lower() or 'javascript:' in value.lower():
-            raise HTTPException(400, f"Environment variable value contains potentially malicious content for key: {key}")
+        # Null byte check - can cause issues in C-based processes
+        if '\0' in value:
+            raise HTTPException(400, f"Environment variable value contains null byte for key: {key}")
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
@@ -956,9 +954,14 @@ async def update_server_instance_env(
             # Rollback env changes on restart failure
             if old_env is not None:
                 logger.warning(f"Restart failed, rolling back env changes for server '{id}'")
-                # Rollback to old env
-                await manager.db.update_instance_env(id, old_env)
-            raise HTTPException(500, f"Failed to restart server '{id}' after updating env. Changes have been rolled back.")
+                try:
+                    # Rollback to old env
+                    await manager.db.update_instance_env(id, old_env)
+                    raise HTTPException(500, f"Failed to restart server '{id}' after updating env. Changes have been rolled back.")
+                except Exception as rollback_error:
+                    logger.critical(f"CRITICAL: Rollback failed for server '{id}': {rollback_error}")
+                    raise HTTPException(500, f"Failed to restart server '{id}' and rollback also failed. Manual intervention required.")
+            raise HTTPException(500, f"Failed to restart server '{id}' after updating env.")
 
     return {
         "message": f"Environment variables updated for server '{id}'",

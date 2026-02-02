@@ -114,6 +114,99 @@ class ServerManager:
 
     # ==================== Server Lifecycle Methods ====================
 
+    async def _start_server_unlocked(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
+        """
+        Internal method to start a server without acquiring a lock.
+
+        ⚠️ IMPORTANT: This method does NOT acquire operation locks.
+        - Only call from restart_server() which holds the lock for the entire operation
+        - DO NOT call directly from public APIs
+
+        Args:
+            id: Unique server identifier
+            config: Server configuration (if None, loads from database)
+            user_id: User who is starting the server (for tracking)
+
+        Returns:
+            True if started successfully, False otherwise
+        """
+        # Initialize name and collector early for exception handler
+        name = id
+        collector = MetricsCollector(id)
+
+        try:
+            # Check if already running
+            if id in self.processes:
+                process = self.processes[id]
+                if process.poll() is None:
+                    logger.warning(f"Server '{id}' is already running (PID: {process.pid})")
+                    return False
+
+            # Load config from database if not provided
+            if config is None:
+                config = await self.db.get_server_config(id)
+                if not config:
+                    logger.error(f"No configuration found for server '{id}'")
+                    return False
+
+            # Store config
+            self.configs[id] = config
+
+            # Get display name from config
+            name = config.get("name", id)
+
+            # Spawn the MCP process
+            logger.info(f"Starting server '{name}' (id: {id})...")
+            process = await self._spawn_mcp_process(id, config)
+
+            if not process:
+                logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
+                return False
+
+            # Store process
+            self.processes[id] = process
+            logger.info(f"Server '{name}' started (PID: {process.pid})")
+
+            # Save state to database with user tracking
+            await self.db.save_instance_state({
+                "server_id": id,
+                "state": "running",
+                "pid": process.pid,
+                "start_time": datetime.utcnow(),
+                "stop_time": None,
+                "exit_code": None,
+                "restart_count": 0,
+                "last_health_check": datetime.utcnow(),
+                "health_check_failures": 0,
+                "started_by": user_id  # Track who started this instance
+            })
+
+            # Update metrics - server is now running (status code: 2)
+            # Note: Metrics update after database save to ensure state consistency
+            collector.set_server_status(2)  # 2 = running
+
+            # Store start time for dynamic uptime calculation
+            self.start_times[id] = time.monotonic()
+            collector.set_uptime(0.0)  # Just started
+
+            return True
+
+        except Exception as e:
+            logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
+
+            # Update metrics - server failed to start (status code: 3)
+            collector.set_server_status(3)  # 3 = error
+            collector.record_error("start_failed")
+
+            # Save error to instance state (PDF spec: last_error field)
+            await self.db.save_instance_state({
+                "server_id": id,
+                "state": "failed",
+                "last_error": str(e)
+            })
+
+            return False
+
     async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
         Start an MCP server.
@@ -136,82 +229,78 @@ class ServerManager:
 
         # Acquire lock for this operation
         async with lock:
-            # Initialize name and collector early for exception handler
-            name = id
-            collector = MetricsCollector(id)
+            return await self._start_server_unlocked(id, config, user_id)
 
-            try:
-                # Check if already running
-                if id in self.processes:
-                    process = self.processes[id]
-                    if process.poll() is None:
-                        logger.warning(f"Server '{id}' is already running (PID: {process.pid})")
-                        return False
+    async def _stop_server_unlocked(self, id: str, force: bool = False) -> bool:
+        """
+        Internal method to stop a server without acquiring a lock.
 
-                # Load config from database if not provided
-                if config is None:
-                    config = await self.db.get_server_config(id)
-                    if not config:
-                        logger.error(f"No configuration found for server '{id}'")
-                        return False
+        ⚠️ IMPORTANT: This method does NOT acquire operation locks.
+        - Only call from restart_server() which holds the lock for the entire operation
+        - DO NOT call directly from public APIs
 
-                # Store config
-                self.configs[id] = config
+        Args:
+            id: Server identifier
+            force: If True, use SIGKILL instead of SIGTERM
 
-                # Get display name from config
-                name = config.get("name", id)
+        Returns:
+            True if stopped successfully, False otherwise
+        """
+        # Initialize metrics collector early for consistent error tracking
+        collector = MetricsCollector(id)
 
-                # Spawn the MCP process
-                logger.info(f"Starting server '{name}' (id: {id})...")
-                process = await self._spawn_mcp_process(id, config)
+        try:
+            # Check if server exists
+            if id not in self.processes:
+                logger.warning(f"Server '{id}' is not running")
+                return False
 
-                if not process:
-                    logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
-                    return False
+            process = self.processes[id]
 
-                # Store process
-                self.processes[id] = process
-                logger.info(f"Server '{name}' started (PID: {process.pid})")
+            # Get display name from config
+            config = self.configs.get(id, {})
+            name = config.get("name", id)
 
-                # Save state to database with user tracking
-                await self.db.save_instance_state({
-                    "server_id": id,
-                    "state": "running",
-                    "pid": process.pid,
-                    "start_time": datetime.utcnow(),
-                    "stop_time": None,
-                    "exit_code": None,
-                    "restart_count": 0,
-                    "last_health_check": datetime.utcnow(),
-                    "health_check_failures": 0,
-                    "started_by": user_id  # Track who started this instance
-                })
-
-                # Update metrics - server is now running (status code: 2)
-                # Note: Metrics update after database save to ensure state consistency
-                collector.set_server_status(2)  # 2 = running
-
-                # Store start time for dynamic uptime calculation
-                self.start_times[id] = time.monotonic()
-                collector.set_uptime(0.0)  # Just started
-
+            # Check if already dead
+            if process.poll() is not None:
+                logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
+                await self._cleanup_server(id, process.returncode)
                 return True
 
-            except Exception as e:
-                logger.exception(f"Error starting server '{name}' (id: {id}): {e}")
+            # Terminate process
+            logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
 
-                # Update metrics - server failed to start (status code: 3)
-                collector.set_server_status(3)  # 3 = error
-                collector.record_error("start_failed")
+            if force:
+                process.kill()  # SIGKILL
+                logger.info(f"Sent SIGKILL to server '{name}' (id: {id})")
+            else:
+                process.terminate()  # SIGTERM
+                logger.info(f"Sent SIGTERM to server '{name}' (id: {id})")
 
-                # Save error to instance state (PDF spec: last_error field)
-                await self.db.save_instance_state({
-                    "server_id": id,
-                    "state": "failed",
-                    "last_error": str(e)
-                })
+            # Wait for process to exit (with timeout)
+            try:
+                exit_code = await asyncio.wait_for(
+                    asyncio.to_thread(process.wait),
+                    timeout=10.0
+                )
+                logger.info(f"Server '{name}' (id: {id}) stopped (exit code: {exit_code})")
+            except asyncio.TimeoutError:
+                logger.warning(f"Server '{name}' (id: {id}) did not stop gracefully, forcing kill...")
+                process.kill()
+                exit_code = await asyncio.to_thread(process.wait)
 
-                return False
+            # Cleanup
+            await self._cleanup_server(id, exit_code)
+
+            # Update metrics - server is now stopped (status code: 0)
+            collector.set_server_status(0)  # 0 = stopped
+
+            return True
+
+        except Exception as e:
+            logger.exception(f"Error stopping server '{id}': {e}")
+            collector.record_error("stop_failed")
+            return False
 
     async def stop_server(self, id: str, force: bool = False) -> bool:
         """
@@ -234,61 +323,7 @@ class ServerManager:
 
         # Acquire lock for this operation
         async with lock:
-            # Initialize metrics collector early for consistent error tracking
-            collector = MetricsCollector(id)
-
-            try:
-                # Check if server exists
-                if id not in self.processes:
-                    logger.warning(f"Server '{id}' is not running")
-                    return False
-
-                process = self.processes[id]
-
-                # Get display name from config
-                config = self.configs.get(id, {})
-                name = config.get("name", id)
-
-                # Check if already dead
-                if process.poll() is not None:
-                    logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
-                    await self._cleanup_server(id, process.returncode)
-                    return True
-
-                # Terminate process
-                logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
-
-                if force:
-                    process.kill()  # SIGKILL
-                    logger.info(f"Sent SIGKILL to server '{name}' (id: {id})")
-                else:
-                    process.terminate()  # SIGTERM
-                    logger.info(f"Sent SIGTERM to server '{name}' (id: {id})")
-
-                # Wait for process to exit (with timeout)
-                try:
-                    exit_code = await asyncio.wait_for(
-                        asyncio.to_thread(process.wait),
-                        timeout=10.0
-                    )
-                    logger.info(f"Server '{name}' (id: {id}) stopped (exit code: {exit_code})")
-                except asyncio.TimeoutError:
-                    logger.warning(f"Server '{name}' (id: {id}) did not stop gracefully, forcing kill...")
-                    process.kill()
-                    exit_code = await asyncio.to_thread(process.wait)
-
-                # Cleanup
-                await self._cleanup_server(id, exit_code)
-
-                # Update metrics - server is now stopped (status code: 0)
-                collector.set_server_status(0)  # 0 = stopped
-
-                return True
-
-            except Exception as e:
-                logger.exception(f"Error stopping server '{id}': {e}")
-                collector.record_error("stop_failed")
-                return False
+            return await self._stop_server_unlocked(id, force)
 
     def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
         """
@@ -308,9 +343,10 @@ class ServerManager:
 
     async def restart_server(self, id: str) -> bool:
         """
-        Restart an MCP server.
+        Restart an MCP server atomically.
 
         Uses a lock to prevent concurrent restart operations on the same server.
+        The lock is held for the entire restart operation (stop + start) to ensure atomicity.
 
         Args:
             id: Server identifier
@@ -336,34 +372,37 @@ class ServerManager:
             name = config.get("name", id) if config else id
             logger.info(f"Restarting server '{name}' (id: {id})...")
 
-        # Stop server
-        if id in self.processes:
-            await self.stop_server(id)
+            # Stop server (using internal unlocked method - lock already held)
+            if id in self.processes:
+                stop_success = await self._stop_server_unlocked(id)
+                if not stop_success:
+                    logger.error(f"Failed to stop server '{name}' (id: {id}) during restart")
+                    return False
 
-        # Increment restart count
-        instance = await self.db.get_instance_state(id)
-        restart_count = instance.get("restart_count", 0) if instance else 0
+            # Increment restart count
+            instance = await self.db.get_instance_state(id)
+            restart_count = instance.get("restart_count", 0) if instance else 0
 
-        # Update config with new restart count
-        if config:
-            config["_restart_count"] = restart_count + 1
+            # Update config with new restart count
+            if config:
+                config["_restart_count"] = restart_count + 1
 
-        # Start server
-        success = await self.start_server(id, config)
+            # Start server (using internal unlocked method - lock already held)
+            success = await self._start_server_unlocked(id, config)
 
-        if success:
-            # Update restart count in database
-            await self.db.save_instance_state({
-                "server_id": id,
-                "restart_count": restart_count + 1
-            })
+            if success:
+                # Update restart count in database
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "restart_count": restart_count + 1
+                })
 
-            # Record restart in metrics
-            collector = MetricsCollector(id)
-            collector.record_restart("manual_restart")
-            # Note: Status already set to 2 (running) by start_server() - no need to override
+                # Record restart in metrics
+                collector = MetricsCollector(id)
+                collector.record_restart("manual_restart")
+                # Note: Status already set to 2 (running) by start_server() - no need to override
 
-        return success
+            return success
 
     async def get_server_status(self, id: str) -> Dict[str, Any]:
         """
