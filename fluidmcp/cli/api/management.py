@@ -6,12 +6,15 @@ Provides REST API for:
 - Starting/stopping/restarting servers
 - Querying server status and logs
 - Listing all configured servers
+- Replicate model inference
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
+import asyncio
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1350,3 +1353,233 @@ async def trigger_health_check(
         # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
         "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }
+# ============================================================================
+# Replicate Model Inference Endpoints
+# ============================================================================
+
+@router.get("/replicate/models")
+async def list_replicate_models(
+    token: str = Depends(get_token)
+):
+    """
+    List all active Replicate models.
+
+    Returns:
+        List of model IDs
+    """
+    from ..services.replicate_client import list_replicate_models as get_models
+
+    models = get_models()
+    return {
+        "models": models,
+        "count": len(models)
+    }
+
+
+@router.post("/replicate/models/{model_id}/predict")
+async def create_prediction(
+    model_id: str,
+    input_data: Dict[str, Any] = Body(...),
+    version: Optional[str] = Body(None),
+    webhook: Optional[str] = Body(None),
+    token: str = Depends(get_token)
+):
+    """
+    Create a prediction on a Replicate model.
+
+    Args:
+        model_id: Model identifier
+        input_data: Input parameters for the model
+        version: Optional specific model version
+        webhook: Optional webhook URL for completion notification
+
+    Returns:
+        Prediction response with ID and status
+    """
+    from ..services.replicate_client import get_replicate_client
+
+    client = get_replicate_client(model_id)
+    if not client:
+        raise HTTPException(404, f"Replicate model '{model_id}' not found")
+
+    try:
+        result = await client.predict(
+            input_data=input_data,
+            version=version,
+            webhook=webhook
+        )
+        logger.info(f"Created prediction {result.get('id')} for model '{model_id}'")
+        return result
+    except Exception as e:
+        logger.error(f"Error creating prediction for '{model_id}': {e}")
+        raise HTTPException(500, f"Failed to create prediction: {str(e)}")
+
+
+@router.get("/replicate/predictions/{prediction_id}")
+async def get_prediction_status(
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get the status and output of a prediction.
+
+    Args:
+        prediction_id: ID of the prediction
+
+    Returns:
+        Prediction status and output
+    """
+    from ..services.replicate_client import list_replicate_models, get_replicate_client
+
+    # Try to find which client owns this prediction by checking all clients
+    models = list_replicate_models()
+    if not models:
+        raise HTTPException(404, "No Replicate models initialized")
+
+    # Use the first available client (predictions are global across a Replicate account)
+    client = get_replicate_client(models[0])
+    if not client:
+        raise HTTPException(500, "No Replicate client available")
+
+    try:
+        result = await client.get_prediction(prediction_id)
+        return result
+    except Exception as e:
+        logger.error(f"Error getting prediction '{prediction_id}': {e}")
+        raise HTTPException(500, f"Failed to get prediction: {str(e)}")
+
+
+@router.post("/replicate/predictions/{prediction_id}/cancel")
+async def cancel_prediction(
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Cancel a running prediction.
+
+    Args:
+        prediction_id: ID of the prediction to cancel
+
+    Returns:
+        Cancellation response
+    """
+    from ..services.replicate_client import list_replicate_models, get_replicate_client
+
+    models = list_replicate_models()
+    if not models:
+        raise HTTPException(404, "No Replicate models initialized")
+
+    client = get_replicate_client(models[0])
+    if not client:
+        raise HTTPException(500, "No Replicate client available")
+
+    try:
+        result = await client.cancel_prediction(prediction_id)
+        logger.info(f"Cancelled prediction '{prediction_id}'")
+        return result
+    except Exception as e:
+        logger.error(f"Error cancelling prediction '{prediction_id}': {e}")
+        raise HTTPException(500, f"Failed to cancel prediction: {str(e)}")
+
+
+@router.post("/replicate/models/{model_id}/stream")
+async def stream_prediction(
+    model_id: str,
+    input_data: Dict[str, Any] = Body(...),
+    version: Optional[str] = Body(None),
+    token: str = Depends(get_token)
+):
+    """
+    Stream prediction output as it's generated.
+
+    Args:
+        model_id: Model identifier
+        input_data: Input parameters for the model
+        version: Optional specific model version
+
+    Returns:
+        Server-sent events stream of output chunks
+    """
+    from ..services.replicate_client import get_replicate_client
+
+    client = get_replicate_client(model_id)
+    if not client:
+        raise HTTPException(404, f"Replicate model '{model_id}' not found")
+
+    async def generate():
+        """Generate server-sent events for streaming."""
+        try:
+            async for chunk in client.stream_prediction(input_data, version):
+                yield f"data: {chunk}\n\n"
+        except Exception as e:
+            logger.error(f"Error streaming prediction for '{model_id}': {e}")
+            yield f"data: [ERROR] {str(e)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream"
+    )
+
+
+@router.get("/replicate/models/{model_id}/info")
+async def get_model_info(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get information about a Replicate model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Model metadata including versions, schema, and description
+    """
+    from ..services.replicate_client import get_replicate_client
+
+    client = get_replicate_client(model_id)
+    if not client:
+        raise HTTPException(404, f"Replicate model '{model_id}' not found")
+
+    try:
+        result = await client.get_model_info()
+        return result
+    except Exception as e:
+        logger.error(f"Error getting model info for '{model_id}': {e}")
+        raise HTTPException(500, f"Failed to get model info: {str(e)}")
+
+
+@router.get("/replicate/models/{model_id}/health")
+async def check_model_health(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Check if a Replicate model is available and healthy.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Health check result
+    """
+    from ..services.replicate_client import get_replicate_client
+
+    client = get_replicate_client(model_id)
+    if not client:
+        raise HTTPException(404, f"Replicate model '{model_id}' not found")
+
+    try:
+        is_healthy = await client.health_check()
+        return {
+            "model_id": model_id,
+            "healthy": is_healthy,
+            "model_name": client.model_name
+        }
+    except Exception as e:
+        logger.error(f"Error checking health for '{model_id}': {e}")
+        return {
+            "model_id": model_id,
+            "healthy": False,
+            "error": str(e)
+        }

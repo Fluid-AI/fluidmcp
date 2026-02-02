@@ -290,7 +290,7 @@ class ReplicateClient:
             logger.warning(f"Health check failed for Replicate model '{self.model_id}': {e}")
             return False
 
-    async def close(self):
+    async def close(self) -> None:
         """Close the HTTP client and cleanup resources."""
         await self.client.aclose()
         logger.info(f"Closed Replicate client for model '{self.model_id}'")
@@ -352,7 +352,7 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
     return clients
 
 
-async def stop_all_replicate_models():
+async def stop_all_replicate_models() -> None:
     """
     Stop all Replicate clients and cleanup resources.
 
