@@ -63,3 +63,8 @@ test-*.json
 
 # Temporary server directories (created when running from config files)
 .temp_servers/
+
+# Test coverage reports
+.coverage
+htmlcov/
+.pytest_cache/

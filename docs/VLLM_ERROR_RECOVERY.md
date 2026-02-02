@@ -6,7 +6,7 @@ FluidMCP includes a comprehensive error recovery system for vLLM processes, with
 
 ### 1. Automatic Health Monitoring
 - **Background Health Checks**: Monitors vLLM processes every 30 seconds
-- **HTTP Endpoint Probing**: Tests `/health` (server root) and `/models` (OpenAI API) endpoints
+- **HTTP Endpoint Probing**: Tests `/health` and `/v1/models` endpoints
 - **Process Status Tracking**: Detects crashed or unresponsive processes
 - **CUDA OOM Detection**: Parses stderr logs for GPU memory errors
 
@@ -50,28 +50,32 @@ Configure restart behavior in your FluidMCP configuration:
 **`restart_policy`** (string, default: `"no"`)
 - `"no"` - Never restart automatically
 - `"on-failure"` - Restart only on crashes or health check failures
-- `"always"` - Restart whenever process stops (planned for future)
+- `"always"` - Restart whenever process stops, regardless of exit reason
 
 **`max_restarts`** (integer, default: `3`)
 - Maximum number of restart attempts
 - After reaching limit, process remains stopped
-- Set to `0` to disable automatic restarts entirely (not recommended)
+- Set to `0` to disable restart limits (not recommended)
 
 **`restart_delay`** (integer, default: `5`)
 - Base delay in seconds between restarts
-- Actual delay uses exponential backoff: `delay * (2 ^ attempt)`
-- Example: 5s, 10s, 20s, 40s, 80s, 160s
+- Actual delay uses exponential backoff: `restart_delay * (2 ^ (attempt - 1))`
+- Where `attempt` is the restart attempt number starting at 1
+- Example with restart_delay=5:
+  - Attempt 1 → 5s (5 * 2^0)
+  - Attempt 2 → 10s (5 * 2^1)
+  - Attempt 3 → 20s (5 * 2^2)
+  - Attempt 4 → 40s (5 * 2^3)
 
 **`health_check_timeout`** (float, default: `10.0`)
 - Timeout in seconds for health check HTTP requests
 - Increase for large models with slow startup times
 - Recommended: 10-30 seconds depending on model size
 
-**Health Check Interval**
-- Health checks currently run every **30 seconds** (fixed interval)
-- This interval is **not configurable** in the current implementation
-- Future versions may expose this as a configurable setting
-- Only applies when health monitoring is enabled (restart_policy != "no")
+**`health_check_interval`** (integer, default: `30`)
+- Interval in seconds between health checks
+- Only applies when health monitoring is enabled
+- Recommended: 30-60 seconds for production
 
 ### Health Check Configuration
 
@@ -84,13 +88,12 @@ Health checks are automatically configured based on the `endpoints.base_url` set
       "endpoints": {
         "base_url": "http://localhost:8001/v1"
       },
-      "health_check_timeout": 30.0
+      "health_check_timeout": 30.0,
+      "health_check_interval": 60
     }
   }
 }
 ```
-
-Note: `health_check_interval` is a global monitor setting, not per-model.
 
 **Configuration for Large Models:**
 ```json
@@ -104,7 +107,8 @@ Note: `health_check_interval` is a global monitor setting, not per-model.
       },
       "restart_policy": "on-failure",
       "max_restarts": 3,
-      "health_check_timeout": 30.0
+      "health_check_timeout": 30.0,
+      "health_check_interval": 60
     }
   }
 }
@@ -251,7 +255,7 @@ POST /api/llm/models/{model_id}/health-check
 The system automatically detects CUDA OOM errors in stderr logs:
 
 ```python
-# Detection patterns (case-insensitive substring match):
+# Detection patterns (case-insensitive):
 - "cuda out of memory"
 - "cudaerror: out of memory"
 - "cuda error: out of memory"
@@ -498,17 +502,57 @@ Consider rate limiting management APIs in production:
 - Restart API: Max 10 requests/minute per model
 - Logs API: Max 30 requests/minute per model
 
-### Log Privacy
+### Log Privacy and Command Sanitization
 
-Stderr logs may contain sensitive information:
-- API keys in stack traces
-- Model paths revealing infrastructure
-- User prompts (if logging enabled)
+FluidMCP automatically sanitizes sensitive data in logs to prevent credential leakage:
 
-**Recommendations:**
-- Restrict `/llm/models/{id}/logs` endpoint access
+**Automatic Sanitization:**
+- Command-line arguments containing API keys, tokens, passwords are redacted
+- Sensitive patterns detected: `api-key`, `token`, `secret`, `password`, `auth`, `credential`
+- Supports both `--flag value` and `--flag=value` formats
+- Example: `vllm serve --api-key sk-secret123` → `vllm serve --api-key ***REDACTED***`
+
+**Environment Variable Filtering:**
+- System environment variables filtered to an allowlist only (case-insensitive matching)
+- Allowlist (Unix-like): `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `CUDA_VISIBLE_DEVICES`, `CUDA_DEVICE_ORDER`, `LD_LIBRARY_PATH`, `PYTHONPATH`, `VIRTUAL_ENV`
+- Additional Windows allowlist entries: `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`
+- User-provided env vars from config always included (explicit configuration)
+
+**Log File Security:**
+- Stderr logs stored in `~/.fluidmcp/logs/llm_{sanitized_model_id}_stderr.log` (using the sanitized model id)
+- File permissions automatically set to `0o600` (owner read/write only)
+- Model IDs are sanitized before being used in filenames to prevent path traversal attacks, and the same sanitized model id is used consistently by both the log writer and log-access APIs
+
+**Additional Recommendations:**
+- Restrict `/api/llm/models/{id}/logs` endpoint access
 - Rotate logs regularly
-- Sanitize logs before exposing via API
+- Review logs periodically for any sensitive data that wasn't caught
+
+## Testing
+
+FluidMCP includes comprehensive test coverage for vLLM functionality:
+
+**Security Tests** ([tests/test_llm_security.py](../tests/test_llm_security.py)):
+- 18 tests covering command sanitization and environment filtering
+- 100% passing
+- Tests for API key redaction, password filtering, env allowlisting, false positive prevention, and case-insensitive env var merging
+
+**Integration Tests** ([tests/test_llm_integration.py](../tests/test_llm_integration.py)):
+- 10 tests covering process lifecycle, configuration validation, and state tracking
+- 100% passing
+- Tests for startup, shutdown, error handling, and environment management
+
+**Run Tests:**
+```bash
+# All vLLM tests
+python -m pytest tests/test_llm_security.py tests/test_llm_integration.py -v
+
+# Security tests only
+python -m pytest tests/test_llm_security.py -v
+
+# Integration tests only
+python -m pytest tests/test_llm_integration.py -v
+```
 
 ## Future Enhancements
 

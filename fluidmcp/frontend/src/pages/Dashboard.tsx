@@ -4,6 +4,7 @@ import ServerCard from "../components/ServerCard";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
 import { useServers } from "../hooks/useServers";
+import { showSuccess, showError, showLoading } from "../services/toast";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -18,12 +19,18 @@ export default function Dashboard() {
     // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
+    const toastId = `server-${serverId}`;
+
     setActionState({ serverId, type: 'starting' });
+    showLoading(`Starting server "${serverName}"...`, toastId);
 
     try {
       await startServer(serverId);
+      showSuccess(`Server "${serverName}" started successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to start server');
+      showError(err instanceof Error ? err.message : 'Failed to start server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }
@@ -33,12 +40,18 @@ export default function Dashboard() {
     // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
+    const toastId = `server-${serverId}`;
+
     setActionState({ serverId, type: 'stopping' });
+    showLoading(`Stopping server "${serverName}"...`, toastId);
 
     try {
       await stopServer(serverId);
+      showSuccess(`Server "${serverName}" stopped successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to stop server');
+      showError(err instanceof Error ? err.message : 'Failed to stop server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }
@@ -48,12 +61,18 @@ export default function Dashboard() {
     // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
+    const toastId = `server-${serverId}`;
+
     setActionState({ serverId, type: 'restarting' });
+    showLoading(`Restarting server "${serverName}"...`, toastId);
 
     try {
       await restartServer(serverId);
+      showSuccess(`Server "${serverName}" restarted successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to restart server');
+      showError(err instanceof Error ? err.message : 'Failed to restart server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }

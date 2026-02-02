@@ -103,6 +103,7 @@ export const ServerEnvForm: React.FC<ServerEnvFormProps> = ({
     }
   };
 
+
   const isSensitiveField = (key: string): boolean => {
     const lowerKey = key.toLowerCase();
     const sensitivePatterns = [
