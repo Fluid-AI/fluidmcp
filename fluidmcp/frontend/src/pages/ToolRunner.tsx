@@ -6,6 +6,7 @@ import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
 import type { Server, Tool } from '../types/server';
 import './ToolRunner.css';
+import { Footer } from '@/components/Footer';
 
 export const ToolRunner: React.FC = () => {
   const { serverId, toolName } = useParams<{ serverId: string; toolName: string }>();
@@ -246,6 +247,9 @@ export const ToolRunner: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Footer */}
+      <Footer />
     </div>
   );
 };

@@ -6,6 +6,7 @@ import ErrorMessage from "../components/ErrorMessage";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Button } from "@/components/ui/button";
+import { Footer } from "@/components/Footer";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -274,6 +275,9 @@ export default function Dashboard() {
           )}
         </div>
       </section>
+
+      {/* Footer */}
+      <Footer />
     </div>
   );
 }

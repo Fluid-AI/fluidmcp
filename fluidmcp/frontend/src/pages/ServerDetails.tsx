@@ -7,6 +7,7 @@ import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
 import { ServerEnvForm } from "../components/ServerEnvForm";
 import { showSuccess, showError, showLoading } from "../services/toast";
+import { Footer } from "@/components/Footer";
 
 export default function ServerDetails() {
   const { serverId } = useParams<{ serverId: string }>();
@@ -373,6 +374,9 @@ export default function ServerDetails() {
           </div>
         </section>
       )}
+
+      {/* Footer */}
+      <Footer />
     </div>
   );
 }
