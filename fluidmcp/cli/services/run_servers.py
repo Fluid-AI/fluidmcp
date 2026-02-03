@@ -345,6 +345,7 @@ def run_servers(
         # Launch vLLM models
         if vllm_models:
             logger.info(f"Validating and transforming {len(vllm_models)} vLLM model config(s)...")
+            validated_llm_config = None
             try:
                 # Validate and transform high-level configs to vLLM args
                 validated_llm_config = validate_and_transform_llm_config(vllm_models)
@@ -358,47 +359,49 @@ def run_servers(
                         "They will continue running."
                     )
                 # Don't return - continue to initialize Replicate models if configured
-                vllm_models = {}  # Clear to skip vLLM launch
+                validated_llm_config = None  # Clear to skip vLLM launch
 
-            logger.info(f"Launching {len(validated_llm_config)} vLLM model(s)...")
-            llm_processes = launch_llm_models(validated_llm_config)
+            # Only launch if validation succeeded
+            if validated_llm_config:
+                logger.info(f"Launching {len(validated_llm_config)} vLLM model(s)...")
+                llm_processes = launch_llm_models(validated_llm_config)
 
-            # Thread-safe update of LLM registries
-            with _llm_registry_lock:
-                _llm_processes.update(llm_processes)
+                # Thread-safe update of LLM registries
+                with _llm_registry_lock:
+                    _llm_processes.update(llm_processes)
 
-                # Register LLM endpoints only for successfully running processes
-                for model_id in llm_processes.keys():
-                    model_config = validated_llm_config[model_id]
-                    endpoints = model_config.get("endpoints", {})
+                    # Register LLM endpoints only for successfully running processes
+                    for model_id in llm_processes.keys():
+                        model_config = validated_llm_config[model_id]
+                        endpoints = model_config.get("endpoints", {})
 
-                    # Determine base_url with smart port extraction
-                    base_url = endpoints.get("base_url")
-                    if not base_url:
-                        # Try to extract port from command args
-                        port = _extract_port_from_args(model_config.get("args", []))
-                        base_url = f"http://localhost:{port}/v1"
-                        logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
+                        # Determine base_url with smart port extraction
+                        base_url = endpoints.get("base_url")
+                        if not base_url:
+                            # Try to extract port from command args
+                            port = _extract_port_from_args(model_config.get("args", []))
+                            base_url = f"http://localhost:{port}/v1"
+                            logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
 
-                    _llm_endpoints[model_id] = {
-                        "base_url": base_url,
-                        "chat": endpoints.get("chat", "/chat/completions"),
-                        "completions": endpoints.get("completions", "/completions"),
-                        "models": endpoints.get("models", "/models"),
-                    }
-                    logger.info(f"Registered vLLM endpoints for '{model_id}' at {base_url}")
+                        _llm_endpoints[model_id] = {
+                            "base_url": base_url,
+                            "chat": endpoints.get("chat", "/chat/completions"),
+                            "completions": endpoints.get("completions", "/completions"),
+                            "models": endpoints.get("models", "/models"),
+                        }
+                        logger.info(f"Registered vLLM endpoints for '{model_id}' at {base_url}")
 
-            # Add OpenAI proxy routes if any models started successfully
-            if _llm_endpoints:
-                _add_llm_proxy_routes(app)
-            else:
-                logger.warning("No vLLM models started successfully - skipping proxy routes")
+                # Add OpenAI proxy routes if any models started successfully
+                if _llm_endpoints:
+                    _add_llm_proxy_routes(app)
+                else:
+                    logger.warning("No vLLM models started successfully - skipping proxy routes")
 
-            # Register startup event to start health monitor after event loop is running
-            @app.on_event("startup")
-            async def startup_health_monitor():
-                """Start LLM health monitor when FastAPI server starts."""
-                await _start_llm_health_monitor_async()
+                # Register startup event to start health monitor after event loop is running
+                @app.on_event("startup")
+                async def startup_health_monitor():
+                    """Start LLM health monitor when FastAPI server starts."""
+                    await _start_llm_health_monitor_async()
 
         # Initialize Replicate models
         if replicate_models:
