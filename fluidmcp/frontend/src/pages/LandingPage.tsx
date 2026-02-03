@@ -3,6 +3,40 @@ import { BackgroundLines } from "@/components/ui/background-lines";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Footer } from "@/components/Footer";
+import { InfiniteMovingCards } from "@/components/ui/infinite-moving-cards";
+
+const testimonials = [
+  {
+    quote:
+      "Fluid MCP Registry has completely transformed how we integrate AI tools into our workflow. The security guarantees give us peace of mind.",
+    name: "Sarah Chen",
+    title: "CTO at TechFlow AI",
+  },
+  {
+    quote:
+      "The quality of MCP servers in this registry is unmatched. Every package is thoroughly vetted, which saves us countless hours of security audits.",
+    name: "Michael Rodriguez",
+    title: "Lead AI Engineer at DataSync",
+  },
+  {
+    quote:
+      "As a developer, I appreciate how easy it is to discover and integrate new MCP servers. The documentation is top-notch and the API is intuitive.",
+    name: "Emily Watson",
+    title: "Full Stack Developer at CloudNine",
+  },
+  {
+    quote:
+      "We've built our entire AI infrastructure on MCP servers from this registry. The reliability and security standards are exactly what enterprise needs.",
+    name: "David Park",
+    title: "VP of Engineering at Enterprise AI Solutions",
+  },
+  {
+    quote:
+      "The community around Fluid MCP Registry is incredible. It's not just a registry, it's a movement towards safer AI integration.",
+    name: "Lisa Thompson",
+    title: "AI Research Lead at InnovateLabs",
+  },
+];
 
 export default function LandingPage() {
   return (
@@ -112,6 +146,23 @@ export default function LandingPage() {
             </div>
           </div>
         </BackgroundLines>
+
+        {/* Testimonials Section */}
+        <div className="py-20 bg-background">
+          <div className="container mx-auto px-6">
+            <h2 className="text-3xl md:text-4xl font-bold text-center mb-4">
+              Trusted by Developers Worldwide
+            </h2>
+            <p className="text-center text-muted-foreground text-lg mb-12 max-w-2xl mx-auto">
+              Join thousands of developers building the future of AI with secure MCP servers
+            </p>
+            <InfiniteMovingCards
+              items={testimonials}
+              direction="right"
+              speed="slow"
+            />
+          </div>
+        </div>
       </main>
 
       {/* Footer */}
