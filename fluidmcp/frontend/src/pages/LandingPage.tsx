@@ -108,7 +108,7 @@ export default function LandingPage() {
               </Badge>
 
               {/* Main Heading */}
-              <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight max-w-5xl">
+              <h1 className="text-3xl md:text-5xl lg:text-6xl font-bold tracking-tight max-w-5xl" style={{ fontFamily: 'Cinzel, serif' }}>
                 Run MCP Servers with Uncompromising Security
               </h1>
 
