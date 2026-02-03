@@ -9,6 +9,7 @@ Includes error recovery, health checks, and automatic restart capabilities.
 
 import os
 import re
+import shutil
 import subprocess
 import time
 import asyncio
@@ -29,7 +30,7 @@ CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
 # Log rotation settings
 LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB per log file
-LOG_BACKUP_COUNT = 5  # Keep 5 backup files (total 50MB max per model)
+LOG_BACKUP_COUNT = 5  # Keep 5 backup files (up to 50MB of backups per model, plus up to 10MB for the active log file)
 
 # Environment variable allowlist for subprocess (uppercase for case-insensitive matching)
 ENV_VAR_ALLOWLIST = {
@@ -109,6 +110,9 @@ def sanitize_command_for_logging(command_parts: list) -> str:
             return True
 
         # Two-word combinations like "api-key", "access-token", "bearer-token"
+        # Only treat flags as sensitive when they *end* with a sensitive pair.
+        # This still catches variants like --prod-api-key or --my-access-token,
+        # but avoids false positives such as --api-key-rotation.
         sensitive_segment_pairs = {
             ("api", "key"),
             ("access", "key"),
@@ -116,9 +120,8 @@ def sanitize_command_for_logging(command_parts: list) -> str:
             ("auth", "token"),
             ("bearer", "token"),
         }
-        for first, second in zip(segments, segments[1:]):
-            if (first, second) in sensitive_segment_pairs:
-                return True
+        if len(segments) >= 2 and (segments[-2], segments[-1]) in sensitive_segment_pairs:
+            return True
 
         return False
 
@@ -309,7 +312,6 @@ class LLMProcess:
         Args:
             log_path: Path to the log file to rotate
         """
-        import shutil
 
         # First, remove the oldest backup (.5) if it exists
         oldest_backup = f"{log_path}.{LOG_BACKUP_COUNT}"
