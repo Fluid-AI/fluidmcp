@@ -10,7 +10,7 @@ import { Footer } from "@/components/Footer";
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { servers, activeServers, loading, error, refetch, startServer, stopServer, restartServer } = useServers();
+  const { servers, activeServers, loading, error, refetch, startServer } = useServers();
 
   const [actionState, setActionState] = useState<{
     serverId: string | null;
@@ -18,7 +18,6 @@ export default function Dashboard() {
   }>({ serverId: null, type: null });
 
   const handleStartServer = async (serverId: string) => {
-    // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
     const server = servers.find(s => s.id === serverId);
@@ -33,48 +32,6 @@ export default function Dashboard() {
       showSuccess(`Server "${serverName}" started successfully`, toastId);
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to start server', toastId);
-    } finally {
-      setActionState({ serverId: null, type: null });
-    }
-  };
-
-  const handleStopServer = async (serverId: string) => {
-    // Silent guard - prevent concurrent operations
-    if (actionState.type !== null) return;
-
-    const server = servers.find(s => s.id === serverId);
-    const serverName = server?.name || serverId;
-    const toastId = `server-${serverId}`;
-
-    setActionState({ serverId, type: 'stopping' });
-    showLoading(`Stopping server "${serverName}"...`, toastId);
-
-    try {
-      await stopServer(serverId);
-      showSuccess(`Server "${serverName}" stopped successfully`, toastId);
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to stop server', toastId);
-    } finally {
-      setActionState({ serverId: null, type: null });
-    }
-  };
-
-  const handleRestartServer = async (serverId: string) => {
-    // Silent guard - prevent concurrent operations
-    if (actionState.type !== null) return;
-
-    const server = servers.find(s => s.id === serverId);
-    const serverName = server?.name || serverId;
-    const toastId = `server-${serverId}`;
-
-    setActionState({ serverId, type: 'restarting' });
-    showLoading(`Restarting server "${serverName}"...`, toastId);
-
-    try {
-      await restartServer(serverId);
-      showSuccess(`Server "${serverName}" restarted successfully`, toastId);
-    } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to restart server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }
@@ -214,7 +171,7 @@ export default function Dashboard() {
             </p>
           </div>
         ) : (
-          <div className="server-list">
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {servers.map((server) => (
               <ServerCard
                 key={server.id}
@@ -226,54 +183,6 @@ export default function Dashboard() {
             ))}
           </div>
         )}
-      </section>
-
-      <section className="dashboard-section">
-        <h2>Currently active servers</h2>
-
-        <div className="active-server-container">
-          {activeServers.length === 0 ? (
-            <p className="empty-state">
-              No servers are currently running
-            </p>
-          ) : (
-            <div className="active-server-list">
-              {activeServers.map((server) => (
-                <div key={server.id} className="active-server-row">
-                  <div>
-                    <strong>{server.name}</strong>
-                    <span className={`status ${server.status?.state}`}>
-                      {server.status?.state}
-                    </span>
-                  </div>
-
-                  <div className="active-server-actions">
-                    <button
-                      className="stop-btn"
-                      onClick={() => handleStopServer(server.id)}
-                      disabled={actionState.serverId === server.id && actionState.type === 'stopping'}
-                    >
-                      {actionState.serverId === server.id && actionState.type === 'stopping' ? 'Stopping...' : 'Stop'}
-                    </button>
-                    <button
-                      className="restart-btn"
-                      onClick={() => handleRestartServer(server.id)}
-                      disabled={actionState.serverId === server.id && actionState.type === 'restarting'}
-                    >
-                      {actionState.serverId === server.id && actionState.type === 'restarting' ? 'Restarting...' : 'Restart'}
-                    </button>
-                    <button
-                      className="details-btn"
-                      onClick={() => navigate(`/servers/${server.id}`)}
-                    >
-                      Details
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
       </section>
 
       {/* Footer */}
