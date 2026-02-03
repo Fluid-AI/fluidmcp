@@ -67,11 +67,10 @@ Results returned to user
 ```
 fluidmcp/mcp_servers/
 ├── sandbox_server.py           # MCP server + session management + lifecycle (~300-350 lines)
-└── sandbox_backend.py          # Docker operations + safety policies (~150 lines)
-
-docker/sandbox/
-├── Dockerfile                  # Base image with tools
-└── requirements.txt            # Python packages
+├── sandbox_backend.py          # Docker operations + safety policies (~150 lines)
+└── docker/
+    ├── Dockerfile              # Base image with tools
+    └── requirements.txt        # Python packages
 
 examples/
 ├── sandbox-config.json         # FluidMCP configuration
