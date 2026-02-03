@@ -175,12 +175,16 @@ Find models at: https://replicate.com/explore
 
 Usage:
 ```bash
-curl -X POST http://localhost:8099/api/replicate/models/llama-chat/predict \
+curl -X POST http://localhost:8099/api/llm/llama-chat/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "input": {
-      "prompt": "What is the capital of France?"
-    }
+    "model": "llama-chat",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ]
   }'
 ```
 
@@ -205,12 +209,16 @@ curl -X POST http://localhost:8099/api/replicate/models/llama-chat/predict \
 
 Usage:
 ```bash
-curl -X POST http://localhost:8099/api/replicate/models/codellama/predict \
+curl -X POST http://localhost:8099/api/llm/codellama/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "input": {
-      "prompt": "Write a Python function to calculate fibonacci numbers"
-    }
+    "model": "codellama",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a Python function to calculate fibonacci numbers"
+      }
+    ]
   }'
 ```
 
@@ -248,113 +256,104 @@ Each model is accessible independently via its model ID.
 
 ## API Endpoints
 
-FluidMCP exposes the following endpoints for Replicate models:
+Replicate models are exposed through **FluidMCP's unified OpenAI-compatible API**. This allows seamless integration with OpenAI client libraries and tools.
 
-### List Models
+### Chat Completions (Primary Endpoint)
 ```
-GET /api/replicate/models
-```
-
-Returns list of active Replicate model IDs.
-
-### Create Prediction
-```
-POST /api/replicate/models/{model_id}/predict
+POST /api/llm/{model_id}/v1/chat/completions
 ```
 
-Body:
+**OpenAI-compatible request format:**
 ```json
 {
-  "input": {
-    "prompt": "Your prompt here",
-    "temperature": 0.7
-  },
-  "version": "optional-specific-version",
-  "webhook": "optional-webhook-url"
+  "model": "llama-2-70b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "What is quantum computing?"
+    }
+  ],
+  "temperature": 0.7,
+  "max_tokens": 1000,
+  "stream": false
 }
 ```
 
-Returns:
+**Response:**
 ```json
 {
-  "id": "pred_abc123",
-  "status": "starting",
-  "input": {...}
-}
-```
-
-### Get Prediction Status
-```
-GET /api/replicate/models/{model_id}/predictions/{prediction_id}
-```
-
-**Parameters:**
-- `model_id`: The model identifier that created the prediction (e.g., `llama-2-70b`)
-- `prediction_id`: The prediction ID returned from the create prediction call
-
-**Returns:**
-```json
-{
-  "id": "pred_abc123",
-  "status": "succeeded",
-  "output": "Model output here...",
-  "metrics": {
-    "predict_time": 1.23
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "llama-2-70b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Quantum computing is..."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 100,
+    "total_tokens": 120
   }
 }
 ```
 
-### Stream Prediction
-```
-POST /api/replicate/models/{model_id}/stream
+### Streaming Responses
+Set `"stream": true` in the request:
+
+```bash
+curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-2-70b",
+    "messages": [{"role": "user", "content": "Tell me a story"}],
+    "stream": true
+  }'
 ```
 
-Body:
-```json
-{
-  "input": {
-    "prompt": "Your prompt here"
-  }
-}
+**Note**: Replicate doesn't support true streaming yet. FluidMCP polls the prediction and returns the complete response when ready.
+
+### Using with OpenAI Python Client
+
+```python
+from openai import OpenAI
+
+# Point OpenAI client to FluidMCP gateway
+client = OpenAI(
+    base_url="http://localhost:8099/api/llm/llama-2-70b/v1",
+    api_key="not-needed"  # FluidMCP uses REPLICATE_API_TOKEN from config
+)
+
+response = client.chat.completions.create(
+    model="llama-2-70b",
+    messages=[
+        {"role": "user", "content": "Hello!"}
+    ]
+)
+
+print(response.choices[0].message.content)
 ```
 
-Returns server-sent events (SSE) stream of output chunks.
+### Model Discovery
 
-### Cancel Prediction
+List all available models (including Replicate):
+```bash
+curl http://localhost:8099/api/models
 ```
-POST /api/replicate/models/{model_id}/predictions/{prediction_id}/cancel
-```
-
-**Parameters:**
-- `model_id`: The model identifier that created the prediction
-- `prediction_id`: The prediction ID to cancel
-
-**Returns:**
-```json
-{
-  "id": "pred_abc123",
-  "status": "canceled"
-}
-```
-
-### Get Model Info
-```
-GET /api/replicate/models/{model_id}/info
-```
-
-Returns model metadata, versions, and schema.
 
 ### Health Check
-```
-GET /api/replicate/models/{model_id}/health
-```
-
-Returns:
-```json
-{
-  "healthy": true,
-  "model_id": "llama-70b"
-}
+```bash
+curl http://localhost:8099/health
 ```
 
 ## Error Handling
@@ -448,9 +447,17 @@ Replicate charges based on compute time. Tips to manage costs:
    # https://replicate.com/account/billing
    ```
 
-5. **Cancel unnecessary predictions**:
-   ```bash
-   curl -X POST http://localhost:8099/api/replicate/models/{model_id}/predictions/{id}/cancel
+5. **Use shorter timeouts** in your config to fail fast:
+   ```json
+   {
+     "llmModels": {
+       "llama-2-70b": {
+         "type": "replicate",
+         "timeout": 60,
+         "max_retries": 2
+       }
+     }
+   }
    ```
 
 ## Security Best Practices
@@ -478,7 +485,7 @@ Store tokens in environment variables or secrets management.
 **Recommendation**: Run FluidMCP behind a reverse proxy with authentication:
 
 ```nginx
-location /api/replicate {
+location /api/llm {
     auth_basic "Restricted";
     auth_basic_user_file /etc/nginx/.htpasswd;
     proxy_pass http://localhost:8099;
@@ -496,9 +503,9 @@ from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
 
-@app.post("/api/replicate/models/{model_id}/predict")
+@app.post("/api/llm/{model_id}/v1/chat/completions")
 @limiter.limit("10/minute")
-async def create_prediction(...):
+async def unified_chat_completions(...):
     ...
 ```
 
@@ -587,22 +594,29 @@ All tests use mocked HTTP responses (no actual Replicate API calls).
    }
    ```
 
-2. Use streaming instead:
-   ```bash
-   curl -X POST .../stream  # Streaming avoids single-request timeout; long-lived connections may still be cut off by client/proxy timeouts
+2. Increase timeout in config:
+   ```json
+   {
+     "llmModels": {
+       "llama-2-70b": {
+         "type": "replicate",
+         "timeout": 300
+       }
+     }
+   }
    ```
 
 3. Check Replicate status:
    - https://replicate.com/status
 
-### Predictions fail
+### Requests fail
 
-**Symptom**: Prediction status shows "failed"
+**Symptom**: Chat completion requests fail with errors
 
 **Solutions:**
-1. Check error message:
+1. Check FluidMCP logs:
    ```bash
-   curl http://localhost:8099/api/replicate/models/{model_id}/predictions/{id}
+   tail -f ~/.fluidmcp/logs/fluidmcp.log
    ```
 
 2. Verify input format matches model requirements:
@@ -657,12 +671,16 @@ fluidmcp run examples/replicate-inference.json --file --start-server
 
 # Server runs on http://localhost:8099
 # Test with:
-curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
+curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "input": {
-      "prompt": "What is the meaning of life?"
-    }
+    "model": "llama-2-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the meaning of life?"
+      }
+    ]
   }'
 ```
 
