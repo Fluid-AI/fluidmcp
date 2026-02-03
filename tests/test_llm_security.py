@@ -97,6 +97,8 @@ class TestCommandSanitization:
             "--tokenizer=/path/to/tokenizer",  # "token" is part of "tokenizer"
             "--monkey=123",                     # "key" is part of "monkey"
             "--keyboard-layout=us",             # "key" is part of "keyboard"
+            "--api-key-rotation", "daily",      # "api-key" is not the trailing pair
+            "--api-key-config=/path/config",    # "api-key" is not the trailing pair
             "--port", "8001"                    # Safe value
         ]
         result = sanitize_command_for_logging(command)
@@ -105,6 +107,9 @@ class TestCommandSanitization:
         assert "--tokenizer=/path/to/tokenizer" in result
         assert "--monkey=123" in result
         assert "--keyboard-layout=us" in result
+        assert "--api-key-rotation" in result
+        assert "daily" in result  # Value after --api-key-rotation NOT redacted
+        assert "--api-key-config=/path/config" in result
         assert "8001" in result
         assert "***REDACTED***" not in result
 
@@ -115,7 +120,9 @@ class TestCommandSanitization:
             "--api-key", "secret1",           # Should redact
             "--auth-token=secret2",           # Should redact
             "--access_key", "secret3",        # Should redact
-            "--my-api-key", "secret4",        # Should redact (api-key is a segment)
+            "--my-api-key", "secret4",        # Should redact (trailing pair is api-key)
+            "--prod-api-key", "secret5",      # Should redact (trailing pair is api-key)
+            "--admin-access-token=secret6",   # Should redact (trailing pair is access-token)
         ]
         result = sanitize_command_for_logging(command)
 
@@ -124,7 +131,9 @@ class TestCommandSanitization:
         assert "secret2" not in result
         assert "secret3" not in result
         assert "secret4" not in result
-        assert result.count("***REDACTED***") == 4
+        assert "secret5" not in result
+        assert "secret6" not in result
+        assert result.count("***REDACTED***") == 6
 
 
 class TestEnvVarFiltering:

@@ -46,11 +46,14 @@ class TestLLMProcessLifecycle:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_successful_startup(self, mock_chmod, mock_open, mock_makedirs, mock_popen, vllm_config, mock_process):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_successful_startup(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen, vllm_config, mock_process):
         """Test successful process startup."""
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False  # No existing log file
 
         llm_process = LLMProcess("vllm", vllm_config)
         llm_process.start()
@@ -77,10 +80,13 @@ class TestLLMProcessLifecycle:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_startup_missing_command(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_startup_missing_command(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen):
         """Test startup fails with missing command."""
         config = {"args": ["serve"]}
         llm_process = LLMProcess("test", config)
+        mock_exists.return_value = False
 
         with pytest.raises(ValueError, match="missing 'command' in config"):
             llm_process.start()
@@ -89,11 +95,14 @@ class TestLLMProcessLifecycle:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_graceful_shutdown(self, mock_chmod, mock_open, mock_makedirs, mock_popen, vllm_config, mock_process):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_graceful_shutdown(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen, vllm_config, mock_process):
         """Test graceful process shutdown."""
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False
 
         llm_process = LLMProcess("vllm", vllm_config)
         llm_process.start()
@@ -130,7 +139,9 @@ class TestLLMProcessLifecycle:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_command_sanitization_in_logs(self, mock_chmod, mock_open, mock_makedirs, mock_popen, mock_logger):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_command_sanitization_in_logs(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen, mock_logger):
         """Test that sensitive data in commands is sanitized in logs."""
         config = {
             "command": "vllm",
@@ -143,6 +154,7 @@ class TestLLMProcessLifecycle:
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False
 
         llm_process = LLMProcess("test", config)
         llm_process.start()
@@ -165,7 +177,9 @@ class TestProcessState:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_is_running_returns_correct_state(self, mock_chmod, mock_open, mock_makedirs, mock_popen, vllm_config):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_is_running_returns_correct_state(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen, vllm_config):
         """Test is_running() returns correct process state."""
         mock_process = Mock()
         mock_process.pid = 12345
@@ -173,6 +187,7 @@ class TestProcessState:
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False
 
         llm_process = LLMProcess("vllm", vllm_config)
 
@@ -191,9 +206,12 @@ class TestProcessState:
 class TestConfigurationValidation:
     """Test configuration validation."""
 
-    def test_empty_config(self):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_empty_config(self, mock_exists, mock_getsize):
         """Test empty configuration raises error."""
         llm_process = LLMProcess("test", {})
+        mock_exists.return_value = False
 
         with pytest.raises(ValueError, match="missing 'command' in config"):
             llm_process.start()
@@ -202,7 +220,9 @@ class TestConfigurationValidation:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_unsafe_model_id_sanitization(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_unsafe_model_id_sanitization(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen):
         """Test that unsafe model IDs are sanitized in log paths."""
         config = {
             "command": "vllm",
@@ -216,6 +236,7 @@ class TestConfigurationValidation:
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False
 
         # Test with path traversal attack
         llm_process = LLMProcess("../../etc/passwd", config)
@@ -241,7 +262,9 @@ class TestConfigurationValidation:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_config_with_optional_fields(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_config_with_optional_fields(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen):
         """Test configuration with all optional fields."""
         config = {
             "command": "vllm",
@@ -261,6 +284,7 @@ class TestConfigurationValidation:
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False
 
         llm_process = LLMProcess("test", config)
         llm_process.start()
@@ -277,7 +301,9 @@ class TestEnvironmentFiltering:
     @patch('os.makedirs')
     @patch('builtins.open')
     @patch('os.chmod')
-    def test_user_env_always_included(self, mock_chmod, mock_open, mock_makedirs, mock_popen):
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_user_env_always_included(self, mock_exists, mock_getsize, mock_chmod, mock_open, mock_makedirs, mock_popen):
         """Test user-provided env vars are always included."""
         config = {
             "command": "test",
@@ -292,6 +318,7 @@ class TestEnvironmentFiltering:
         mock_popen.return_value = mock_process
         mock_file = Mock()
         mock_open.return_value = mock_file
+        mock_exists.return_value = False
 
         llm_process = LLMProcess("test", config)
         llm_process.start()
