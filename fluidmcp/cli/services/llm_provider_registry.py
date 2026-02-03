@@ -48,16 +48,20 @@ def get_model_config(model_id: str) -> Optional[dict]:
 def get_model_type(model_id: str) -> Optional[str]:
     """
     Get provider type for a specific model.
-    
+
     Args:
         model_id: Model identifier
-        
+
     Returns:
         Provider type (e.g., "vllm", "replicate", "ollama") or None if not found
+
+    Note:
+        For backward compatibility, models without explicit "type" field default to "vllm"
     """
     config = _llm_models_config.get(model_id)
     if config:
-        return config.get("type")
+        # Default to "vllm" for backward compatibility with legacy configs
+        return config.get("type", "vllm")
     return None
 
 

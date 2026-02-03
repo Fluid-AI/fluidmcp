@@ -30,7 +30,7 @@ from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
-from .llm_provider_registry import initialize_llm_registry, get_model_type, get_model_config
+from .llm_provider_registry import initialize_llm_registry
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 

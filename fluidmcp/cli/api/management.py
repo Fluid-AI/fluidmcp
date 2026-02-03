@@ -1414,7 +1414,28 @@ async def unified_chat_completions(
         if not base_url:
             raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
 
-        # Forward request to vLLM
+        # Check if streaming is requested
+        is_streaming = request_body.get("stream", False)
+
+        if is_streaming:
+            # Return streaming response
+            async def stream_generator():
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{base_url}/chat/completions",
+                        json=request_body
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 response = await client.post(
@@ -1465,6 +1486,28 @@ async def unified_completions(
         if not base_url:
             raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
 
+        # Check if streaming is requested
+        is_streaming = request_body.get("stream", False)
+
+        if is_streaming:
+            # Return streaming response
+            async def stream_generator():
+                async with httpx.AsyncClient(timeout=300.0) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{base_url}/completions",
+                        json=request_body
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 response = await client.post(
@@ -1546,7 +1589,7 @@ async def create_prediction(
     Create a prediction on a Replicate model.
 
     **DEPRECATED**: This endpoint is deprecated. Use the unified OpenAI-compatible endpoint instead:
-    POST /llm/{model_id}/v1/chat/completions
+    POST /api/llm/{model_id}/v1/chat/completions
 
     Args:
         model_id: Model identifier
@@ -1567,7 +1610,7 @@ async def create_prediction(
     # Add deprecation warning header
     if response:
         response.headers["X-Deprecated"] = "true"
-        response.headers["X-Deprecated-Message"] = "Use POST /llm/{model_id}/v1/chat/completions instead"
+        response.headers["X-Deprecated-Message"] = "Use POST /api/llm/{model_id}/v1/chat/completions instead"
 
     logger.warning(f"Deprecated endpoint /replicate/models/{model_id}/predict called")
 
