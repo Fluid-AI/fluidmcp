@@ -123,6 +123,15 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         if len(segments) >= 2 and (segments[-2], segments[-1]) in sensitive_segment_pairs:
             return True
 
+        # Three-word combinations like "access-key-id" or "api-key-id"
+        # Treat a flag as sensitive when it ends with a known sensitive pair
+        # followed by a credential-like suffix such as "id", while still
+        # ignoring benign variants like "--access-key-rotation" or "--access-key-config"
+        sensitive_suffixes_for_pairs = {"id"}
+        if len(segments) >= 3:
+            if (segments[-3], segments[-2]) in sensitive_segment_pairs and segments[-1] in sensitive_suffixes_for_pairs:
+                return True
+
         return False
 
     safe_command = []
@@ -323,13 +332,14 @@ class LLMProcess:
                 logger.warning(f"Failed to remove old backup {oldest_backup}: {e}")
 
         # Rotate existing backups (move .4 -> .5, .3 -> .4, etc.)
+        # Use os.replace for atomic cross-platform rotation
         for i in range(LOG_BACKUP_COUNT - 1, 0, -1):
             old_backup = f"{log_path}.{i}"
             new_backup = f"{log_path}.{i + 1}"
 
             if os.path.exists(old_backup):
                 try:
-                    shutil.move(old_backup, new_backup)
+                    os.replace(old_backup, new_backup)
                     logger.debug(f"Rotated log backup: {old_backup} -> {new_backup}")
                 except Exception as e:
                     logger.warning(f"Failed to rotate log {old_backup} -> {new_backup}: {e}")
@@ -337,7 +347,7 @@ class LLMProcess:
         # Move current log to .1
         if os.path.exists(log_path):
             try:
-                shutil.move(log_path, f"{log_path}.1")
+                os.replace(log_path, f"{log_path}.1")
                 logger.info(f"Rotated log file: {log_path} -> {log_path}.1")
             except Exception as e:
                 logger.warning(f"Failed to rotate log {log_path}: {e}")

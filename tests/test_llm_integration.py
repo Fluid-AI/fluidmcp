@@ -423,9 +423,9 @@ class TestLogRotation:
 
     @patch('os.path.exists')
     @patch('os.remove')
-    @patch('shutil.move')
-    def test_log_rotation_respects_backup_count(self, mock_move, mock_remove, mock_exists):
-        """Test that log rotation respects LOG_BACKUP_COUNT."""
+    @patch('os.replace')
+    def test_log_rotation_respects_backup_count(self, mock_replace, mock_remove, mock_exists):
+        """Test that log rotation respects LOG_BACKUP_COUNT and uses os.replace."""
         from fluidmcp.cli.services.llm_launcher import LOG_BACKUP_COUNT
 
         config = {
@@ -455,8 +455,8 @@ class TestLogRotation:
         # Verify oldest backup (.5) was removed
         mock_remove.assert_called_once_with(f"{log_path}.{LOG_BACKUP_COUNT}")
 
-        # Verify rotation chain: .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2, current -> .1
-        expected_moves = [
+        # Verify rotation chain uses os.replace: .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2, current -> .1
+        expected_replaces = [
             (f"{log_path}.4", f"{log_path}.5"),
             (f"{log_path}.3", f"{log_path}.4"),
             (f"{log_path}.2", f"{log_path}.3"),
@@ -464,6 +464,6 @@ class TestLogRotation:
             (log_path, f"{log_path}.1"),
         ]
 
-        assert mock_move.call_count == 5
-        actual_calls = [call[0] for call in mock_move.call_args_list]
-        assert actual_calls == expected_moves
+        assert mock_replace.call_count == 5
+        actual_calls = [call[0] for call in mock_replace.call_args_list]
+        assert actual_calls == expected_replaces

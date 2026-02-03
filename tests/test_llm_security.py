@@ -123,6 +123,8 @@ class TestCommandSanitization:
             "--my-api-key", "secret4",        # Should redact (trailing pair is api-key)
             "--prod-api-key", "secret5",      # Should redact (trailing pair is api-key)
             "--admin-access-token=secret6",   # Should redact (trailing pair is access-token)
+            "--access-key-id", "secret7",     # Should redact (3-word: access-key-id)
+            "--aws-access-key-id=secret8",    # Should redact (3-word: access-key-id)
         ]
         result = sanitize_command_for_logging(command)
 
@@ -133,7 +135,9 @@ class TestCommandSanitization:
         assert "secret4" not in result
         assert "secret5" not in result
         assert "secret6" not in result
-        assert result.count("***REDACTED***") == 6
+        assert "secret7" not in result
+        assert "secret8" not in result
+        assert result.count("***REDACTED***") == 8
 
 
 class TestEnvVarFiltering:
