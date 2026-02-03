@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Shield, AlertCircle, Play } from "lucide-react";
 import type { Server } from "../types/server";
 
@@ -15,8 +14,6 @@ export default function ServerCard({
   onViewDetails,
   isStarting,
 }: ServerCardProps) {
-  const [isHovered, setIsHovered] = useState(false);
-  
   const isStopped =
     server.status?.state === "stopped" ||
     server.status?.state === "failed" ||
@@ -49,16 +46,10 @@ export default function ServerCard({
   };
 
   return (
-    <div
-      className="relative group"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      {/* Glow effect */}
+    <div className="relative group">
+      {/* Glow effect - removed animate-pulse */}
       <div
-        className={`absolute -inset-0.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl opacity-0 group-hover:opacity-20 blur transition-all duration-500 ${
-          isHovered ? 'animate-pulse' : ''
-        }`}
+        className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl opacity-0 group-hover:opacity-20 blur transition-all duration-500"
       />
 
       {/* Card */}
