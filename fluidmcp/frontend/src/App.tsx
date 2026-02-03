@@ -3,6 +3,7 @@ import { Toaster } from "react-hot-toast";
 import Dashboard from "./pages/Dashboard";
 import ServerDetails from "./pages/ServerDetails";
 import { ToolRunner } from "./pages/ToolRunner";
+import ComponentShowcase from "./pages/ComponentShowcase";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
         }}
       />
       <Routes>
+        <Route path="/showcase" element={<ComponentShowcase />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/servers/:serverId" element={<ServerDetails />} />
         <Route path="/servers/:serverId/tools/:toolName" element={<ToolRunner />} />
