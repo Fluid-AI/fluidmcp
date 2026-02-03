@@ -1,10 +1,11 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useState } from "react";
 import ServerCard from "../components/ServerCard";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
+import { Button } from "@/components/ui/button";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -81,7 +82,36 @@ export default function Dashboard() {
   if (loading) {
     return (
       <div className="dashboard">
-        <LoadingSpinner size="large" message="Loading servers..." />
+        {/* Navbar */}
+        <header className="fixed top-0 w-full z-50 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <div className="container mx-auto flex h-16 items-center justify-between px-6">
+            <Link to="/" className="flex items-center space-x-2">
+              <span className="text-xl font-bold">Fluid MCP</span>
+            </Link>
+            <nav className="hidden md:flex items-center space-x-6 text-sm">
+              <Link to="/" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                Home
+              </Link>
+              <Link to="/servers" className="transition-colors hover:text-foreground/80 text-foreground">
+                Servers
+              </Link>
+              <a href="#" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                Submit
+              </a>
+              <a href="#" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                Documentation
+              </a>
+            </nav>
+            <div className="flex items-center space-x-4">
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/servers">Browse Registry</Link>
+              </Button>
+            </div>
+          </div>
+        </header>
+        <div style={{ paddingTop: '64px' }}>
+          <LoadingSpinner size="large" message="Loading servers..." />
+        </div>
       </div>
     );
   }
@@ -89,30 +119,86 @@ export default function Dashboard() {
   if (error) {
     return (
       <div className="dashboard">
-        <header className="dashboard-header">
-          <h1>FluidMCP Dashboard</h1>
+        {/* Navbar */}
+        <header className="fixed top-0 w-full z-50 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <div className="container mx-auto flex h-16 items-center justify-between px-6">
+            <Link to="/" className="flex items-center space-x-2">
+              <span className="text-xl font-bold">Fluid MCP</span>
+            </Link>
+            <nav className="hidden md:flex items-center space-x-6 text-sm">
+              <Link to="/" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                Home
+              </Link>
+              <Link to="/servers" className="transition-colors hover:text-foreground/80 text-foreground">
+                Servers
+              </Link>
+              <a href="#" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                Submit
+              </a>
+              <a href="#" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                Documentation
+              </a>
+            </nav>
+            <div className="flex items-center space-x-4">
+              <Button variant="ghost" size="sm" asChild>
+                <Link to="/servers">Browse Registry</Link>
+              </Button>
+            </div>
+          </div>
         </header>
-        <ErrorMessage message={error} onRetry={refetch} />
+        <div style={{ paddingTop: '64px' }}>
+          <ErrorMessage message={error} onRetry={refetch} />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="dashboard">
-      {/* Header */}
-      <header className="dashboard-header">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h1>FluidMCP Dashboard</h1>
-            <p className="subtitle">
-              {servers.length} {servers.length === 1 ? 'server' : 'servers'} configured, {activeServers.length} running
-            </p>
+      {/* Navbar */}
+      <header className="fixed top-0 w-full z-50 border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="container mx-auto flex h-16 items-center justify-between px-6">
+          <Link to="/" className="flex items-center space-x-2">
+            <span className="text-xl font-bold">Fluid MCP</span>
+          </Link>
+          <nav className="hidden md:flex items-center space-x-6 text-sm">
+            <Link to="/" className="transition-colors hover:text-foreground/80 text-foreground/60">
+              Home
+            </Link>
+            <Link to="/servers" className="transition-colors hover:text-foreground/80 text-foreground">
+              Servers
+            </Link>
+            <a href="#" className="transition-colors hover:text-foreground/80 text-foreground/60">
+              Submit
+            </a>
+            <a href="#" className="transition-colors hover:text-foreground/80 text-foreground/60">
+              Documentation
+            </a>
+          </nav>
+          <div className="flex items-center space-x-4">
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/servers">Browse Registry</Link>
+            </Button>
           </div>
-          <button onClick={refetch} className="retry-btn" style={{ marginTop: 0 }}>
-            🔄 Refresh
-          </button>
         </div>
       </header>
+
+      {/* Dashboard Content */}
+      <div style={{ paddingTop: '64px' }}>
+        <header className="dashboard-header">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h1>FluidMCP Dashboard</h1>
+              <p className="subtitle">
+                {servers.length} {servers.length === 1 ? 'server' : 'servers'} configured, {activeServers.length} running
+              </p>
+            </div>
+            <button onClick={refetch} className="retry-btn" style={{ marginTop: 0 }}>
+              🔄 Refresh
+            </button>
+          </div>
+        </header>
+      </div>
 
       {/* Main content */}
       <section className="dashboard-section">
