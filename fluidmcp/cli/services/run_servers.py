@@ -30,6 +30,7 @@ from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
+from .llm_provider_registry import initialize_llm_registry, get_model_type, get_model_config
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 
@@ -337,6 +338,9 @@ def run_servers(
                 replicate_models[model_id] = model_config
             else:
                 logger.warning(f"Model '{model_id}' has unsupported type '{model_type}', skipping")
+
+        # Initialize unified LLM provider registry for all models
+        initialize_llm_registry(config.llm_models)
 
         # Launch vLLM models
         if vllm_models:

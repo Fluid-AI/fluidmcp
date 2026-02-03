@@ -9,13 +9,17 @@ Provides REST API for:
 - Replicate model inference
 """
 from typing import Dict, Any
-from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
+from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
 import asyncio
 import httpx
+import time
+
+from ..services.llm_provider_registry import get_model_type, get_model_config
+from ..services.replicate_openai_adapter import replicate_chat_completion
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1354,8 +1358,162 @@ async def trigger_health_check(
         # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
         "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }
+
+
 # ============================================================================
-# Replicate Model Inference Endpoints
+# Unified LLM Inference Endpoints (Provider-Agnostic OpenAI-Compatible)
+# ============================================================================
+
+@router.post("/llm/{model_id}/v1/chat/completions")
+async def unified_chat_completions(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible chat completions endpoint (works for ALL provider types).
+
+    Supports vLLM, Replicate, Ollama, and future providers.
+    Provider type is determined from config, not from the route.
+
+    Args:
+        model_id: Model identifier from config
+        request_body: OpenAI-format chat request with messages, temperature, etc.
+
+    Returns:
+        OpenAI-format chat completion response
+
+    Example request:
+        {
+          "messages": [{"role": "user", "content": "Hello"}],
+          "temperature": 0.7,
+          "max_tokens": 100
+        }
+    """
+    # Get provider type from registry
+    provider_type = get_model_type(model_id)
+    if not provider_type:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    logger.info(f"Chat completion request for model '{model_id}' (type: {provider_type})")
+
+    # Route to appropriate provider handler
+    if provider_type == "replicate":
+        # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
+        timeout = request_body.get("timeout", 300)
+        return await replicate_chat_completion(model_id, request_body, timeout)
+
+    elif provider_type == "vllm":
+        # Proxy to vLLM's native OpenAI-compatible endpoint
+        model_config = get_model_config(model_id)
+        if not model_config:
+            raise HTTPException(500, f"Model '{model_id}' config not found")
+
+        base_url = model_config.get("endpoints", {}).get("base_url")
+
+        if not base_url:
+            raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+
+        # Forward request to vLLM
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            try:
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    json=request_body
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                logger.error(f"vLLM returned error {e.response.status_code}: {e.response.text}")
+                raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
+            except httpx.RequestError as e:
+                logger.error(f"Failed to connect to vLLM: {e}")
+                raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
+
+    else:
+        raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
+
+
+@router.post("/llm/{model_id}/v1/completions")
+async def unified_completions(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible text completions endpoint (works for ALL provider types).
+
+    Args:
+        model_id: Model identifier from config
+        request_body: OpenAI-format completion request
+
+    Returns:
+        OpenAI-format completion response
+    """
+    provider_type = get_model_type(model_id)
+    if not provider_type:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    if provider_type == "vllm":
+        # Proxy to vLLM's native completions endpoint
+        model_config = get_model_config(model_id)
+        if not model_config:
+            raise HTTPException(500, f"Model '{model_id}' config not found")
+
+        base_url = model_config.get("endpoints", {}).get("base_url")
+
+        if not base_url:
+            raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            try:
+                response = await client.post(
+                    f"{base_url}/completions",
+                    json=request_body
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
+            except httpx.RequestError as e:
+                raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
+
+    else:
+        raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")
+
+
+@router.get("/llm/{model_id}/v1/models")
+async def unified_list_models(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible models listing endpoint.
+
+    Returns:
+        OpenAI-format models list
+    """
+    config = get_model_config(model_id)
+    if not config:
+        raise HTTPException(404, f"Model '{model_id}' not found")
+
+    # Return OpenAI-format response
+    return {
+        "object": "list",
+        "data": [{
+            "id": model_id,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "fluidmcp",
+            "permission": [],
+            "root": model_id,
+            "parent": None
+        }]
+    }
+
+
+# ============================================================================
+# Replicate Model Inference Endpoints (DEPRECATED - Use /llm/{model_id}/v1/... instead)
 # ============================================================================
 
 @router.get("/replicate/models")
@@ -1381,10 +1539,14 @@ async def list_replicate_models(
 async def create_prediction(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
-    token: str = Depends(get_token)
+    token: str = Depends(get_token),
+    response: Response = None
 ):
     """
     Create a prediction on a Replicate model.
+
+    **DEPRECATED**: This endpoint is deprecated. Use the unified OpenAI-compatible endpoint instead:
+    POST /llm/{model_id}/v1/chat/completions
 
     Args:
         model_id: Model identifier
@@ -1401,6 +1563,13 @@ async def create_prediction(
         }
     """
     from ..services.replicate_client import get_replicate_client
+
+    # Add deprecation warning header
+    if response:
+        response.headers["X-Deprecated"] = "true"
+        response.headers["X-Deprecated-Message"] = "Use POST /llm/{model_id}/v1/chat/completions instead"
+
+    logger.warning(f"Deprecated endpoint /replicate/models/{model_id}/predict called")
 
     client = get_replicate_client(model_id)
     if not client:
