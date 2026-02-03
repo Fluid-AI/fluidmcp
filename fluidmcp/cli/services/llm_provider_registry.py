@@ -23,13 +23,32 @@ def initialize_llm_registry(llm_models: Dict[str, dict]) -> None:
     """
     global _llm_models_config
     _llm_models_config = llm_models.copy()
-    
+
     types_count = {}
     for model_id, config in llm_models.items():
-        provider_type = config.get("type", "unknown")
+        # Default to "vllm" for backward compatibility (matches get_model_type behavior)
+        provider_type = config.get("type", "vllm")
         types_count[provider_type] = types_count.get(provider_type, 0) + 1
-    
+
     logger.info(f"Initialized LLM registry with {len(llm_models)} models: {dict(types_count)}")
+
+
+def update_model_endpoints(model_id: str, endpoints: dict) -> None:
+    """
+    Update runtime endpoints for a model (e.g., after vLLM infers base_url).
+
+    Args:
+        model_id: Model identifier
+        endpoints: Endpoints dict to merge into model config
+    """
+    global _llm_models_config
+    if model_id in _llm_models_config:
+        if "endpoints" not in _llm_models_config[model_id]:
+            _llm_models_config[model_id]["endpoints"] = {}
+        _llm_models_config[model_id]["endpoints"].update(endpoints)
+        logger.debug(f"Updated endpoints for '{model_id}': {endpoints}")
+    else:
+        logger.warning(f"Cannot update endpoints for unknown model '{model_id}'")
 
 
 def get_model_config(model_id: str) -> Optional[dict]:
@@ -68,17 +87,20 @@ def get_model_type(model_id: str) -> Optional[str]:
 def list_models_by_type(provider_type: str) -> List[str]:
     """
     List all model IDs of a specific provider type.
-    
+
     Args:
         provider_type: Provider type to filter by (e.g., "vllm", "replicate")
-        
+
     Returns:
         List of model IDs
+
+    Note:
+        Uses same defaulting logic as get_model_type: missing type defaults to "vllm"
     """
     return [
         model_id
         for model_id, config in _llm_models_config.items()
-        if config.get("type") == provider_type
+        if config.get("type", "vllm") == provider_type
     ]
 
 

@@ -1581,9 +1581,9 @@ async def list_replicate_models(
 @router.post("/replicate/models/{model_id}/predict")
 async def create_prediction(
     model_id: str,
+    response: Response,
     request_body: Dict[str, Any] = Body(...),
-    token: str = Depends(get_token),
-    response: Response = None
+    token: str = Depends(get_token)
 ):
     """
     Create a prediction on a Replicate model.
@@ -1607,10 +1607,9 @@ async def create_prediction(
     """
     from ..services.replicate_client import get_replicate_client
 
-    # Add deprecation warning header
-    if response:
-        response.headers["X-Deprecated"] = "true"
-        response.headers["X-Deprecated-Message"] = "Use POST /api/llm/{model_id}/v1/chat/completions instead"
+    # Add deprecation warning headers
+    response.headers["X-Deprecated"] = "true"
+    response.headers["X-Deprecated-Message"] = "Use POST /api/llm/{model_id}/v1/chat/completions instead"
 
     logger.warning(f"Deprecated endpoint /replicate/models/{model_id}/predict called")
 

@@ -30,7 +30,7 @@ from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
-from .llm_provider_registry import initialize_llm_registry
+from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 
@@ -390,6 +390,9 @@ def run_servers(
                             "models": endpoints.get("models", "/models"),
                         }
                         logger.info(f"Registered vLLM endpoints for '{model_id}' at {base_url}")
+
+                        # Update registry with inferred base_url for unified API
+                        update_model_endpoints(model_id, {"base_url": base_url})
 
                 # Add OpenAI proxy routes if any models started successfully
                 if _llm_endpoints:
