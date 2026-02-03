@@ -24,6 +24,7 @@ export const ActiveServerListControls: React.FC<ActiveServerListControlsProps> =
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           className="search-input"
+          aria-label="Search active servers by name or ID"
         />
       </div>
 

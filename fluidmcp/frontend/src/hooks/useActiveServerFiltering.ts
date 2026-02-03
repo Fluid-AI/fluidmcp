@@ -50,14 +50,14 @@ export function useActiveServerFiltering(
           return b.name.localeCompare(a.name);
         case 'recent': {
           // Sort by uptime (lower uptime = more recently started)
-          const aTime = a.status?.uptime || Number.MAX_SAFE_INTEGER;
-          const bTime = b.status?.uptime || Number.MAX_SAFE_INTEGER;
+          const aTime = a.status?.uptime ?? 0;
+          const bTime = b.status?.uptime ?? 0;
           return aTime - bTime; // Lower uptime first (more recent)
         }
         case 'uptime': {
           // Sort by uptime (higher uptime = longest running)
-          const aTime = a.status?.uptime || 0;
-          const bTime = b.status?.uptime || 0;
+          const aTime = a.status?.uptime ?? 0;
+          const bTime = b.status?.uptime ?? 0;
           return bTime - aTime; // Higher uptime first (longest running)
         }
         default:
