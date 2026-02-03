@@ -1041,7 +1041,6 @@ async def run_tool(
     # Send tools/call request
     try:
         import json
-        import asyncio
 
         tool_request = {
             "jsonrpc": "2.0",

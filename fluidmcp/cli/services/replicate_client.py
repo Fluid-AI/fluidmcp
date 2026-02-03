@@ -167,7 +167,8 @@ class ReplicateClient:
                     )
 
                     if attempt < self.max_retries:
-                        # Exponential backoff: 0s, 2s, 4s (0 on first retry, then 2^attempt)
+                        # Exponential backoff: 0s, 2s, 4s (for max_retries=3)
+                        # First retry is immediate, subsequent retries use 2^attempt seconds
                         wait_time = 0 if attempt == 0 else (2 ** attempt)
                         if wait_time > 0:
                             await asyncio.sleep(wait_time)
@@ -187,7 +188,8 @@ class ReplicateClient:
                 )
 
                 if attempt < self.max_retries:
-                    # Exponential backoff: 0s, 2s, 4s (0 on first retry, then 2^attempt)
+                    # Exponential backoff: 0s, 2s, 4s (for max_retries=3)
+                    # First retry is immediate, subsequent retries use 2^attempt seconds
                     wait_time = 0 if attempt == 0 else (2 ** attempt)
                     if wait_time > 0:
                         await asyncio.sleep(wait_time)
