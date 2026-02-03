@@ -34,7 +34,7 @@ export interface ServerCardProps {
   className?: string;
 }
 
-export function PremiumServerCard({
+export function EnhancedServerCard({
   data,
   defaultVersionIndex = 0,
   isStarred = false,
@@ -215,4 +215,4 @@ export function PremiumServerCard({
   );
 }
 
-export default PremiumServerCard;
+export default EnhancedServerCard;
