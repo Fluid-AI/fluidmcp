@@ -296,6 +296,7 @@ Add LLM models to your config using the `llmModels` section:
   "mcpServers": {},
   "llmModels": {
     "vllm": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",
@@ -439,6 +440,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "vllm": {
+      "type": "vllm",
       "command": "vllm",
       "args": ["serve", "facebook/opt-125m", "--port", "8001"],
       "endpoints": {"base_url": "http://localhost:8001/v1"}
@@ -452,6 +454,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "vllm-production": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",
@@ -480,6 +483,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "ollama": {
+      "type": "vllm",
       "command": "ollama",
       "args": ["serve"],
       "endpoints": {"base_url": "http://localhost:11434"},
