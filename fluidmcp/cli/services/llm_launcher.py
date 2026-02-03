@@ -9,7 +9,6 @@ Includes error recovery, health checks, and automatic restart capabilities.
 
 import os
 import re
-import shutil
 import subprocess
 import time
 import asyncio
