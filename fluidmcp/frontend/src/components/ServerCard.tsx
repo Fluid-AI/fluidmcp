@@ -16,6 +16,7 @@ export default function ServerCard({
   const isStopped =
     server.status?.state === "stopped" ||
     server.status?.state === "failed" ||
+    server.status?.state === "not_found" ||
     !server.status;
 
   const toolCount = server.tools?.length || 0;

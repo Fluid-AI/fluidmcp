@@ -94,7 +94,8 @@ export function useServers() {
     (server) =>
       !server.status ||
       server.status.state === "stopped" ||
-      server.status.state === "failed"
+      server.status.state === "failed" ||
+      server.status.state === "not_found"
   );
 
   return {
