@@ -24,6 +24,9 @@ from ..services.replicate_openai_adapter import replicate_chat_completion
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
+# Shared HTTP client for vLLM proxy requests (connection pooling)
+_http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=300.0)
+
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
@@ -1418,35 +1421,33 @@ async def unified_chat_completions(
         is_streaming = request_body.get("stream", False)
 
         if is_streaming:
-            # Return streaming response
+            # Return streaming response using shared client
             async def stream_generator():
-                async with httpx.AsyncClient(timeout=300.0) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{base_url}/chat/completions",
-                        json=request_body
-                    ) as response:
-                        response.raise_for_status()
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
+                async with _http_client.stream(
+                    "POST",
+                    f"{base_url}/chat/completions",
+                    json=request_body
+                ) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
 
             return StreamingResponse(
                 stream_generator(),
                 media_type="text/event-stream"
             )
 
-        # Non-streaming request
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            try:
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    json=request_body
-                )
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPStatusError as e:
-                logger.error(f"vLLM returned error {e.response.status_code}: {e.response.text}")
-                raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
+        # Non-streaming request using shared client
+        try:
+            response = await _http_client.post(
+                f"{base_url}/chat/completions",
+                json=request_body
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"vLLM returned error {e.response.status_code}: {e.response.text}")
+            raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
             except httpx.RequestError as e:
                 logger.error(f"Failed to connect to vLLM: {e}")
                 raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
@@ -1490,36 +1491,34 @@ async def unified_completions(
         is_streaming = request_body.get("stream", False)
 
         if is_streaming:
-            # Return streaming response
+            # Return streaming response using shared client
             async def stream_generator():
-                async with httpx.AsyncClient(timeout=300.0) as client:
-                    async with client.stream(
-                        "POST",
-                        f"{base_url}/completions",
-                        json=request_body
-                    ) as response:
-                        response.raise_for_status()
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
+                async with _http_client.stream(
+                    "POST",
+                    f"{base_url}/completions",
+                    json=request_body
+                ) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
 
             return StreamingResponse(
                 stream_generator(),
                 media_type="text/event-stream"
             )
 
-        # Non-streaming request
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            try:
-                response = await client.post(
-                    f"{base_url}/completions",
-                    json=request_body
-                )
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
-            except httpx.RequestError as e:
-                raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
+        # Non-streaming request using shared client
+        try:
+            response = await _http_client.post(
+                f"{base_url}/completions",
+                json=request_body
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
+        except httpx.RequestError as e:
+            raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
 
     else:
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")

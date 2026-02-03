@@ -248,13 +248,17 @@ EOF
 # Run FluidMCP
 fluidmcp run replicate-config.json --file --start-server
 
-# Test the model
-curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
+# Test the model via the unified OpenAI-compatible chat completions endpoint
+curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "input": {
-      "prompt": "Explain quantum computing in simple terms"
-    }
+    "model": "llama-2-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain quantum computing in simple terms"
+      }
+    ]
   }'
 ```
 

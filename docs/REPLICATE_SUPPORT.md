@@ -65,33 +65,40 @@ fluidmcp run replicate-config.json --file --start-server
 
 ### 4. Use the Model
 
-The Replicate models integrate with FluidMCP's management API:
+Replicate-backed models are exposed through FluidMCP's **unified, OpenAI-compatible LLM API**, which is the recommended integration path:
 
 ```bash
-# List active models
-curl http://localhost:8099/api/replicate/models
-
-# Create a prediction
-curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/predict \
+# Create a chat completion using the unified LLM endpoint
+curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "input": {
-      "prompt": "Explain quantum computing in simple terms"
-    }
+    "model": "llama-2-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain quantum computing in simple terms"
+      }
+    ],
+    "temperature": 0.7,
+    "max_tokens": 1000
   }'
 
-# Check prediction status (use the prediction ID from above and model ID)
-curl http://localhost:8099/api/replicate/models/llama-2-70b/predictions/{prediction_id}
-
-# Stream predictions
-curl -X POST http://localhost:8099/api/replicate/models/llama-2-70b/stream \
+# Stream chat completions (use -N flag for curl to disable buffering)
+curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "input": {
-      "prompt": "Write a haiku about coding"
-    }
+    "model": "llama-2-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a haiku about coding"
+      }
+    ],
+    "stream": true
   }'
 ```
+
+**Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/{model_id}/v1/...` routes shown above.
 
 ## Configuration Format
 

@@ -118,7 +118,7 @@ def replicate_output_to_openai_response(
     if status == "succeeded":
         finish_reason = "stop"
     elif status == "canceled":
-        finish_reason = "length"  # Or could be "stop"
+        finish_reason = "stop"  # Cancellation doesn't mean token limit hit
     else:
         finish_reason = "stop"
     
