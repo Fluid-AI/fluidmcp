@@ -92,12 +92,32 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         if flag_name in sensitive_flags:
             return True
 
-        # Check if flag ends with a known sensitive suffix
-        # This catches --my-api-key, --prod-api-key, etc.
-        sensitive_suffixes = ['api-key', 'api_key', 'apikey',
-                             'auth-token', 'access-key', 'secret-key']
-        for suffix in sensitive_suffixes:
-            if flag_name.endswith(suffix):
+        # Check if flag contains known sensitive segments (segment-based matching)
+        # This catches variants like --my-api-key, --prod-access-token, etc.,
+        # while avoiding false positives such as --tokenizer.
+        segments = re.split(r'[-_]+', flag_name)
+
+        # Single-word sensitive indicators
+        sensitive_segments = {
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "pwd",
+        }
+        if any(seg in sensitive_segments for seg in segments):
+            return True
+
+        # Two-word combinations like "api-key", "access-token", "bearer-token"
+        sensitive_segment_pairs = {
+            ("api", "key"),
+            ("access", "key"),
+            ("access", "token"),
+            ("auth", "token"),
+            ("bearer", "token"),
+        }
+        for first, second in zip(segments, segments[1:]):
+            if (first, second) in sensitive_segment_pairs:
                 return True
 
         return False
@@ -291,25 +311,26 @@ class LLMProcess:
         """
         import shutil
 
+        # First, remove the oldest backup (.5) if it exists
+        oldest_backup = f"{log_path}.{LOG_BACKUP_COUNT}"
+        if os.path.exists(oldest_backup):
+            try:
+                os.remove(oldest_backup)
+                logger.debug(f"Removed oldest log backup: {oldest_backup}")
+            except Exception as e:
+                logger.warning(f"Failed to remove old backup {oldest_backup}: {e}")
+
         # Rotate existing backups (move .4 -> .5, .3 -> .4, etc.)
         for i in range(LOG_BACKUP_COUNT - 1, 0, -1):
             old_backup = f"{log_path}.{i}"
             new_backup = f"{log_path}.{i + 1}"
 
             if os.path.exists(old_backup):
-                if i == LOG_BACKUP_COUNT - 1:
-                    # Remove oldest backup
-                    try:
-                        os.remove(old_backup)
-                        logger.debug(f"Removed oldest log backup: {old_backup}")
-                    except Exception as e:
-                        logger.warning(f"Failed to remove old backup {old_backup}: {e}")
-                else:
-                    # Rotate backup
-                    try:
-                        shutil.move(old_backup, new_backup)
-                    except Exception as e:
-                        logger.warning(f"Failed to rotate log {old_backup} -> {new_backup}: {e}")
+                try:
+                    shutil.move(old_backup, new_backup)
+                    logger.debug(f"Rotated log backup: {old_backup} -> {new_backup}")
+                except Exception as e:
+                    logger.warning(f"Failed to rotate log {old_backup} -> {new_backup}: {e}")
 
         # Move current log to .1
         if os.path.exists(log_path):
