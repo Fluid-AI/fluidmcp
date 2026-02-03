@@ -1447,9 +1447,9 @@ async def unified_chat_completions(
         except httpx.HTTPStatusError as e:
             logger.error(f"vLLM returned error {e.response.status_code}: {e.response.text}")
             raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
-            except httpx.RequestError as e:
-                logger.error(f"Failed to connect to vLLM: {e}")
-                raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
+        except httpx.RequestError as e:
+            logger.error(f"Failed to connect to vLLM: {e}")
+            raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
 
     else:
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
