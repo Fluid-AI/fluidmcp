@@ -9,43 +9,89 @@ Provides REST API for:
 """
 from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
-import re
-import asyncio
 
 from ..auth import get_token, security
 from ..auth.dependencies import get_current_user
-
-# Environment variable validation patterns and constants
-ENV_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]*$')
-ENV_VALUE_MAX_LENGTH = 10000
-
-# Validation error messages
-ENV_NAME_INVALID_MSG = "Invalid environment variable name '{}'. Must start with A-Z or underscore, followed by A-Z, 0-9, or underscores only."
-ENV_VALUE_NULL_BYTE_MSG = "Environment variable value cannot contain null bytes"
-ENV_VALUE_TOO_LONG_MSG = f"Environment variable value exceeds maximum length of {ENV_VALUE_MAX_LENGTH} characters"
+from ..utils.env_utils import is_placeholder
 
 router = APIRouter()
+security = HTTPBearer(auto_error=False)
 
 
-def sanitize_error_message(error_msg: str) -> str:
+def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Validate bearer token if secure mode is enabled"""
+    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    if not secure_mode:
+        return None
+    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+        raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
+    return credentials.credentials
+
+
+def validate_env_variables(env: Dict[str, str], max_vars: int = 100, max_key_length: int = 256, max_value_length: int = 10240) -> None:
     """
-    Sanitize error messages to prevent exposure of sensitive information.
+    Validate environment variables to prevent injection attacks and DoS.
 
-    - Removes absolute file paths
-    - Removes user directories
-    - Keeps only generic error information
+    Security context:
+    - Environment variables are passed to subprocess.Popen() with shell=False
+    - This means shell metacharacters (;, |, &, etc.) are NOT interpreted
+    - Values are passed directly to the child process, no shell injection risk
+
+    Security checks:
+    - Prevent MongoDB injection (keys starting with $ or containing dots)
+    - Prevent DoS via excessive data (length limits)
+    - Validate key format (POSIX standard: alphanumeric + underscore only)
+    - Check for null bytes (can cause issues in C-based processes)
+
+    Args:
+        env: Environment variables dict to validate
+        max_vars: Maximum number of variables allowed (default: 100)
+        max_key_length: Maximum key length (default: 256)
+        max_value_length: Maximum value length (default: 10KB)
+
+    Raises:
+        HTTPException: If validation fails
     """
-    # Remove absolute paths (e.g., /home/user/... or C:\Users\...)
-    sanitized = re.sub(r'(/[a-zA-Z0-9_/.-]+/|[A-Z]:\\[a-zA-Z0-9_\\.-]+\\)', '<path>/', error_msg)
+    import re
 
-    # Remove common sensitive patterns
-    sanitized = re.sub(r'File ".*?"', 'File "<sanitized>"', sanitized)
-    sanitized = re.sub(r'at /.+?:\d+', 'at <sanitized>', sanitized)
+    # Check number of variables (DoS prevention)
+    if len(env) > max_vars:
+        raise HTTPException(400, f"Too many environment variables (max: {max_vars})")
 
-    return sanitized
+    # Validate each key-value pair
+    for key, value in env.items():
+        # Type check
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise HTTPException(400, f"Environment variable keys and values must be strings")
+
+        # Key length check (DoS prevention)
+        if len(key) > max_key_length:
+            raise HTTPException(400, f"Environment variable key too long (max: {max_key_length} chars): {key[:50]}...")
+
+        # Value length check (DoS prevention)
+        if len(value) > max_value_length:
+            raise HTTPException(400, f"Environment variable value too long (max: {max_value_length} chars) for key: {key}")
+
+        # MongoDB injection prevention - keys must not start with $ or contain dots
+        if key.startswith('$'):
+            raise HTTPException(400, f"Invalid environment variable key (MongoDB reserved): {key}")
+
+        if '.' in key:
+            raise HTTPException(400, f"Invalid environment variable key (contains dot): {key}")
+
+        # Key format validation - only alphanumeric and underscore
+        # Standard POSIX env var naming convention (no hyphens - not supported by bash/sh)
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+            raise HTTPException(400, f"Invalid environment variable key format: {key}. Must start with letter or underscore and contain only alphanumeric and underscore characters.")
+
+        # Null byte check - can cause issues in C-based processes
+        if '\0' in value:
+            raise HTTPException(400, f"Environment variable value contains null byte for key: {key}")
 
 
 def get_server_manager(request: Request):
@@ -312,7 +358,7 @@ async def get_server(request: Request, id: str):
         id: Server identifier
 
     Returns:
-        Server config and status (with masked env values for security)
+        Server config and status
     """
     manager = get_server_manager(request)
 
@@ -326,18 +372,10 @@ async def get_server(request: Request, id: str):
     # Get status
     status = await manager.get_server_status(id)
 
-    # Mask env values for security (never expose credentials in config)
-    config_copy = config.copy()
-    if "env" in config_copy and config_copy["env"]:
-        config_copy["env"] = {
-            key: "****" if value else None
-            for key, value in config_copy["env"].items()
-        }
-
     return {
         "id": id,
         "name": config.get("name"),
-        "config": config_copy,
+        "config": config,
         "status": status
     }
 
@@ -560,7 +598,6 @@ async def stop_server(
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
-            logger.warning(f"Authorization failed: User '{user_id}' attempted to stop server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
                 f"Forbidden: Server '{id}' was started by another user. Only the user who started it can stop it."
@@ -613,7 +650,6 @@ async def restart_server(
         started_by = instance.get("started_by")
         # Allow if user started it, or if no owner (backward compatibility), or if anonymous mode
         if started_by and started_by != user_id and user_id != "anonymous":
-            logger.warning(f"Authorization failed: User '{user_id}' attempted to restart server '{id}' started by '{started_by}'")
             raise HTTPException(
                 403,
                 f"Forbidden: Server '{id}' was started by another user. Only the user who started it can restart it."
@@ -992,6 +1028,203 @@ async def get_server_logs(
     }
 
 
+# ==================== Environment Variable Management ====================
+
+@router.get("/servers/{id}/instance/env")
+async def get_server_instance_env(request: Request, id: str):
+    """
+    Get environment variable metadata for a server instance.
+
+    Returns metadata about each environment variable:
+    - present: Whether it has a value in the instance
+    - required: Whether it's required for server operation
+    - masked: Masked value if present (e.g., "****")
+    - description: Help text for the user
+
+    Args:
+        id: Server identifier
+
+    Returns:
+        Dict of env var names to metadata
+    """
+    manager = get_server_manager(request)
+
+    # Get server config to determine required env vars
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Get instance env (actual values set by user)
+    instance_env = await manager.db.get_instance_env(id) or {}
+
+    # Get config env (default/required env vars from config)
+    config_env = config.get("env", {})
+
+    # Build metadata response
+    metadata = {}
+
+    # Add all config env vars (these are the ones we expect)
+    for key in config_env.keys():
+        # Check if key exists in instance env with a non-empty, non-placeholder value
+        value = instance_env.get(key, "")
+        has_value = bool(value and value.strip() and not is_placeholder(value))
+        metadata[key] = {
+            "present": has_value,
+            "required": True,  # All env vars in config are considered required
+            "masked": "****" if has_value else None,
+            "description": f"Environment variable for {config.get('name', id)}"
+        }
+
+    # Add any instance env vars not in config (user-added)
+    for key, value in instance_env.items():
+        if key not in metadata:
+            has_value = bool(value and value.strip() and not is_placeholder(value))
+            metadata[key] = {
+                "present": has_value,
+                "required": False,
+                "masked": "****" if has_value else None,
+                "description": "Custom environment variable"
+            }
+
+    return metadata
+
+
+@router.put("/servers/{id}/instance/env")
+async def update_server_instance_env(
+    request: Request,
+    id: str,
+    env: Dict[str, str] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Update environment variables for a server instance.
+
+    This updates the instance-specific env vars (user's API keys, etc.)
+    without modifying the server config template.
+
+    Args:
+        id: Server identifier
+        env: Dict of environment variable key-value pairs
+
+    Returns:
+        Success message with update status
+    """
+    manager = get_server_manager(request)
+
+    # Check if server exists
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Validate env vars (comprehensive security validation)
+    if not isinstance(env, dict):
+        raise HTTPException(400, "Environment variables must be a dictionary")
+
+    # Comprehensive validation for security and DoS prevention
+    validate_env_variables(env)
+
+    # Filter out placeholder values before saving
+    # This prevents saving config defaults like "YOUR_API_KEY_HERE"
+    # Only save non-placeholder, non-empty values
+    filtered_env = {
+        k: v for k, v in env.items()
+        if v and v.strip() and not is_placeholder(v)
+    }
+
+    if not filtered_env:
+        raise HTTPException(400, "No valid environment variables provided (all values were empty or placeholders)")
+
+    # Save current env for rollback if restart fails
+    old_env = None
+    server_was_running = False
+    if id in manager.processes:
+        process = manager.processes[id]
+        if process.poll() is None:  # Still running
+            server_was_running = True
+            # Get current env before update for potential rollback
+            old_env = await manager.db.get_instance_env(id)
+
+    # Update instance env in database (upserts if instance doesn't exist)
+    success = await manager.db.update_instance_env(id, filtered_env)
+
+    if not success:
+        raise HTTPException(500, "Failed to update environment variables")
+
+    logger.info(f"Updated instance env for server '{id}'")
+
+    # If server is running, restart it to apply new env vars
+    if server_was_running:
+        logger.info(f"Restarting server '{id}' to apply new environment variables")
+        restart_success = await manager.restart_server(id)
+        if not restart_success:
+            # Rollback env changes on restart failure
+            if old_env is not None:
+                logger.warning(f"Restart failed, rolling back env changes for server '{id}'")
+                try:
+                    # Rollback to old env
+                    await manager.db.update_instance_env(id, old_env)
+                    raise HTTPException(500, f"Failed to restart server '{id}' after updating env. Changes have been rolled back.")
+                except Exception as rollback_error:
+                    logger.critical(f"CRITICAL: Rollback failed for server '{id}': {rollback_error}")
+                    raise HTTPException(500, f"Failed to restart server '{id}' and rollback also failed. Manual intervention required.")
+            raise HTTPException(500, f"Failed to restart server '{id}' after updating env.")
+
+    return {
+        "message": f"Environment variables updated for server '{id}'",
+        "env_updated": True
+    }
+
+
+@router.delete("/servers/{id}/instance/env")
+async def delete_server_instance_env(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Delete all environment variables from a server instance.
+
+    This clears user-configured env vars, useful for testing or resetting.
+    Does not affect the server_config template.
+
+    Args:
+        id: Server identifier
+
+    Returns:
+        Success message
+    """
+    manager = get_server_manager(request)
+
+    # Check if server exists
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # Clear instance env by deleting the env field from the instance
+    try:
+        result = await manager.db.db.fluidmcp_server_instances.update_one(
+            {"server_id": id},
+            {"$unset": {"env": ""}}
+        )
+        if result.matched_count == 0:
+            logger.warning(f"No instance found for server '{id}', nothing to clear")
+    except Exception as e:
+        logger.error(f"Error clearing instance env: {e}")
+        raise HTTPException(500, "Failed to clear environment variables")
+
+    logger.info(f"Cleared instance env for server '{id}'")
+    return {
+        "message": f"Environment variables cleared for server '{id}'",
+        "env_cleared": True
+    }
+
+
 # ==================== Tool Discovery & Execution (PDF Spec) ====================
 
 @router.get("/servers/{id}/tools")
@@ -1084,14 +1317,7 @@ async def run_tool(
         response = json.loads(response_line.strip())
 
         if "error" in response:
-            # Handle error object properly - JSON-RPC error format
-            error_obj = response['error']
-            if isinstance(error_obj, dict):
-                error_message = error_obj.get('message', str(error_obj))
-            else:
-                error_message = str(error_obj)
-            sanitized_message = sanitize_error_message(error_message)
-            raise HTTPException(500, f"Tool execution error: {sanitized_message}")
+            raise HTTPException(500, f"Tool execution error: {response['error']}")
 
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
@@ -1099,12 +1325,11 @@ async def run_tool(
     except asyncio.TimeoutError:
         raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
-        sanitized_error = sanitize_error_message(str(e))
-        raise HTTPException(500, f"Failed to parse tool response: {sanitized_error}")
+        logger.error(f"Failed to parse tool response for '{tool_name}' on '{id}': {e}")
+        raise HTTPException(500, "Failed to parse tool response")
     except Exception as e:
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
-        sanitized_error = sanitize_error_message(str(e))
-        raise HTTPException(500, f"Tool execution failed: {sanitized_error}")
+        raise HTTPException(500, "Tool execution failed")
 
 
 # ==================== LLM Management ====================
@@ -1185,7 +1410,8 @@ async def get_llm_model_status(
         "uptime_seconds": process.get_uptime(),
         "last_restart_time": process.last_restart_time,
         "last_health_check_time": process.last_health_check_time,
-        "has_cuda_oom": process.check_for_cuda_oom()
+        # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
+        "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }
 
 
@@ -1267,12 +1493,11 @@ async def stop_llm_model(
     logger.info(f"Stop requested for LLM model '{model_id}' (force={force})")
 
     try:
-        # Run blocking stop/kill operations in thread to avoid blocking event loop
         if force:
-            await asyncio.to_thread(process.force_kill)
+            process.force_kill()
             return {"message": f"LLM model '{model_id}' force killed"}
         else:
-            await asyncio.to_thread(process.stop)
+            process.stop()
             return {"message": f"LLM model '{model_id}' stopped gracefully"}
     except Exception as e:
         logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)
@@ -1384,5 +1609,6 @@ async def trigger_health_check(
         "health_message": error_msg,
         "consecutive_health_failures": process.consecutive_health_failures,
         "last_health_check_time": process.last_health_check_time,
-        "has_cuda_oom": process.check_for_cuda_oom()
+        # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
+        "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }

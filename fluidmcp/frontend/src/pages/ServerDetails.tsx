@@ -2,10 +2,11 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { useServerDetails } from "../hooks/useServerDetails";
 import { useServerEnv } from "../hooks/useServerEnv";
+import { useServerPolling } from "../hooks/useServerPolling";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
 import { ServerEnvForm } from "../components/ServerEnvForm";
-import apiClient from "../services/api";
+import { showSuccess, showError, showLoading } from "../services/toast";
 
 export default function ServerDetails() {
   const { serverId } = useParams<{ serverId: string }>();
@@ -36,6 +37,8 @@ export default function ServerDetails() {
     refetch: refetchEnv,
   } = useServerEnv(serverId);
 
+  const { pollForServerState } = useServerPolling(serverId || '');
+
   // Detect if server needs env variables
   const configEnv = serverDetails?.config?.env || {};
   const needsEnv = Object.keys(configEnv).length > 0;
@@ -45,45 +48,55 @@ export default function ServerDetails() {
   const hasInstanceEnv = envMetadata && needsEnv &&
     Object.keys(configEnv).every(key => envMetadata[key]?.present === true);
 
-  // Debug logging
-  console.log('[ServerDetails] Env Check:', {
-    needsEnv,
-    hasInstanceEnv,
-    configEnvKeys: Object.keys(configEnv),
-    envMetadata
-  });
-
   // Auto-expand env form if server needs env but doesn't have instance env yet
   const shouldExpandEnvForm = needsEnv && !hasInstanceEnv;
 
   const handleStartServer = async () => {
+    const toastId = `server-${serverId}`;
+    const serverName = serverDetails?.name || serverId;
+
     setActionLoading('start');
+    showLoading(`Starting server "${serverName}"...`, toastId);
+
     try {
       await startServer();
+      showSuccess(`Server "${serverName}" started successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to start server');
+      showError(err instanceof Error ? err.message : 'Failed to start server', toastId);
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleStopServer = async () => {
+    const toastId = `server-${serverId}`;
+    const serverName = serverDetails?.name || serverId;
+
     setActionLoading('stop');
+    showLoading(`Stopping server "${serverName}"...`, toastId);
+
     try {
       await stopServer();
+      showSuccess(`Server "${serverName}" stopped successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to stop server');
+      showError(err instanceof Error ? err.message : 'Failed to stop server', toastId);
     } finally {
       setActionLoading(null);
     }
   };
 
   const handleRestartServer = async () => {
+    const toastId = `server-${serverId}`;
+    const serverName = serverDetails?.name || serverId;
+
     setActionLoading('restart');
+    showLoading(`Restarting server "${serverName}"...`, toastId);
+
     try {
       await restartServer();
+      showSuccess(`Server "${serverName}" restarted successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to restart server');
+      showError(err instanceof Error ? err.message : 'Failed to restart server', toastId);
     } finally {
       setActionLoading(null);
     }
@@ -92,46 +105,34 @@ export default function ServerDetails() {
   const handleEnvSubmit = async (env: Record<string, string>) => {
     if (!serverId) return;
 
+    const toastId = `env-${serverId}`;
+
     setEnvSubmitting(true);
+    showLoading('Saving environment variables and restarting server...', toastId);
 
     try {
       await updateEnv(env);
 
-      // TEMP: Manual retry until polling hook is introduced in follow-up PR
-      //
-      // RETRY LOGIC (intentional, not a bug):
-      // After env update, server auto-restarts. We retry 3 times (2s intervals)
-      // to wait for server restart + tool discovery to complete. This handles:
-      // - Server restart delay (~1-2s)
-      // - Tool discovery/initialization delay
-      // - Network latency
-      // Total wait: up to 6 seconds with exponential checks
-      let retries = 3;
-      let toolsFound = false;
+      // Poll for server restart and tools availability
+      const success = await pollForServerState({
+        expectedState: 'running',
+        checkTools: true,
+        onSuccess: () => {
+          // Collapse form after successful restart
+          setEnvFormExpanded(false);
+          showSuccess('Environment variables saved and server restarted successfully', toastId);
+        },
+        onTimeout: () => {
+          showError('Server restart timed out. Please check server status manually.', toastId);
+        },
+      });
 
-      while (retries > 0 && !toolsFound) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        // Refetch server details and env metadata
+      // Refetch server details and env metadata after polling completes
+      if (success) {
         await Promise.all([refetch(), refetchEnv()]);
-
-        // Check if tools are now available
-        const currentTools = await apiClient.getServerTools(serverId).catch(() => ({ tools: [] }));
-        toolsFound = currentTools.tools && currentTools.tools.length > 0;
-
-        retries--;
-      }
-
-      // Collapse form after successful update
-      setEnvFormExpanded(false);
-
-      if (toolsFound) {
-        alert('Environment variables saved and server restarted successfully. Tools are now available!');
-      } else {
-        alert('Environment variables saved and server restarted successfully. Tools may take a moment to appear.');
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update environment variables');
+      showError(err instanceof Error ? err.message : 'Failed to update environment variables', toastId);
       throw err; // Re-throw so form knows it failed
     } finally {
       setEnvSubmitting(false);

@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
 from loguru import logger
 from .base import PersistenceBackend
+from ..utils.env_utils import is_placeholder
 
 
 def mask_mongodb_uri(uri: str) -> str:
@@ -565,6 +566,9 @@ class DatabaseManager(PersistenceBackend):
         """
         Get environment variables from server instance.
 
+        Filters out placeholder values to ensure only real user-configured
+        values are returned. This prevents old polluted data from breaking UI.
+
         Args:
             server_id: Server identifier
 
@@ -574,7 +578,15 @@ class DatabaseManager(PersistenceBackend):
         try:
             instance = await self.get_instance_state(server_id)
             if instance:
-                return instance.get("env")
+                env = instance.get("env")
+                if env:
+                    # Filter out placeholder and empty values
+                    filtered_env = {
+                        k: v for k, v in env.items()
+                        if v and v.strip() and not is_placeholder(v)
+                    }
+                    return filtered_env if filtered_env else None
+                return None
             return None
         except Exception as e:
             logger.error(f"Error retrieving instance env: {e}")
@@ -584,29 +596,44 @@ class DatabaseManager(PersistenceBackend):
         """
         Update environment variables in server instance.
 
+        Merges new env vars with existing ones (does not replace the entire env dict).
+        Creates an instance record if it doesn't exist yet (upsert).
+        This allows setting env vars before the server is first started.
+
+        Uses atomic MongoDB operations to prevent race conditions during concurrent updates.
+
         Args:
             server_id: Server identifier
-            env: Dict of environment variables to set
+            env: Dict of environment variables to set/update
 
         Returns:
             True if updated successfully
         """
         try:
+            # Build atomic $set operations for individual env keys
+            # This prevents race conditions - MongoDB handles the merge atomically
+            set_operations = {
+                f"env.{key}": value for key, value in env.items()
+            }
+            set_operations["updated_at"] = datetime.utcnow()
+
             result = await self.db.fluidmcp_server_instances.update_one(
                 {"server_id": server_id},
                 {
-                    "$set": {
-                        "env": env,
-                        "updated_at": datetime.utcnow()
+                    "$set": set_operations,
+                    "$setOnInsert": {
+                        "server_id": server_id,
+                        "created_at": datetime.utcnow()
                     }
-                }
+                },
+                upsert=True
             )
 
-            if result.matched_count == 0:
-                logger.warning(f"No instance found for server '{server_id}'")
-                return False
+            if result.upserted_id:
+                logger.debug(f"Created new instance with env for server: {server_id}")
+            else:
+                logger.debug(f"Updated instance env for server: {server_id}")
 
-            logger.debug(f"Updated instance env for server: {server_id}")
             return True
 
         except Exception as e:

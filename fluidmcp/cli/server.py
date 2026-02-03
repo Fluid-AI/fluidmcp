@@ -7,60 +7,21 @@ and manage MCP servers dynamically via HTTP API.
 import argparse
 import asyncio
 import os
-import secrets
 import signal
+import secrets
 from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager
-from .services.frontend_utils import setup_frontend_routes
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
-from .auth import verify_token
-
-
-def mask_mongodb_uri(uri: str) -> str:
-    """
-    Mask sensitive information in MongoDB URI for logging.
-
-    Examples:
-        mongodb://user:pass@host:27017/db -> mongodb://***:***@host:27017/db
-        mongodb+srv://user:pass@cluster.net -> mongodb+srv://***:***@cluster.net
-
-    Args:
-        uri: MongoDB connection URI
-
-    Returns:
-        Masked URI safe for logging
-    """
-    if not uri or '@' not in uri:
-        return uri
-
-    try:
-        # Split by @ to separate credentials from host
-        parts = uri.split('@')
-        if len(parts) != 2:
-            return uri
-
-        prefix_with_creds = parts[0]
-        host_and_path = parts[1]
-
-        # Split prefix to get protocol and credentials
-        if '://' in prefix_with_creds:
-            protocol, creds = prefix_with_creds.split('://', 1)
-            # Mask credentials completely
-            masked = f"{protocol}://***:***@{host_and_path}"
-            return masked
-
-        return uri
-    except Exception:
-        # If anything goes wrong, return a safe default
-        return "mongodb://***:***@[masked]"
+from .services.frontend_utils import setup_frontend_routes
 
 
 def save_token_to_file(token: str) -> Path:
@@ -86,6 +47,8 @@ def save_token_to_file(token: str) -> Path:
     return token_file
 
 async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099, auth0_mode: bool = False) -> FastAPI:
+
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -180,9 +143,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         os.environ["FMCP_SECURE_MODE"] = "true"
         logger.info("Secure mode enabled with bearer token")
 
-    # Serve frontend from backend (single-port deployment)
-    setup_frontend_routes(app, host=host, port=port)
-
     # Include Management API
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
     logger.info("Management API mounted at /api")
@@ -199,6 +159,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         init_auth_routes(auth_config)
         app.include_router(auth_router, tags=["Authentication"])
         logger.info("✓ OAuth routes mounted at /auth")
+    # Serve frontend from backend (single-port deployment)
+    setup_frontend_routes(app, host="0.0.0.0", port=port)
 
     # Add a health check endpoint with actual connection verification
     # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
@@ -211,7 +173,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         db_status = "disconnected"
         db_error = None
 
-        if hasattr(db_manager, 'client') and db_manager.client:
+        if db_manager.client:
             try:
                 # Actually ping the database to verify connection
                 await db_manager.client.admin.command('ping')
@@ -219,8 +181,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             except Exception as e:
                 db_status = "error"
                 db_error = str(e)
-        elif hasattr(db_manager, '__class__') and db_manager.__class__.__name__ == 'InMemoryBackend':
-            db_status = "in-memory"
 
         return {
             "status": "healthy",
@@ -229,13 +189,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "persistence_enabled": db_status == "connected"
         }
 
-    @app.get("/metrics", dependencies=[Depends(verify_token)])
+    @app.get("/metrics")
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
-
-        Requires bearer token authentication when FMCP_SECURE_MODE=true.
-        Public access when secure mode is disabled.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
@@ -251,13 +208,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
         # Creating N instances per scrape is acceptable given low overhead.
         # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
-
-        # Get snapshot of server IDs under lock to avoid race condition
-        with server_manager._registry_lock:
-            server_ids = list(server_manager.processes.keys())
-
-        # Update metrics outside lock (safe iteration)
-        for server_id in server_ids:
+        for server_id in server_manager.processes.keys():
             uptime = server_manager.get_uptime(server_id)
             if uptime is not None:
                 collector = MetricsCollector(server_id)
@@ -348,31 +299,6 @@ async def main(args):
         origins_str = args.allowed_origins or os.getenv("FMCP_ALLOWED_ORIGINS", "")
         if origins_str:
             allowed_origins = [origin.strip() for origin in origins_str.split(",")]
-    else:
-        # Check environment variable even if no CLI args
-        origins_str = os.getenv("FMCP_ALLOWED_ORIGINS", "")
-        if origins_str:
-            allowed_origins = [origin.strip() for origin in origins_str.split(",")]
-
-    # Auto-detect GitHub Codespaces environment and add Codespaces URLs to CORS
-    codespace_name = os.getenv("CODESPACE_NAME")
-    if codespace_name:
-        codespaces_domain = f"https://*.{codespace_name}.preview.app.github.dev"
-        logger.info(f"GitHub Codespaces detected: {codespace_name}")
-        logger.info(f"Adding Codespaces domain to CORS: {codespaces_domain}")
-
-        if allowed_origins is None:
-            allowed_origins = [
-                "http://localhost:*",
-                "http://127.0.0.1:*",
-                f"https://*.{codespace_name}.preview.app.github.dev",
-                f"https://*-*.app.github.dev"
-            ]
-        elif "*" not in allowed_origins:
-            allowed_origins.extend([
-                f"https://*.{codespace_name}.preview.app.github.dev",
-                f"https://*-*.app.github.dev"
-            ])
 
     # 1. Choose persistence backend
     persistence_mode = getattr(args, 'persistence_mode', 'mongodb')
@@ -383,7 +309,7 @@ async def main(args):
         persistence: PersistenceBackend = InMemoryBackend()
         db_connected = await persistence.connect()
     else:  # mongodb (default)
-        logger.info(f"Using MongoDB persistence backend at {mask_mongodb_uri(args.mongodb_uri)}")
+        logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
         persistence: PersistenceBackend = DatabaseManager(
             mongodb_uri=args.mongodb_uri,
             database_name=args.database
@@ -436,16 +362,11 @@ async def main(args):
         host=args.host,
         port=args.port,
         loop="asyncio",
-        log_level="info",
-        proxy_headers=True,
-        forwarded_allow_ips="*",
-        server_header=False,
-        date_header=False
+        log_level="info"
     )
     server = Server(config)
 
     logger.info(f"Backend server starting on http://{args.host}:{args.port}")
-    logger.info(f"Frontend UI available at: http://{args.host}:{args.port}/ui")
     logger.info(f"Swagger UI available at: http://{args.host}:{args.port}/docs")
     logger.info(f"Health check at: http://{args.host}:{args.port}/health")
 

@@ -3,7 +3,11 @@ import { useState } from "react";
 import ServerCard from "../components/ServerCard";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
+import { ServerListControls } from "../components/ServerListControls";
+import { Pagination } from "../components/Pagination";
 import { useServers } from "../hooks/useServers";
+import { useServerFiltering } from "../hooks/useServerFiltering";
+import { showSuccess, showError, showLoading } from "../services/toast";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -14,16 +18,38 @@ export default function Dashboard() {
     type: 'starting' | 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
 
+  // Server filtering for "Currently configured servers" section
+  const {
+    searchQuery,
+    sortBy,
+    filterBy,
+    currentPage,
+    setSearchQuery,
+    setSortBy,
+    setFilterBy,
+    setCurrentPage,
+    clearFilters,
+    paginatedServers,
+    totalPages,
+    totalFilteredCount,
+  } = useServerFiltering(servers, { itemsPerPage: 6 });
+
   const handleStartServer = async (serverId: string) => {
     // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
+    const toastId = `server-${serverId}`;
+
     setActionState({ serverId, type: 'starting' });
+    showLoading(`Starting server "${serverName}"...`, toastId);
 
     try {
       await startServer(serverId);
+      showSuccess(`Server "${serverName}" started successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to start server');
+      showError(err instanceof Error ? err.message : 'Failed to start server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }
@@ -33,12 +59,18 @@ export default function Dashboard() {
     // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
+    const toastId = `server-${serverId}`;
+
     setActionState({ serverId, type: 'stopping' });
+    showLoading(`Stopping server "${serverName}"...`, toastId);
 
     try {
       await stopServer(serverId);
+      showSuccess(`Server "${serverName}" stopped successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to stop server');
+      showError(err instanceof Error ? err.message : 'Failed to stop server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }
@@ -48,12 +80,18 @@ export default function Dashboard() {
     // Silent guard - prevent concurrent operations
     if (actionState.type !== null) return;
 
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
+    const toastId = `server-${serverId}`;
+
     setActionState({ serverId, type: 'restarting' });
+    showLoading(`Restarting server "${serverName}"...`, toastId);
 
     try {
       await restartServer(serverId);
+      showSuccess(`Server "${serverName}" restarted successfully`, toastId);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to restart server');
+      showError(err instanceof Error ? err.message : 'Failed to restart server', toastId);
     } finally {
       setActionState({ serverId: null, type: null });
     }
@@ -108,17 +146,50 @@ export default function Dashboard() {
             </p>
           </div>
         ) : (
-          <div className="server-list">
-            {servers.map((server) => (
-              <ServerCard
-                key={server.id}
-                server={server}
-                onStart={() => handleStartServer(server.id)}
-                onViewDetails={() => navigate(`/servers/${server.id}`)}
-                isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
-              />
-            ))}
-          </div>
+          <>
+            <ServerListControls
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
+              filterBy={filterBy}
+              onFilterChange={setFilterBy}
+              onClearFilters={clearFilters}
+            />
+
+            {totalFilteredCount === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">🔍</div>
+                <h3 className="empty-state-title">No servers found</h3>
+                <p className="empty-state-description">
+                  No servers match your current filters
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="server-list">
+                  {paginatedServers.map((server) => (
+                    <ServerCard
+                      key={server.id}
+                      server={server}
+                      onStart={() => handleStartServer(server.id)}
+                      onViewDetails={() => navigate(`/servers/${server.id}`)}
+                      isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
+                    />
+                  ))}
+                </div>
+
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={totalFilteredCount}
+                  itemsPerPage={6}
+                  onPageChange={setCurrentPage}
+                  itemName="servers"
+                />
+              </>
+            )}
+          </>
         )}
       </section>
 

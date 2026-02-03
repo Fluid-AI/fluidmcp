@@ -9,9 +9,7 @@ import asyncio
 import subprocess
 import json
 import time
-import math
 import atexit
-import threading
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -39,9 +37,8 @@ class ServerManager:
         self.configs: Dict[str, Dict[str, Any]] = {}
         self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
 
-        # Thread-safe access locks
-        self._registry_lock = threading.Lock()  # Protects processes and configs dicts
-        self._start_times_lock = threading.Lock()  # Thread-safe access to start_times
+        # Operation locks to prevent concurrent operations on same server
+        self._operation_locks: Dict[str, asyncio.Lock] = {}
 
         # Event loop for async operations
         self._loop = None
@@ -92,10 +89,7 @@ class ServerManager:
                         process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         # Intentional: timeout during cleanup is acceptable - process will be reaped by OS
-                        logger.debug(
-                            f"Timeout while reaping server '{server_id}' (PID: {process.pid}) "
-                            "during cleanup; relying on OS to reap the process."
-                        )
+                        pass
 
             except Exception as e:
                 logger.error(f"Error cleaning up server '{server_id}': {e}")
@@ -120,15 +114,18 @@ class ServerManager:
 
     # ==================== Server Lifecycle Methods ====================
 
-    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None, env_overrides: Optional[Dict[str, str]] = None) -> bool:
+    async def _start_server_unlocked(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
-        Start an MCP server.
+        Internal method to start a server without acquiring a lock.
+
+        ⚠️ IMPORTANT: This method does NOT acquire operation locks.
+        - Only call from restart_server() which holds the lock for the entire operation
+        - DO NOT call directly from public APIs
 
         Args:
             id: Unique server identifier
             config: Server configuration (if None, loads from database)
             user_id: User who is starting the server (for tracking)
-            env_overrides: Instance-specific environment variables (overrides config env)
 
         Returns:
             True if started successfully, False otherwise
@@ -152,24 +149,22 @@ class ServerManager:
                     logger.error(f"No configuration found for server '{id}'")
                     return False
 
-            # Store config (thread-safe)
-            with self._registry_lock:
-                self.configs[id] = config
+            # Store config
+            self.configs[id] = config
 
             # Get display name from config
             name = config.get("name", id)
 
             # Spawn the MCP process
             logger.info(f"Starting server '{name}' (id: {id})...")
-            process = await self._spawn_mcp_process(id, config, instance_env=env_overrides)
+            process = await self._spawn_mcp_process(id, config)
 
             if not process:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
                 return False
 
-            # Store process (thread-safe)
-            with self._registry_lock:
-                self.processes[id] = process
+            # Store process
+            self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
             # Save state to database with user tracking
@@ -183,17 +178,15 @@ class ServerManager:
                 "restart_count": 0,
                 "last_health_check": datetime.utcnow(),
                 "health_check_failures": 0,
-                "started_by": user_id,  # Track who started this instance
-                "env": env_overrides  # Store instance-specific environment variables
+                "started_by": user_id  # Track who started this instance
             })
 
             # Update metrics - server is now running (status code: 2)
             # Note: Metrics update after database save to ensure state consistency
             collector.set_server_status(2)  # 2 = running
 
-            # Store start time for dynamic uptime calculation (thread-safe)
-            with self._start_times_lock:
-                self.start_times[id] = time.monotonic()
+            # Store start time for dynamic uptime calculation
+            self.start_times[id] = time.monotonic()
             collector.set_uptime(0.0)  # Just started
 
             return True
@@ -214,9 +207,37 @@ class ServerManager:
 
             return False
 
-    async def stop_server(self, id: str, force: bool = False) -> bool:
+    async def start_server(self, id: str, config: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> bool:
         """
-        Stop a running MCP server.
+        Start an MCP server.
+
+        Uses a lock to prevent concurrent start operations on the same server.
+
+        Args:
+            id: Unique server identifier
+            config: Server configuration (if None, loads from database)
+            user_id: User who is starting the server (for tracking)
+
+        Returns:
+            True if started successfully, False otherwise
+        """
+        # Check for concurrent operations - fail fast
+        lock = self._get_operation_lock(id)
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
+
+        # Acquire lock for this operation
+        async with lock:
+            return await self._start_server_unlocked(id, config, user_id)
+
+    async def _stop_server_unlocked(self, id: str, force: bool = False) -> bool:
+        """
+        Internal method to stop a server without acquiring a lock.
+
+        ⚠️ IMPORTANT: This method does NOT acquire operation locks.
+        - Only call from restart_server() which holds the lock for the entire operation
+        - DO NOT call directly from public APIs
 
         Args:
             id: Server identifier
@@ -234,10 +255,10 @@ class ServerManager:
                 logger.warning(f"Server '{id}' is not running")
                 return False
 
-            # Get process and config (thread-safe)
-            with self._registry_lock:
-                process = self.processes[id]
-                config = self.configs.get(id, {})
+            process = self.processes[id]
+
+            # Get display name from config
+            config = self.configs.get(id, {})
             name = config.get("name", id)
 
             # Check if already dead
@@ -281,9 +302,51 @@ class ServerManager:
             collector.record_error("stop_failed")
             return False
 
+    async def stop_server(self, id: str, force: bool = False) -> bool:
+        """
+        Stop a running MCP server.
+
+        Uses a lock to prevent concurrent stop operations on the same server.
+
+        Args:
+            id: Server identifier
+            force: If True, use SIGKILL instead of SIGTERM
+
+        Returns:
+            True if stopped successfully, False otherwise
+        """
+        # Check for concurrent operations - fail fast
+        lock = self._get_operation_lock(id)
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
+
+        # Acquire lock for this operation
+        async with lock:
+            return await self._stop_server_unlocked(id, force)
+
+    def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
+        """
+        Get or create an operation lock for a server.
+
+        Prevents concurrent operations (start/stop/restart) on the same server.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Asyncio lock for the server
+        """
+        if server_id not in self._operation_locks:
+            self._operation_locks[server_id] = asyncio.Lock()
+        return self._operation_locks[server_id]
+
     async def restart_server(self, id: str) -> bool:
         """
-        Restart an MCP server.
+        Restart an MCP server atomically.
+
+        Uses a lock to prevent concurrent restart operations on the same server.
+        The lock is held for the entire restart operation (stop + start) to ensure atomicity.
 
         Args:
             id: Server identifier
@@ -291,44 +354,55 @@ class ServerManager:
         Returns:
             True if restarted successfully
         """
-        # Get current config before stopping (thread-safe)
-        with self._registry_lock:
+        # Acquire lock to prevent concurrent operations
+        lock = self._get_operation_lock(id)
+
+        # Try to acquire lock without waiting - fail fast if operation in progress
+        if lock.locked():
+            logger.warning(f"Server '{id}' is already being modified by another operation")
+            return False
+
+        async with lock:
+            # Get current config before stopping
             config = self.configs.get(id)
-        if not config:
-            config = await self.db.get_server_config(id)
+            if not config:
+                config = await self.db.get_server_config(id)
 
-        # Get display name
-        name = config.get("name", id) if config else id
-        logger.info(f"Restarting server '{name}' (id: {id})...")
+            # Get display name
+            name = config.get("name", id) if config else id
+            logger.info(f"Restarting server '{name}' (id: {id})...")
 
-        # Stop server
-        if id in self.processes:
-            await self.stop_server(id)
+            # Stop server (using internal unlocked method - lock already held)
+            if id in self.processes:
+                stop_success = await self._stop_server_unlocked(id)
+                if not stop_success:
+                    logger.error(f"Failed to stop server '{name}' (id: {id}) during restart")
+                    return False
 
-        # Increment restart count
-        instance = await self.db.get_instance_state(id)
-        restart_count = instance.get("restart_count", 0) if instance else 0
+            # Increment restart count
+            instance = await self.db.get_instance_state(id)
+            restart_count = instance.get("restart_count", 0) if instance else 0
 
-        # Update config with new restart count
-        if config:
-            config["_restart_count"] = restart_count + 1
+            # Update config with new restart count
+            if config:
+                config["_restart_count"] = restart_count + 1
 
-        # Start server
-        success = await self.start_server(id, config)
+            # Start server (using internal unlocked method - lock already held)
+            success = await self._start_server_unlocked(id, config)
 
-        if success:
-            # Update restart count in database
-            await self.db.save_instance_state({
-                "server_id": id,
-                "restart_count": restart_count + 1
-            })
+            if success:
+                # Update restart count in database
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "restart_count": restart_count + 1
+                })
 
-            # Record restart in metrics
-            collector = MetricsCollector(id)
-            collector.record_restart("manual_restart")
-            # Note: Status already set to 2 (running) by start_server() - no need to override
+                # Record restart in metrics
+                collector = MetricsCollector(id)
+                collector.record_restart("manual_restart")
+                # Note: Status already set to 2 (running) by start_server() - no need to override
 
-        return success
+            return success
 
     async def get_server_status(self, id: str) -> Dict[str, Any]:
         """
@@ -464,14 +538,13 @@ class ServerManager:
 
     # ==================== Private Helper Methods ====================
 
-    async def _spawn_mcp_process(self, id: str, config: Dict[str, Any], instance_env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
+    async def _spawn_mcp_process(self, id: str, config: Dict[str, Any]) -> Optional[subprocess.Popen]:
         """
         Spawn MCP server process.
 
         Args:
             id: Server identifier
             config: Server configuration
-            instance_env: Instance-specific environment variables (overrides config env)
 
         Returns:
             Popen process or None if failed
@@ -486,6 +559,13 @@ class ServerManager:
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
 
+            # Load instance-specific env vars (user's API keys, etc.)
+            # These override config env vars
+            instance_env = await self.db.get_instance_env(id)
+            if instance_env:
+                logger.debug(f"Merging instance env for server '{id}': {len(instance_env)} vars")
+                env_vars = {**env_vars, **instance_env}
+
             # Get display name
             name = config.get("name", id)
 
@@ -496,22 +576,10 @@ class ServerManager:
             # Build command list
             cmd_list = [command] + args
 
-            # Merge environment variables with priority order:
-            # 1. Shell environment (highest priority)
-            # 2. Instance env (user-provided, from instance_env parameter)
-            # 3. Config env (lowest priority - templates/defaults)
+            # Merge environment variables (shell env takes precedence)
             env = dict(os.environ)
-
-            # Add config env (templates) if not in shell env and not placeholder
             for key, value in env_vars.items():
                 if key not in env and value and not self._is_placeholder(value):
-                    env[key] = value
-
-            # Override with instance env (actual user-provided values)
-            # Note: We set values even if empty - user intent matters
-            # Validation happens at API level, not here
-            if instance_env:
-                for key, value in instance_env.items():
                     env[key] = value
 
             # Determine working directory
@@ -645,15 +713,11 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
         """
-        # Remove from registry (thread-safe)
-        with self._registry_lock:
-            if id in self.processes:
-                del self.processes[id]
-            if id in self.configs:
-                del self.configs[id]
-        with self._start_times_lock:
-            if id in self.start_times:
-                del self.start_times[id]
+        # Remove from registry
+        if id in self.processes:
+            del self.processes[id]
+        if id in self.start_times:
+            del self.start_times[id]
 
         # Update database
         await self.db.save_instance_state({
@@ -676,22 +740,9 @@ class ServerManager:
         Returns:
             Uptime in seconds since server start, or None if server not running
         """
-        with self._start_times_lock:
-            if server_id not in self.start_times:
-                return None
-            start_time = self.start_times[server_id]
-
-        # Calculate uptime (outside lock to minimize lock duration)
-        try:
-            uptime = time.monotonic() - start_time
-            # Validate uptime is reasonable (non-negative, not NaN/Inf)
-            if uptime < 0 or math.isnan(uptime) or math.isinf(uptime):
-                logger.warning(f"Invalid uptime calculated for {server_id}: {uptime}")
-                return None
-            return uptime
-        except Exception as e:
-            logger.error(f"Error calculating uptime for {server_id}: {e}")
+        if server_id not in self.start_times:
             return None
+        return time.monotonic() - self.start_times[server_id]
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:
