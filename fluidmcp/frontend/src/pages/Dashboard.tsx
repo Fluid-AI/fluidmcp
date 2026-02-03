@@ -1,5 +1,5 @@
 import { useNavigate, Link } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ServerCard from "../components/ServerCard";
 import LoadingSpinner from "../components/LoadingSpinner";
 import ErrorMessage from "../components/ErrorMessage";
@@ -7,10 +7,21 @@ import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Button } from "@/components/ui/button";
 import { Footer } from "@/components/Footer";
+import AOS from 'aos';
+import 'aos/dist/aos.css';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
+
+  useEffect(() => {
+    AOS.init({
+      duration: 800,
+      easing: 'ease-in-out',
+      once: true,
+      offset: 50,
+    });
+  }, []);
 
   const [actionState, setActionState] = useState<{
     serverId: string | null;
@@ -244,14 +255,19 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {servers.map((server) => (
-              <ServerCard
+            {servers.map((server, index) => (
+              <div
                 key={server.id}
-                server={server}
-                onStart={() => handleStartServer(server.id)}
-                onViewDetails={() => navigate(`/servers/${server.id}`)}
-                isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
-              />
+                data-aos="fade-up"
+                data-aos-delay={index * 100}
+              >
+                <ServerCard
+                  server={server}
+                  onStart={() => handleStartServer(server.id)}
+                  onViewDetails={() => navigate(`/servers/${server.id}`)}
+                  isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
+                />
+              </div>
             ))}
           </div>
         )}

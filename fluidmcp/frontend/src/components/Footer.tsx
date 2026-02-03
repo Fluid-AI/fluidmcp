@@ -1,12 +1,24 @@
 import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import AOS from 'aos';
+import 'aos/dist/aos.css';
 
 export function Footer() {
+  useEffect(() => {
+    AOS.init({
+      duration: 800,
+      easing: 'ease-in-out',
+      once: true,
+      offset: 50,
+    });
+  }, []);
+
   return (
     <footer className="border-t border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-6 py-12">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           {/* Company Info */}
-          <div className="space-y-4">
+          <div className="space-y-4" data-aos="fade-up" data-aos-delay="0">
             <h3 className="text-lg font-bold">Fluid MCP </h3>
             <p className="text-sm text-muted-foreground">
               A secure, vetted registry of Model Context Protocol Packages for agentic AI solutions. Building the future of AI integration.
@@ -36,7 +48,7 @@ export function Footer() {
           </div>
 
           {/* Registry */}
-          <div className="space-y-4">
+          <div className="space-y-4" data-aos="fade-up" data-aos-delay="100">
             <h4 className="text-sm font-semibold">Registry</h4>
             <ul className="space-y-2 text-sm">
               <li>
@@ -63,7 +75,7 @@ export function Footer() {
           </div>
 
           {/* Documentation */}
-          <div className="space-y-4">
+          <div className="space-y-4" data-aos="fade-up" data-aos-delay="200">
             <h4 className="text-sm font-semibold">Documentation</h4>
             <ul className="space-y-2 text-sm">
               <li>
@@ -90,7 +102,7 @@ export function Footer() {
           </div>
 
           {/* Community */}
-          <div className="space-y-4">
+          <div className="space-y-4" data-aos="fade-up" data-aos-delay="300">
             <h4 className="text-sm font-semibold">Community</h4>
             <ul className="space-y-2 text-sm">
               <li>
