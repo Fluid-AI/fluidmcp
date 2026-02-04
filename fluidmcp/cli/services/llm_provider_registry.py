@@ -16,7 +16,7 @@ _llm_models_config: Dict[str, dict] = {}
 def initialize_llm_registry(llm_models: Dict[str, dict]) -> None:
     """
     Initialize the LLM provider registry with configurations.
-    
+
     Args:
         llm_models: Dictionary from config's "llmModels" section
                    Each entry should have a "type" field (vllm, replicate, ollama, etc.)
@@ -54,10 +54,10 @@ def update_model_endpoints(model_id: str, endpoints: dict) -> None:
 def get_model_config(model_id: str) -> Optional[dict]:
     """
     Get configuration for a specific model.
-    
+
     Args:
         model_id: Model identifier
-        
+
     Returns:
         Model configuration dict or None if not found
     """
@@ -107,7 +107,7 @@ def list_models_by_type(provider_type: str) -> List[str]:
 def list_all_models() -> List[dict]:
     """
     List all registered models with their types.
-    
+
     Returns:
         List of dicts with model_id and type
     """
