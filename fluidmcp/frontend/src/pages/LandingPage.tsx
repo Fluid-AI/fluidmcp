@@ -8,7 +8,7 @@ import { InfiniteMovingCards } from "@/components/ui/infinite-moving-cards";
 const testimonials = [
   {
     quote:
-      "Fluid MCP Registry has completely transformed how we integrate AI tools into our workflow. The security guarantees give us peace of mind.",
+      "Fluid MCP  has completely transformed how we integrate AI tools into our workflow. The security guarantees give us peace of mind.",
     name: "Sarah Chen",
     title: "CTO at TechFlow AI",
   },
@@ -32,7 +32,7 @@ const testimonials = [
   },
   {
     quote:
-      "The community around Fluid MCP Registry is incredible. It's not just a registry, it's a movement towards safer AI integration.",
+      "The community around Fluid MCP  is incredible. It's not just a registry, it's a movement towards safer AI integration.",
     name: "Lisa Thompson",
     title: "AI Research Lead at InnovateLabs",
   },
@@ -50,7 +50,7 @@ export default function LandingPage() {
               className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105"
             >
               <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">
-                Fluid MCP Registry
+                Fluid MCP 
               </span>
             </Link>
             <nav className="hidden md:flex items-center space-x-1 text-sm">

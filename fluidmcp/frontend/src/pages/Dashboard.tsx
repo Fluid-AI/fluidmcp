@@ -56,7 +56,7 @@ export default function Dashboard() {
           <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
             <div className="flex items-center space-x-8">
               <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
-                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP Registry</span>
+                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
               </Link>
               <nav className="hidden md:flex items-center space-x-1 text-sm">
                 <Link 
@@ -150,7 +150,7 @@ export default function Dashboard() {
           <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
             <div className="flex items-center space-x-8">
               <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
-                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP Registry</span>
+                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
               </Link>
               <nav className="hidden md:flex items-center space-x-1 text-sm">
                 <Link 
@@ -206,7 +206,7 @@ export default function Dashboard() {
         <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
           <div className="flex items-center space-x-8">
             <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
-              <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP Registry</span>
+              <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
             </Link>
             <nav className="hidden md:flex items-center space-x-1 text-sm">
               <Link 
