@@ -8,7 +8,7 @@ Provides REST API for:
 - Listing all configured servers
 - Replicate model inference
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -24,13 +24,29 @@ from ..services.replicate_openai_adapter import replicate_chat_completion
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
-# Shared HTTP client for vLLM proxy requests (connection pooling)
-_http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=300.0)
+# Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
+_http_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """
+    Get or create the shared HTTP client (lazy initialization).
+
+    Lazy initialization prevents resource leaks when the module is imported
+    but the client is never used (e.g., in Replicate-only or test configurations).
+    """
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=300.0)
+    return _http_client
 
 
 async def cleanup_http_client():
     """Close the shared HTTP client to prevent resource leaks."""
-    await _http_client.aclose()
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
 
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -1427,8 +1443,9 @@ async def unified_chat_completions(
 
         if is_streaming:
             # Return streaming response using shared client
+            http_client = _get_http_client()
             async def stream_generator():
-                async with _http_client.stream(
+                async with http_client.stream(
                     "POST",
                     f"{base_url}/chat/completions",
                     json=request_body
@@ -1444,7 +1461,8 @@ async def unified_chat_completions(
 
         # Non-streaming request using shared client
         try:
-            response = await _http_client.post(
+            http_client = _get_http_client()
+            response = await http_client.post(
                 f"{base_url}/chat/completions",
                 json=request_body
             )
@@ -1497,8 +1515,9 @@ async def unified_completions(
 
         if is_streaming:
             # Return streaming response using shared client
+            http_client = _get_http_client()
             async def stream_generator():
-                async with _http_client.stream(
+                async with http_client.stream(
                     "POST",
                     f"{base_url}/completions",
                     json=request_body
@@ -1514,7 +1533,8 @@ async def unified_completions(
 
         # Non-streaming request using shared client
         try:
-            response = await _http_client.post(
+            http_client = _get_http_client()
+            response = await http_client.post(
                 f"{base_url}/completions",
                 json=request_body
             )
