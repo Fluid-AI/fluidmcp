@@ -4,7 +4,6 @@ import ServerCard from "../components/ServerCard";
 import ErrorMessage from "../components/ErrorMessage";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
-import { Button } from "@/components/ui/button";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
 import AOS from 'aos';
@@ -74,18 +73,26 @@ export default function Dashboard() {
               </nav>
             </div>
             <div className="flex items-center space-x-3">
-              <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 transition-all duration-200">
+              <button 
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                 </svg>
                 Fluid MCP for your Enterprise
-              </Button>
-              <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 transition-all duration-200">
+              </button>
+              <button 
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
                 </svg>
                 Report Issue
-              </Button>
+              </button>
             </div>
           </div>
         </header>
@@ -156,15 +163,26 @@ export default function Dashboard() {
               </nav>
             </div>
             <div className="flex items-center space-x-3">
-            <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 transition-all duration-200">
+            <button 
+              style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+            >
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
               </svg>
               Fluid MCP for your Enterprise
-            </Button>
-            <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 transition-all duration-200">
-                Report Issue
-              </Button>
+            </button>
+            <button 
+              style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+              </svg>
+              Report Issue
+            </button>
             </div>
           </div>
         </header>
@@ -200,18 +218,26 @@ export default function Dashboard() {
             </nav>
           </div>
           <div className="flex items-center space-x-3">
-            <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 transition-all duration-200">
+            <button 
+              style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+            >
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
               </svg>
               Fluid MCP for your Enterprise
-            </Button>
-            <Button size="sm" className="bg-zinc-900 hover:bg-zinc-800 text-white border border-zinc-800 transition-all duration-200">
+            </button>
+            <button 
+              style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+            >
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
               </svg>
               Report Issue
-            </Button>
+            </button>
           </div>
         </div>
       </header>
@@ -226,12 +252,17 @@ export default function Dashboard() {
                 {servers.length} {servers.length === 1 ? 'server' : 'servers'} configured, {activeServers.length} running
               </p>
             </div>
-            <Button onClick={refetch} variant="outline" size="sm" className="gap-2">
+            <button 
+              onClick={refetch}
+              style={{ background: 'transparent', color: '#d1d5db', border: '1px solid rgba(63, 63, 70, 0.6)', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', transition: 'all 0.2s', margin: 0, cursor: 'pointer' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(39, 39, 42, 0.8)'; e.currentTarget.style.borderColor = 'rgba(82, 82, 91, 0.8)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(63, 63, 70, 0.6)'; }}
+            >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               Refresh
-            </Button>
+            </button>
           </div>
         </header>
       </div>
@@ -262,7 +293,7 @@ export default function Dashboard() {
                   onViewDetails={() => navigate(`/servers/${server.id}`)}
                   isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
                 />
-              </div>
+              </div>                     
             ))}
           </div>
         )}
