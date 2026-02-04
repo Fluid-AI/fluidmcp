@@ -94,6 +94,7 @@ class TestConfigurableTimeouts:
         mock_client.predict = AsyncMock(return_value={"id": "pred_poll", "status": "starting"})
 
         call_count = 0
+
         async def slow_prediction(pred_id):
             nonlocal call_count
             call_count += 1

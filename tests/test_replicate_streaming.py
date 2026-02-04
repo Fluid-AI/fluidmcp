@@ -61,7 +61,6 @@ class TestReplicateStreaming:
         assert final_chunk["choices"][0]["finish_reason"] == "stop"
         assert final_chunk["choices"][0]["delta"] == {}
 
-
     async def test_stream_incremental_updates(self):
         """Test streaming with incremental output updates."""
         mock_client = Mock()
@@ -72,6 +71,7 @@ class TestReplicateStreaming:
 
         # Simulate incremental output updates
         call_count = 0
+
         async def get_prediction_incremental(pred_id):
             nonlocal call_count
             call_count += 1
@@ -107,7 +107,6 @@ class TestReplicateStreaming:
         assert len(content_deltas) > 1
         # Concatenated should equal full output
         assert "".join(content_deltas) == "Hello, world!"
-
 
     async def test_stream_error_handling_failed_prediction(self):
         """Test streaming handles failed predictions gracefully."""
@@ -151,7 +150,6 @@ class TestReplicateStreaming:
         assert "Model crashed" in error_chunk["error"]["message"]
         assert error_chunk["error"]["code"] == "prediction_failed"
 
-
     async def test_stream_timeout(self):
         """Test streaming times out correctly."""
         mock_client = Mock()
@@ -191,7 +189,6 @@ class TestReplicateStreaming:
         assert "timed out" in error_chunk["error"]["message"].lower()
         assert error_chunk["error"]["code"] == "prediction_timeout"
 
-
     async def test_stream_canceled_prediction(self):
         """Test streaming handles canceled predictions."""
         mock_client = Mock()
@@ -230,7 +227,6 @@ class TestReplicateStreaming:
         assert "canceled" in error_chunk["error"]["message"].lower()
         assert error_chunk["error"]["code"] == "prediction_canceled"
 
-
     async def test_stream_creation_failure(self):
         """Test streaming handles prediction creation failure."""
         mock_client = Mock()
@@ -259,7 +255,6 @@ class TestReplicateStreaming:
         assert error_chunk is not None
         assert "API rate limit exceeded" in error_chunk["error"]["message"]
         assert error_chunk["error"]["code"] == "prediction_creation_failed"
-
 
     async def test_stream_sse_format_compliance(self):
         """Test that SSE chunks follow OpenAI format spec."""
@@ -309,7 +304,6 @@ class TestReplicateStreaming:
                     assert "delta" in choice
                     assert choice["index"] == 0
 
-
     async def test_stream_preserves_completion_id(self):
         """Test that all chunks in a stream share the same completion ID."""
         mock_client = Mock()
@@ -320,6 +314,7 @@ class TestReplicateStreaming:
 
         # Multiple polls to get multiple chunks
         call_count = 0
+
         async def get_prediction_multi(pred_id):
             nonlocal call_count
             call_count += 1

@@ -217,7 +217,15 @@ class TestReplicateStreamingIntegration:
         os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
 
         # Configure client
-        replicate_client._replicate_clients["stream-test"] = ReplicateClient("stream-test", {"model": "replicate/flan-t5-small", "api_key": os.getenv("REPLICATE_API_TOKEN"), "timeout": 60, "max_retries": 2})
+        replicate_client._replicate_clients["stream-test"] = ReplicateClient(
+            "stream-test",
+            {
+                "model": "replicate/flan-t5-small",
+                "api_key": os.getenv("REPLICATE_API_TOKEN"),
+                "timeout": 60,
+                "max_retries": 2
+            }
+        )
 
         request = {
             "model": "stream-test",
@@ -244,7 +252,15 @@ class TestReplicateStreamingIntegration:
         from fluidmcp.cli.services import replicate_client
 
         # Configure with invalid model
-        replicate_client._replicate_clients["error-test"] = ReplicateClient("error-test", {"model": "nonexistent/fake-model", "api_key": os.getenv("REPLICATE_API_TOKEN"), "timeout": 30, "max_retries": 0})
+        replicate_client._replicate_clients["error-test"] = ReplicateClient(
+            "error-test",
+            {
+                "model": "nonexistent/fake-model",
+                "api_key": os.getenv("REPLICATE_API_TOKEN"),
+                "timeout": 30,
+                "max_retries": 0
+            }
+        )
 
         request = {
             "model": "error-test",

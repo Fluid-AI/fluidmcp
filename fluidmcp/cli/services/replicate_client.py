@@ -158,7 +158,10 @@ class ReplicateClient:
                 response.raise_for_status()
                 result = response.json()
 
-                logger.info(f"Prediction created for model '{self.model_id}': {result.get('id')} (status: {result.get('status')})")
+                logger.info(
+                    f"Prediction created for model '{self.model_id}': "
+                    f"{result.get('id')} (status: {result.get('status')})"
+                )
                 return result
 
             except httpx.HTTPStatusError as e:
