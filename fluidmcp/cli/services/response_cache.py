@@ -1,11 +1,25 @@
 """
 Response caching layer for API calls.
 
-Caches responses to reduce redundant API calls and costs.
+⚠️  IMPORTANT: This module is NOT currently integrated into the application.
+It provides caching infrastructure but is not wired into any production code paths.
 
-NOTE: This caching infrastructure is available for use but not automatically
-enabled by default. To use response caching, call get_response_cache() with
-enabled=True and wire it into your API call paths. See tests for usage examples.
+Status: EXPERIMENTAL / NOT IN USE
+
+This module was developed as part of enhancement work but is not yet integrated.
+Before using in production:
+1. Wire it into actual API call paths (currently it's only tested, not used)
+2. Add cache invalidation strategy
+3. Add monitoring and metrics
+4. Test under production load
+5. Document cache key generation and TTL policies
+
+To use this caching layer:
+- Call get_response_cache() with enabled=True
+- Wire it into your API call paths using the get_or_fetch() method
+- See tests/test_response_cache.py for usage examples
+
+DO NOT assume this is active - it requires explicit integration.
 """
 
 import asyncio

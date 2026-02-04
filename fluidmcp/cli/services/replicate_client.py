@@ -9,6 +9,7 @@ Includes error handling, retry logic, and streaming support.
 
 import os
 import re
+import time
 import httpx
 import asyncio
 from typing import Dict, Any, Optional, AsyncIterator, List
@@ -66,24 +67,44 @@ class ReplicateClient:
         api_key_raw = config["api_key"]
         if isinstance(api_key_raw, str):
             api_key_expanded = os.path.expandvars(api_key_raw)
-            # Check if ${VAR} or $VAR pattern was not resolved
-            # Only check for our supported patterns to avoid false positives
-            if re.search(r'\$\{[^}]+\}|\$[A-Z_][A-Z0-9_]*', api_key_raw):
+            # Check if any ${VAR} or $VAR pattern was not resolved
+            # Match the same pattern that os.path.expandvars() uses (any alphanumeric + underscore)
+            if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_raw):
                 if api_key_expanded == api_key_raw:
+                    # SECURITY: Do NOT expose the actual API key value in error messages
                     raise ValueError(
                         f"Replicate model '{model_id}' has unresolved environment variable "
-                        f"in 'api_key': {api_key_raw!r}. Make sure the environment variable is set."
+                        f"in 'api_key'. Make sure the environment variable is set."
                     )
             self.api_key = api_key_expanded
         else:
             self.api_key = api_key_raw
-        self.base_url = config.get("endpoints", {}).get("base_url", REPLICATE_API_BASE)
-        self.default_params = config.get("default_params", {})
+        # Validate optional dict-typed configuration fields
+        endpoints = config.get("endpoints")
+        if endpoints is not None and not isinstance(endpoints, dict):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'endpoints' config: "
+                f"expected a dict, got {type(endpoints).__name__}"
+            )
+        default_params = config.get("default_params")
+        if default_params is not None and not isinstance(default_params, dict):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'default_params' config: "
+                f"expected a dict, got {type(default_params).__name__}"
+            )
+        self.base_url = (endpoints or {}).get("base_url", REPLICATE_API_BASE)
+        self.default_params = default_params or {}
         self.timeout = config.get("timeout", DEFAULT_TIMEOUT)
         self.max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
 
         # Store rate limit config for later initialization (after event loop is running)
-        self.rate_limit_config = config.get("rate_limit", {})
+        rate_limit = config.get("rate_limit")
+        if rate_limit is not None and not isinstance(rate_limit, dict):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'rate_limit' config: "
+                f"expected a dict, got {type(rate_limit).__name__}"
+            )
+        self.rate_limit_config = rate_limit or {}
 
         # Initialize HTTP client
         self.client = httpx.AsyncClient(
@@ -288,12 +309,12 @@ class ReplicateClient:
         if max_stream_seconds is None:
             max_stream_seconds = DEFAULT_MAX_STREAM_SECONDS
 
-        # Poll for updates with timeout (compatible with Python 3.6+)
-        start_time = asyncio.get_event_loop().time()
+        # Poll for updates with timeout
+        start_time = time.monotonic()
         try:
             while True:
                 # Check if we've exceeded the timeout
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = time.monotonic() - start_time
                 if elapsed > max_stream_seconds:
                     raise asyncio.TimeoutError(f"Prediction exceeded maximum stream time of {max_stream_seconds}s")
 
@@ -440,6 +461,7 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
     clients = {}
 
     for model_id, config in replicate_models.items():
+        client = None
         try:
             client = ReplicateClient(model_id, config)
 
@@ -466,9 +488,17 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
             else:
                 logger.error(f"Health check failed for Replicate model '{model_id}'")
                 await client.close()
+                client = None  # Prevent double-close in finally
 
         except Exception as e:
             logger.error(f"Failed to initialize Replicate model '{model_id}': {e}")
+        finally:
+            # Ensure client is closed if initialization or health check failed with exception
+            if client is not None and model_id not in clients:
+                try:
+                    await client.close()
+                except Exception as close_error:
+                    logger.warning(f"Error closing Replicate client '{model_id}': {close_error}")
 
     logger.info(f"Initialized {len(clients)} Replicate model(s)")
     return clients

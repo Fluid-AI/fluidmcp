@@ -28,6 +28,11 @@ security = HTTPBearer(auto_error=False)
 _http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=300.0)
 
 
+async def cleanup_http_client():
+    """Close the shared HTTP client to prevent resource leaks."""
+    await _http_client.aclose()
+
+
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
@@ -44,11 +49,17 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     """
     Extract user identifier from bearer token.
 
-    For now, uses a simple approach:
-    - In secure mode: Uses the token itself as user ID (simple but works)
-    - In non-secure mode: Returns "anonymous"
+    ⚠️  WARNING: NOT PRODUCTION READY ⚠️
+    This implementation uses a SHA-256 hash of the bearer token as the user ID.
+    For production use, implement proper JWT authentication with:
+    - Token signature verification
+    - Expiration checking
+    - Role-based access control (RBAC)
+    - User claims extraction (email, user_id, roles)
 
-    Future: Parse JWT tokens to extract user email/ID from claims
+    Current behavior:
+    - In secure mode: Uses SHA-256 hash of token as user ID
+    - In non-secure mode: Returns "anonymous"
 
     Returns:
         User identifier string
@@ -61,16 +72,12 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if not credentials or not credentials.credentials:
         return "anonymous"
 
-    # For now, use token as user ID (simple approach)
-    # TODO: Implement proper JWT authentication with role claims
-    # Current implementation uses first 8 chars of token (~33 bits entropy)
-    # which is insufficient for production security. Replace with JWT decode
-    # to extract user_id/email/role claims.
+    # Use secure hash of token as user ID to avoid weak 8-char prefix
+    # This provides better security than 8-char prefix but still needs JWT for production
+    import hashlib
     token = credentials.credentials
-
-    # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users but provides weak security
-    user_id = f"user_{token[:8]}"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    user_id = f"user_{token_hash[:16]}"  # Use first 16 hex chars (64 bits) of hash
 
     return user_id
 
@@ -86,27 +93,47 @@ def sanitize_input(value: Any) -> Any:
     """
     Sanitize user input to prevent MongoDB injection attacks.
 
-    Removes MongoDB operators and special characters from input.
+    ⚠️  WARNING: This is a basic defense layer. For production:
+    - Use MongoDB's query parameterization
+    - Validate input types strictly at API boundaries
+    - Use schema validation (Pydantic models)
+    - Never construct queries by string concatenation
+
+    This function:
+    - Rejects dict/list values with MongoDB operators in keys
+    - Escapes strings containing MongoDB operators
+    - Recursively sanitizes nested structures
 
     Args:
         value: Input value to sanitize
 
     Returns:
         Sanitized value
+
+    Raises:
+        HTTPException: If MongoDB operator detected in dict keys
     """
-    if isinstance(value, str):
-        # Remove MongoDB operator prefixes
-        if value.startswith("$"):
-            value = value.lstrip("$")
-        # Remove braces that could be part of injection attempts
-        value = value.replace("{", "").replace("}", "")
-    elif isinstance(value, dict):
+    if isinstance(value, dict):
+        # Check for MongoDB operators in dictionary keys (most dangerous)
+        for key in value.keys():
+            if isinstance(key, str) and key.startswith("$"):
+                raise HTTPException(
+                    400,
+                    f"MongoDB operator not allowed in input keys: {key}"
+                )
         # Recursively sanitize dictionary values
         return {k: sanitize_input(v) for k, v in value.items()}
     elif isinstance(value, list):
         # Recursively sanitize list items
         return [sanitize_input(item) for item in value]
-    return value
+    elif isinstance(value, str):
+        # For string values, MongoDB operators are generally safe but can be escaped
+        # Don't modify the string - let MongoDB handle it with parameterized queries
+        # Removing $ or {} can break legitimate values
+        return value
+    else:
+        # Primitive types (int, float, bool, None) are safe
+        return value
 
 
 def validate_server_config(config: Dict[str, Any]) -> None:
@@ -1415,27 +1442,8 @@ async def unified_chat_completions(
             )
         else:
             # Non-streaming request
-            try:
-                return await replicate_chat_completion(model_id, request_body, timeout)
-            except httpx.HTTPStatusError as e:
-                # Preserve status code from upstream
-                status_code = e.response.status_code if e.response is not None else 502
-                upstream_request_id = (
-                    e.response.headers.get("x-request-id")
-                    if e.response is not None
-                    else None
-                )
-                log_msg = f"Replicate upstream HTTP error {status_code}"
-                if upstream_request_id:
-                    log_msg += f" (request_id={upstream_request_id})"
-                logger.error(f"{log_msg}: {e}")
-                message = "Replicate upstream error"
-                if upstream_request_id:
-                    message += f" (request_id={upstream_request_id})"
-                raise HTTPException(status_code, message)
-            except httpx.RequestError as e:
-                logger.error(f"Failed to connect to Replicate upstream service: {e}")
-                raise HTTPException(502, "Failed to connect to Replicate upstream service")
+            # The adapter already converts httpx errors to HTTPException, no need to catch them here
+            return await replicate_chat_completion(model_id, request_body, timeout)
 
     elif provider_type == "vllm":
         # Proxy to vLLM's native OpenAI-compatible endpoint

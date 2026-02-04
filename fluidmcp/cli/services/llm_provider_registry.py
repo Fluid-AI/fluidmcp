@@ -112,8 +112,8 @@ def list_all_models() -> List[dict]:
         List of dicts with model_id and type
     """
     return [
-        {"id": model_id, "type": config.get("type", "unknown")}
-        for model_id, config in _llm_models_config.items()
+        {"id": model_id, "type": get_model_type(model_id) or "unknown"}
+        for model_id in _llm_models_config.keys()
     ]
 
 
