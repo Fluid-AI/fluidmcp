@@ -32,13 +32,13 @@ class TestReplicateClientIntegration:
     async def test_create_and_poll_prediction(self):
         """Test creating and polling a real prediction."""
         # Use a fast, cheap model for testing
-        client = ReplicateClient(
-            model_id="tiny-llm",
-            model_name="replicate/flan-t5-small",  # Fast, free tier model
-            api_key=os.getenv("REPLICATE_API_TOKEN"),
-            timeout=60,
-            max_retries=2
-        )
+        config = {
+            "model": "replicate/flan-t5-small",  # Fast, free tier model
+            "api_key": os.getenv("REPLICATE_API_TOKEN"),
+            "timeout": 60,
+            "max_retries": 2
+        }
+        client = ReplicateClient("tiny-llm", config)
 
         # Create prediction
         prediction = await client.predict(input_data={"prompt": "Hello"})
@@ -61,13 +61,13 @@ class TestReplicateClientIntegration:
 
     async def test_replicate_client_retry_logic(self):
         """Test that client retries on transient errors."""
-        client = ReplicateClient(
-            model_id="test-model",
-            model_name="replicate/flan-t5-small",
-            api_key=os.getenv("REPLICATE_API_TOKEN"),
-            timeout=60,
-            max_retries=3
-        )
+        config = {
+            "model": "replicate/flan-t5-small",
+            "api_key": os.getenv("REPLICATE_API_TOKEN"),
+            "timeout": 60,
+            "max_retries": 3
+        }
+        client = ReplicateClient("test-model", config)
 
         # Make a valid request (should succeed without retries)
         prediction = await client.predict(input_data={"prompt": "Test"})
@@ -75,26 +75,26 @@ class TestReplicateClientIntegration:
 
     async def test_invalid_api_key_fails(self):
         """Test that invalid API key raises appropriate error."""
-        client = ReplicateClient(
-            model_id="test-model",
-            model_name="replicate/flan-t5-small",
-            api_key="invalid_key_12345",
-            timeout=30,
-            max_retries=0
-        )
+        config = {
+            "model": "replicate/flan-t5-small",
+            "api_key": "invalid_key_12345",
+            "timeout": 30,
+            "max_retries": 0
+        }
+        client = ReplicateClient("test-model", config)
 
         with pytest.raises(Exception):  # Should raise auth error
             await client.predict(input_data={"prompt": "Test"})
 
     async def test_nonexistent_model_fails(self):
         """Test that nonexistent model raises error."""
-        client = ReplicateClient(
-            model_id="fake-model",
-            model_name="nonexistent/model-does-not-exist",
-            api_key=os.getenv("REPLICATE_API_TOKEN"),
-            timeout=30,
-            max_retries=0
-        )
+        config = {
+            "model": "nonexistent/model-does-not-exist",
+            "api_key": os.getenv("REPLICATE_API_TOKEN"),
+            "timeout": 30,
+            "max_retries": 0
+        }
+        client = ReplicateClient("fake-model", config)
 
         with pytest.raises(Exception):  # Should raise 404 or similar
             await client.predict(input_data={"prompt": "Test"})
@@ -121,13 +121,7 @@ class TestReplicateAdapterIntegration:
 
         # Temporarily inject config (in real code, this comes from registry)
         from fluidmcp.cli.services import replicate_client
-        replicate_client._replicate_clients["test-model"] = ReplicateClient(
-            model_id="test-model",
-            model_name="replicate/flan-t5-small",
-            api_key=model_config["api_key"],
-            timeout=model_config["timeout"],
-            max_retries=model_config["max_retries"]
-        )
+        replicate_client._replicate_clients["test-model"] = ReplicateClient("test-model", model_config)
 
         # Make chat completion request
         request = {
@@ -186,13 +180,13 @@ class TestReplicateAdapterIntegration:
 
         # Configure client with very short timeout
         from fluidmcp.cli.services import replicate_client
-        replicate_client._replicate_clients["timeout-test"] = ReplicateClient(
-            model_id="timeout-test",
-            model_name="replicate/flan-t5-small",
-            api_key=os.getenv("REPLICATE_API_TOKEN"),
-            timeout=1,  # 1 second timeout
-            max_retries=0
-        )
+        timeout_config = {
+            "model": "replicate/flan-t5-small",
+            "api_key": os.getenv("REPLICATE_API_TOKEN"),
+            "timeout": 1,  # 1 second timeout
+            "max_retries": 0
+        }
+        replicate_client._replicate_clients["timeout-test"] = ReplicateClient("timeout-test", timeout_config)
 
         request = {
             "model": "timeout-test",
@@ -223,13 +217,7 @@ class TestReplicateStreamingIntegration:
         os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
 
         # Configure client
-        replicate_client._replicate_clients["stream-test"] = ReplicateClient(
-            model_id="stream-test",
-            model_name="replicate/flan-t5-small",
-            api_key=os.getenv("REPLICATE_API_TOKEN"),
-            timeout=60,
-            max_retries=2
-        )
+        replicate_client._replicate_clients["stream-test"] = ReplicateClient("stream-test", {"model": "replicate/flan-t5-small", "api_key": os.getenv("REPLICATE_API_TOKEN"), "timeout": 60, "max_retries": 2})
 
         request = {
             "model": "stream-test",
@@ -256,13 +244,7 @@ class TestReplicateStreamingIntegration:
         from fluidmcp.cli.services import replicate_client
 
         # Configure with invalid model
-        replicate_client._replicate_clients["error-test"] = ReplicateClient(
-            model_id="error-test",
-            model_name="nonexistent/fake-model",
-            api_key=os.getenv("REPLICATE_API_TOKEN"),
-            timeout=30,
-            max_retries=0
-        )
+        replicate_client._replicate_clients["error-test"] = ReplicateClient("error-test", {"model": "nonexistent/fake-model", "api_key": os.getenv("REPLICATE_API_TOKEN"), "timeout": 30, "max_retries": 0})
 
         request = {
             "model": "error-test",

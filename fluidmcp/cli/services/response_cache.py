@@ -2,6 +2,10 @@
 Response caching layer for API calls.
 
 Caches responses to reduce redundant API calls and costs.
+
+NOTE: This caching infrastructure is available for use but not automatically
+enabled by default. To use response caching, call get_response_cache() with
+enabled=True and wire it into your API call paths. See tests for usage examples.
 """
 
 import asyncio

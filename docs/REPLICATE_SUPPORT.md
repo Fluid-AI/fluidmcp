@@ -321,7 +321,7 @@ curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
   }'
 ```
 
-**Note**: Replicate doesn't support true streaming yet. FluidMCP polls the prediction and returns the complete response when ready.
+**Note**: Replicate doesn't support native streaming yet. FluidMCP implements streaming by polling the Replicate prediction and emitting incremental OpenAI-compatible SSE chunks (`delta.content`) as the output grows, rather than waiting to return a single final response.
 
 ### Using with OpenAI Python Client
 
