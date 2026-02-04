@@ -38,11 +38,14 @@ def retry_with_backoff(
             response = await client.get("/api/data")
             return response.json()
 
-    Backoff sequence (initial_delay=2, backoff_factor=2):
-        Attempt 0: immediate
-        Attempt 1: wait 2s  (2 * 2^0)
-        Attempt 2: wait 4s  (2 * 2^1)
-        Attempt 3: wait 8s  (2 * 2^2)
+    Backoff sequence with initial_delay=2, backoff_factor=2:
+        Initial call: no delay (attempt 0, first try)
+        Retry 1: immediate retry (attempt 0, no delay since attempt == 0)
+        Retry 2: wait 2s  (attempt 1, delay = 2 * 2^0)
+        Retry 3: wait 4s  (attempt 2, delay = 2 * 2^1)
+        Retry 4: wait 8s  (attempt 3, delay = 2 * 2^2)
+
+    Note: The first retry is immediate (no delay), subsequent retries use exponential backoff.
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)

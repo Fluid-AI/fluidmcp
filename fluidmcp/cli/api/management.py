@@ -103,9 +103,9 @@ def sanitize_input(value: Any) -> Any:
     - Never construct queries by string concatenation
 
     This function:
-    - Rejects dict/list values with MongoDB operators in keys
-    - Escapes strings containing MongoDB operators
-    - Recursively sanitizes nested structures
+    - Rejects dict keys that start with "$" (MongoDB-style operators)
+    - Leaves string values unchanged (no escaping performed)
+    - Recursively sanitizes nested dicts and lists
 
     Args:
         value: Input value to sanitize
