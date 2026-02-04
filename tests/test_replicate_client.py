@@ -223,8 +223,10 @@ class TestReplicateClientPredictions:
         client = original_client
         client.client = mock_http_client
 
-        # Should eventually succeed after retries
-        result = await client.predict({"prompt": "Test"})
+        # Patch asyncio.sleep to avoid real delays in tests
+        with patch('asyncio.sleep', new_callable=AsyncMock):
+            # Should eventually succeed after retries
+            result = await client.predict({"prompt": "Test"})
 
         assert result["id"] == "pred_123"
         assert mock_http_client.post.call_count == 3
@@ -243,9 +245,11 @@ class TestReplicateClientPredictions:
         client = original_client
         client.client = mock_http_client
 
-        # Should raise after max_retries attempts (3 retries + 1 initial = 4 total)
-        with pytest.raises(httpx.RequestError):
-            await client.predict({"prompt": "Test"})
+        # Patch asyncio.sleep to avoid real delays in tests
+        with patch('asyncio.sleep', new_callable=AsyncMock):
+            # Should raise after max_retries attempts (3 retries + 1 initial = 4 total)
+            with pytest.raises(httpx.RequestError):
+                await client.predict({"prompt": "Test"})
 
         assert mock_http_client.post.call_count == 4  # 1 initial + max_retries (3)
 
@@ -330,13 +334,15 @@ class TestReplicateClientStreaming:
         client = original_client
         client.client = mock_http_client
 
-        # Stream prediction
-        chunks = []
-        async for chunk in client.stream_prediction({"prompt": "Test"}):
-            chunks.append(chunk)
+        # Patch asyncio.sleep to avoid real delays in tests
+        with patch('asyncio.sleep', new_callable=AsyncMock):
+            # Stream prediction
+            chunks = []
+            async for chunk in client.stream_prediction({"prompt": "Test"}):
+                chunks.append(chunk)
 
-        assert "Hello" in chunks or "Hello World" in chunks
-        assert mock_http_client.get.call_count == 2
+            assert "Hello" in chunks or "Hello World" in chunks
+            assert mock_http_client.get.call_count == 2
 
     @pytest.mark.asyncio
     async def test_stream_prediction_failure(self, replicate_config, mock_http_client):

@@ -28,6 +28,11 @@ security = HTTPBearer(auto_error=False)
 _http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=300.0)
 
 
+async def cleanup_http_client():
+    """Close the shared HTTP client to prevent resource leaks."""
+    await _http_client.aclose()
+
+
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
@@ -1402,28 +1407,9 @@ async def unified_chat_completions(
     # Route to appropriate provider handler
     if provider_type == "replicate":
         # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
+        # The adapter already converts httpx errors to HTTPException, no need to catch them here
         timeout = request_body.get("timeout", 300)
-        try:
-            return await replicate_chat_completion(model_id, request_body, timeout)
-        except httpx.HTTPStatusError as e:
-            # Preserve status code from upstream
-            status_code = e.response.status_code if e.response is not None else 502
-            upstream_request_id = (
-                e.response.headers.get("x-request-id")
-                if e.response is not None
-                else None
-            )
-            log_msg = f"Replicate upstream HTTP error {status_code}"
-            if upstream_request_id:
-                log_msg += f" (request_id={upstream_request_id})"
-            logger.error(f"{log_msg}: {e}")
-            message = "Replicate upstream error"
-            if upstream_request_id:
-                message += f" (request_id={upstream_request_id})"
-            raise HTTPException(status_code, message)
-        except httpx.RequestError as e:
-            logger.error(f"Failed to connect to Replicate upstream service: {e}")
-            raise HTTPException(502, "Failed to connect to Replicate upstream service")
+        return await replicate_chat_completion(model_id, request_body, timeout)
 
     elif provider_type == "vllm":
         # Proxy to vLLM's native OpenAI-compatible endpoint
