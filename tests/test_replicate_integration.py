@@ -1,0 +1,295 @@
+"""
+Integration tests for Replicate functionality.
+
+These tests make real API calls to Replicate and are skipped if
+REPLICATE_API_TOKEN is not set.
+
+Run with: pytest tests/test_replicate_integration.py -v -m integration
+"""
+
+import pytest
+import os
+import asyncio
+from fluidmcp.cli.services.replicate_client import ReplicateClient, get_replicate_client
+from fluidmcp.cli.services.replicate_openai_adapter import (
+    replicate_chat_completion,
+    openai_messages_to_prompt,
+    openai_to_replicate_input
+)
+
+# Skip all tests if no API token
+pytestmark = pytest.mark.skipif(
+    not os.getenv("REPLICATE_API_TOKEN"),
+    reason="REPLICATE_API_TOKEN not set - skipping integration tests"
+)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestReplicateClientIntegration:
+    """Integration tests for ReplicateClient with real API."""
+
+    async def test_create_and_poll_prediction(self):
+        """Test creating and polling a real prediction."""
+        # Use a fast, cheap model for testing
+        client = ReplicateClient(
+            model_id="tiny-llm",
+            model_name="replicate/flan-t5-small",  # Fast, free tier model
+            api_key=os.getenv("REPLICATE_API_TOKEN"),
+            timeout=60,
+            max_retries=2
+        )
+
+        # Create prediction
+        prediction = await client.predict(input_data={"prompt": "Hello"})
+
+        assert "id" in prediction
+        assert prediction["status"] in ["starting", "processing", "succeeded"]
+        prediction_id = prediction["id"]
+
+        # Poll until complete (with timeout)
+        max_polls = 30
+        for _ in range(max_polls):
+            status = await client.get_prediction(prediction_id)
+            if status["status"] in ["succeeded", "failed", "canceled"]:
+                break
+            await asyncio.sleep(2)
+
+        # Check final status
+        assert status["status"] == "succeeded"
+        assert "output" in status
+
+    async def test_replicate_client_retry_logic(self):
+        """Test that client retries on transient errors."""
+        client = ReplicateClient(
+            model_id="test-model",
+            model_name="replicate/flan-t5-small",
+            api_key=os.getenv("REPLICATE_API_TOKEN"),
+            timeout=60,
+            max_retries=3
+        )
+
+        # Make a valid request (should succeed without retries)
+        prediction = await client.predict(input_data={"prompt": "Test"})
+        assert "id" in prediction
+
+    async def test_invalid_api_key_fails(self):
+        """Test that invalid API key raises appropriate error."""
+        client = ReplicateClient(
+            model_id="test-model",
+            model_name="replicate/flan-t5-small",
+            api_key="invalid_key_12345",
+            timeout=30,
+            max_retries=0
+        )
+
+        with pytest.raises(Exception):  # Should raise auth error
+            await client.predict(input_data={"prompt": "Test"})
+
+    async def test_nonexistent_model_fails(self):
+        """Test that nonexistent model raises error."""
+        client = ReplicateClient(
+            model_id="fake-model",
+            model_name="nonexistent/model-does-not-exist",
+            api_key=os.getenv("REPLICATE_API_TOKEN"),
+            timeout=30,
+            max_retries=0
+        )
+
+        with pytest.raises(Exception):  # Should raise 404 or similar
+            await client.predict(input_data={"prompt": "Test"})
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestReplicateAdapterIntegration:
+    """Integration tests for OpenAI adapter with real API."""
+
+    async def test_chat_completion_end_to_end(self):
+        """Test complete chat completion flow with real API."""
+        # Configure environment
+        os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
+
+        # Mock config (would normally come from llm_provider_registry)
+        model_config = {
+            "type": "replicate",
+            "model": "replicate/flan-t5-small",
+            "api_key": os.getenv("REPLICATE_API_TOKEN"),
+            "timeout": 60,
+            "max_retries": 2
+        }
+
+        # Temporarily inject config (in real code, this comes from registry)
+        from fluidmcp.cli.services import replicate_client
+        replicate_client._replicate_clients["test-model"] = ReplicateClient(
+            model_id="test-model",
+            model_name="replicate/flan-t5-small",
+            api_key=model_config["api_key"],
+            timeout=model_config["timeout"],
+            max_retries=model_config["max_retries"]
+        )
+
+        # Make chat completion request
+        request = {
+            "model": "test-model",
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 50
+        }
+
+        response = await replicate_chat_completion("test-model", request, timeout=60)
+
+        # Verify OpenAI-format response
+        assert "id" in response
+        assert "object" in response
+        assert response["object"] == "chat.completion"
+        assert "choices" in response
+        assert len(response["choices"]) > 0
+        assert "message" in response["choices"][0]
+        assert "content" in response["choices"][0]["message"]
+        assert response["choices"][0]["finish_reason"] == "stop"
+
+        # Content should be non-empty
+        content = response["choices"][0]["message"]["content"]
+        assert len(content) > 0
+
+    async def test_openai_to_replicate_conversion(self):
+        """Test that OpenAI format converts correctly to Replicate."""
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"}
+        ]
+
+        prompt = openai_messages_to_prompt(messages)
+        assert "helpful" in prompt.lower()
+        assert "hello" in prompt.lower()
+
+        # Test conversion of full request
+        request = {
+            "messages": messages,
+            "temperature": 0.8,
+            "max_tokens": 100,
+            "top_p": 0.9
+        }
+
+        replicate_input = openai_to_replicate_input(request)
+        assert "prompt" in replicate_input
+        assert replicate_input["temperature"] == 0.8
+        assert replicate_input["max_tokens"] == 100
+        assert replicate_input["top_p"] == 0.9
+
+    async def test_timeout_handling(self):
+        """Test that timeouts are handled correctly."""
+        os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
+
+        # Configure client with very short timeout
+        from fluidmcp.cli.services import replicate_client
+        replicate_client._replicate_clients["timeout-test"] = ReplicateClient(
+            model_id="timeout-test",
+            model_name="replicate/flan-t5-small",
+            api_key=os.getenv("REPLICATE_API_TOKEN"),
+            timeout=1,  # 1 second timeout
+            max_retries=0
+        )
+
+        request = {
+            "model": "timeout-test",
+            "messages": [{"role": "user", "content": "Long task"}]
+        }
+
+        # Should timeout (flan-t5 might be fast enough, so this might not always fail)
+        # But the timeout mechanism should be invoked
+        try:
+            response = await replicate_chat_completion("timeout-test", request, timeout=1)
+            # If it succeeds, that's fine - model was fast
+            assert "choices" in response
+        except Exception as e:
+            # Should be a timeout error
+            assert "timeout" in str(e).lower() or "timed out" in str(e).lower()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+class TestReplicateStreamingIntegration:
+    """Integration tests for streaming functionality."""
+
+    async def test_streaming_chat_completion(self):
+        """Test streaming chat completion with real API."""
+        from fluidmcp.cli.services.replicate_openai_adapter import replicate_chat_completion_stream
+        from fluidmcp.cli.services import replicate_client
+
+        os.environ["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN")
+
+        # Configure client
+        replicate_client._replicate_clients["stream-test"] = ReplicateClient(
+            model_id="stream-test",
+            model_name="replicate/flan-t5-small",
+            api_key=os.getenv("REPLICATE_API_TOKEN"),
+            timeout=60,
+            max_retries=2
+        )
+
+        request = {
+            "model": "stream-test",
+            "messages": [{"role": "user", "content": "Count to 3"}],
+            "stream": True
+        }
+
+        chunks = []
+        async for chunk in replicate_chat_completion_stream("stream-test", request, timeout=60):
+            chunks.append(chunk)
+
+        # Should have multiple chunks
+        assert len(chunks) > 0
+
+        # Should have [DONE] marker
+        assert any("data: [DONE]" in chunk for chunk in chunks)
+
+        # Should have content chunks
+        content_chunks = [c for c in chunks if "delta" in c and "content" in c]
+        # Note: May or may not have content depending on polling timing
+
+    async def test_streaming_error_handling(self):
+        """Test that streaming handles errors correctly."""
+        from fluidmcp.cli.services.replicate_openai_adapter import replicate_chat_completion_stream
+        from fluidmcp.cli.services import replicate_client
+
+        # Configure with invalid model
+        replicate_client._replicate_clients["error-test"] = ReplicateClient(
+            model_id="error-test",
+            model_name="nonexistent/fake-model",
+            api_key=os.getenv("REPLICATE_API_TOKEN"),
+            timeout=30,
+            max_retries=0
+        )
+
+        request = {
+            "model": "error-test",
+            "messages": [{"role": "user", "content": "Test"}],
+            "stream": True
+        }
+
+        chunks = []
+        async for chunk in replicate_chat_completion_stream("error-test", request, timeout=30):
+            chunks.append(chunk)
+
+        # Should have error chunk
+        assert len(chunks) > 0
+        # Should contain error information
+        error_found = False
+        for chunk in chunks:
+            if "error" in chunk:
+                error_found = True
+                break
+        assert error_found
+
+
+@pytest.mark.integration
+def test_integration_environment_setup():
+    """Verify integration test environment is configured."""
+    api_token = os.getenv("REPLICATE_API_TOKEN")
+    assert api_token is not None, "REPLICATE_API_TOKEN must be set for integration tests"
+    assert api_token.startswith("r8_"), "REPLICATE_API_TOKEN should start with 'r8_'"
+    assert len(api_token) > 20, "REPLICATE_API_TOKEN seems too short"

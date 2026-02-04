@@ -189,7 +189,7 @@ class TestReplicateStreaming:
                         break
 
         assert error_chunk is not None
-        assert "timeout" in error_chunk["error"]["message"].lower()
+        assert "timed out" in error_chunk["error"]["message"].lower()
         assert error_chunk["error"]["code"] == "prediction_timeout"
 
 

@@ -142,6 +142,11 @@ class ReplicateClient:
 
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
+        # Apply rate limiting before making request
+        from .rate_limiter import get_rate_limiter
+        rate_limiter = await get_rate_limiter(self.model_id)
+        await rate_limiter.acquire()
+
         # Retry logic (max_retries = number of retries AFTER initial attempt)
         last_error = None
         for attempt in range(self.max_retries + 1):
@@ -216,6 +221,11 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
         """
+        # Apply rate limiting
+        from .rate_limiter import get_rate_limiter
+        rate_limiter = await get_rate_limiter(self.model_id)
+        await rate_limiter.acquire()
+
         response = await self.client.get(f"/predictions/{prediction_id}")
         response.raise_for_status()
         return response.json()
