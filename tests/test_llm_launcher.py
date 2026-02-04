@@ -5,7 +5,7 @@ import asyncio
 import os
 import subprocess
 import time
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch, mock_open
 
 # Third-party imports
 import httpx
@@ -1670,3 +1670,249 @@ class TestProcessCleanup:
             # Ensure cleanup
             if process.is_running():
                 process.stop()
+
+
+class TestLogRotation:
+    """Test log rotation functionality"""
+
+    @patch('os.chmod')
+    @patch('os.makedirs')
+    @patch('os.path.getsize')
+    @patch('os.path.exists')
+    def test_rotation_triggers_when_log_exceeds_max_size(
+        self, mock_exists, mock_getsize, mock_makedirs, mock_chmod
+    ):
+        """Test that rotation is triggered when log exceeds LOG_MAX_BYTES."""
+        from fluidmcp.cli.services.llm_launcher import LOG_MAX_BYTES
+
+        # Log file exists and exceeds 10MB limit
+        mock_exists.return_value = True
+        mock_getsize.return_value = 11 * 1024 * 1024  # 11MB
+
+        config = {"command": "python", "args": ["-c", "print('test')"]}
+        process = LLMProcess("test-model", config)
+
+        with patch.object(process, '_rotate_log_files') as mock_rotate:
+            with patch('builtins.open', mock_open()):
+                with patch('subprocess.Popen') as mock_popen:
+                    mock_proc = Mock()
+                    mock_proc.pid = 12345
+                    mock_proc.poll.return_value = None
+                    mock_popen.return_value = mock_proc
+
+                    try:
+                        process.start()
+                        # Rotation should be called once
+                        mock_rotate.assert_called_once()
+                    finally:
+                        if hasattr(process, 'process') and process.process:
+                            try:
+                                process.process.kill()
+                            except:
+                                pass
+
+    @patch('os.replace')
+    @patch('os.remove')
+    @patch('os.path.exists')
+    def test_rotate_log_files_creates_correct_backup_chain(
+        self, mock_exists, mock_remove, mock_replace
+    ):
+        """Test that rotation creates correct backup chain (.1, .2, .3, .4, .5)."""
+        from fluidmcp.cli.services.llm_launcher import LOG_BACKUP_COUNT
+
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        log_path = "/tmp/test.log"
+
+        # Simulate:
+        # - Current log exists
+        # - Backups .1 through .4 exist
+        # - Backup .5 (oldest) exists and should be deleted
+        def exists_side_effect(path):
+            return path in [
+                log_path,
+                f"{log_path}.1",
+                f"{log_path}.2",
+                f"{log_path}.3",
+                f"{log_path}.4",
+                f"{log_path}.5",  # Oldest backup
+            ]
+
+        mock_exists.side_effect = exists_side_effect
+
+        # Execute rotation
+        process._rotate_log_files(log_path)
+
+        # Verify .5 was removed first
+        mock_remove.assert_called_once_with(f"{log_path}.{LOG_BACKUP_COUNT}")
+
+        # Verify rotation chain: .4→.5, .3→.4, .2→.3, .1→.2, current→.1
+        expected_moves = [
+            (f"{log_path}.4", f"{log_path}.5"),
+            (f"{log_path}.3", f"{log_path}.4"),
+            (f"{log_path}.2", f"{log_path}.3"),
+            (f"{log_path}.1", f"{log_path}.2"),
+            (log_path, f"{log_path}.1"),
+        ]
+
+        assert mock_replace.call_count == 5
+        for old, new in expected_moves:
+            mock_replace.assert_any_call(old, new)
+
+    @patch('os.replace')
+    @patch('os.remove')
+    @patch('os.path.exists')
+    def test_rotate_log_files_respects_backup_count(
+        self, mock_exists, mock_remove, mock_replace
+    ):
+        """Test that rotation never exceeds LOG_BACKUP_COUNT."""
+        from fluidmcp.cli.services.llm_launcher import LOG_BACKUP_COUNT
+
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        log_path = "/tmp/test.log"
+
+        # Only current log and .5 exist
+        def exists_side_effect(path):
+            return path in [log_path, f"{log_path}.5"]
+
+        mock_exists.side_effect = exists_side_effect
+
+        # Execute rotation
+        process._rotate_log_files(log_path)
+
+        # Oldest (.5) should be deleted
+        mock_remove.assert_called_once_with(f"{log_path}.5")
+
+        # Only current log should be moved
+        mock_replace.assert_called_once_with(log_path, f"{log_path}.1")
+
+    @patch('os.replace')
+    @patch('os.remove')
+    @patch('os.path.exists')
+    def test_rotate_log_files_handles_missing_backups(
+        self, mock_exists, mock_remove, mock_replace
+    ):
+        """Test rotation works when some backups don't exist."""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        log_path = "/tmp/test.log"
+
+        # Only current log and .2 exist (gaps in backup chain)
+        def exists_side_effect(path):
+            return path in [log_path, f"{log_path}.2"]
+
+        mock_exists.side_effect = exists_side_effect
+
+        # Execute rotation (should not crash)
+        process._rotate_log_files(log_path)
+
+        # .5 doesn't exist, remove should not be called
+        mock_remove.assert_not_called()
+
+        # .2 should be rotated to .3, current to .1
+        assert mock_replace.call_count == 2
+        mock_replace.assert_any_call(f"{log_path}.2", f"{log_path}.3")
+        mock_replace.assert_any_call(log_path, f"{log_path}.1")
+
+    @patch('os.replace')
+    @patch('os.remove')
+    @patch('os.path.exists')
+    def test_rotation_handles_windows_file_locking(
+        self, mock_exists, mock_remove, mock_replace
+    ):
+        """Test that rotation failures are handled gracefully on Windows."""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        log_path = "/tmp/test.log"
+
+        # Current log exists
+        mock_exists.return_value = True
+
+        # Simulate Windows file locking error
+        mock_replace.side_effect = PermissionError("File is locked")
+
+        # Should not crash, just log warning
+        try:
+            process._rotate_log_files(log_path)
+        except Exception as e:
+            pytest.fail(f"Rotation should handle errors gracefully, got: {e}")
+
+    @patch('os.path.exists', return_value=False)
+    def test_rotation_handles_nonexistent_log(self, mock_exists):
+        """Test rotation when log file doesn't exist yet."""
+        config = {"command": "echo"}
+        process = LLMProcess("test", config)
+        log_path = "/tmp/nonexistent.log"
+
+        # Should not crash
+        try:
+            process._rotate_log_files(log_path)
+        except Exception as e:
+            pytest.fail(f"Rotation should handle missing log gracefully, got: {e}")
+
+
+class TestCommandSanitization:
+    """Test command sanitization for logging"""
+
+    def test_prod_api_key_is_redacted(self):
+        """Test that --prod-api-key IS redacted."""
+        from fluidmcp.cli.services.llm_launcher import sanitize_command_for_logging
+
+        cmd = ["vllm", "--prod-api-key", "secret123"]
+        result = sanitize_command_for_logging(cmd)
+
+        assert "secret123" not in result
+        assert "***REDACTED***" in result
+
+    def test_aws_access_key_id_is_redacted(self):
+        """Test that --aws-access-key-id IS redacted."""
+        from fluidmcp.cli.services.llm_launcher import sanitize_command_for_logging
+
+        cmd = ["aws", "s3", "ls", "--access-key-id", "AKIAIOSFODNN7EXAMPLE"]
+        result = sanitize_command_for_logging(cmd)
+
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert "***REDACTED***" in result
+
+    def test_bearer_token_is_redacted(self):
+        """Test that --bearer-token IS redacted."""
+        from fluidmcp.cli.services.llm_launcher import sanitize_command_for_logging
+
+        cmd = ["curl", "--bearer-token", "eyJhbGci..."]
+        result = sanitize_command_for_logging(cmd)
+
+        assert "eyJhbGci" not in result
+        assert "***REDACTED***" in result
+
+    def test_staging_secret_is_redacted(self):
+        """Test that --staging-secret IS redacted."""
+        from fluidmcp.cli.services.llm_launcher import sanitize_command_for_logging
+
+        cmd = ["deploy", "--staging-secret", "stg_secret_xyz"]
+        result = sanitize_command_for_logging(cmd)
+
+        assert "stg_secret_xyz" not in result
+        assert "***REDACTED***" in result
+
+    def test_api_key_rotation_not_redacted(self):
+        """Test that --api-key-rotation is NOT redacted (false positive prevention)."""
+        from fluidmcp.cli.services.llm_launcher import sanitize_command_for_logging
+
+        cmd = ["vllm", "--api-key-rotation", "enable"]
+        result = sanitize_command_for_logging(cmd)
+
+        # "enable" should NOT be redacted (not sensitive)
+        assert "enable" in result
+        assert "***REDACTED***" not in result
+
+    def test_tokenizer_not_redacted(self):
+        """Test that --tokenizer is NOT redacted (false positive prevention)."""
+        from fluidmcp.cli.services.llm_launcher import sanitize_command_for_logging
+
+        cmd = ["vllm", "--tokenizer", "gpt2"]
+        result = sanitize_command_for_logging(cmd)
+
+        # "gpt2" should NOT be redacted
+        assert "gpt2" in result
+        assert "***REDACTED***" not in result
