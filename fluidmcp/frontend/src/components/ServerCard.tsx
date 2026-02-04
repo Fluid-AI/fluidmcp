@@ -1,4 +1,4 @@
-import { Shield, AlertCircle, Play } from "lucide-react";
+import { AlertCircle, Play } from "lucide-react";
 import type { Server } from "../types/server";
 
 interface ServerCardProps {
@@ -55,23 +55,15 @@ export default function ServerCard({
       {/* Card */}
       <div className="relative bg-gradient-to-br from-zinc-900/90 to-zinc-800/90 backdrop-blur-xl border border-zinc-700/50 rounded-2xl p-6 shadow-2xl transition-all duration-300 hover:scale-[1.02] hover:shadow-indigo-500/20">
         {/* Header */}
-        <div className="flex items-start justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <h3 className="text-xl font-bold text-white truncate">
-                {server.name}
-              </h3>
-              {server.status?.state === "running" && (
-                <div className="flex items-center gap-1 px-2 py-0.5 bg-green-500/10 border border-green-500/30 rounded-full">
-                  <Shield className="w-3 h-3 text-green-400" />
-                  <span className="text-xs text-green-400 font-medium">Active</span>
-                </div>
-              )}
-            </div>
+            <h3 className="text-xl font-bold text-white truncate">
+              {server.name}
+            </h3>
           </div>
 
           {/* Status indicator */}
-          <div className={`flex items-center gap-1 px-2 py-0.5 border rounded-full ${getStatusColor()}`}>
+          <div className={`flex items-center gap-1 px-2 py-1 border rounded-full whitespace-nowrap ${getStatusColor()}`}>
             {server.status?.state === "failed" && <AlertCircle className="w-3 h-3" />}
             <span className="text-xs font-medium capitalize">
               {server.status?.state || "stopped"}
