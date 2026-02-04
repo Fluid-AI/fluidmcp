@@ -47,6 +47,7 @@ class ResponseCache:
         self.max_size = max_size
         self._cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._lock = asyncio.Lock()
+        self._in_flight: Dict[str, asyncio.Future] = {}  # Track in-flight fetches
         self._hits = 0
         self._misses = 0
 
@@ -127,6 +128,9 @@ class ResponseCache:
         """
         Get from cache or fetch if not present.
 
+        Prevents duplicate fetches for the same key - if multiple concurrent
+        calls request the same data, only one fetch executes while others wait.
+
         Args:
             data: Data to use as cache key (will be hashed)
             fetch_fn: Async function to fetch data on cache miss
@@ -147,10 +151,62 @@ class ResponseCache:
         if cached is not None:
             return cached
 
-        # Cache miss - fetch and store
-        value = await fetch_fn()
-        await self.set(key, value)
-        return value
+        # Check if another task is already fetching this key
+        future_to_await = None
+        async with self._lock:
+            if key in self._in_flight:
+                # Another task is fetching - wait for it
+                future_to_await = self._in_flight[key]
+                logger.debug(f"Waiting for in-flight fetch: {key[:16]}...")
+
+        # If there was an in-flight fetch, wait for it outside the lock
+        if future_to_await:
+            try:
+                return await future_to_await
+            except Exception:
+                # In-flight fetch failed - fall through to try again
+                pass
+
+        # No in-flight fetch or it failed - we need to fetch
+        async with self._lock:
+            # Double-check: another task may have started fetching after we checked
+            if key in self._in_flight:
+                future_to_await = self._in_flight[key]
+
+        if future_to_await:
+            return await future_to_await
+
+        # Still no in-flight fetch - create one
+        async with self._lock:
+            # Triple-check cache (another task may have completed while we waited for lock)
+            if key in self._cache:
+                entry = self._cache[key]
+                if not self._is_expired(entry):
+                    return entry["value"]
+
+            # Create a future to track this fetch
+            future = asyncio.Future()
+            self._in_flight[key] = future
+
+        # Fetch outside the lock
+        try:
+            value = await fetch_fn()
+            await self.set(key, value)
+
+            # Mark future as done
+            async with self._lock:
+                if key in self._in_flight:
+                    self._in_flight[key].set_result(value)
+                    del self._in_flight[key]
+
+            return value
+        except Exception as e:
+            # Mark future as failed and remove from in-flight
+            async with self._lock:
+                if key in self._in_flight:
+                    self._in_flight[key].set_exception(e)
+                    del self._in_flight[key]
+            raise
 
     async def invalidate(self, data: Any) -> bool:
         """

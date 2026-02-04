@@ -1415,7 +1415,27 @@ async def unified_chat_completions(
             )
         else:
             # Non-streaming request
-            return await replicate_chat_completion(model_id, request_body, timeout)
+            try:
+                return await replicate_chat_completion(model_id, request_body, timeout)
+            except httpx.HTTPStatusError as e:
+                # Preserve status code from upstream
+                status_code = e.response.status_code if e.response is not None else 502
+                upstream_request_id = (
+                    e.response.headers.get("x-request-id")
+                    if e.response is not None
+                    else None
+                )
+                log_msg = f"Replicate upstream HTTP error {status_code}"
+                if upstream_request_id:
+                    log_msg += f" (request_id={upstream_request_id})"
+                logger.error(f"{log_msg}: {e}")
+                message = "Replicate upstream error"
+                if upstream_request_id:
+                    message += f" (request_id={upstream_request_id})"
+                raise HTTPException(status_code, message)
+            except httpx.RequestError as e:
+                logger.error(f"Failed to connect to Replicate upstream service: {e}")
+                raise HTTPException(502, "Failed to connect to Replicate upstream service")
 
     elif provider_type == "vllm":
         # Proxy to vLLM's native OpenAI-compatible endpoint
@@ -1801,7 +1821,7 @@ async def stream_prediction(
                 # JSON-encode the chunk to handle newlines and special characters
                 encoded_chunk = json.dumps({"chunk": chunk})
                 yield f"data: {encoded_chunk}\n\n"
-        except Exception as e:
+        except Exception:
             # Log full exception details server-side for debugging
             logger.exception(f"Error streaming prediction for '{model_id}'")
             # Send generic error to client (avoid leaking internal details)

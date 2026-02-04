@@ -3,14 +3,13 @@
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 from argparse import Namespace
 
 from fluidmcp.cli.services.config_resolver import (
     ServerConfig,
     resolve_config,
     resolve_from_package,
-    resolve_from_installed,
     resolve_from_file,
     _resolve_package_dest_dir,
     _collect_installed_servers,

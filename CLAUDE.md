@@ -367,7 +367,7 @@ pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_clie
 - [tests/test_replicate_client.py](tests/test_replicate_client.py) - Comprehensive tests (22 tests)
 - [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) - Complete documentation
 - [examples/replicate-inference.json](examples/replicate-inference.json) - Example configuration
-```
+
 ### Key Features
 
 **Process Lifecycle**:
