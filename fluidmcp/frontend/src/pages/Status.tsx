@@ -55,7 +55,7 @@ export default function Status() {
 
   if (loading) {
     return (
-      <div className="dashboard">
+      <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         {/* Navbar */}
         <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
           <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
@@ -108,7 +108,7 @@ export default function Status() {
             </div>
           </div>
         </header>
-        <div style={{ paddingTop: '64px' }}>
+        <div style={{ paddingTop: '64px', flex: 1, display: 'flex', flexDirection: 'column' }}>
           <header className="dashboard-header">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
@@ -119,7 +119,7 @@ export default function Status() {
             </div>
           </header>
           
-          <section className="dashboard-section">
+          <section className="dashboard-section" style={{ flex: 1 }}>
             <Skeleton className="h-6 w-48 mb-6" />
             <div className="flex flex-col gap-4">
               {[...Array(3)].map((_, index) => (
@@ -136,7 +136,7 @@ export default function Status() {
 
   if (error) {
     return (
-      <div className="dashboard">
+      <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         {/* Navbar */}
         <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
           <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
@@ -189,7 +189,7 @@ export default function Status() {
             </div>
           </div>
         </header>
-        <div style={{ paddingTop: '64px' }}>
+        <div style={{ paddingTop: '64px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <div className="error-container">
             <div className="error-message">{error}</div>
             <button onClick={refetch} className="retry-btn">
@@ -202,7 +202,7 @@ export default function Status() {
   }
 
   return (
-    <div className="dashboard">
+    <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Navbar */}
       <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
         <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
@@ -257,7 +257,7 @@ export default function Status() {
       </header>
 
       {/* Dashboard Content */}
-      <div style={{ paddingTop: '64px' }}>
+      <div style={{ paddingTop: '64px', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <header className="dashboard-header">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
@@ -279,11 +279,10 @@ export default function Status() {
             </button>
           </div>
         </header>
-      </div>
 
-      {/* Currently Active Servers */}
-      <section className="dashboard-section">
-        <h2>Currently active servers</h2>
+        {/* Currently Active Servers */}
+        <section className="dashboard-section" style={{ flex: 1 }}>
+          <h2>Currently active servers</h2>
 
         <div className="active-server-container">
           {activeServers.length === 0 ? (
@@ -330,6 +329,7 @@ export default function Status() {
           )}
         </div>
       </section>
+      </div>
 
       {/* Footer */}
       <Footer />
