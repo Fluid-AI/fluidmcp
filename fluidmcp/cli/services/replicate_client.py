@@ -93,8 +93,33 @@ class ReplicateClient:
             )
         self.base_url = (endpoints or {}).get("base_url", REPLICATE_API_BASE)
         self.default_params = default_params or {}
-        self.timeout = config.get("timeout", DEFAULT_TIMEOUT)
-        self.max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
+
+        # Validate numeric configuration fields
+        timeout = config.get("timeout", DEFAULT_TIMEOUT)
+        if not isinstance(timeout, (int, float)):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'timeout' config: "
+                f"expected a number, got {type(timeout).__name__}"
+            )
+        if timeout <= 0:
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'timeout' config: "
+                f"must be positive, got {timeout}"
+            )
+        self.timeout = timeout
+
+        max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
+        if not isinstance(max_retries, int):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'max_retries' config: "
+                f"expected an integer, got {type(max_retries).__name__}"
+            )
+        if max_retries < 0:
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'max_retries' config: "
+                f"must be non-negative, got {max_retries}"
+            )
+        self.max_retries = max_retries
 
         # Initialize HTTP client
         self.client = httpx.AsyncClient(
