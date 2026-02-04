@@ -1541,10 +1541,16 @@ async def unified_list_models(
     token: str = Depends(get_token)
 ):
     """
-    OpenAI-compatible models listing endpoint.
+    OpenAI-compatible model metadata endpoint.
+
+    Returns metadata for the specified model in OpenAI /v1/models format.
+    This is a per-model endpoint, not a global models list.
+
+    Args:
+        model_id: The model identifier
 
     Returns:
-        OpenAI-format models list
+        OpenAI-format model metadata with single entry
     """
     config = get_model_config(model_id)
     if not config:
