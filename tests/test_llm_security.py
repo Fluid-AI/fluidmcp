@@ -272,3 +272,171 @@ class TestEnvVarFiltering:
 
         # Non-allowlisted should still be filtered
         assert "SECRET_KEY" not in result
+
+
+class TestEnhancedAPIKeyDetection:
+    """Test enhanced API key detection patterns."""
+
+    def test_prod_api_key_redacted(self):
+        """Test that --prod-api-key is redacted."""
+        command = ["server", "--prod-api-key", "secret123"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "secret123" not in result
+
+    def test_staging_access_token_redacted(self):
+        """Test that --staging-access-token is redacted."""
+        command = ["server", "--staging-access-token", "token456"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "token456" not in result
+
+    def test_aws_access_key_redacted(self):
+        """Test that --aws-access-key is redacted."""
+        command = ["server", "--aws-access-key", "AKIAIOSFODNN7EXAMPLE"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+
+    def test_access_key_id_redacted(self):
+        """Test that --access-key-id is redacted."""
+        command = ["server", "--access-key-id", "AKIAIOSFODNN7EXAMPLE"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+
+    def test_private_key_redacted(self):
+        """Test that --private-key is redacted."""
+        command = ["server", "--private-key", "/path/to/key"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "/path/to/key" not in result
+
+    def test_api_key_rotation_not_redacted(self):
+        """Test that --api-key-rotation is NOT redacted (false positive prevention)."""
+        command = ["server", "--api-key-rotation", "enabled"]
+        result = sanitize_command_for_logging(command)
+        # "enabled" should NOT be redacted because it's not a sensitive value
+        assert "enabled" in result
+        assert "***REDACTED***" not in result
+
+    def test_api_key_config_not_redacted(self):
+        """Test that --api-key-config is NOT redacted (false positive prevention)."""
+        command = ["server", "--api-key-config", "/path/to/config"]
+        result = sanitize_command_for_logging(command)
+        assert "/path/to/config" in result
+        assert "***REDACTED***" not in result
+
+
+class TestLogRotation:
+    """Test log rotation functionality."""
+
+    def test_log_rotation_basic(self, tmp_path):
+        """Test basic log rotation creates correct backup files."""
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+
+        log_file = tmp_path / "test.log"
+        log_file.write_text("original content")
+
+        process = LLMProcess("test-model", {
+            "command": "echo",
+            "args": ["test"]
+        })
+
+        process._rotate_log_files(str(log_file))
+
+        # Original log should be moved to .1
+        assert not log_file.exists()
+        assert (tmp_path / "test.log.1").exists()
+        assert (tmp_path / "test.log.1").read_text() == "original content"
+
+    def test_log_rotation_sequence(self, tmp_path):
+        """Test log rotation correctly moves files in sequence."""
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+
+        log_file = tmp_path / "test.log"
+
+        # Create existing backups
+        (tmp_path / "test.log.1").write_text("backup1")
+        (tmp_path / "test.log.2").write_text("backup2")
+        (tmp_path / "test.log.3").write_text("backup3")
+        log_file.write_text("current")
+
+        process = LLMProcess("test-model", {
+            "command": "echo",
+            "args": ["test"]
+        })
+
+        process._rotate_log_files(str(log_file))
+
+        # Check rotation sequence
+        assert (tmp_path / "test.log.1").read_text() == "current"
+        assert (tmp_path / "test.log.2").read_text() == "backup1"
+        assert (tmp_path / "test.log.3").read_text() == "backup2"
+        assert (tmp_path / "test.log.4").read_text() == "backup3"
+
+    def test_log_rotation_removes_oldest(self, tmp_path):
+        """Test that oldest backup (>LOG_BACKUP_COUNT) is removed."""
+        from fluidmcp.cli.services.llm_launcher import LLMProcess, LOG_BACKUP_COUNT
+
+        log_file = tmp_path / "test.log"
+
+        # Create max backups + current
+        for i in range(1, LOG_BACKUP_COUNT + 1):
+            (tmp_path / f"test.log.{i}").write_text(f"backup{i}")
+        log_file.write_text("current")
+
+        process = LLMProcess("test-model", {
+            "command": "echo",
+            "args": ["test"]
+        })
+
+        process._rotate_log_files(str(log_file))
+
+        # Oldest backup should be removed
+        assert not (tmp_path / f"test.log.{LOG_BACKUP_COUNT + 1}").exists()
+
+        # All other backups should exist
+        for i in range(1, LOG_BACKUP_COUNT + 1):
+            assert (tmp_path / f"test.log.{i}").exists()
+
+    def test_log_rotation_missing_intermediate_file(self, tmp_path):
+        """Test rotation handles missing intermediate backup files."""
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+
+        log_file = tmp_path / "test.log"
+
+        # Create backups with gap (.2 missing)
+        (tmp_path / "test.log.1").write_text("backup1")
+        (tmp_path / "test.log.3").write_text("backup3")
+        log_file.write_text("current")
+
+        process = LLMProcess("test-model", {
+            "command": "echo",
+            "args": ["test"]
+        })
+
+        # Should not crash
+        process._rotate_log_files(str(log_file))
+
+        assert (tmp_path / "test.log.1").exists()
+        assert (tmp_path / "test.log.2").exists()  # backup1 moved here
+        assert (tmp_path / "test.log.4").exists()  # backup3 moved here
+
+    def test_log_rotation_file_not_exists(self, tmp_path):
+        """Test rotation when log file doesn't exist (shouldn't crash)."""
+        from fluidmcp.cli.services.llm_launcher import LLMProcess
+
+        log_file = tmp_path / "nonexistent.log"
+
+        process = LLMProcess("test-model", {
+            "command": "echo",
+            "args": ["test"]
+        })
+
+        # Should not crash
+        process._rotate_log_files(str(log_file))
+
+        # No files should be created
+        assert not log_file.exists()
+        assert not (tmp_path / "nonexistent.log.1").exists()

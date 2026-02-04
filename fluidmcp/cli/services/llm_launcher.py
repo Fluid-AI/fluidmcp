@@ -29,7 +29,7 @@ CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
 # Log rotation settings
 LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB per log file
-LOG_BACKUP_COUNT = 5  # Keep 5 backup files (up to 50MB of backups per model, plus up to 10MB for the active log file)
+LOG_BACKUP_COUNT = 5  # Keep 5 backup files (50MB of backups) + active log (10MB) = 60MB total per model
 
 # Environment variable allowlist for subprocess (uppercase for case-insensitive matching)
 ENV_VAR_ALLOWLIST = {
@@ -115,20 +115,32 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         sensitive_segment_pairs = {
             ("api", "key"),
             ("access", "key"),
+            ("secret", "key"),
+            ("private", "key"),
             ("access", "token"),
             ("auth", "token"),
             ("bearer", "token"),
+            ("api", "token"),
+            ("prod", "key"),        # --prod-key
+            ("staging", "key"),     # --staging-key
+            ("prod", "token"),      # --prod-token
+            ("staging", "token"),   # --staging-token
+            ("prod", "secret"),     # --prod-secret
+            ("staging", "secret"),  # --staging-secret
         }
         if len(segments) >= 2 and (segments[-2], segments[-1]) in sensitive_segment_pairs:
             return True
 
-        # Three-word combinations like "access-key-id" or "api-key-id"
+        # Three-word combinations like "access-key-id", "api-key-id", "aws-access-key"
         # Treat a flag as sensitive when it ends with a known sensitive pair
         # followed by a credential-like suffix such as "id", while still
         # ignoring benign variants like "--access-key-rotation" or "--access-key-config"
-        sensitive_suffixes_for_pairs = {"id"}
+        sensitive_suffixes_for_pairs = {"id", "secret"}
         if len(segments) >= 3:
             if (segments[-3], segments[-2]) in sensitive_segment_pairs and segments[-1] in sensitive_suffixes_for_pairs:
+                return True
+            # Also catch patterns like "aws-access-key"
+            if segments[-2] in ("access", "secret", "api") and segments[-1] in ("key", "token"):
                 return True
 
         return False
@@ -330,9 +342,9 @@ class LLMProcess:
             except Exception as e:
                 logger.warning(f"Failed to remove old backup {oldest_backup}: {e}")
 
-        # Rotate existing backups (move .4 -> .5, .3 -> .4, etc.)
+        # Rotate existing backups (move .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2)
         # Use os.replace for atomic cross-platform rotation
-        for i in range(LOG_BACKUP_COUNT - 1, 0, -1):
+        for i in range(LOG_BACKUP_COUNT - 1, 0, -1):  # [4, 3, 2, 1] when LOG_BACKUP_COUNT=5
             old_backup = f"{log_path}.{i}"
             new_backup = f"{log_path}.{i + 1}"
 
