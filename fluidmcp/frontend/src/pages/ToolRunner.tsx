@@ -4,6 +4,7 @@ import { apiClient } from '../services/api';
 import { useToolRunner } from '../hooks/useToolRunner';
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import type { Server, Tool } from '../types/server';
 import { Footer } from '@/components/Footer';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -384,12 +385,23 @@ export const ToolRunner: React.FC = () => {
           </div>
 
       {/* Main Content */}
-      <div style={{ 
-        display: (result !== null || executionError) ? 'grid' : 'block',
-        gridTemplateColumns: (result !== null || executionError) ? '2fr 3fr' : undefined, 
-        gap: '2rem', 
-        marginBottom: '2rem' 
-      }}>
+      <ErrorBoundary fallback={
+        <div className="tool-runner-content">
+          <div className="result-error">
+            <h3>Error Loading Tool</h3>
+            <p>Failed to render tool execution interface. Please try again.</p>
+            <button onClick={() => navigate('/dashboard')} className="btn-secondary">
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      }>
+        <div style={{
+          display: (result !== null || executionError) ? 'grid' : 'block',
+          gridTemplateColumns: (result !== null || executionError) ? '2fr 3fr' : undefined,
+          gap: '2rem',
+          marginBottom: '2rem'
+        }}>
         {/* Left Column: Form and History */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', width: '100%' }}>
           {/* Parameters Form */}
@@ -443,7 +455,6 @@ export const ToolRunner: React.FC = () => {
             />
           </div>
         )}
-      </div>
         </div>
       </div>
 
@@ -696,6 +707,9 @@ export const ToolRunner: React.FC = () => {
           `}</style>
         </>
       )}
+
+        </div>
+      </ErrorBoundary>
 
       <Footer />
     </div>

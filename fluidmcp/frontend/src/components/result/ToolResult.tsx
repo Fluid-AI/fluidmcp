@@ -305,9 +305,15 @@ export const ToolResult: React.FC<ToolResultProps> = ({
                 </ErrorBoundary>
               )}
               {format === ResultFormat.TABLE && Array.isArray(result) && (
-                <TableResultView data={result as Array<Record<string, unknown>>} />
+                <ErrorBoundary>
+                  <TableResultView data={result as Array<Record<string, unknown>>} />
+                </ErrorBoundary>
               )}
-              {format === ResultFormat.JSON_OBJECT && <JsonResultView data={result} expandAll={expandAll} />}
+              {format === ResultFormat.JSON_OBJECT && (
+                <ErrorBoundary>
+                  <JsonResultView data={result} expandAll={expandAll} />
+                </ErrorBoundary>
+              )}
               {format === ResultFormat.TEXT_BLOCK && typeof result === 'string' && (
                 <TextResultView text={result} isLongText={true} />
               )}

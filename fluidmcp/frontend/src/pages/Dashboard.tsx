@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import ServerCard from "../components/ServerCard";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ServerListControls } from "../components/ServerListControls";
 import { Pagination } from "../components/Pagination";
 import ErrorMessage from "../components/ErrorMessage";
@@ -352,61 +353,71 @@ export default function Dashboard() {
       </div>
 
       {/* Main content */}
-      <section className="dashboard-section">
-        <h2 ref={serverListRef}>Currently configured servers</h2>
-
-        <div style={{ marginBottom: 24 }}>
-          <ServerListControls
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            sortBy={sortBy}
-            onSortChange={v => setSortBy(v as any)}
-            filterBy={filterBy}
-            onFilterChange={v => setFilterBy(v as any)}
-            onClearFilters={handleClearFilters}
-          />
-        </div>
-        {sortedServers.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon">📦</div>
-            <h3 className="empty-state-title">No servers found</h3>
-            <p className="empty-state-description">
-              Try adjusting your search, sort, or filter options.
-            </p>
+      <ErrorBoundary fallback={
+        <div className="dashboard-section">
+          <h2>Currently configured servers</h2>
+          <div className="result-error">
+            <h3>Error Loading Servers</h3>
+            <p>Failed to render server list. Please refresh the page.</p>
           </div>
-        ) : (
-          <>
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {paginatedServers.map((server, index) => (
-                <div
-                  key={server.id}
-                  data-aos="fade-up"
-                  data-aos-delay={index * 100}
-                >
-                  <ServerCard
-                    server={server}
-                    onStart={() => handleStartServer(server.id)}
-                    onViewDetails={() => navigate(`/servers/${server.id}`)}
-                    isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
+        </div>
+      }>
+        <section className="dashboard-section">
+          <h2 ref={serverListRef}>Currently configured servers</h2>
+
+          <div style={{ marginBottom: 24 }}>
+            <ServerListControls
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              sortBy={sortBy}
+              onSortChange={v => setSortBy(v as any)}
+              filterBy={filterBy}
+              onFilterChange={v => setFilterBy(v as any)}
+              onClearFilters={handleClearFilters}
+            />
+          </div>
+          {sortedServers.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">📦</div>
+              <h3 className="empty-state-title">No servers found</h3>
+              <p className="empty-state-description">
+                Try adjusting your search, sort, or filter options.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {paginatedServers.map((server, index) => (
+                  <div
+                    key={server.id}
+                    data-aos="fade-up"
+                    data-aos-delay={index * 100}
+                  >
+                    <ServerCard
+                      server={server}
+                      onStart={() => handleStartServer(server.id)}
+                      onViewDetails={() => navigate(`/servers/${server.id}`)}
+                      isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
+                    />
+                  </div>
+                ))}
+              </div>
+              {sortedServers.length > itemsPerPage && (
+                <div style={{ marginTop: 32 }}>
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={sortedServers.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={handlePageChange}
+                    itemName="servers"
                   />
                 </div>
-              ))}
-            </div>
-            {sortedServers.length > itemsPerPage && (
-              <div style={{ marginTop: 32 }}>
-                <Pagination
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  totalItems={sortedServers.length}
-                  itemsPerPage={itemsPerPage}
-                  onPageChange={handlePageChange}
-                  itemName="servers"
-                />
-              </div>
-            )}
-          </>
-        )}
-      </section>
+              )}
+            </>
+          )}
+        </section>
+      </ErrorBoundary>
 
       {/* Footer */}
       <Footer />
