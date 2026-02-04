@@ -23,10 +23,10 @@ def app_with_management_routes():
 
 @pytest.fixture
 def client(app_with_management_routes):
-    """Create test client."""
-    # Disable secure mode for testing
+    """Create test client with secure mode disabled for entire test duration."""
+    # Disable secure mode for testing - keep patch active for entire test
     with patch.dict('os.environ', {'FMCP_SECURE_MODE': 'false'}):
-        return TestClient(app_with_management_routes)
+        yield TestClient(app_with_management_routes)
 
 
 class TestUnifiedChatCompletionsRouting:
@@ -193,18 +193,28 @@ class TestVLLMErrorHandling:
 class TestHTTPClientLifecycle:
     """Test HTTP client lazy initialization and cleanup."""
 
-    def test_http_client_lazy_initialization(self):
+    @pytest.mark.asyncio
+    async def test_http_client_lazy_initialization(self):
         """Test that HTTP client is only created when first used."""
-        from fluidmcp.cli.api.management import _http_client, _get_http_client
+        from fluidmcp.cli.api.management import _get_http_client, cleanup_http_client
+        from unittest.mock import AsyncMock
 
-        # Initially should be None (lazy init)
-        with patch('fluidmcp.cli.api.management._http_client', None):
+        # Mock httpx.AsyncClient to avoid creating real client
+        with patch('fluidmcp.cli.api.management.httpx.AsyncClient') as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            # First call should create client
             client = _get_http_client()
             assert client is not None
+            assert mock_client_class.called
 
             # Second call should return same instance
             client2 = _get_http_client()
             assert client is client2
+
+            # Cleanup (even though mocked, demonstrates proper pattern)
+            await cleanup_http_client()
 
     @pytest.mark.asyncio
     async def test_cleanup_http_client_handles_none(self):

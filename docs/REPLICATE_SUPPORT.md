@@ -288,16 +288,21 @@ POST /api/llm/{model_id}/v1/chat/completions
     }
   ],
   "usage": {
-    "prompt_tokens": 20,
-    "completion_tokens": 100,
-    "total_tokens": 120
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
   }
+  // Note: Replicate API doesn't provide token counts, so usage fields are always 0
 }
 ```
 
 ### Streaming Not Supported
 
-Replicate models do not support streaming responses. Requests with `"stream": true` will return HTTP 501 (Not Implemented) due to Replicate's polling-based API architecture. For real-time streaming requirements, use vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
+Replicate-backed models do not support **OpenAI-compatible streaming** via `"stream": true` on the `/api/llm/...` endpoints. Such requests will return HTTP 501 (Not Implemented) because Replicate's API is fundamentally polling-based.
+
+FluidMCP also exposes a legacy, Replicate-specific SSE endpoint at `/api/replicate/models/{model_id}/stream` that streams the results of polling Replicate; this endpoint is **deprecated** and is not a replacement for OpenAI-style token-by-token streaming.
+
+For real-time streaming requirements, use vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
 ### Using with OpenAI Python Client
 
@@ -497,7 +502,7 @@ pytest tests/test_replicate_client.py -v
 pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_client
 ```
 
-**Test Coverage**: 22 tests covering:
+**Test Coverage**: 25 tests covering:
 - Client initialization
 - Prediction creation and retrieval
 - Streaming

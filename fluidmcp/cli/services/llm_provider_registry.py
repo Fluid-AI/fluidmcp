@@ -110,9 +110,12 @@ def list_all_models() -> List[dict]:
 
     Returns:
         List of dicts with model_id and type
+
+    Note:
+        Defaults to "vllm" for backward compatibility (matches get_model_type behavior)
     """
     return [
-        {"id": model_id, "type": config.get("type", "unknown")}
+        {"id": model_id, "type": config.get("type", "vllm")}
         for model_id, config in _llm_models_config.items()
     ]
 

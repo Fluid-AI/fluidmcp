@@ -1462,12 +1462,14 @@ async def unified_chat_completions(
                     if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
                         error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
                     logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
-                    # Emit SSE error event
-                    yield f"event: error\ndata: {{\"error\": \"vLLM error: {error_text}\", \"status\": {e.response.status_code}}}\n\n".encode()
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
                     logger.error(f"vLLM streaming connection error: {e}")
-                    # Emit SSE error event
-                    yield f"event: error\ndata: {{\"error\": \"Failed to connect to vLLM server: {str(e)}\"}}\n\n".encode()
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
 
             return StreamingResponse(
                 stream_generator(),
@@ -1549,12 +1551,14 @@ async def unified_completions(
                     if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
                         error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
                     logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
-                    # Emit SSE error event
-                    yield f"event: error\ndata: {{\"error\": \"vLLM error: {error_text}\", \"status\": {e.response.status_code}}}\n\n".encode()
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
                     logger.error(f"vLLM streaming connection error: {e}")
-                    # Emit SSE error event
-                    yield f"event: error\ndata: {{\"error\": \"Failed to connect to vLLM server: {str(e)}\"}}\n\n".encode()
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
 
             return StreamingResponse(
                 stream_generator(),
