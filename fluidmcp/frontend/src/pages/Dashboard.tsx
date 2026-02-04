@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import ServerCard from "../components/ServerCard";
 import { ServerListControls } from "../components/ServerListControls";
@@ -93,7 +93,7 @@ export default function Dashboard() {
     type: 'starting' | 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
 
-  const handleStartServer = async (serverId: string) => {
+  const handleStartServer = useCallback(async (serverId: string) => {
     if (actionState.type !== null) return;
 
     const server = servers.find(s => s.id === serverId);
@@ -111,7 +111,7 @@ export default function Dashboard() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  };
+  }, [actionState.type, servers, startServer]);
 
   if (loading) {
     return (
