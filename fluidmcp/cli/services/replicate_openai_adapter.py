@@ -7,6 +7,7 @@ and vice versa, enabling unified API access across providers.
 
 import time
 import asyncio
+import httpx
 from typing import Dict, Any, List
 from loguru import logger
 
@@ -178,6 +179,13 @@ async def replicate_chat_completion(
     if not client:
         raise HTTPException(404, f"Model '{model_id}' not found or not a Replicate model")
 
+    # Check if streaming is requested
+    if openai_request.get("stream", False):
+        raise HTTPException(
+            501,
+            "Streaming is not supported for Replicate models. Set 'stream': false or omit it."
+        )
+
     # Convert OpenAI request to Replicate input
     replicate_input = openai_to_replicate_input(openai_request)
     logger.debug(f"Converted OpenAI request to Replicate input for '{model_id}'")
@@ -187,9 +195,27 @@ async def replicate_chat_completion(
         prediction = await client.predict(input_data=replicate_input)
         prediction_id = prediction.get("id")
         logger.info(f"Created Replicate prediction {prediction_id} for model '{model_id}'")
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code if e.response is not None else 502
+        upstream_request_id = (
+            e.response.headers.get("x-request-id")
+            if e.response is not None
+            else None
+        )
+        log_msg = f"Replicate upstream HTTP error {status_code}"
+        if upstream_request_id:
+            log_msg += f" (request_id={upstream_request_id})"
+        logger.error(f"{log_msg}: {e}")
+        message = "Replicate upstream error"
+        if upstream_request_id:
+            message += f" (request_id={upstream_request_id})"
+        raise HTTPException(status_code, message)
+    except httpx.RequestError as e:
+        logger.error(f"Failed to connect to Replicate upstream service: {e}")
+        raise HTTPException(502, "Failed to connect to Replicate upstream service")
     except Exception as e:
         logger.error(f"Failed to create Replicate prediction for '{model_id}': {e}")
-        raise HTTPException(500, f"Failed to create prediction: {str(e)}")
+        raise HTTPException(500, "Failed to create prediction")
 
     # Poll until prediction completes (with timeout)
     start_time = time.time()
@@ -229,6 +255,24 @@ async def replicate_chat_completion(
 
         except HTTPException:
             raise
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code if e.response is not None else 502
+            upstream_request_id = (
+                e.response.headers.get("x-request-id")
+                if e.response is not None
+                else None
+            )
+            log_msg = f"Replicate upstream HTTP error {status_code} while polling {prediction_id}"
+            if upstream_request_id:
+                log_msg += f" (request_id={upstream_request_id})"
+            logger.error(f"{log_msg}: {e}")
+            message = "Error checking prediction status"
+            if upstream_request_id:
+                message += f" (request_id={upstream_request_id})"
+            raise HTTPException(status_code, message)
+        except httpx.RequestError as e:
+            logger.error(f"Failed to connect to Replicate while polling {prediction_id}: {e}")
+            raise HTTPException(502, "Failed to connect to Replicate upstream service")
         except Exception as e:
             logger.error(f"Error polling prediction {prediction_id}: {e}")
-            raise HTTPException(500, f"Error checking prediction status: {str(e)}")
+            raise HTTPException(500, "Error checking prediction status")

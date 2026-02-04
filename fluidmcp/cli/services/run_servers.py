@@ -433,13 +433,16 @@ def run_servers(
                 except Exception as e:
                     logger.error(f"Error during Replicate clients shutdown: {e}")
 
-        # Final check: warn if no models of any type were successfully configured
-        if not vllm_models and not replicate_models:
+        # Final check: warn if no models of any type actually launched/initialized
+        vllm_launched = bool(_llm_processes)
+        replicate_will_init = bool(replicate_models)  # Will be initialized on startup
+
+        if not vllm_launched and not replicate_will_init:
             if launched_servers == 0:
                 logger.error("No MCP servers or LLM models successfully configured - aborting")
                 return
             else:
-                logger.warning("No LLM models successfully configured, but MCP servers are running")
+                logger.warning("No LLM models successfully launched, but MCP servers are running")
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)

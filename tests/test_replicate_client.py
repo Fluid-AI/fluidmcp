@@ -404,8 +404,11 @@ class TestReplicateClientModelInfo:
         config = {**replicate_config, "model": "invalid-format"}
         client = ReplicateClient("test", config)
 
-        with pytest.raises(ValueError, match="Invalid model format"):
-            await client.get_model_info()
+        try:
+            with pytest.raises(ValueError, match="Invalid model format"):
+                await client.get_model_info()
+        finally:
+            await client.close()
 
 
 class TestReplicateClientHealthCheck:
