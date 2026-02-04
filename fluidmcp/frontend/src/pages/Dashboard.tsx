@@ -60,23 +60,11 @@ export default function Dashboard() {
               </Link>
               <nav className="hidden md:flex items-center space-x-1 text-sm">
                 <Link 
-                  to="/" 
-                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
-                >
-                  Home
-                </Link>
-                <Link 
                   to="/servers" 
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
                 >
                   Servers
                 </Link>
-                <a 
-                  href="#" 
-                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
-                >
-                  Submit
-                </a>
                 <a 
                   href="#" 
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
@@ -154,23 +142,11 @@ export default function Dashboard() {
               </Link>
               <nav className="hidden md:flex items-center space-x-1 text-sm">
                 <Link 
-                  to="/" 
-                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
-                >
-                  Home
-                </Link>
-                <Link 
                   to="/servers" 
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
                 >
                   Servers
                 </Link>
-                <a 
-                  href="#" 
-                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
-                >
-                  Submit
-                </a>
                 <a 
                   href="#" 
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
@@ -210,23 +186,11 @@ export default function Dashboard() {
             </Link>
             <nav className="hidden md:flex items-center space-x-1 text-sm">
               <Link 
-                to="/" 
-                className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
-              >
-                Home
-              </Link>
-              <Link 
                 to="/servers" 
                 className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
               >
                 Servers
               </Link>
-              <a 
-                href="#" 
-                className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
-              >
-                Submit
-              </a>
               <a 
                 href="#" 
                 className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
