@@ -18,6 +18,7 @@ from loguru import logger
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
+from .health_checker import HealthChecker
 
 
 class ServerManager:
@@ -42,6 +43,9 @@ class ServerManager:
 
         # Event loop for async operations
         self._loop = None
+
+        # Health checker for process validation
+        self.health_checker = HealthChecker()
 
         # Register cleanup handlers
         atexit.register(self._cleanup_on_exit)
@@ -452,10 +456,37 @@ class ServerManager:
         # Check database
         instance = await self.db.get_instance_state(id)
         if instance:
+            state = instance.get("state", "unknown")
+            pid = instance.get("pid")
+
+            # Validate PID if state is "running" - fix stale PID issue
+            if state == "running" and pid:
+                is_alive, error_msg = self.health_checker.check_process_alive(pid)
+                if not is_alive:
+                    logger.warning(f"Server {id} has stale PID {pid}: {error_msg}. Updating state to 'failed'.")
+                    # Update database with corrected state
+                    await self.db.save_instance_state({
+                        "server_id": id,
+                        "state": "failed",
+                        "pid": None,
+                        "exit_code": -1,  # Unknown exit code for stale PID
+                        "updated_at": datetime.utcnow()
+                    })
+                    # Return corrected status
+                    return {
+                        "id": id,
+                        "state": "failed",
+                        "pid": None,
+                        "uptime": None,
+                        "restart_count": instance.get("restart_count", 0),
+                        "exit_code": -1
+                    }
+
+            # Return database state as-is (PID validated or not applicable)
             return {
                 "id": id,
-                "state": instance.get("state", "unknown"),
-                "pid": instance.get("pid"),
+                "state": state,
+                "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
                 "exit_code": instance.get("exit_code")
