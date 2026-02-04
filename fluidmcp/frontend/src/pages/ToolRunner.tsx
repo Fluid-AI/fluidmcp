@@ -17,7 +17,7 @@ export const ToolRunner: React.FC = () => {
   const [loadingServer, setLoadingServer] = useState(true);
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<Record<string, any> | undefined>(undefined);
-  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
 
   const {
     execute,
@@ -333,10 +333,53 @@ export const ToolRunner: React.FC = () => {
           </div>
 
           {/* Page Header */}
-          <div style={{ marginBottom: '2rem' }}>
-            <h1 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{tool.name}</h1>
-            {tool.description && (
-              <p style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: '1rem' }}>{tool.description}</p>
+          <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h1 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{tool.name}</h1>
+              {tool.description && (
+                <p style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: '1rem' }}>{tool.description}</p>
+              )}
+            </div>
+            {history.length > 0 && (
+              <button
+                onClick={() => setHistoryDrawerOpen(true)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.75rem 1.25rem',
+                  background: 'linear-gradient(to right, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.15))',
+                  border: '1px solid rgba(99, 102, 241, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fff',
+                  fontSize: '0.9rem',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  whiteSpace: 'nowrap'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'linear-gradient(to right, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.25))';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'linear-gradient(to right, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.15))';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
+              >
+                <span style={{ fontSize: '1.25rem' }}>📜</span>
+                <span>Execution History</span>
+                <span style={{
+                  padding: '0.125rem 0.5rem',
+                  background: 'rgba(99, 102, 241, 0.3)',
+                  borderRadius: '0.75rem',
+                  fontSize: '0.75rem'
+                }}>
+                  {history.length}
+                </span>
+              </button>
             )}
           </div>
 
@@ -380,188 +423,7 @@ export const ToolRunner: React.FC = () => {
             )}
           </div>
 
-          {/* Execution History */}
-          {history.length > 0 && (
-            <div style={{ 
-              background: 'linear-gradient(to bottom right, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.08))',
-              border: '1px solid rgba(99, 102, 241, 0.2)',
-              borderRadius: '0.75rem',
-              padding: '1.5rem'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <span style={{ fontSize: '1.5rem' }}>📜</span>
-                  <h2 style={{ fontSize: '1.25rem', fontWeight: '600', margin: 0 }}>Execution History</h2>
-                  <span style={{ 
-                    fontSize: '0.75rem', 
-                    padding: '0.25rem 0.5rem', 
-                    background: 'rgba(99, 102, 241, 0.2)',
-                    borderRadius: '0.25rem',
-                    color: '#a5b4fc'
-                  }}>
-                    {history.length} run{history.length !== 1 ? 's' : ''}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    onClick={() => setHistoryCollapsed(!historyCollapsed)}
-                    style={{ 
-                      padding: '0.5rem 1rem', 
-                      background: 'transparent', 
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      borderRadius: '0.375rem',
-                      color: '#fff',
-                      fontSize: '0.875rem',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                    title={historyCollapsed ? 'Expand history' : 'Collapse history'}
-                  >
-                    {historyCollapsed ? 'Expand ▼' : 'Collapse ▲'}
-                  </button>
-                  <button 
-                    onClick={handleClearHistory}
-                    style={{ 
-                      padding: '0.5rem 1rem', 
-                      background: 'transparent', 
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      borderRadius: '0.375rem',
-                      color: '#fff',
-                      fontSize: '0.875rem',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-                  >
-                    Clear All
-                  </button>
-                </div>
-              </div>
 
-              {!historyCollapsed && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  {history.slice(0, 10).map((execution) => (
-                    <div
-                      key={execution.id}
-                      style={{
-                        background: execution.success 
-                          ? 'linear-gradient(to right, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.05))'
-                          : 'linear-gradient(to right, rgba(239, 68, 68, 0.1), rgba(239, 68, 68, 0.05))',
-                        border: `1px solid ${execution.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                        borderLeft: `3px solid ${execution.success ? '#22c55e' : '#ef4444'}`,
-                        borderRadius: '0.5rem',
-                        padding: '1rem',
-                        transition: 'all 0.2s',
-                        cursor: 'pointer'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.transform = 'translateX(4px)';
-                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.transform = 'translateX(0)';
-                        e.currentTarget.style.boxShadow = 'none';
-                      }}
-                    >
-                      {/* Header with timestamp and status */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <span style={{ fontSize: '1rem' }}>🕐</span>
-                          <span style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.7)', fontWeight: '500' }}>
-                            {new Date(execution.timestamp).toLocaleString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}
-                          </span>
-                        </div>
-                        <div style={{ 
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.375rem',
-                          padding: '0.25rem 0.75rem',
-                          background: execution.success ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                          borderRadius: '1rem',
-                          fontSize: '0.75rem',
-                          fontWeight: '600',
-                          color: execution.success ? '#86efac' : '#fca5a5'
-                        }}>
-                          {execution.success ? '✓ Success' : '✗ Failed'}
-                        </div>
-                      </div>
-
-                      {/* Parameters preview */}
-                      <div style={{ marginBottom: '0.75rem' }}>
-                        <div style={{ 
-                          fontSize: '0.75rem', 
-                          color: 'rgba(255, 255, 255, 0.5)', 
-                          marginBottom: '0.5rem',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.05em',
-                          fontWeight: '600'
-                        }}>
-                          Parameters
-                        </div>
-                        <div style={{ 
-                          background: 'rgba(0, 0, 0, 0.25)',
-                          padding: '0.75rem',
-                          borderRadius: '0.375rem',
-                          border: '1px solid rgba(255, 255, 255, 0.05)'
-                        }}>
-                          <pre style={{ 
-                            margin: 0,
-                            fontSize: '0.8rem',
-                            overflow: 'auto',
-                            maxHeight: '120px',
-                            color: '#e5e7eb',
-                            lineHeight: '1.5'
-                          }}>
-                            {JSON.stringify(execution.arguments, null, 2)}
-                          </pre>
-                        </div>
-                      </div>
-
-                      {/* Action button */}
-                      <button
-                        onClick={() => handleLoadFromHistory(execution.id)}
-                        style={{
-                          width: '100%',
-                          padding: '0.625rem 1rem',
-                          background: '#fff',
-                          color: '#000',
-                          border: 'none',
-                          borderRadius: '0.375rem',
-                          fontSize: '0.875rem',
-                          fontWeight: '600',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '0.5rem'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = '#f4f4f5';
-                          e.currentTarget.style.transform = 'scale(1.02)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = '#fff';
-                          e.currentTarget.style.transform = 'scale(1)';
-                        }}
-                      >
-                        <span>↻</span>
-                        Load Parameters
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Right Column: Results */}
@@ -584,6 +446,257 @@ export const ToolRunner: React.FC = () => {
       </div>
         </div>
       </div>
+
+      {/* Execution History Drawer */}
+      {historyDrawerOpen && (
+        <>
+          {/* Overlay */}
+          <div 
+            onClick={() => setHistoryDrawerOpen(false)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.5)',
+              zIndex: 999,
+              animation: 'fadeIn 0.2s ease-out'
+            }}
+          />
+          
+          {/* Drawer */}
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: '500px',
+            maxWidth: '90vw',
+            background: '#09090b',
+            borderLeft: '1px solid rgba(63, 63, 70, 0.5)',
+            boxShadow: '-8px 0 32px rgba(0, 0, 0, 0.6)',
+            zIndex: 1000,
+            display: 'flex',
+            flexDirection: 'column',
+            animation: 'slideInRight 0.3s ease-out'
+          }}>
+            {/* Drawer Header */}
+            <div style={{
+              padding: '1.5rem',
+              borderBottom: '1px solid rgba(63, 63, 70, 0.5)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: 'linear-gradient(to bottom, rgba(39, 39, 42, 0.8), rgba(24, 24, 27, 0.8))'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '1.5rem' }}>📜</span>
+                <div>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: '600', margin: 0 }}>Execution History</h2>
+                  <p style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.6)', margin: '0.25rem 0 0 0' }}>
+                    {history.length} run{history.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setHistoryDrawerOpen(false)}
+                style={{
+                  background: 'rgba(63, 63, 70, 0.5)',
+                  border: '1px solid rgba(63, 63, 70, 0.7)',
+                  borderRadius: '0.5rem',
+                  padding: '0.5rem',
+                  cursor: 'pointer',
+                  color: '#fff',
+                  fontSize: '1.25rem',
+                  width: '2.5rem',
+                  height: '2.5rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(63, 63, 70, 0.8)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(63, 63, 70, 0.5)';
+                  e.currentTarget.style.borderColor = 'rgba(63, 63, 70, 0.7)';
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Clear All Button */}
+            <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid rgba(63, 63, 70, 0.3)', background: 'rgba(24, 24, 27, 0.5)' }}>
+              <button 
+                onClick={handleClearHistory}
+                style={{ 
+                  width: '100%',
+                  padding: '0.75rem 1rem', 
+                  background: 'rgba(239, 68, 68, 0.1)', 
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fca5a5',
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)';
+                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+                }}
+              >
+                <span>🗑️</span>
+                Clear All History
+              </button>
+            </div>
+
+            {/* Drawer Content */}
+            <div style={{ 
+              flex: 1, 
+              overflowY: 'auto',
+              padding: '1rem 1.5rem',
+              background: '#09090b'
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {history.slice(0, 20).map((execution) => (
+                  <div
+                    key={execution.id}
+                    style={{
+                      background: execution.success 
+                        ? 'linear-gradient(to right, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.05))'
+                        : 'linear-gradient(to right, rgba(239, 68, 68, 0.1), rgba(239, 68, 68, 0.05))',
+                      border: `1px solid ${execution.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                      borderLeft: `3px solid ${execution.success ? '#22c55e' : '#ef4444'}`,
+                      borderRadius: '0.5rem',
+                      padding: '1rem',
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    {/* Header with timestamp and status */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ fontSize: '1rem' }}>🕐</span>
+                        <span style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.7)', fontWeight: '500' }}>
+                          {new Date(execution.timestamp).toLocaleString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      </div>
+                      <div style={{ 
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.375rem',
+                        padding: '0.25rem 0.75rem',
+                        background: execution.success ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                        borderRadius: '1rem',
+                        fontSize: '0.75rem',
+                        fontWeight: '600',
+                        color: execution.success ? '#86efac' : '#fca5a5'
+                      }}>
+                        {execution.success ? '✓ Success' : '✗ Failed'}
+                      </div>
+                    </div>
+
+                    {/* Parameters preview */}
+                    <div style={{ marginBottom: '0.75rem' }}>
+                      <div style={{ 
+                        fontSize: '0.75rem', 
+                        color: 'rgba(255, 255, 255, 0.5)', 
+                        marginBottom: '0.5rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        fontWeight: '600'
+                      }}>
+                        Parameters
+                      </div>
+                      <div style={{ 
+                        background: 'rgba(0, 0, 0, 0.25)',
+                        padding: '0.75rem',
+                        borderRadius: '0.375rem',
+                        border: '1px solid rgba(255, 255, 255, 0.05)'
+                      }}>
+                        <pre style={{ 
+                          margin: 0,
+                          fontSize: '0.8rem',
+                          overflow: 'auto',
+                          maxHeight: '120px',
+                          color: '#e5e7eb',
+                          lineHeight: '1.5'
+                        }}>
+                          {JSON.stringify(execution.arguments, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+
+                    {/* Action button */}
+                    <button
+                      onClick={() => {
+                        handleLoadFromHistory(execution.id);
+                        setHistoryDrawerOpen(false);
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '0.625rem 1rem',
+                        background: '#fff',
+                        color: '#000',
+                        border: 'none',
+                        borderRadius: '0.375rem',
+                        fontSize: '0.875rem',
+                        fontWeight: '600',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#f4f4f5';
+                        e.currentTarget.style.transform = 'scale(1.02)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#fff';
+                        e.currentTarget.style.transform = 'scale(1)';
+                      }}
+                    >
+                      <span>↻</span>
+                      Load Parameters
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <style>{`
+            @keyframes fadeIn {
+              from { opacity: 0; }
+              to { opacity: 1; }
+            }
+            @keyframes slideInRight {
+              from { transform: translateX(100%); }
+              to { transform: translateX(0); }
+            }
+          `}</style>
+        </>
+      )}
+
       <Footer />
     </div>
   );
