@@ -6,7 +6,7 @@ that routes to different providers (Replicate, vLLM) based on model configuratio
 """
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import Mock, AsyncMock, patch
 from fastapi.testclient import TestClient
 from fastapi import FastAPI, HTTPException
 

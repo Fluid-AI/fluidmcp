@@ -245,7 +245,7 @@ async def replicate_chat_completion(
 
             elif status == "canceled":
                 logger.warning(f"Prediction {prediction_id} was canceled")
-                raise HTTPException(499, "Prediction was canceled")
+                raise HTTPException(409, "Prediction was canceled by the upstream provider")
 
             # Still processing, wait before next poll
             await asyncio.sleep(poll_interval)
