@@ -17,6 +17,7 @@ import os
 import asyncio
 import httpx
 import time
+import json
 
 from ..services.llm_provider_registry import get_model_type, get_model_config
 from ..services.replicate_openai_adapter import replicate_chat_completion
@@ -1493,9 +1494,15 @@ async def unified_chat_completions(
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            error_text = e.response.text
-            if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
-                error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+            # Read error body with size limit to avoid buffering entire response
+            try:
+                error_bytes = await e.response.aread()
+                error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                    error_text += "... [truncated]"
+            except Exception:
+                error_text = str(e)
+
             logger.error(f"vLLM returned error {e.response.status_code}: {error_text}")
             raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
         except httpx.RequestError as e:
@@ -1589,9 +1596,15 @@ async def unified_completions(
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            error_text = e.response.text
-            if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
-                error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+            # Read error body with size limit to avoid buffering entire response
+            try:
+                error_bytes = await e.response.aread()
+                error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                    error_text += "... [truncated]"
+            except Exception:
+                error_text = str(e)
+
             raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
         except httpx.RequestError as e:
             raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
