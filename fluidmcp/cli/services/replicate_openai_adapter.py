@@ -7,6 +7,7 @@ and vice versa, enabling unified API access across providers.
 
 import time
 import asyncio
+import httpx
 import json
 from typing import Dict, Any, List
 from loguru import logger
@@ -188,9 +189,27 @@ async def replicate_chat_completion(
         prediction = await client.predict(input_data=replicate_input)
         prediction_id = prediction.get("id")
         logger.info(f"Created Replicate prediction {prediction_id} for model '{model_id}'")
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code if e.response is not None else 502
+        upstream_request_id = (
+            e.response.headers.get("x-request-id")
+            if e.response is not None
+            else None
+        )
+        log_msg = f"Replicate upstream HTTP error {status_code}"
+        if upstream_request_id:
+            log_msg += f" (request_id={upstream_request_id})"
+        logger.error(f"{log_msg}: {e}")
+        message = "Replicate upstream error"
+        if upstream_request_id:
+            message += f" (request_id={upstream_request_id})"
+        raise HTTPException(status_code, message)
+    except httpx.RequestError as e:
+        logger.error(f"Failed to connect to Replicate upstream service: {e}")
+        raise HTTPException(502, "Failed to connect to Replicate upstream service")
     except Exception as e:
         logger.error(f"Failed to create Replicate prediction for '{model_id}': {e}")
-        raise HTTPException(500, f"Failed to create prediction: {str(e)}")
+        raise HTTPException(500, "Failed to create prediction")
 
     # Poll until prediction completes (with timeout)
     start_time = time.time()
@@ -230,9 +249,27 @@ async def replicate_chat_completion(
 
         except HTTPException:
             raise
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code if e.response is not None else 502
+            upstream_request_id = (
+                e.response.headers.get("x-request-id")
+                if e.response is not None
+                else None
+            )
+            log_msg = f"Replicate upstream HTTP error {status_code} while polling {prediction_id}"
+            if upstream_request_id:
+                log_msg += f" (request_id={upstream_request_id})"
+            logger.error(f"{log_msg}: {e}")
+            message = "Error checking prediction status"
+            if upstream_request_id:
+                message += f" (request_id={upstream_request_id})"
+            raise HTTPException(status_code, message)
+        except httpx.RequestError as e:
+            logger.error(f"Failed to connect to Replicate while polling {prediction_id}: {e}")
+            raise HTTPException(502, "Failed to connect to Replicate upstream service")
         except Exception as e:
             logger.error(f"Error polling prediction {prediction_id}: {e}")
-            raise HTTPException(500, f"Error checking prediction status: {str(e)}")
+            raise HTTPException(500, "Error checking prediction status")
 
 
 async def replicate_chat_completion_stream(
@@ -285,9 +322,44 @@ async def replicate_chat_completion_stream(
         prediction = await client.predict(input_data=replicate_input)
         prediction_id = prediction.get("id")
         logger.info(f"Created streaming prediction {prediction_id} for model '{model_id}'")
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code if e.response is not None else 502
+        upstream_request_id = (
+            e.response.headers.get("x-request-id")
+            if e.response is not None
+            else None
+        )
+        log_msg = f"Replicate upstream HTTP error {status_code}"
+        if upstream_request_id:
+            log_msg += f" (request_id={upstream_request_id})"
+        logger.error(f"{log_msg}: {e}")
+        # Yield error as SSE
+        error_msg = f"Replicate upstream error (HTTP {status_code})"
+        if upstream_request_id:
+            error_msg += f" (request_id={upstream_request_id})"
+        error_chunk = {
+            "error": {
+                "message": error_msg,
+                "type": "upstream_error",
+                "code": "prediction_creation_failed"
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        return
+    except httpx.RequestError as e:
+        logger.error(f"Failed to connect to Replicate upstream service: {e}")
+        error_chunk = {
+            "error": {
+                "message": "Failed to connect to Replicate upstream service",
+                "type": "connection_error",
+                "code": "prediction_creation_failed"
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        return
     except Exception as e:
         logger.error(f"Failed to create streaming prediction for '{model_id}': {e}")
-        # Yield error as SSE
+        # Yield error as SSE - keep message for non-HTTP errors (debugging/testing)
         error_chunk = {
             "error": {
                 "message": f"Failed to create prediction: {str(e)}",

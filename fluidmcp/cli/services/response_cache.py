@@ -151,61 +151,48 @@ class ResponseCache:
         if cached is not None:
             return cached
 
-        # Check if another task is already fetching this key
-        future_to_await = None
+        # Single critical section to either reuse or register an in-flight fetch
+        created_future = False
+        future = None
         async with self._lock:
-            if key in self._in_flight:
-                # Another task is fetching - wait for it
-                future_to_await = self._in_flight[key]
-                logger.debug(f"Waiting for in-flight fetch: {key[:16]}...")
-
-        # If there was an in-flight fetch, wait for it outside the lock
-        if future_to_await:
-            try:
-                return await future_to_await
-            except Exception:
-                # In-flight fetch failed - fall through to try again
-                pass
-
-        # No in-flight fetch or it failed - we need to fetch
-        async with self._lock:
-            # Double-check: another task may have started fetching after we checked
-            if key in self._in_flight:
-                future_to_await = self._in_flight[key]
-
-        if future_to_await:
-            return await future_to_await
-
-        # Still no in-flight fetch - create one
-        async with self._lock:
-            # Triple-check cache (another task may have completed while we waited for lock)
+            # Another task may have completed the fetch while we waited for the lock
             if key in self._cache:
                 entry = self._cache[key]
                 if not self._is_expired(entry):
                     return entry["value"]
 
-            # Create a future to track this fetch
-            future = asyncio.Future()
-            self._in_flight[key] = future
+            future = self._in_flight.get(key)
+            if future is None:
+                # First task to start fetching for this key: create and register future
+                future = asyncio.get_event_loop().create_future()
+                self._in_flight[key] = future
+                created_future = True
+                logger.debug(f"Starting new fetch for key: {key[:16]}...")
+            else:
+                logger.debug(f"Waiting for in-flight fetch: {key[:16]}...")
 
-        # Fetch outside the lock
+        if not created_future:
+            # Another task is already fetching; just await its result
+            return await future
+
+        # This task is responsible for performing the fetch
         try:
             value = await fetch_fn()
             await self.set(key, value)
 
             # Mark future as done
             async with self._lock:
-                if key in self._in_flight:
-                    self._in_flight[key].set_result(value)
-                    del self._in_flight[key]
+                in_flight_future = self._in_flight.pop(key, None)
+                if in_flight_future is not None and not in_flight_future.done():
+                    in_flight_future.set_result(value)
 
             return value
         except Exception as e:
             # Mark future as failed and remove from in-flight
             async with self._lock:
-                if key in self._in_flight:
-                    self._in_flight[key].set_exception(e)
-                    del self._in_flight[key]
+                in_flight_future = self._in_flight.pop(key, None)
+                if in_flight_future is not None and not in_flight_future.done():
+                    in_flight_future.set_exception(e)
             raise
 
     async def invalidate(self, data: Any) -> bool:
