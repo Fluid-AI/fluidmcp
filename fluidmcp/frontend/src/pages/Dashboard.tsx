@@ -94,11 +94,9 @@ export default function Dashboard() {
     type: 'starting' | 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
 
-  const handleStartServer = useCallback(async (serverId: string) => {
+  const handleStartServer = useCallback(async (serverId: string, serverName: string) => {
     if (actionState.type !== null) return;
 
-    const server = servers.find(s => s.id === serverId);
-    const serverName = server?.name || serverId;
     const toastId = `server-${serverId}`;
 
     setActionState({ serverId, type: 'starting' });
@@ -112,7 +110,7 @@ export default function Dashboard() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  }, [actionState.type, servers, startServer]);
+  }, [actionState.type, startServer]);
 
   if (loading) {
     return (
@@ -395,7 +393,7 @@ export default function Dashboard() {
                   >
                     <ServerCard
                       server={server}
-                      onStart={() => handleStartServer(server.id)}
+                      onStart={() => handleStartServer(server.id, server.name)}
                       onViewDetails={() => navigate(`/servers/${server.id}`)}
                       isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
                     />

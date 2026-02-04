@@ -47,6 +47,11 @@ class ServerManager:
         # Health checker for process validation
         self.health_checker = HealthChecker()
 
+        # Stale PID update cache to throttle database writes
+        # Maps server_id -> last_update_timestamp
+        self._stale_pid_updates: Dict[str, float] = {}
+        self._stale_pid_cache_ttl = 30.0  # seconds
+
         # Register cleanup handlers
         atexit.register(self._cleanup_on_exit)
 
@@ -170,6 +175,9 @@ class ServerManager:
             # Store process
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
+
+            # Clear stale PID cache entry (if any) since server is now running
+            self._stale_pid_updates.pop(id, None)
 
             # Save state to database with user tracking
             await self.db.save_instance_state({
@@ -463,15 +471,41 @@ class ServerManager:
             if state == "running" and pid:
                 is_alive, error_msg = self.health_checker.check_process_alive(pid)
                 if not is_alive:
+                    # Check if we recently updated this stale PID (throttling)
+                    current_time = time.time()
+                    last_update = self._stale_pid_updates.get(id, 0)
+
+                    if current_time - last_update < self._stale_pid_cache_ttl:
+                        # Return cached failed status without database write
+                        logger.debug(f"Server {id} stale PID {pid} cached, skipping DB update")
+                        return {
+                            "id": id,
+                            "state": "failed",
+                            "pid": None,
+                            "uptime": None,
+                            "restart_count": instance.get("restart_count", 0),
+                            "exit_code": -1
+                        }
+
                     logger.warning(f"Server {id} has stale PID {pid}: {error_msg}. Updating state to 'failed'.")
-                    # Update database with corrected state
-                    await self.db.save_instance_state({
+                    # Update database with corrected state using optimistic locking
+                    # Only update if PID hasn't changed (prevents race condition)
+                    success = await self.db.save_instance_state({
                         "server_id": id,
                         "state": "failed",
                         "pid": None,
                         "exit_code": -1,  # Unknown exit code for stale PID
                         "updated_at": datetime.utcnow()
-                    })
+                    }, expected_pid=pid)
+
+                    # If optimistic lock failed, PID changed - re-fetch status
+                    if not success:
+                        logger.debug(f"Server {id} PID changed during stale check, re-fetching status")
+                        return await self.get_server_status(id)
+
+                    # Cache the update timestamp
+                    self._stale_pid_updates[id] = current_time
+
                     # Return corrected status
                     return {
                         "id": id,

@@ -456,6 +456,8 @@ export const ToolRunner: React.FC = () => {
           </div>
         )}
         </div>
+      </ErrorBoundary>
+        </div>
       </div>
 
       {/* Execution History Drawer */}
@@ -707,9 +709,6 @@ export const ToolRunner: React.FC = () => {
           `}</style>
         </>
       )}
-
-        </div>
-      </ErrorBoundary>
 
       <Footer />
     </div>
