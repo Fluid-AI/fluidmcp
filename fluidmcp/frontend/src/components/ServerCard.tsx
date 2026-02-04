@@ -109,7 +109,7 @@ export default function ServerCard({
             <button
               onClick={onStart}
               disabled={isStarting}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white rounded-lg font-medium transition-all duration-200 hover:shadow-lg hover:shadow-green-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white hover:bg-zinc-100 text-black rounded-lg font-medium transition-all duration-200 hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-4 h-4" />
               <span>{isStarting ? "Starting..." : "Start"}</span>
@@ -117,7 +117,7 @@ export default function ServerCard({
           )}
           <button
             onClick={onViewDetails}
-            className={`${isStopped ? 'flex-1' : 'w-full'} px-4 py-2 bg-zinc-800/50 border border-zinc-600/50 hover:bg-zinc-700/50 text-white rounded-lg font-medium transition-all duration-200`}
+            className={`${isStopped ? 'flex-1' : 'w-full'} px-4 py-2 bg-white hover:bg-zinc-100 text-black rounded-lg font-medium transition-all duration-200`}
           >
             Details
           </button>
