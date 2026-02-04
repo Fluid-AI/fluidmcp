@@ -1403,7 +1403,19 @@ async def unified_chat_completions(
     if provider_type == "replicate":
         # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
         timeout = request_body.get("timeout", 300)
-        return await replicate_chat_completion(model_id, request_body, timeout)
+        is_streaming = request_body.get("stream", False)
+
+        if is_streaming:
+            # Import streaming function
+            from ..services.replicate_openai_adapter import replicate_chat_completion_stream
+            # Return streaming response
+            return StreamingResponse(
+                replicate_chat_completion_stream(model_id, request_body, timeout),
+                media_type="text/event-stream"
+            )
+        else:
+            # Non-streaming request
+            return await replicate_chat_completion(model_id, request_body, timeout)
 
     elif provider_type == "vllm":
         # Proxy to vLLM's native OpenAI-compatible endpoint
