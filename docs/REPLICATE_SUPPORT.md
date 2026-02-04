@@ -14,7 +14,6 @@ FluidMCP supports running AI models via **Replicate's cloud API**, enabling infe
 - HTTP client for Replicate API
 - Automatic retry logic and error handling
 - Health monitoring
-- Streaming support
 - Model lifecycle management
 
 ## Key Features
@@ -24,7 +23,6 @@ FluidMCP supports running AI models via **Replicate's cloud API**, enabling infe
 ✅ **Simple setup** - Just API key needed
 ✅ **Wide model selection** - Access to Meta Llama, Mistral, CodeLlama, Stable Diffusion, and thousands more
 ✅ **Automatic retries** - Built-in error recovery
-✅ **Streaming support** - Real-time output generation
 
 ## Quick Start
 
@@ -297,20 +295,9 @@ POST /api/llm/{model_id}/v1/chat/completions
 }
 ```
 
-### Streaming Responses
-Set `"stream": true` in the request:
+### Streaming Not Supported
 
-```bash
-curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama-2-70b",
-    "messages": [{"role": "user", "content": "Tell me a story"}],
-    "stream": true
-  }'
-```
-
-**Note**: Replicate doesn't support true streaming yet. FluidMCP polls the prediction and returns the complete response when ready.
+Replicate models do not support streaming responses. Requests with `"stream": true` will return HTTP 501 (Not Implemented) due to Replicate's polling-based API architecture. For real-time streaming requirements, use vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
 ### Using with OpenAI Python Client
 

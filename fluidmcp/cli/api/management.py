@@ -24,6 +24,9 @@ from ..services.replicate_openai_adapter import replicate_chat_completion
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
+# Constants
+MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
+
 # Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None
 
@@ -1445,14 +1448,26 @@ async def unified_chat_completions(
             # Return streaming response using shared client
             http_client = _get_http_client()
             async def stream_generator():
-                async with http_client.stream(
-                    "POST",
-                    f"{base_url}/chat/completions",
-                    json=request_body
-                ) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        f"{base_url}/chat/completions",
+                        json=request_body
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+                except httpx.HTTPStatusError as e:
+                    error_text = e.response.text if hasattr(e.response, 'text') else str(e)
+                    if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
+                        error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+                    logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+                    # Emit SSE error event
+                    yield f"event: error\ndata: {{\"error\": \"vLLM error: {error_text}\", \"status\": {e.response.status_code}}}\n\n".encode()
+                except httpx.RequestError as e:
+                    logger.error(f"vLLM streaming connection error: {e}")
+                    # Emit SSE error event
+                    yield f"event: error\ndata: {{\"error\": \"Failed to connect to vLLM server: {str(e)}\"}}\n\n".encode()
 
             return StreamingResponse(
                 stream_generator(),
@@ -1469,8 +1484,11 @@ async def unified_chat_completions(
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            logger.error(f"vLLM returned error {e.response.status_code}: {e.response.text}")
-            raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
+            error_text = e.response.text
+            if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
+                error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+            logger.error(f"vLLM returned error {e.response.status_code}: {error_text}")
+            raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to vLLM: {e}")
             raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
@@ -1517,14 +1535,26 @@ async def unified_completions(
             # Return streaming response using shared client
             http_client = _get_http_client()
             async def stream_generator():
-                async with http_client.stream(
-                    "POST",
-                    f"{base_url}/completions",
-                    json=request_body
-                ) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        f"{base_url}/completions",
+                        json=request_body
+                    ) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+                except httpx.HTTPStatusError as e:
+                    error_text = e.response.text if hasattr(e.response, 'text') else str(e)
+                    if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
+                        error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+                    logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+                    # Emit SSE error event
+                    yield f"event: error\ndata: {{\"error\": \"vLLM error: {error_text}\", \"status\": {e.response.status_code}}}\n\n".encode()
+                except httpx.RequestError as e:
+                    logger.error(f"vLLM streaming connection error: {e}")
+                    # Emit SSE error event
+                    yield f"event: error\ndata: {{\"error\": \"Failed to connect to vLLM server: {str(e)}\"}}\n\n".encode()
 
             return StreamingResponse(
                 stream_generator(),
@@ -1541,7 +1571,10 @@ async def unified_completions(
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            raise HTTPException(e.response.status_code, f"vLLM error: {e.response.text}")
+            error_text = e.response.text
+            if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
+                error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+            raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
         except httpx.RequestError as e:
             raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
 
