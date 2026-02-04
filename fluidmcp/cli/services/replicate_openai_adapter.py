@@ -12,6 +12,7 @@ from typing import Dict, Any, List
 from loguru import logger
 
 from .replicate_client import get_replicate_client
+from ..utils.error_utils import truncate_error_message
 
 
 def openai_messages_to_prompt(messages: List[Dict[str, str]]) -> str:
@@ -248,8 +249,10 @@ async def replicate_chat_completion(
 
             elif status == "failed":
                 error = status_result.get("error", "Unknown error")
+                # Truncate error to prevent information leakage
+                error_truncated = truncate_error_message(error)
                 logger.error(f"Prediction {prediction_id} failed: {error}")
-                raise HTTPException(500, f"Prediction failed: {error}")
+                raise HTTPException(500, f"Prediction failed: {error_truncated}")
 
             elif status == "canceled":
                 logger.warning(f"Prediction {prediction_id} was canceled")

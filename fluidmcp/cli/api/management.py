@@ -32,22 +32,6 @@ MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to
 _http_client: Optional[httpx.AsyncClient] = None
 
 
-def truncate_error_message(msg: str, max_len: int = MAX_ERROR_MESSAGE_LENGTH) -> str:
-    """
-    Truncate error messages to prevent information leakage and client issues.
-
-    Args:
-        msg: Error message to truncate
-        max_len: Maximum length (default: MAX_ERROR_MESSAGE_LENGTH)
-
-    Returns:
-        Truncated message with indicator if truncated
-    """
-    if len(msg) <= max_len:
-        return msg
-    return msg[:max_len] + "... [truncated]"
-
-
 def _get_http_client() -> httpx.AsyncClient:
     """
     Get or create the shared HTTP client (lazy initialization).
