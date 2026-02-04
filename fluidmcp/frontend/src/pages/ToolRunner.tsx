@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { apiClient } from '../services/api';
 import { useToolRunner } from '../hooks/useToolRunner';
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
@@ -7,6 +7,7 @@ import { ToolResult } from '../components/result/ToolResult';
 import type { Server, Tool } from '../types/server';
 import './ToolRunner.css';
 import { Footer } from '@/components/Footer';
+import { Skeleton } from '@/components/ui/skeleton';
 
 export const ToolRunner: React.FC = () => {
   const { serverId, toolName } = useParams<{ serverId: string; toolName: string }>();
@@ -107,8 +108,69 @@ export const ToolRunner: React.FC = () => {
   // Loading state
   if (loadingServer) {
     return (
-      <div className="tool-runner-container">
-        <div className="loading">Loading tool details...</div>
+      <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        {/* Navbar */}
+        <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
+          <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
+            <div className="flex items-center space-x-8">
+              <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
+                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
+              </Link>
+              <nav className="hidden md:flex items-center space-x-1 text-sm">
+                <Link 
+                  to="/servers" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
+                >
+                  Servers
+                </Link>
+                <Link 
+                  to="/status" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  Status
+                </Link>
+                <a 
+                  href="#" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  Documentation
+                </a>
+              </nav>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button 
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                Fluid MCP for your Enterprise
+              </button>
+              <button 
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                </svg>
+                Report Issue
+              </button>
+            </div>
+          </div>
+        </header>
+        <div style={{ paddingTop: '64px', flex: 1 }}>
+          <header className="dashboard-header">
+            <Skeleton className="h-8 w-64 mb-4" />
+            <Skeleton className="h-6 w-96 mb-2" />
+          </header>
+          <section className="dashboard-section">
+            <Skeleton className="h-96 w-full" />
+          </section>
+        </div>
+        <Footer />
       </div>
     );
   }
@@ -116,48 +178,176 @@ export const ToolRunner: React.FC = () => {
   // Error state
   if (loadingError || !server || !tool) {
     return (
-      <div className="tool-runner-container">
-        <div className="error-box">
-          <h2>Error</h2>
-          <p>{loadingError || 'Failed to load server or tool'}</p>
-          <button onClick={() => navigate('/dashboard')} className="btn-secondary">
-            Back to Dashboard
-          </button>
+      <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        {/* Navbar */}
+        <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
+          <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
+            <div className="flex items-center space-x-8">
+              <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
+                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
+              </Link>
+              <nav className="hidden md:flex items-center space-x-1 text-sm">
+                <Link 
+                  to="/servers" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
+                >
+                  Servers
+                </Link>
+                <Link 
+                  to="/status" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  Status
+                </Link>
+                <a 
+                  href="#" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  Documentation
+                </a>
+              </nav>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button 
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                Fluid MCP for your Enterprise
+              </button>
+              <button 
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                </svg>
+                Report Issue
+              </button>
+            </div>
+          </div>
+        </header>
+        <div style={{ paddingTop: '64px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <div className="error-box" style={{ maxWidth: '600px', margin: '0 auto', padding: '2rem', textAlign: 'center' }}>
+            <h2>Error</h2>
+            <p>{loadingError || 'Failed to load server or tool'}</p>
+            <button 
+              onClick={() => navigate('/servers')} 
+              className="px-4 py-2 bg-white hover:bg-zinc-100 text-black rounded-lg font-medium transition-all duration-200 mt-4"
+            >
+              Back to Servers
+            </button>
+          </div>
         </div>
+        <Footer />
       </div>
     );
   }
 
   return (
-    <div className="tool-runner-container">
-      {/* Header */}
-      <div className="tool-runner-header">
-        <div className="breadcrumb">
-          <span className="breadcrumb-item" onClick={() => navigate('/dashboard')}>
-            Dashboard
-          </span>
-          <span className="breadcrumb-separator">&gt;</span>
-          <span
-            className="breadcrumb-item"
-            onClick={() => navigate(`/servers/${serverId}`)}
-          >
-            {server.name}
-          </span>
-          <span className="breadcrumb-separator">&gt;</span>
-          <span className="breadcrumb-item active">{tool.name}</span>
+    <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      {/* Navbar */}
+      <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
+        <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
+          <div className="flex items-center space-x-8">
+            <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
+              <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
+            </Link>
+            <nav className="hidden md:flex items-center space-x-1 text-sm">
+              <Link 
+                to="/servers" 
+                className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
+              >
+                Servers
+              </Link>
+              <Link 
+                to="/status" 
+                className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+              >
+                Status
+              </Link>
+              <a 
+                href="#" 
+                className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+              >
+                Documentation
+              </a>
+            </nav>
+          </div>
+          <div className="flex items-center space-x-3">
+            <button 
+              style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+              </svg>
+              Fluid MCP for your Enterprise
+            </button>
+            <button 
+              style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+              </svg>
+              Report Issue
+            </button>
+          </div>
         </div>
+      </header>
 
-        <h1>{tool.name}</h1>
-        {tool.description && <p className="tool-description">{tool.description}</p>}
-      </div>
+      <div style={{ paddingTop: '64px', flex: 1 }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem' }}>
+          {/* Breadcrumb */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.6)' }}>
+            <span 
+              onClick={() => navigate('/servers')} 
+              style={{ cursor: 'pointer', transition: 'color 0.2s' }}
+              onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+              onMouseLeave={(e) => e.currentTarget.style.color = 'rgba(255, 255, 255, 0.6)'}
+            >
+              Servers
+            </span>
+            <span>&gt;</span>
+            <span
+              onClick={() => navigate(`/servers/${serverId}`)}
+              style={{ cursor: 'pointer', transition: 'color 0.2s' }}
+              onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+              onMouseLeave={(e) => e.currentTarget.style.color = 'rgba(255, 255, 255, 0.6)'}
+            >
+              {server.name}
+            </span>
+            <span>&gt;</span>
+            <span style={{ color: '#fff' }}>{tool.name}</span>
+          </div>
+
+          {/* Page Header */}
+          <div style={{ marginBottom: '2rem' }}>
+            <h1 style={{ fontSize: '2rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>{tool.name}</h1>
+            {tool.description && (
+              <p style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: '1rem' }}>{tool.description}</p>
+            )}
+          </div>
 
       {/* Main Content */}
-      <div className="tool-runner-content">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
         {/* Left Column: Form and History */}
-        <div className="tool-runner-left">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           {/* Parameters Form */}
-          <div className="tool-runner-section">
-            <h2>Parameters</h2>
+          <div style={{ 
+            background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
+            border: '1px solid rgba(63, 63, 70, 0.5)',
+            borderRadius: '0.75rem',
+            padding: '1.5rem'
+          }}>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>Parameters</h2>
             {tool.inputSchema ? (
               <JsonSchemaForm
                 schema={tool.inputSchema}
@@ -167,12 +357,12 @@ export const ToolRunner: React.FC = () => {
                 loading={executing}
               />
             ) : (
-              <div className="no-parameters">
-                <p>This tool has no parameters</p>
+              <div style={{ textAlign: 'center', padding: '2rem' }}>
+                <p style={{ marginBottom: '1rem', color: 'rgba(255, 255, 255, 0.6)' }}>This tool has no parameters</p>
                 <button
                   onClick={() => handleSubmit({})}
                   disabled={executing}
-                  className="btn-primary"
+                  className="px-6 py-2 bg-white hover:bg-zinc-100 text-black rounded-lg font-medium transition-all duration-200"
                 >
                   {executing ? 'Running...' : 'Run Tool'}
                 </button>
@@ -182,48 +372,93 @@ export const ToolRunner: React.FC = () => {
 
           {/* Execution History */}
           {history.length > 0 && (
-            <div className="tool-runner-section">
-              <div className="section-header">
-                <h2>Execution History</h2>
-                <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ 
+              background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
+              border: '1px solid rgba(63, 63, 70, 0.5)',
+              borderRadius: '0.75rem',
+              padding: '1.5rem'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: '600' }}>Execution History</h2>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button
                     onClick={() => setHistoryCollapsed(!historyCollapsed)}
-                    className="btn-text"
+                    style={{ 
+                      padding: '0.5rem 1rem', 
+                      background: 'transparent', 
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      borderRadius: '0.375rem',
+                      color: '#fff',
+                      fontSize: '0.875rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                     title={historyCollapsed ? 'Expand history' : 'Collapse history'}
                   >
                     {historyCollapsed ? 'Expand ▼' : 'Collapse ▲'}
                   </button>
-                  <button onClick={handleClearHistory} className="btn-text">
+                  <button 
+                    onClick={handleClearHistory}
+                    style={{ 
+                      padding: '0.5rem 1rem', 
+                      background: 'transparent', 
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                      borderRadius: '0.375rem',
+                      color: '#fff',
+                      fontSize: '0.875rem',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
                     Clear All
                   </button>
                 </div>
               </div>
 
               {!historyCollapsed && (
-                <div className="history-list">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   {history.slice(0, 10).map((execution) => (
                     <div
                       key={execution.id}
-                      className={`history-item ${execution.success ? 'success' : 'failed'}`}
+                      style={{
+                        background: execution.success ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                        border: `1px solid ${execution.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                        borderRadius: '0.5rem',
+                        padding: '1rem'
+                      }}
                     >
-                      <div className="history-item-header">
-                        <span className="history-timestamp">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <span style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)' }}>
                           {new Date(execution.timestamp).toLocaleString()}
                         </span>
-                        <span className={`history-status ${execution.success ? 'success' : 'failed'}`}>
+                        <span style={{ 
+                          fontSize: '1.25rem',
+                          color: execution.success ? '#22c55e' : '#ef4444'
+                        }}>
                           {execution.success ? '✓' : '✗'}
                         </span>
                       </div>
 
-                      <div className="history-item-details">
-                        <pre className="history-args">
+                      <div style={{ marginBottom: '0.75rem' }}>
+                        <pre style={{ 
+                          background: 'rgba(0, 0, 0, 0.3)',
+                          padding: '0.75rem',
+                          borderRadius: '0.375rem',
+                          fontSize: '0.875rem',
+                          overflow: 'auto',
+                          maxHeight: '150px'
+                        }}>
                           {JSON.stringify(execution.arguments, null, 2)}
                         </pre>
                       </div>
 
                       <button
                         onClick={() => handleLoadFromHistory(execution.id)}
-                        className="btn-load-history"
+                        className="px-4 py-1.5 bg-white hover:bg-zinc-100 text-black rounded-md text-sm font-medium transition-all duration-200"
                       >
                         Load
                       </button>
@@ -237,7 +472,13 @@ export const ToolRunner: React.FC = () => {
 
         {/* Right Column: Results */}
         {(result !== null || executionError) && (
-          <div className="tool-runner-right">
+          <div style={{ 
+            background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
+            border: '1px solid rgba(63, 63, 70, 0.5)',
+            borderRadius: '0.75rem',
+            padding: '1.5rem',
+            height: 'fit-content'
+          }}>
             <ToolResult
               result={result}
               error={executionError || undefined}
@@ -247,8 +488,8 @@ export const ToolRunner: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* Footer */}
+        </div>
+      </div>
       <Footer />
     </div>
   );

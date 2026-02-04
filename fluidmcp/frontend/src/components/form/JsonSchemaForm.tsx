@@ -105,7 +105,12 @@ export const JsonSchemaForm: React.FC<JsonSchemaFormProps> = ({
       })}
 
       <div className="form-actions">
-        <button type="submit" className="btn-primary" disabled={loading}>
+        <button 
+          type="submit" 
+          className="px-6 py-2 bg-white hover:bg-zinc-100 text-black rounded-lg font-medium transition-all duration-200" 
+          disabled={loading}
+          style={{ opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
+        >
           {loading ? 'Loading...' : submitLabel}
         </button>
       </div>
