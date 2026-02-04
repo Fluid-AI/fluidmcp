@@ -4,7 +4,6 @@ Tests for response caching layer.
 
 import pytest
 import asyncio
-import time
 from fluidmcp.cli.services.response_cache import ResponseCache, get_response_cache, clear_response_cache
 
 

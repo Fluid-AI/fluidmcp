@@ -10,7 +10,7 @@ Run with: pytest tests/test_replicate_integration.py -v -m integration
 import pytest
 import os
 import asyncio
-from fluidmcp.cli.services.replicate_client import ReplicateClient, get_replicate_client
+from fluidmcp.cli.services.replicate_client import ReplicateClient
 from fluidmcp.cli.services.replicate_openai_adapter import (
     replicate_chat_completion,
     openai_messages_to_prompt,
@@ -247,9 +247,8 @@ class TestReplicateStreamingIntegration:
         # Should have [DONE] marker
         assert any("data: [DONE]" in chunk for chunk in chunks)
 
-        # Should have content chunks
-        content_chunks = [c for c in chunks if "delta" in c and "content" in c]
-        # Note: May or may not have content depending on polling timing
+        # Should have content chunks (may vary based on polling timing)
+        assert any("delta" in c and "content" in c for c in chunks)
 
     async def test_streaming_error_handling(self):
         """Test that streaming handles errors correctly."""

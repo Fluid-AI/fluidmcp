@@ -82,6 +82,9 @@ class ReplicateClient:
         self.timeout = config.get("timeout", DEFAULT_TIMEOUT)
         self.max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
 
+        # Store rate limit config for later initialization (after event loop is running)
+        self.rate_limit_config = config.get("rate_limit", {})
+
         # Initialize HTTP client
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -439,6 +442,21 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
 
             # Run health check
             if await client.health_check():
+                # Configure rate limiter if specified
+                try:
+                    rate_limit_config = getattr(client, 'rate_limit_config', {})
+                    if rate_limit_config and isinstance(rate_limit_config, dict):
+                        from .rate_limiter import configure_rate_limiter
+                        requests_per_second = rate_limit_config.get("requests_per_second", 10)
+                        burst_capacity = rate_limit_config.get("burst_capacity", 20)
+                        await configure_rate_limiter(model_id, requests_per_second, burst_capacity)
+                        logger.debug(
+                            f"Configured rate limiter for '{model_id}': "
+                            f"{requests_per_second} req/s, burst {burst_capacity}"
+                        )
+                except Exception as e:
+                    logger.debug(f"Skipping rate limiter configuration for '{model_id}': {e}")
+
                 clients[model_id] = client
                 _replicate_clients[model_id] = client
                 logger.info(f"Successfully initialized Replicate model '{model_id}'")

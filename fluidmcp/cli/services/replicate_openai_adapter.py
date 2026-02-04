@@ -266,6 +266,18 @@ async def replicate_chat_completion_stream(
     # Get Replicate client for this model
     client = get_replicate_client(model_id)
 
+    if client is None:
+        logger.error(f"Replicate model '{model_id}' not found or not initialized")
+        error_chunk = {
+            "error": {
+                "message": f"Model '{model_id}' not found or not initialized. Check configuration and health checks.",
+                "type": "model_not_found",
+                "code": "model_unavailable"
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        return
+
     # Convert OpenAI request to Replicate input
     replicate_input = openai_to_replicate_input(openai_request)
     logger.debug(f"Starting streaming prediction for '{model_id}'")

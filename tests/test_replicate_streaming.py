@@ -6,7 +6,6 @@ Replicate predictions and yields OpenAI-format SSE chunks.
 """
 
 import pytest
-import asyncio
 import json
 from unittest.mock import Mock, AsyncMock, patch
 from fluidmcp.cli.services.replicate_openai_adapter import replicate_chat_completion_stream
