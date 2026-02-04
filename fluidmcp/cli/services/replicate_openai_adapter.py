@@ -85,7 +85,15 @@ def openai_to_replicate_input(openai_request: Dict[str, Any]) -> Dict[str, Any]:
         replicate_input["top_p"] = openai_request["top_p"]
 
     if "stop" in openai_request:
-        replicate_input["stop_sequences"] = openai_request["stop"]
+        # Normalize stop sequences to list (OpenAI allows string or list)
+        stop_value = openai_request["stop"]
+        if isinstance(stop_value, str):
+            replicate_input["stop_sequences"] = [stop_value]
+        elif isinstance(stop_value, list):
+            replicate_input["stop_sequences"] = stop_value
+        else:
+            # Unexpected type, skip (will use model default)
+            pass
 
     return replicate_input
 

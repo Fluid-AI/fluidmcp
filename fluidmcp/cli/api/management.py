@@ -1458,9 +1458,16 @@ async def unified_chat_completions(
                         async for chunk in response.aiter_bytes():
                             yield chunk
                 except httpx.HTTPStatusError as e:
-                    error_text = e.response.text if hasattr(e.response, 'text') else str(e)
-                    if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
-                        error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+                    # Read error body with size limit to avoid buffering entire response
+                    try:
+                        # Read at most MAX_ERROR_MESSAGE_LENGTH bytes from response
+                        error_bytes = await e.response.aread()
+                        error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                        if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                            error_text += "... [truncated]"
+                    except Exception:
+                        error_text = str(e)
+
                     logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
                     # Emit SSE error event with proper JSON escaping
                     error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
@@ -1547,9 +1554,16 @@ async def unified_completions(
                         async for chunk in response.aiter_bytes():
                             yield chunk
                 except httpx.HTTPStatusError as e:
-                    error_text = e.response.text if hasattr(e.response, 'text') else str(e)
-                    if len(error_text) > MAX_ERROR_MESSAGE_LENGTH:
-                        error_text = error_text[:MAX_ERROR_MESSAGE_LENGTH] + "... [truncated]"
+                    # Read error body with size limit to avoid buffering entire response
+                    try:
+                        # Read at most MAX_ERROR_MESSAGE_LENGTH bytes from response
+                        error_bytes = await e.response.aread()
+                        error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                        if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                            error_text += "... [truncated]"
+                    except Exception:
+                        error_text = str(e)
+
                     logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
                     # Emit SSE error event with proper JSON escaping
                     error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
