@@ -5,7 +5,6 @@ import { useToolRunner } from '../hooks/useToolRunner';
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
 import type { Server, Tool } from '../types/server';
-import './ToolRunner.css';
 import { Footer } from '@/components/Footer';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -304,7 +303,12 @@ export const ToolRunner: React.FC = () => {
       </header>
 
       <div style={{ paddingTop: '64px', flex: 1 }}>
-        <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem' }}>
+        <div style={{ 
+          maxWidth: (result !== null || executionError) ? '1600px' : '900px', 
+          margin: '0 auto', 
+          padding: '2rem',
+          transition: 'max-width 0.3s ease'
+        }}>
           {/* Breadcrumb */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.6)' }}>
             <span 
@@ -337,15 +341,21 @@ export const ToolRunner: React.FC = () => {
           </div>
 
       {/* Main Content */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr', gap: '2rem', marginBottom: '2rem' }}>
+      <div style={{ 
+        display: (result !== null || executionError) ? 'grid' : 'block',
+        gridTemplateColumns: (result !== null || executionError) ? '2fr 3fr' : undefined, 
+        gap: '2rem', 
+        marginBottom: '2rem' 
+      }}>
         {/* Left Column: Form and History */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', width: '100%' }}>
           {/* Parameters Form */}
           <div style={{ 
             background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
             border: '1px solid rgba(63, 63, 70, 0.5)',
             borderRadius: '0.75rem',
-            padding: '1.5rem'
+            padding: '1.5rem',
+            width: '100%'
           }}>
             <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>Parameters</h2>
             {tool.inputSchema ? (
@@ -373,13 +383,25 @@ export const ToolRunner: React.FC = () => {
           {/* Execution History */}
           {history.length > 0 && (
             <div style={{ 
-              background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
-              border: '1px solid rgba(63, 63, 70, 0.5)',
+              background: 'linear-gradient(to bottom right, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.08))',
+              border: '1px solid rgba(99, 102, 241, 0.2)',
               borderRadius: '0.75rem',
               padding: '1.5rem'
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: '600' }}>Execution History</h2>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <span style={{ fontSize: '1.5rem' }}>📜</span>
+                  <h2 style={{ fontSize: '1.25rem', fontWeight: '600', margin: 0 }}>Execution History</h2>
+                  <span style={{ 
+                    fontSize: '0.75rem', 
+                    padding: '0.25rem 0.5rem', 
+                    background: 'rgba(99, 102, 241, 0.2)',
+                    borderRadius: '0.25rem',
+                    color: '#a5b4fc'
+                  }}>
+                    {history.length} run{history.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button
                     onClick={() => setHistoryCollapsed(!historyCollapsed)}
@@ -420,47 +442,119 @@ export const ToolRunner: React.FC = () => {
               </div>
 
               {!historyCollapsed && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   {history.slice(0, 10).map((execution) => (
                     <div
                       key={execution.id}
                       style={{
-                        background: execution.success ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                        background: execution.success 
+                          ? 'linear-gradient(to right, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.05))'
+                          : 'linear-gradient(to right, rgba(239, 68, 68, 0.1), rgba(239, 68, 68, 0.05))',
                         border: `1px solid ${execution.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                        borderLeft: `3px solid ${execution.success ? '#22c55e' : '#ef4444'}`,
                         borderRadius: '0.5rem',
-                        padding: '1rem'
+                        padding: '1rem',
+                        transition: 'all 0.2s',
+                        cursor: 'pointer'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'translateX(4px)';
+                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'translateX(0)';
+                        e.currentTarget.style.boxShadow = 'none';
                       }}
                     >
+                      {/* Header with timestamp and status */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                        <span style={{ fontSize: '0.875rem', color: 'rgba(255, 255, 255, 0.7)' }}>
-                          {new Date(execution.timestamp).toLocaleString()}
-                        </span>
-                        <span style={{ 
-                          fontSize: '1.25rem',
-                          color: execution.success ? '#22c55e' : '#ef4444'
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ fontSize: '1rem' }}>🕐</span>
+                          <span style={{ fontSize: '0.8rem', color: 'rgba(255, 255, 255, 0.7)', fontWeight: '500' }}>
+                            {new Date(execution.timestamp).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                        </div>
+                        <div style={{ 
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.375rem',
+                          padding: '0.25rem 0.75rem',
+                          background: execution.success ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          borderRadius: '1rem',
+                          fontSize: '0.75rem',
+                          fontWeight: '600',
+                          color: execution.success ? '#86efac' : '#fca5a5'
                         }}>
-                          {execution.success ? '✓' : '✗'}
-                        </span>
+                          {execution.success ? '✓ Success' : '✗ Failed'}
+                        </div>
                       </div>
 
+                      {/* Parameters preview */}
                       <div style={{ marginBottom: '0.75rem' }}>
-                        <pre style={{ 
-                          background: 'rgba(0, 0, 0, 0.3)',
+                        <div style={{ 
+                          fontSize: '0.75rem', 
+                          color: 'rgba(255, 255, 255, 0.5)', 
+                          marginBottom: '0.5rem',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                          fontWeight: '600'
+                        }}>
+                          Parameters
+                        </div>
+                        <div style={{ 
+                          background: 'rgba(0, 0, 0, 0.25)',
                           padding: '0.75rem',
                           borderRadius: '0.375rem',
-                          fontSize: '0.875rem',
-                          overflow: 'auto',
-                          maxHeight: '150px'
+                          border: '1px solid rgba(255, 255, 255, 0.05)'
                         }}>
-                          {JSON.stringify(execution.arguments, null, 2)}
-                        </pre>
+                          <pre style={{ 
+                            margin: 0,
+                            fontSize: '0.8rem',
+                            overflow: 'auto',
+                            maxHeight: '120px',
+                            color: '#e5e7eb',
+                            lineHeight: '1.5'
+                          }}>
+                            {JSON.stringify(execution.arguments, null, 2)}
+                          </pre>
+                        </div>
                       </div>
 
+                      {/* Action button */}
                       <button
                         onClick={() => handleLoadFromHistory(execution.id)}
-                        className="px-4 py-1.5 bg-white hover:bg-zinc-100 text-black rounded-md text-sm font-medium transition-all duration-200"
+                        style={{
+                          width: '100%',
+                          padding: '0.625rem 1rem',
+                          background: '#fff',
+                          color: '#000',
+                          border: 'none',
+                          borderRadius: '0.375rem',
+                          fontSize: '0.875rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.5rem'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = '#f4f4f5';
+                          e.currentTarget.style.transform = 'scale(1.02)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = '#fff';
+                          e.currentTarget.style.transform = 'scale(1)';
+                        }}
                       >
-                        Load
+                        <span>↻</span>
+                        Load Parameters
                       </button>
                     </div>
                   ))}
