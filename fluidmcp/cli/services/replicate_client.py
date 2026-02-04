@@ -79,6 +79,18 @@ class ReplicateClient:
             self.api_key = api_key_expanded
         else:
             self.api_key = api_key_raw
+
+        # Validate API key is not empty or whitespace-only
+        if not self.api_key or (isinstance(self.api_key, str) and not self.api_key.strip()):
+            raise ValueError(
+                f"Replicate model '{model_id}' has empty or whitespace-only API key"
+            )
+
+        # Validate minimum API key length (Replicate API keys are typically 40+ characters)
+        if isinstance(self.api_key, str) and len(self.api_key.strip()) < 8:
+            raise ValueError(
+                f"Replicate model '{model_id}' API key is too short (minimum 8 characters)"
+            )
         # Validate optional dict-typed configuration fields
         endpoints = config.get("endpoints")
         if endpoints is not None and not isinstance(endpoints, dict):
@@ -420,8 +432,11 @@ class ReplicateClient:
 
     async def close(self) -> None:
         """Close the HTTP client and cleanup resources."""
-        await self.client.aclose()
-        logger.info(f"Closed Replicate client for model '{self.model_id}'")
+        try:
+            await self.client.aclose()
+            logger.info(f"Closed Replicate client for model '{self.model_id}'")
+        except Exception as e:
+            logger.error(f"Error closing Replicate client '{self.model_id}': {e}")
 
     async def __aenter__(self):
         """Async context manager entry."""

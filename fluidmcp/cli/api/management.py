@@ -30,7 +30,10 @@ _http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=300.0)
 
 async def cleanup_http_client():
     """Close the shared HTTP client to prevent resource leaks."""
-    await _http_client.aclose()
+    try:
+        await _http_client.aclose()
+    except Exception as e:
+        logger.error(f"Error closing management HTTP client: {e}")
 
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):

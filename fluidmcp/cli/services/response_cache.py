@@ -160,25 +160,33 @@ class ResponseCache:
         """
         key = self._generate_key(data)
 
-        # Try cache first
-        cached = await self.get(key)
-        if cached is not None:
-            return cached
-
-        # Single critical section to either reuse or register an in-flight fetch
+        # Single critical section to check cache and register in-flight fetch
         created_future = False
         future = None
         async with self._lock:
-            # Another task may have completed the fetch while we waited for the lock
+            # Check cache first (with lock held to prevent races)
             if key in self._cache:
                 entry = self._cache[key]
                 if not self._is_expired(entry):
+                    # Cache hit - move to end (LRU) and return
+                    self._cache.move_to_end(key)
+                    self._hits += 1
+                    logger.debug(f"Cache HIT: {key[:16]}...")
                     return entry["value"]
+                else:
+                    # Expired - remove from cache
+                    del self._cache[key]
+                    self._misses += 1
+                    logger.debug(f"Cache MISS (expired): {key[:16]}...")
+            else:
+                self._misses += 1
+                logger.debug(f"Cache MISS: {key[:16]}...")
 
+            # Check if another task is already fetching
             future = self._in_flight.get(key)
             if future is None:
                 # First task to start fetching for this key: create and register future
-                future = asyncio.get_event_loop().create_future()
+                future = asyncio.get_running_loop().create_future()
                 self._in_flight[key] = future
                 created_future = True
                 logger.debug(f"Starting new fetch for key: {key[:16]}...")
