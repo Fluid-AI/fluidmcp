@@ -337,7 +337,7 @@ export const ToolRunner: React.FC = () => {
           </div>
 
       {/* Main Content */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 3fr', gap: '2rem', marginBottom: '2rem' }}>
         {/* Left Column: Form and History */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           {/* Parameters Form */}

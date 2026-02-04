@@ -13,7 +13,15 @@ export const TextResultView: React.FC<TextResultViewProps> = ({
   const displayText = text ?? 'No result';
 
   return (
-    <div className={`result-text ${isLongText ? 'result-text-long' : ''}`}>
+    <div style={{ 
+      color: '#e5e7eb',
+      fontSize: isLongText ? '0.95rem' : '1rem',
+      lineHeight: '1.8',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      fontFamily: isLongText ? 'ui-monospace, monospace' : 'system-ui, -apple-system, sans-serif',
+      padding: '0.5rem 0'
+    }}>
       {displayText}
     </div>
   );
