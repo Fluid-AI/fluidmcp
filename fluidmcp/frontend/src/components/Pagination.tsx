@@ -1,4 +1,5 @@
 import React from 'react';
+import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 
 export interface PaginationProps {
   currentPage: number;
@@ -32,7 +33,7 @@ export const Pagination: React.FC<PaginationProps> = ({
         className="pagination-btn"
         aria-label="Go to previous page"
       >
-        Previous
+        <FiChevronLeft size={20} />
       </button>
 
       <span className="pagination-info" aria-live="polite">
@@ -47,7 +48,7 @@ export const Pagination: React.FC<PaginationProps> = ({
         className="pagination-btn"
         aria-label="Go to next page"
       >
-        Next
+        <FiChevronRight size={20} />
       </button>
     </div>
   );

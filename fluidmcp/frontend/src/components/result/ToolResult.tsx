@@ -149,10 +149,13 @@ export const ToolResult: React.FC<ToolResultProps> = ({
 }) => {
   const format = result !== null && !error ? detectResultFormat(result) : ResultFormat.PRIMITIVE;
   const [expandAll, setExpandAll] = useState(false);
+  const [viewMode, setViewMode] = useState<'formatted' | 'raw'>('formatted');
 
   const handleCopy = () => {
     try {
-      const textToCopy = extractCopyText(result, format);
+      const textToCopy = viewMode === 'raw' 
+        ? JSON.stringify(result, null, 2)
+        : extractCopyText(result, format);
       navigator.clipboard.writeText(textToCopy);
     } catch (err) {
       console.error('Failed to copy:', err);
@@ -176,67 +179,147 @@ export const ToolResult: React.FC<ToolResultProps> = ({
   };
 
   return (
-    <div className="tool-runner-section">
-      <div className="section-header">
-        <h2>Results</h2>
-        {result !== null && !error && (
-          <ResultActions
-            onCopy={handleCopy}
-            onDownload={handleDownload}
-            canExpand={format === ResultFormat.JSON_OBJECT}
-            isExpanded={expandAll}
-            onToggleExpand={() => setExpandAll(!expandAll)}
-          />
-        )}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: '600' }}>Results</h2>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {result !== null && !error && (
+            <>
+              {/* View Mode Toggle */}
+              <div style={{ 
+                display: 'flex', 
+                background: 'rgba(0, 0, 0, 0.3)', 
+                borderRadius: '0.375rem',
+                padding: '0.25rem',
+                gap: '0.25rem'
+              }}>
+                <button
+                  onClick={() => setViewMode('formatted')}
+                  style={{
+                    padding: '0.375rem 0.75rem',
+                    borderRadius: '0.25rem',
+                    border: 'none',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    background: viewMode === 'formatted' ? '#fff' : 'transparent',
+                    color: viewMode === 'formatted' ? '#000' : 'rgba(255, 255, 255, 0.7)'
+                  }}
+                >
+                  Formatted
+                </button>
+                <button
+                  onClick={() => setViewMode('raw')}
+                  style={{
+                    padding: '0.375rem 0.75rem',
+                    borderRadius: '0.25rem',
+                    border: 'none',
+                    fontSize: '0.875rem',
+                    fontWeight: '500',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    background: viewMode === 'raw' ? '#fff' : 'transparent',
+                    color: viewMode === 'raw' ? '#000' : 'rgba(255, 255, 255, 0.7)'
+                  }}
+                >
+                  Raw JSON
+                </button>
+              </div>
+              
+              <ResultActions
+                onCopy={handleCopy}
+                onDownload={handleDownload}
+                canExpand={format === ResultFormat.JSON_OBJECT && viewMode === 'formatted'}
+                isExpanded={expandAll}
+                onToggleExpand={() => setExpandAll(!expandAll)}
+              />
+            </>
+          )}
+        </div>
       </div>
 
       {/* Execution Info */}
       {executionTime !== null && executionTime !== undefined && (
-        <div className="execution-info">
-          <span>
-            Execution Time: <strong>{executionTime.toFixed(2)}s</strong>
+        <div style={{ 
+          padding: '0.5rem 1rem',
+          background: 'rgba(99, 102, 241, 0.1)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          borderRadius: '0.5rem',
+          fontSize: '0.875rem'
+        }}>
+          <span style={{ color: 'rgba(255, 255, 255, 0.7)' }}>
+            Execution Time: <strong style={{ color: '#fff' }}>{executionTime.toFixed(2)}s</strong>
           </span>
         </div>
       )}
 
       {/* Error Display */}
       {error && (
-        <div className="result-error">
-          <h3>Error</h3>
-          <p>{error}</p>
+        <div style={{
+          padding: '1rem',
+          background: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: '0.5rem'
+        }}>
+          <h3 style={{ color: '#ef4444', marginBottom: '0.5rem' }}>Error</h3>
+          <p style={{ color: 'rgba(255, 255, 255, 0.9)' }}>{error}</p>
         </div>
       )}
 
       {/* Result Display */}
       {!error && result !== null && (
-        <>
-          {format === ResultFormat.MCP_CONTENT && (
-            <ErrorBoundary>
-              <McpContentView
-                content={
-                  isMcpContentArray(result)
-                    ? result
-                    : isMcpResult(result)
-                    ? result.content
-                    : []
-                }
-              />
-            </ErrorBoundary>
+        <div style={{
+          background: 'rgba(0, 0, 0, 0.3)',
+          border: '1px solid rgba(63, 63, 70, 0.5)',
+          borderRadius: '0.5rem',
+          padding: '1.5rem',
+          maxHeight: '70vh',
+          overflow: 'auto'
+        }}>
+          {viewMode === 'raw' ? (
+            <pre style={{ 
+              margin: 0, 
+              color: '#e5e7eb',
+              fontSize: '0.95rem',
+              lineHeight: '1.8',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontFamily: 'ui-monospace, monospace'
+            }}>
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          ) : (
+            <>
+              {format === ResultFormat.MCP_CONTENT && (
+                <ErrorBoundary>
+                  <McpContentView
+                    content={
+                      isMcpContentArray(result)
+                        ? result
+                        : isMcpResult(result)
+                        ? result.content
+                        : []
+                    }
+                  />
+                </ErrorBoundary>
+              )}
+              {format === ResultFormat.TABLE && Array.isArray(result) && (
+                <TableResultView data={result as Array<Record<string, unknown>>} />
+              )}
+              {format === ResultFormat.JSON_OBJECT && <JsonResultView data={result} expandAll={expandAll} />}
+              {format === ResultFormat.TEXT_BLOCK && typeof result === 'string' && (
+                <TextResultView text={result} isLongText={true} />
+              )}
+              {format === ResultFormat.TEXT && typeof result === 'string' && (
+                <TextResultView text={result} />
+              )}
+              {format === ResultFormat.PRIMITIVE && (
+                <TextResultView text={result === undefined ? 'undefined' : JSON.stringify(result)} />
+              )}
+            </>
           )}
-          {format === ResultFormat.TABLE && Array.isArray(result) && (
-            <TableResultView data={result as Array<Record<string, unknown>>} />
-          )}
-          {format === ResultFormat.JSON_OBJECT && <JsonResultView data={result} expandAll={expandAll} />}
-          {format === ResultFormat.TEXT_BLOCK && typeof result === 'string' && (
-            <TextResultView text={result} isLongText={true} />
-          )}
-          {format === ResultFormat.TEXT && typeof result === 'string' && (
-            <TextResultView text={result} />
-          )}
-          {format === ResultFormat.PRIMITIVE && (
-            <TextResultView text={result === undefined ? 'undefined' : JSON.stringify(result)} />
-          )}
-        </>
+        </div>
       )}
     </div>
   );
