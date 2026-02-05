@@ -6,7 +6,7 @@ Provides Prometheus-compatible metrics endpoint for monitoring and alerting.
 """
 
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
@@ -33,7 +33,7 @@ class ModelMetrics:
     total_tokens: int = 0
 
     # Error tracking
-    errors_by_status: Dict[int, int] = field(default_factory=lambda: defaultdict(int))
+    errors_by_status: Dict[int, int] = field(default_factory=dict)
 
     # Provider-specific
     provider_type: Optional[str] = None
@@ -156,7 +156,8 @@ class LLMMetricsCollector:
             metrics.total_latency += latency
             metrics.min_latency = min(metrics.min_latency, latency)
             metrics.max_latency = max(metrics.max_latency, latency)
-            metrics.errors_by_status[status_code] += 1
+            # Thread-safe explicit key handling (instead of defaultdict auto-vivification)
+            metrics.errors_by_status[status_code] = metrics.errors_by_status.get(status_code, 0) + 1
 
         logger.debug(
             f"Recorded failure for '{model_id}': "
@@ -259,7 +260,7 @@ class LLMMetricsCollector:
 
         return '\n'.join(lines) + '\n'
 
-    def export_json(self) -> Dict[str, any]:
+    def export_json(self) -> Dict[str, Any]:
         """
         Export metrics in JSON format.
 
