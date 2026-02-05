@@ -1,6 +1,8 @@
+import React, { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { useState, useEffect } from "react";
 import ServerCard from "../components/ServerCard";
+import { ServerListControls } from "../components/ServerListControls";
+import { Pagination } from "../components/Pagination";
 import ErrorMessage from "../components/ErrorMessage";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
@@ -12,6 +14,70 @@ import 'aos/dist/aos.css';
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
+
+  // Controls state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<'name-asc' | 'name-desc' | 'status' | 'recent'>('name-asc');
+  const [filterBy, setFilterBy] = useState<'all' | 'running' | 'stopped' | 'error'>('all');
+
+
+  // Filtering, sorting, searching logic
+  const filteredServers = servers
+    .filter(server => {
+      if (filterBy === 'running') return server.status?.state === 'running';
+      if (filterBy === 'stopped') return server.status?.state === 'stopped';
+      if (filterBy === 'error') return server.status?.state === 'failed';
+      return true;
+    })
+    .filter(server => server.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const sortedServers = [...filteredServers].sort((a, b) => {
+    if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
+    if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
+    if (sortBy === 'status') {
+      // Running first, then stopped, then error/other
+      const order = (s: any) => s.status?.state === 'running' ? 0 : s.status?.state === 'stopped' ? 1 : 2;
+      return order(a) - order(b);
+    }
+    if (sortBy === 'recent') {
+      // Most recently started first (assume updated_at is start time)
+      return (new Date(b.updated_at || 0).getTime()) - (new Date(a.updated_at || 0).getTime());
+    }
+    return 0;
+  });
+
+  // Pagination logic
+
+  const itemsPerPage = 9;
+  const [currentPage, setCurrentPage] = useState(1);
+  const totalPages = Math.ceil(sortedServers.length / itemsPerPage);
+  const paginatedServers = sortedServers.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  // Ref for server list section
+  const serverListRef = React.useRef<HTMLDivElement>(null);
+
+  // Scroll to server list on page change
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    setTimeout(() => {
+      serverListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  };
+
+  // Reset to page 1 if filters/search/sort change and currentPage is out of range
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(1);
+    // eslint-disable-next-line
+  }, [searchQuery, sortBy, filterBy, sortedServers.length]);
+
+  const handleClearFilters = () => {
+    setSearchQuery("");
+    setSortBy('name-asc');
+    setFilterBy('all');
+  };
 
   useEffect(() => {
     AOS.init({
@@ -287,33 +353,58 @@ export default function Dashboard() {
 
       {/* Main content */}
       <section className="dashboard-section">
-        <h2>Currently configured servers</h2>
+        <h2 ref={serverListRef}>Currently configured servers</h2>
 
-        {servers.length === 0 ? (
+        <div style={{ marginBottom: 24 }}>
+          <ServerListControls
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            sortBy={sortBy}
+            onSortChange={v => setSortBy(v as any)}
+            filterBy={filterBy}
+            onFilterChange={v => setFilterBy(v as any)}
+            onClearFilters={handleClearFilters}
+          />
+        </div>
+        {sortedServers.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state-icon">📦</div>
-            <h3 className="empty-state-title">No servers configured</h3>
+            <h3 className="empty-state-title">No servers found</h3>
             <p className="empty-state-description">
-              Add MCP servers to get started
+              Try adjusting your search, sort, or filter options.
             </p>
           </div>
         ) : (
-          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {servers.map((server, index) => (
-              <div
-                key={server.id}
-                data-aos="fade-up"
-                data-aos-delay={index * 100}
-              >
-                <ServerCard
-                  server={server}
-                  onStart={() => handleStartServer(server.id)}
-                  onViewDetails={() => navigate(`/servers/${server.id}`)}
-                  isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
+          <>
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {paginatedServers.map((server, index) => (
+                <div
+                  key={server.id}
+                  data-aos="fade-up"
+                  data-aos-delay={index * 100}
+                >
+                  <ServerCard
+                    server={server}
+                    onStart={() => handleStartServer(server.id)}
+                    onViewDetails={() => navigate(`/servers/${server.id}`)}
+                    isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
+                  />
+                </div>
+              ))}
+            </div>
+            {sortedServers.length > itemsPerPage && (
+              <div style={{ marginTop: 32 }}>
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={sortedServers.length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={handlePageChange}
+                  itemName="servers"
                 />
-              </div>                     
-            ))}
-          </div>
+              </div>
+            )}
+          </>
         )}
       </section>
 

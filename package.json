@@ -5,5 +5,8 @@
     "dev": "fmcp serve --allow-insecure",
     "build:frontend": "npm run build --prefix fluidmcp/frontend",
     "prod": "npm run build:frontend && fmcp serve --allow-insecure"
+  },
+  "dependencies": {
+    "react-icons": "^5.5.0"
   }
 }
