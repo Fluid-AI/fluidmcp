@@ -12,6 +12,7 @@ import re
 import time
 import httpx
 import asyncio
+import threading
 from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
@@ -68,8 +69,8 @@ class ReplicateClient:
         if isinstance(api_key_raw, str):
             api_key_expanded = os.path.expandvars(api_key_raw)
             # Check if ${VAR} or $VAR pattern was not resolved
-            # Only check for our supported patterns to avoid false positives
-            if re.search(r'\$\{[^}]+\}|\$[A-Z_][A-Z0-9_]*', api_key_raw):
+            # Support both uppercase and lowercase variable names (e.g., $PATH, $api_key)
+            if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_raw):
                 if api_key_expanded == api_key_raw:
                     raise ValueError(
                         f"Replicate model '{model_id}' has unresolved environment variable "
@@ -482,6 +483,8 @@ class ReplicateClient:
 
 # Global registry of active Replicate clients
 _replicate_clients: Dict[str, ReplicateClient] = {}
+# Thread-safety lock for registry operations
+_registry_lock = threading.RLock()
 
 
 async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]]) -> Dict[str, ReplicateClient]:
@@ -516,7 +519,9 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
             # Run health check
             if await client.health_check():
                 clients[model_id] = client
-                _replicate_clients[model_id] = client
+                # Thread-safe registry update
+                with _registry_lock:
+                    _replicate_clients[model_id] = client
                 logger.info(f"Successfully initialized Replicate model '{model_id}'")
             else:
                 logger.error(f"Health check failed for Replicate model '{model_id}'")
@@ -546,11 +551,14 @@ async def stop_all_replicate_models() -> None:
     """
     global _replicate_clients
 
-    logger.info(f"Stopping {len(_replicate_clients)} Replicate client(s)")
+    # Thread-safe snapshot creation
+    with _registry_lock:
+        clients_count = len(_replicate_clients)
+        # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
+        # await client.close() yields control, allowing concurrent modifications
+        clients_snapshot = list(_replicate_clients.items())
 
-    # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
-    # await client.close() yields control, allowing concurrent modifications
-    clients_snapshot = list(_replicate_clients.items())
+    logger.info(f"Stopping {clients_count} Replicate client(s)")
 
     for model_id, client in clients_snapshot:
         try:
@@ -559,7 +567,9 @@ async def stop_all_replicate_models() -> None:
         except Exception as e:
             logger.error(f"Error stopping Replicate client '{model_id}': {e}")
 
-    _replicate_clients.clear()
+    # Thread-safe registry clear
+    with _registry_lock:
+        _replicate_clients.clear()
     logger.info("All Replicate clients stopped")
 
 
@@ -573,7 +583,9 @@ def get_replicate_client(model_id: str) -> Optional[ReplicateClient]:
     Returns:
         ReplicateClient instance or None if not found
     """
-    return _replicate_clients.get(model_id)
+    # Thread-safe registry read
+    with _registry_lock:
+        return _replicate_clients.get(model_id)
 
 
 def list_replicate_models() -> List[str]:
@@ -583,4 +595,6 @@ def list_replicate_models() -> List[str]:
     Returns:
         List of model identifiers
     """
-    return list(_replicate_clients.keys())
+    # Thread-safe registry read
+    with _registry_lock:
+        return list(_replicate_clients.keys())
