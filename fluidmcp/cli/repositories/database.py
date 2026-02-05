@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
 from loguru import logger
 from .base import PersistenceBackend
+from ..utils.env_utils import is_placeholder
 
 
 def mask_mongodb_uri(uri: str) -> str:
@@ -574,20 +575,6 @@ class DatabaseManager(PersistenceBackend):
         Returns:
             Dict of environment variables or None if instance not found
         """
-        def is_placeholder(value: str) -> bool:
-            """Check if environment variable value is a placeholder."""
-            if not isinstance(value, str):
-                return False
-            placeholder_indicators = [
-                '<' in value and '>' in value,
-                'xxxx' in value.lower(),
-                'placeholder' in value.lower(),
-                value.startswith('<') and value.endswith('>'),
-                'your-' in value.lower(),
-                'my-' in value.lower(),
-            ]
-            return any(placeholder_indicators)
-
         try:
             instance = await self.get_instance_state(server_id)
             if instance:
@@ -613,6 +600,8 @@ class DatabaseManager(PersistenceBackend):
         Creates an instance record if it doesn't exist yet (upsert).
         This allows setting env vars before the server is first started.
 
+        Uses atomic MongoDB operations to prevent race conditions during concurrent updates.
+
         Args:
             server_id: Server identifier
             env: Dict of environment variables to set/update
@@ -621,20 +610,17 @@ class DatabaseManager(PersistenceBackend):
             True if updated successfully
         """
         try:
-            # Get existing instance env to merge with new values
-            # get_instance_env() already filters placeholders
-            existing_env = await self.get_instance_env(server_id) or {}
-
-            # Merge new env with existing (new values override)
-            merged_env = {**existing_env, **env}
+            # Build atomic $set operations for individual env keys
+            # This prevents race conditions - MongoDB handles the merge atomically
+            set_operations = {
+                f"env.{key}": value for key, value in env.items()
+            }
+            set_operations["updated_at"] = datetime.utcnow()
 
             result = await self.db.fluidmcp_server_instances.update_one(
                 {"server_id": server_id},
                 {
-                    "$set": {
-                        "env": merged_env,
-                        "updated_at": datetime.utcnow()
-                    },
+                    "$set": set_operations,
                     "$setOnInsert": {
                         "server_id": server_id,
                         "created_at": datetime.utcnow()

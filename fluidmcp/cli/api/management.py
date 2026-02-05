@@ -13,6 +13,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
 
+from ..utils.env_utils import is_placeholder
+
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
@@ -27,6 +29,67 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
     return credentials.credentials
+
+
+def validate_env_variables(env: Dict[str, str], max_vars: int = 100, max_key_length: int = 256, max_value_length: int = 10240) -> None:
+    """
+    Validate environment variables to prevent injection attacks and DoS.
+
+    Security context:
+    - Environment variables are passed to subprocess.Popen() with shell=False
+    - This means shell metacharacters (;, |, &, etc.) are NOT interpreted
+    - Values are passed directly to the child process, no shell injection risk
+
+    Security checks:
+    - Prevent MongoDB injection (keys starting with $ or containing dots)
+    - Prevent DoS via excessive data (length limits)
+    - Validate key format (POSIX standard: alphanumeric + underscore only)
+    - Check for null bytes (can cause issues in C-based processes)
+
+    Args:
+        env: Environment variables dict to validate
+        max_vars: Maximum number of variables allowed (default: 100)
+        max_key_length: Maximum key length (default: 256)
+        max_value_length: Maximum value length (default: 10KB)
+
+    Raises:
+        HTTPException: If validation fails
+    """
+    import re
+
+    # Check number of variables (DoS prevention)
+    if len(env) > max_vars:
+        raise HTTPException(400, f"Too many environment variables (max: {max_vars})")
+
+    # Validate each key-value pair
+    for key, value in env.items():
+        # Type check
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise HTTPException(400, f"Environment variable keys and values must be strings")
+
+        # Key length check (DoS prevention)
+        if len(key) > max_key_length:
+            raise HTTPException(400, f"Environment variable key too long (max: {max_key_length} chars): {key[:50]}...")
+
+        # Value length check (DoS prevention)
+        if len(value) > max_value_length:
+            raise HTTPException(400, f"Environment variable value too long (max: {max_value_length} chars) for key: {key}")
+
+        # MongoDB injection prevention - keys must not start with $ or contain dots
+        if key.startswith('$'):
+            raise HTTPException(400, f"Invalid environment variable key (MongoDB reserved): {key}")
+
+        if '.' in key:
+            raise HTTPException(400, f"Invalid environment variable key (contains dot): {key}")
+
+        # Key format validation - only alphanumeric and underscore
+        # Standard POSIX env var naming convention (no hyphens - not supported by bash/sh)
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+            raise HTTPException(400, f"Invalid environment variable key format: {key}. Must start with letter or underscore and contain only alphanumeric and underscore characters.")
+
+        # Null byte check - can cause issues in C-based processes
+        if '\0' in value:
+            raise HTTPException(400, f"Environment variable value contains null byte for key: {key}")
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
@@ -774,20 +837,6 @@ async def get_server_instance_env(request: Request, id: str):
     Returns:
         Dict of env var names to metadata
     """
-    def is_placeholder(value: str) -> bool:
-        """Check if environment variable value is a placeholder."""
-        if not isinstance(value, str):
-            return False
-        placeholder_indicators = [
-            '<' in value and '>' in value,
-            'xxxx' in value.lower(),
-            'placeholder' in value.lower(),
-            value.startswith('<') and value.endswith('>'),
-            'your-' in value.lower(),
-            'my-' in value.lower(),
-        ]
-        return any(placeholder_indicators)
-
     manager = get_server_manager(request)
 
     # Get server config to determine required env vars
@@ -861,30 +910,15 @@ async def update_server_instance_env(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Validate env vars (basic validation)
+    # Validate env vars (comprehensive security validation)
     if not isinstance(env, dict):
         raise HTTPException(400, "Environment variables must be a dictionary")
 
-    for key, value in env.items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            raise HTTPException(400, "Environment variable keys and values must be strings")
+    # Comprehensive validation for security and DoS prevention
+    validate_env_variables(env)
 
     # Filter out placeholder values before saving
     # This prevents saving config defaults like "YOUR_API_KEY_HERE"
-    def is_placeholder(value: str) -> bool:
-        """Check if environment variable value is a placeholder."""
-        if not isinstance(value, str):
-            return False
-        placeholder_indicators = [
-            '<' in value and '>' in value,
-            'xxxx' in value.lower(),
-            'placeholder' in value.lower(),
-            value.startswith('<') and value.endswith('>'),
-            'your-' in value.lower(),
-            'my-' in value.lower(),
-        ]
-        return any(placeholder_indicators)
-
     # Only save non-placeholder, non-empty values
     filtered_env = {
         k: v for k, v in env.items()
@@ -893,6 +927,16 @@ async def update_server_instance_env(
 
     if not filtered_env:
         raise HTTPException(400, "No valid environment variables provided (all values were empty or placeholders)")
+
+    # Save current env for rollback if restart fails
+    old_env = None
+    server_was_running = False
+    if id in manager.processes:
+        process = manager.processes[id]
+        if process.poll() is None:  # Still running
+            server_was_running = True
+            # Get current env before update for potential rollback
+            old_env = await manager.db.get_instance_env(id)
 
     # Update instance env in database (upserts if instance doesn't exist)
     success = await manager.db.update_instance_env(id, filtered_env)
@@ -903,13 +947,21 @@ async def update_server_instance_env(
     logger.info(f"Updated instance env for server '{id}'")
 
     # If server is running, restart it to apply new env vars
-    if id in manager.processes:
-        process = manager.processes[id]
-        if process.poll() is None:  # Still running
-            logger.info(f"Restarting server '{id}' to apply new environment variables")
-            restart_success = await manager.restart_server(id)
-            if not restart_success:
-                raise HTTPException(500, f"Failed to restart server '{id}' after updating env")
+    if server_was_running:
+        logger.info(f"Restarting server '{id}' to apply new environment variables")
+        restart_success = await manager.restart_server(id)
+        if not restart_success:
+            # Rollback env changes on restart failure
+            if old_env is not None:
+                logger.warning(f"Restart failed, rolling back env changes for server '{id}'")
+                try:
+                    # Rollback to old env
+                    await manager.db.update_instance_env(id, old_env)
+                    raise HTTPException(500, f"Failed to restart server '{id}' after updating env. Changes have been rolled back.")
+                except Exception as rollback_error:
+                    logger.critical(f"CRITICAL: Rollback failed for server '{id}': {rollback_error}")
+                    raise HTTPException(500, f"Failed to restart server '{id}' and rollback also failed. Manual intervention required.")
+            raise HTTPException(500, f"Failed to restart server '{id}' after updating env.")
 
     return {
         "message": f"Environment variables updated for server '{id}'",
