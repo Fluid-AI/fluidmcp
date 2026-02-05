@@ -2,12 +2,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useState, useEffect } from "react";
 import ServerCard from "../components/ServerCard";
 import ErrorMessage from "../components/ErrorMessage";
-import { ServerListControls } from "../components/ServerListControls";
-import { ActiveServerListControls } from "../components/ActiveServerListControls";
-import { Pagination } from "../components/Pagination";
 import { useServers } from "../hooks/useServers";
-import { useServerFiltering } from "../hooks/useServerFiltering";
-import { useActiveServerFiltering } from "../hooks/useActiveServerFiltering";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,35 +26,6 @@ export default function Dashboard() {
     serverId: string | null;
     type: 'starting' | 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
-
-  // Server filtering for "Currently configured servers" section
-  const {
-    searchQuery,
-    sortBy,
-    filterBy,
-    currentPage,
-    setSearchQuery,
-    setSortBy,
-    setFilterBy,
-    setCurrentPage,
-    clearFilters,
-    paginatedServers,
-    totalPages,
-    totalFilteredCount,
-  } = useServerFiltering(servers, { itemsPerPage: 6 });
-
-  // Server filtering for "Currently active servers" section
-  const {
-    searchQuery: activeSearchQuery,
-    sortBy: activeSortBy,
-    currentPage: activeCurrentPage,
-    setSearchQuery: setActiveSearchQuery,
-    setSortBy: setActiveSortBy,
-    setCurrentPage: setActiveCurrentPage,
-    paginatedServers: paginatedActiveServers,
-    totalPages: activeTotalPages,
-    totalFilteredCount: activeTotalFilteredCount,
-  } = useActiveServerFiltering(activeServers, { itemsPerPage: 6 });
 
   const handleStartServer = async (serverId: string) => {
     if (actionState.type !== null) return;
