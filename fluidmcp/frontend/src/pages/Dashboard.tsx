@@ -8,7 +8,7 @@ import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
-
+//dummy comment to change file
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
