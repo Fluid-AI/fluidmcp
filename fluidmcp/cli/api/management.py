@@ -21,6 +21,7 @@ import json
 
 from ..services.llm_provider_registry import get_model_type, get_model_config
 from ..services.replicate_openai_adapter import replicate_chat_completion
+from ..services.llm_metrics import get_metrics_collector
 
 from ..utils.env_utils import is_placeholder
 
@@ -1476,12 +1477,44 @@ async def unified_chat_completions(
 
     logger.info(f"Chat completion request for model '{model_id}' (type: {provider_type})")
 
+    # Initialize metrics collection
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
     # Route to appropriate provider handler
     if provider_type == "replicate":
         # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
         # The adapter already converts httpx errors to HTTPException, no need to catch them here
-        timeout = request_body.get("timeout", 300)
-        return await replicate_chat_completion(model_id, request_body, timeout)
+        try:
+            timeout = request_body.get("timeout", 300)
+            response = await replicate_chat_completion(model_id, request_body, timeout)
+
+            # Record successful request with token usage
+            usage = response.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response
+        except HTTPException as e:
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.status_code
+            )
+            raise
+        except Exception as e:
+            # Record unexpected error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=500
+            )
+            raise
 
     elif provider_type == "vllm":
         # Proxy to vLLM's native OpenAI-compatible endpoint
@@ -1544,7 +1577,18 @@ async def unified_chat_completions(
                 json=request_body
             )
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+
+            # Record successful request with token usage
+            usage = response_json.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response_json
         except httpx.HTTPStatusError as e:
             # Read error body with size limit to avoid buffering entire response
             try:
@@ -1556,9 +1600,25 @@ async def unified_chat_completions(
                 error_text = str(e)
 
             logger.error(f"vLLM returned error {e.response.status_code}: {error_text}")
+
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.response.status_code
+            )
+
             raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to vLLM: {e}")
+
+            # Record connection error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=502
+            )
+
             raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
 
     else:
@@ -1584,6 +1644,10 @@ async def unified_completions(
     provider_type = get_model_type(model_id)
     if not provider_type:
         raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Initialize metrics collection
+    collector = get_metrics_collector()
+    start_time = time.time()
 
     if provider_type == "vllm":
         # Proxy to vLLM's native completions endpoint
@@ -1646,7 +1710,18 @@ async def unified_completions(
                 json=request_body
             )
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+
+            # Record successful request with token usage
+            usage = response_json.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response_json
         except httpx.HTTPStatusError as e:
             # Read error body with size limit to avoid buffering entire response
             try:
@@ -1657,8 +1732,22 @@ async def unified_completions(
             except Exception:
                 error_text = str(e)
 
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.response.status_code
+            )
+
             raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
         except httpx.RequestError as e:
+            # Record connection error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=502
+            )
+
             raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
 
     else:
