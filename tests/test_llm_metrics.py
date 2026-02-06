@@ -311,6 +311,40 @@ class TestGlobalCollector:
         assert collector1 is not collector2
         assert len(collector2.get_all_metrics()) == 0
 
+    def test_concurrent_singleton_initialization(self):
+        """Test that singleton initialization is thread-safe."""
+        import threading
+
+        # Reset to ensure we test initialization
+        reset_metrics_collector()
+
+        collectors = []
+        barrier = threading.Barrier(10)  # Synchronize 10 threads
+
+        def get_collector():
+            # Wait for all threads to be ready
+            barrier.wait()
+            # All threads try to get collector simultaneously
+            collector = get_metrics_collector()
+            collectors.append(collector)
+
+        # Create 10 threads that all try to initialize collector
+        threads = []
+        for _ in range(10):
+            thread = threading.Thread(target=get_collector)
+            threads.append(thread)
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Verify all threads got the same instance (singleton)
+        assert len(collectors) == 10
+        first_collector = collectors[0]
+        for collector in collectors:
+            assert collector is first_collector  # All same instance
+
 
 class TestThreadSafety:
     """Test thread safety of metrics collector."""

@@ -330,24 +330,37 @@ class LLMMetricsCollector:
             return result
 
 
-# Global metrics collector instance
+# Global metrics collector instance with thread-safe initialization
 _metrics_collector: Optional[LLMMetricsCollector] = None
+_collector_lock = Lock()
 
 
 def get_metrics_collector() -> LLMMetricsCollector:
     """
-    Get the global metrics collector instance (singleton pattern).
+    Get the global metrics collector instance (thread-safe singleton pattern).
+
+    Uses double-checked locking to ensure only one instance is created
+    even in multi-threaded environments.
 
     Returns:
         LLMMetricsCollector instance
     """
     global _metrics_collector
-    if _metrics_collector is None:
-        _metrics_collector = LLMMetricsCollector()
-    return _metrics_collector
+
+    # Fast path: if already initialized, return immediately without lock
+    if _metrics_collector is not None:
+        return _metrics_collector
+
+    # Slow path: acquire lock for initialization
+    with _collector_lock:
+        # Double-check: another thread might have initialized while we waited
+        if _metrics_collector is None:
+            _metrics_collector = LLMMetricsCollector()
+        return _metrics_collector
 
 
 def reset_metrics_collector():
     """Reset the global metrics collector (useful for testing)."""
     global _metrics_collector
-    _metrics_collector = None
+    with _collector_lock:
+        _metrics_collector = None
