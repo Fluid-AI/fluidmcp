@@ -85,8 +85,6 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 
 **Streaming Support**: Replicate models do not currently support streaming (`"stream": true`) due to Replicate's polling-based API architecture. Streaming requests will return a 501 error. For real-time output requirements, consider using vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
-**Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/{model_id}/v1/...` routes shown above.
-
 ## Configuration Format
 
 ### Complete Example
@@ -299,8 +297,6 @@ POST /api/llm/{model_id}/v1/chat/completions
 ### Streaming Not Supported
 
 Replicate-backed models do not support **OpenAI-compatible streaming** via `"stream": true` on the `/api/llm/...` endpoints. Such requests will return HTTP 501 (Not Implemented) because Replicate's API is fundamentally polling-based.
-
-FluidMCP also exposes a legacy, Replicate-specific SSE endpoint at `/api/replicate/models/{model_id}/stream` that streams the results of polling Replicate; this endpoint is **deprecated** and is not a replacement for OpenAI-style token-by-token streaming.
 
 For real-time streaming requirements, use vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
