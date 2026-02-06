@@ -305,26 +305,28 @@ class LLMMetricsCollector:
             }
 
             for model_id, metrics in self._metrics.items():
+                # Work on a deep copy to avoid exposing internal mutable state
+                metrics_copy = copy.deepcopy(metrics)
                 result["models"][model_id] = {
-                    "provider_type": metrics.provider_type,
+                    "provider_type": metrics_copy.provider_type,
                     "requests": {
-                        "total": metrics.total_requests,
-                        "successful": metrics.successful_requests,
-                        "failed": metrics.failed_requests,
-                        "success_rate_percent": round(metrics.success_rate(), 2),
-                        "error_rate_percent": round(metrics.error_rate(), 2),
+                        "total": metrics_copy.total_requests,
+                        "successful": metrics_copy.successful_requests,
+                        "failed": metrics_copy.failed_requests,
+                        "success_rate_percent": round(metrics_copy.success_rate(), 2),
+                        "error_rate_percent": round(metrics_copy.error_rate(), 2),
                     },
                     "latency": {
-                        "avg_seconds": round(metrics.avg_latency(), 3),
-                        "min_seconds": round(metrics.min_latency, 3) if metrics.min_latency != float('inf') else None,
-                        "max_seconds": round(metrics.max_latency, 3),
+                        "avg_seconds": round(metrics_copy.avg_latency(), 3),
+                        "min_seconds": round(metrics_copy.min_latency, 3) if metrics_copy.min_latency != float('inf') else None,
+                        "max_seconds": round(metrics_copy.max_latency, 3),
                     },
                     "tokens": {
-                        "prompt": metrics.total_prompt_tokens,
-                        "completion": metrics.total_completion_tokens,
-                        "total": metrics.total_tokens,
+                        "prompt": metrics_copy.total_prompt_tokens,
+                        "completion": metrics_copy.total_completion_tokens,
+                        "total": metrics_copy.total_tokens,
                     },
-                    "errors_by_status": dict(metrics.errors_by_status),
+                    "errors_by_status": dict(metrics_copy.errors_by_status),
                 }
 
             return result

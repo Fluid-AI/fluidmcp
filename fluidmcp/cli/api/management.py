@@ -1546,17 +1546,18 @@ async def unified_chat_completions(
                         json=request_body
                     ) as response:
                         response.raise_for_status()
+
+                        # Record successful streaming request after status check
+                        # Note: Token usage not available for streaming responses
+                        collector.record_request_success(
+                            model_id=model_id,
+                            start_time=start_time,
+                            prompt_tokens=0,
+                            completion_tokens=0
+                        )
+
                         async for chunk in response.aiter_bytes():
                             yield chunk
-
-                    # Record successful streaming request
-                    # Note: Token usage not available for streaming responses
-                    collector.record_request_success(
-                        model_id=model_id,
-                        start_time=start_time,
-                        prompt_tokens=0,
-                        completion_tokens=0
-                    )
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
@@ -1706,17 +1707,18 @@ async def unified_completions(
                         json=request_body
                     ) as response:
                         response.raise_for_status()
+
+                        # Record successful streaming request after status check
+                        # Note: Token usage not available for streaming responses
+                        collector.record_request_success(
+                            model_id=model_id,
+                            start_time=start_time,
+                            prompt_tokens=0,
+                            completion_tokens=0
+                        )
+
                         async for chunk in response.aiter_bytes():
                             yield chunk
-
-                    # Record successful streaming request
-                    # Note: Token usage not available for streaming responses
-                    collector.record_request_success(
-                        model_id=model_id,
-                        start_time=start_time,
-                        prompt_tokens=0,
-                        completion_tokens=0
-                    )
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:

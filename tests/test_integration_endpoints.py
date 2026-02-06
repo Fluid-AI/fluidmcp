@@ -304,3 +304,147 @@ class TestErrorHandling:
 
                     assert response.status_code == 502
                     assert "failed to connect" in response.json()["detail"].lower()
+
+
+class TestMetricsIntegration:
+    """Integration tests for metrics collection during API calls."""
+
+    def test_metrics_recorded_on_successful_request(self, client):
+        """Test that successful requests are recorded in metrics."""
+        from fluidmcp.cli.services.llm_metrics import reset_metrics_collector, get_metrics_collector
+
+        # Reset metrics before test
+        reset_metrics_collector()
+
+        with patch('fluidmcp.cli.api.management.get_model_type', return_value='replicate'):
+            with patch('fluidmcp.cli.api.management.replicate_chat_completion', new_callable=AsyncMock) as mock:
+                mock.return_value = {
+                    "id": "test-123",
+                    "object": "chat.completion",
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 20,
+                        "total_tokens": 30
+                    }
+                }
+
+                response = client.post(
+                    "/api/llm/test-model/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "Test"}]}
+                )
+
+                assert response.status_code == 200
+
+                # Verify metrics were recorded
+                collector = get_metrics_collector()
+                metrics = collector.get_model_metrics("test-model")
+                assert metrics is not None
+                assert metrics.total_requests == 1
+                assert metrics.successful_requests == 1
+                assert metrics.failed_requests == 0
+                assert metrics.total_prompt_tokens == 10
+                assert metrics.total_completion_tokens == 20
+
+    def test_metrics_recorded_on_failed_request(self, client):
+        """Test that failed requests are recorded in metrics."""
+        from fluidmcp.cli.services.llm_metrics import reset_metrics_collector, get_metrics_collector
+
+        # Reset metrics before test
+        reset_metrics_collector()
+
+        with patch('fluidmcp.cli.api.management.get_model_type', return_value='replicate'):
+            with patch('fluidmcp.cli.api.management.replicate_chat_completion', new_callable=AsyncMock) as mock:
+                from fastapi import HTTPException
+                mock.side_effect = HTTPException(503, "Service unavailable")
+
+                response = client.post(
+                    "/api/llm/failing-model/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "Test"}]}
+                )
+
+                assert response.status_code == 503
+
+                # Verify metrics were recorded
+                collector = get_metrics_collector()
+                metrics = collector.get_model_metrics("failing-model")
+                assert metrics is not None
+                assert metrics.total_requests == 1
+                assert metrics.successful_requests == 0
+                assert metrics.failed_requests == 1
+                assert 503 in metrics.errors_by_status
+                assert metrics.errors_by_status[503] == 1
+
+    def test_metrics_endpoint_returns_data_after_requests(self, client):
+        """Test that /api/metrics endpoint returns collected metrics."""
+        from fluidmcp.cli.services.llm_metrics import reset_metrics_collector
+
+        # Reset metrics before test
+        reset_metrics_collector()
+
+        # Make a successful request
+        with patch('fluidmcp.cli.api.management.get_model_type', return_value='replicate'):
+            with patch('fluidmcp.cli.api.management.replicate_chat_completion', new_callable=AsyncMock) as mock:
+                mock.return_value = {
+                    "id": "test-123",
+                    "object": "chat.completion",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15}
+                }
+
+                client.post(
+                    "/api/llm/metrics-test-model/v1/chat/completions",
+                    json={"messages": [{"role": "user", "content": "Test"}]}
+                )
+
+        # Fetch metrics via API (use /metrics/json endpoint for JSON format)
+        metrics_response = client.get("/api/metrics/json")
+        assert metrics_response.status_code == 200
+
+        metrics_data = metrics_response.json()
+        assert "models" in metrics_data
+        assert "metrics-test-model" in metrics_data["models"]
+        assert metrics_data["models"]["metrics-test-model"]["requests"]["total"] == 1
+        assert metrics_data["models"]["metrics-test-model"]["tokens"]["prompt"] == 5
+        assert metrics_data["models"]["metrics-test-model"]["tokens"]["completion"] == 10
+
+    def test_metrics_prometheus_format(self, client):
+        """Test that metrics are available in Prometheus format."""
+        from fluidmcp.cli.services.llm_metrics import reset_metrics_collector
+
+        # Reset metrics before test
+        reset_metrics_collector()
+
+        # Make a request
+        with patch('fluidmcp.cli.api.management.get_model_type', return_value='vllm'):
+            with patch('fluidmcp.cli.api.management.get_model_config', return_value={
+                "endpoints": {"base_url": "http://localhost:8001/v1"}
+            }):
+                with patch('fluidmcp.cli.api.management._get_http_client') as mock_get_client:
+                    mock_http_client = Mock()
+                    mock_response = Mock()
+                    mock_response.status_code = 200
+                    mock_response.json.return_value = {
+                        "id": "test",
+                        "usage": {"prompt_tokens": 3, "completion_tokens": 7, "total_tokens": 10}
+                    }
+                    mock_response.raise_for_status = Mock()
+
+                    async def mock_post(*args, **kwargs):
+                        return mock_response
+
+                    mock_http_client.post = mock_post
+                    mock_get_client.return_value = mock_http_client
+
+                    client.post(
+                        "/api/llm/prom-test-model/v1/chat/completions",
+                        json={"messages": [{"role": "user", "content": "Test"}], "stream": False}
+                    )
+
+        # Fetch Prometheus metrics
+        prom_response = client.get("/api/metrics")
+        assert prom_response.status_code == 200
+        prom_text = prom_response.text
+
+        # Verify Prometheus format
+        assert "fluidmcp_llm_requests_total" in prom_text
+        assert 'model_id="prom-test-model"' in prom_text
+        assert 'provider="vllm"' in prom_text
