@@ -8,7 +8,7 @@ Provides Prometheus-compatible metrics endpoint for monitoring and alerting.
 import time
 import copy
 from typing import Dict, Optional, Any
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from threading import Lock
 from loguru import logger
 
@@ -258,7 +258,8 @@ class LLMMetricsCollector:
             for model_id, metrics in self._metrics.items():
                 # Escape special characters in label values for Prometheus format
                 safe_model_id = self._escape_label_value(model_id)
-                safe_provider = self._escape_label_value(metrics.provider_type)
+                # Handle potential None provider_type
+                safe_provider = self._escape_label_value(metrics.provider_type or "unknown")
                 labels = f'model_id="{safe_model_id}",provider="{safe_provider}"'
 
                 # Request counts
