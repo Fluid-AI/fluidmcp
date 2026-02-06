@@ -17,8 +17,12 @@ def is_placeholder(value: str) -> bool:
     - Contains repeated 'x' characters (6+ consecutive): xxxxxx-xxxx, XXXXXXXX
     - Contains 'placeholder' keyword
     - Generic instruction patterns: 'your-*', 'my-*', 'insert-*', 'enter-*'
-    - Common placeholder values: 'changeme', 'replace_me', 'todo'
+    - Common placeholder values: 'changeme', 'replace_me', 'todo', 'none', 'null'
     - Too short for real credentials (< 8 chars) with placeholder keywords
+
+    Note: 'none' and 'null' are flagged as placeholders because in the context of
+    environment variables for credentials (API keys, tokens, secrets), these values
+    are almost always placeholders indicating missing configuration.
 
     Args:
         value: The environment variable value to check
@@ -33,6 +37,10 @@ def is_placeholder(value: str) -> bool:
         True
         >>> is_placeholder("xxxx-xxxx-xxxx")
         True
+        >>> is_placeholder("none")
+        True  # 'none' as an API key value is a placeholder
+        >>> is_placeholder("null")
+        True  # 'null' as an API key value is a placeholder
         >>> is_placeholder("my-api-key-abc123def456ghi789")
         False  # Too long and complex to be placeholder
         >>> is_placeholder("sk-1234567890abcdef")

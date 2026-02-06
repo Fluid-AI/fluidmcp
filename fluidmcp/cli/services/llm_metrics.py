@@ -7,7 +7,7 @@ Provides Prometheus-compatible metrics endpoint for monitoring and alerting.
 
 import time
 from typing import Dict, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Lock
 from loguru import logger
 
@@ -165,26 +165,33 @@ class LLMMetricsCollector:
 
     def get_model_metrics(self, model_id: str) -> Optional[ModelMetrics]:
         """
-        Get metrics for a specific model.
+        Get metrics for a specific model (returns a copy for thread safety).
 
         Args:
             model_id: Model identifier
 
         Returns:
-            ModelMetrics or None if not found
+            Copy of ModelMetrics or None if not found.
+            The returned copy is safe to read without affecting internal state.
         """
         with self._lock:
-            return self._metrics.get(model_id)
+            metrics = self._metrics.get(model_id)
+            if metrics is None:
+                return None
+            # Return a shallow copy to prevent external modifications
+            return replace(metrics)
 
     def get_all_metrics(self) -> Dict[str, ModelMetrics]:
         """
-        Get metrics for all models.
+        Get metrics for all models (returns copies for thread safety).
 
         Returns:
-            Dictionary mapping model IDs to their metrics
+            Dictionary mapping model IDs to copies of their metrics.
+            The returned copies are safe to read without affecting internal state.
         """
         with self._lock:
-            return dict(self._metrics)
+            # Return copies of all metrics to prevent external modifications
+            return {model_id: replace(metrics) for model_id, metrics in self._metrics.items()}
 
     def reset_metrics(self, model_id: Optional[str] = None):
         """
@@ -203,6 +210,24 @@ class LLMMetricsCollector:
                 self._metrics.clear()
                 self._start_time = time.time()
                 logger.info("Reset all metrics")
+
+    @staticmethod
+    def _escape_label_value(value: str) -> str:
+        """
+        Escape special characters in Prometheus label values.
+
+        According to Prometheus format specification, label values must escape:
+        - Backslash (\\) -> \\\\
+        - Double quote (") -> \\"
+        - Newline (\\n) -> \\n
+
+        Args:
+            value: Raw label value
+
+        Returns:
+            Escaped label value safe for Prometheus format
+        """
+        return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 
     def export_prometheus(self) -> str:
         """
@@ -228,7 +253,10 @@ class LLMMetricsCollector:
 
         with self._lock:
             for model_id, metrics in self._metrics.items():
-                labels = f'model_id="{model_id}",provider="{metrics.provider_type}"'
+                # Escape special characters in label values for Prometheus format
+                safe_model_id = self._escape_label_value(model_id)
+                safe_provider = self._escape_label_value(metrics.provider_type)
+                labels = f'model_id="{safe_model_id}",provider="{safe_provider}"'
 
                 # Request counts
                 lines.append(f'fluidmcp_llm_requests_total{{{labels}}} {metrics.total_requests}')

@@ -408,7 +408,7 @@ curl http://localhost:8099/api/metrics/test-model
 **Debug:**
 ```bash
 # Check model health
-curl http://localhost:8099/api/llm/model-id/health
+curl -X POST http://localhost:8099/api/llm/models/model-id/health-check
 
 # Check error rates
 curl http://localhost:8099/api/metrics/json | jq '.models["model-id"].errors_by_status'
