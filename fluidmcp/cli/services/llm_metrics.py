@@ -6,6 +6,7 @@ Provides Prometheus-compatible metrics endpoint for monitoring and alerting.
 """
 
 import time
+import copy
 from typing import Dict, Optional, Any
 from dataclasses import dataclass, field, replace
 from threading import Lock
@@ -165,33 +166,35 @@ class LLMMetricsCollector:
 
     def get_model_metrics(self, model_id: str) -> Optional[ModelMetrics]:
         """
-        Get metrics for a specific model (returns a copy for thread safety).
+        Get metrics for a specific model (returns a deep copy for thread safety).
 
         Args:
             model_id: Model identifier
 
         Returns:
-            Copy of ModelMetrics or None if not found.
-            The returned copy is safe to read without affecting internal state.
+            Deep copy of ModelMetrics or None if not found.
+            The returned copy is fully isolated from internal state, including
+            the mutable errors_by_status dictionary.
         """
         with self._lock:
             metrics = self._metrics.get(model_id)
             if metrics is None:
                 return None
-            # Return a shallow copy to prevent external modifications
-            return replace(metrics)
+            # Return a deep copy to ensure mutable fields (errors_by_status) are also copied
+            return copy.deepcopy(metrics)
 
     def get_all_metrics(self) -> Dict[str, ModelMetrics]:
         """
-        Get metrics for all models (returns copies for thread safety).
+        Get metrics for all models (returns deep copies for thread safety).
 
         Returns:
-            Dictionary mapping model IDs to copies of their metrics.
-            The returned copies are safe to read without affecting internal state.
+            Dictionary mapping model IDs to deep copies of their metrics.
+            The returned copies are fully isolated from internal state, including
+            mutable errors_by_status dictionaries.
         """
         with self._lock:
-            # Return copies of all metrics to prevent external modifications
-            return {model_id: replace(metrics) for model_id, metrics in self._metrics.items()}
+            # Return deep copies of all metrics to ensure mutable fields are also copied
+            return {model_id: copy.deepcopy(metrics) for model_id, metrics in self._metrics.items()}
 
     def reset_metrics(self, model_id: Optional[str] = None):
         """

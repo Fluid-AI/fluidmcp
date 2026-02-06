@@ -342,3 +342,48 @@ class TestThreadSafety:
             metrics = all_metrics[f"model-{i}"]
             assert metrics.total_requests == 10
             assert metrics.successful_requests == 10
+
+    def test_get_model_metrics_returns_isolated_copy(self):
+        """Test that modifying returned metrics doesn't affect internal state."""
+        collector = LLMMetricsCollector()
+
+        # Record a request
+        start = collector.record_request_start("test-model", "vllm")
+        collector.record_request_failure("test-model", start, status_code=500)
+
+        # Get metrics copy
+        metrics_copy = collector.get_model_metrics("test-model")
+        assert metrics_copy is not None
+        assert metrics_copy.total_requests == 1
+        assert metrics_copy.errors_by_status[500] == 1
+
+        # Modify the copy's mutable field
+        metrics_copy.errors_by_status[500] = 999
+        metrics_copy.errors_by_status[404] = 123
+
+        # Verify internal state is unchanged
+        metrics_internal = collector.get_model_metrics("test-model")
+        assert metrics_internal.errors_by_status[500] == 1  # Not 999
+        assert 404 not in metrics_internal.errors_by_status  # Not added
+
+    def test_get_all_metrics_returns_isolated_copies(self):
+        """Test that modifying returned metrics dict doesn't affect internal state."""
+        collector = LLMMetricsCollector()
+
+        # Record requests for multiple models
+        for i in range(3):
+            start = collector.record_request_start(f"model-{i}", "vllm")
+            collector.record_request_failure(f"model-{i}", start, status_code=500)
+
+        # Get all metrics
+        all_metrics = collector.get_all_metrics()
+        assert len(all_metrics) == 3
+
+        # Modify copies
+        all_metrics["model-0"].errors_by_status[500] = 999
+        all_metrics["model-1"].errors_by_status[404] = 123
+
+        # Verify internal state unchanged
+        internal = collector.get_all_metrics()
+        assert internal["model-0"].errors_by_status[500] == 1  # Not 999
+        assert 404 not in internal["model-1"].errors_by_status  # Not added

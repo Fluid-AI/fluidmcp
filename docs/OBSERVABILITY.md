@@ -229,10 +229,12 @@ rate(fluidmcp_llm_requests_total[5m])
 (rate(fluidmcp_llm_requests_failed[5m]) / rate(fluidmcp_llm_requests_total[5m])) * 100
 ```
 
-**P95 latency estimate:**
+**Max (worst-case) latency:**
 ```promql
 fluidmcp_llm_latency_seconds{stat="max"}
 ```
+
+Note: This shows the maximum observed latency (outlier), not a P95 percentile. For true P95 tracking, histogram buckets would be needed.
 
 **Token cost estimate (Replicate Llama 2 70B: $0.65/1M tokens):**
 ```promql
