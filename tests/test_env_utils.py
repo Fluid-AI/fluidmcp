@@ -39,9 +39,10 @@ class TestPlaceholderDetection:
         assert not is_placeholder("ab")  # Two chars not placeholder
 
     def test_repeated_characters(self):
-        """Test repeated character detection."""
+        """Test repeated character detection (6+ consecutive x's)."""
         assert is_placeholder("xxxxxxxxxx")  # 10 x's
         assert is_placeholder("XXXXXXXXXX")  # 10 X's
+        assert is_placeholder("xxxxxx")  # 6 x's (at threshold)
         assert not is_placeholder("xxxxx")  # Only 5 x's (below threshold)
 
     def test_angle_bracket_patterns(self):

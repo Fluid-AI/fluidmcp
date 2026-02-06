@@ -14,7 +14,7 @@ def is_placeholder(value: str) -> bool:
 
     Common placeholder patterns detected:
     - Wrapped in angle brackets: <your-username>, <password>
-    - Contains repeated 'x' characters: xxxx-xxxx-xxxx, XXXXXXXX
+    - Contains repeated 'x' characters (6+ consecutive): xxxxxx-xxxx, XXXXXXXX
     - Contains 'placeholder' keyword
     - Generic instruction patterns: 'your-*', 'my-*', 'insert-*', 'enter-*'
     - Common placeholder values: 'changeme', 'replace_me', 'todo'
@@ -56,8 +56,8 @@ def is_placeholder(value: str) -> bool:
     if 'placeholder' in value_lower:
         return True
 
-    # Repeated 'x' characters (4+ consecutive x's)
-    if 'xxxx' in value_lower or 'XXXX' in value:
+    # Repeated 'x' characters (6+ consecutive x's to avoid false positives)
+    if 'xxxxxx' in value_lower or 'XXXXXX' in value:
         return True
 
     # Common placeholder values (exact match)
@@ -68,6 +68,7 @@ def is_placeholder(value: str) -> bool:
         'example', 'sample', 'test',
         'your_key', 'your_token', 'your_password',
         'my_key', 'my_token', 'my_password',
+        'none', 'null',
     ]
     if value_lower in common_placeholders:
         return True
