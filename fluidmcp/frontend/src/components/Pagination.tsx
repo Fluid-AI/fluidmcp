@@ -1,5 +1,5 @@
 import React from 'react';
-import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 export interface PaginationProps {
   currentPage: number;
@@ -33,7 +33,7 @@ export const Pagination: React.FC<PaginationProps> = ({
         className="pagination-btn"
         aria-label="Go to previous page"
       >
-        <FiChevronLeft size={20} />
+        <ChevronLeft className="w-5 h-5" />
       </button>
 
       <span className="pagination-info" aria-live="polite">
@@ -48,7 +48,7 @@ export const Pagination: React.FC<PaginationProps> = ({
         className="pagination-btn"
         aria-label="Go to next page"
       >
-        <FiChevronRight size={20} />
+        <ChevronRight className="w-5 h-5" />
       </button>
     </div>
   );

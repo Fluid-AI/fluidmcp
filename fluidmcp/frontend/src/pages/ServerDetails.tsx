@@ -158,18 +158,18 @@ export default function ServerDetails() {
                 >
                   Servers
                 </Link>
-                <Link 
-                  to="/status" 
+                <Link
+                  to="/status"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
                 >
                   Status
                 </Link>
-                <a 
-                  href="#" 
+                <Link
+                  to="/documentation"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
                 >
                   Documentation
-                </a>
+                </Link>
               </nav>
             </div>
             <div className="flex items-center space-x-3">
@@ -239,18 +239,18 @@ export default function ServerDetails() {
                 >
                   Servers
                 </Link>
-                <Link 
-                  to="/status" 
+                <Link
+                  to="/status"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
                 >
                   Status
                 </Link>
-                <a 
-                  href="#" 
+                <Link
+                  to="/documentation"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
                 >
                   Documentation
-                </a>
+                </Link>
               </nav>
             </div>
             <div className="flex items-center space-x-3">
@@ -321,12 +321,12 @@ export default function ServerDetails() {
               >
                 Status
               </Link>
-              <a 
-                href="#" 
+              <Link
+                to="/documentation"
                 className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
               >
                 Documentation
-              </a>
+              </Link>
             </nav>
           </div>
           <div className="flex items-center space-x-3">

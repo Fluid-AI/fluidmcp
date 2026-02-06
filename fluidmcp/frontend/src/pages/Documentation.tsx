@@ -233,18 +233,17 @@ export default function Documentation() {
     <div className="min-h-screen bg-background flex flex-col text-sm" style={{ backgroundColor: 'hsl(240, 10%, 3.9%)' }}>
       {/* Header - Same as Dashboard */}
       <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
+        {/* Mobile menu button - fixed position to not affect header layout */}
+        <button
+          onClick={toggleMobileSidebar}
+          className="fixed left-4 top-4 md:hidden h-8 w-8 flex items-center justify-center rounded-md hover:bg-zinc-800 text-white z-[60]"
+          aria-label="Toggle sidebar menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+
         <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
           <div className="flex items-center space-x-8">
-            <div className="md:hidden mr-2">
-              <button 
-                onClick={toggleMobileSidebar}
-                className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-zinc-800 text-white"
-                aria-label="Toggle sidebar menu"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-            </div>
-            
             <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
               <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
             </Link>
@@ -315,31 +314,33 @@ export default function Documentation() {
         >
           <div className="p-4 pb-12 space-y-4">
             <div className="flex flex-col space-y-1">
-              <div className="flex items-center justify-between">
-                <div className={cn(
-                  "font-medium text-base transition-opacity duration-200 text-white",
-                  sidebarOpen ? "opacity-100" : "opacity-0 md:hidden"
-                )}>
-                  Documentation
-                </div>
+              <div className={cn(
+                "flex items-center",
+                sidebarOpen ? "justify-between" : "md:justify-center"
+              )}>
+                {sidebarOpen && (
+                  <div className="font-medium text-base text-white">
+                    Documentation
+                  </div>
+                )}
                 <div className="flex items-center">
                   {/* Mobile close button */}
-                  <button 
+                  <button
                     onClick={toggleMobileSidebar}
                     className="h-8 w-8 flex md:hidden items-center justify-center rounded-md hover:bg-[#1A1D26] text-white"
                     aria-label="Close sidebar menu"
                   >
                     <X className="h-5 w-5" />
                   </button>
-                  
+
                   {/* Desktop sidebar toggle */}
-                  <button 
+                  <button
                     onClick={toggleSidebar}
                     className="h-8 w-8 hidden md:flex items-center justify-center rounded-md hover:bg-[#1A1D26] text-white"
                     aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
                   >
-                    {sidebarOpen ? 
-                      <PanelLeftClose className="h-5 w-5" /> : 
+                    {sidebarOpen ?
+                      <PanelLeftClose className="h-5 w-5" /> :
                       <PanelLeft className="h-5 w-5" />
                     }
                   </button>
@@ -4383,7 +4384,7 @@ curl -X PUT http://localhost:8099/api/servers/my-server/instance/env \\
       
       {/* Scroll to top button */}
       {showScrollTop && (
-        <button 
+        <button
           onClick={scrollToTop}
           className="fixed bottom-6 right-6 bg-white text-black p-3 rounded-full shadow-lg hover:bg-gray-100 transition-colors"
           aria-label="Scroll to top"
@@ -4391,16 +4392,6 @@ curl -X PUT http://localhost:8099/api/servers/my-server/instance/env \\
           <ArrowUp className="h-5 w-5" />
         </button>
       )}
-      
-      {/* Mobile sidebar toggle button */}
-      <button 
-        onClick={toggleMobileSidebar}
-        className="fixed bottom-6 left-6 md:hidden bg-white text-black p-3 rounded-full shadow-lg hover:bg-gray-100 transition-colors"
-        aria-label="Open sidebar menu"
-        style={{ display: mobileSidebarOpen ? 'none' : 'flex' }}
-      >
-        <Menu className="h-5 w-5" />
-      </button>
     </div>
   )
 }
