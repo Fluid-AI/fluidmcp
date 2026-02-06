@@ -50,78 +50,12 @@ from fluidmcp.cli.server import create_app
 from fluidmcp.cli.repositories.database import DatabaseManager
 from fluidmcp.cli.services.server_manager import ServerManager
 
-
-# ============================================================================
-# Test Fixtures
-# ============================================================================
-
-@pytest.fixture
-def mongodb_uri():
-    """MongoDB URI for testing."""
-    return os.getenv("FMCP_TEST_MONGODB_URI", "mongodb://localhost:27017")
-
-
-@pytest.fixture
-def test_db_name():
-    """Generate unique test database name."""
-    return f"fluidmcp_test_{uuid.uuid4().hex[:8]}"
-
-
-@pytest.fixture
-async def mongodb_test_connection(mongodb_uri, test_db_name):
-    """
-    MongoDB connection for integration tests.
-    Uses environment variable FMCP_TEST_MONGODB_URI or defaults to localhost.
-    """
-    # Create database manager
-    manager = DatabaseManager(mongodb_uri, test_db_name)
-    await manager.connect()
-
-    yield manager
-
-    # Cleanup: drop test database
-    try:
-        await manager.client.drop_database(test_db_name)
-    except Exception:
-        pass  # Best effort cleanup
-    await manager.close()
-
-
-@pytest.fixture
-async def serve_test_app(mongodb_test_connection):
-    """
-    Creates FastAPI app with MongoDB backend for integration testing.
-    Uses insecure mode (no authentication) to simplify testing.
-    Returns tuple: (app, database_manager, server_manager)
-    """
-    # Create managers
-    db_manager = mongodb_test_connection
-    server_manager = ServerManager(db_manager)
-
-    # Create app using server.create_app() in insecure mode
-    app = await create_app(
-        db_manager=db_manager,
-        server_manager=server_manager,
-        secure_mode=False,  # Insecure mode - no authentication
-        token=None,
-        allowed_origins=["http://localhost:3000"]
-    )
-
-    yield app, db_manager, server_manager
-
-    # Cleanup: stop all servers
-    await server_manager.shutdown_all()
-
-
-@pytest.fixture
-async def api_client(serve_test_app):
-    """
-    httpx.AsyncClient for making API requests (insecure mode, no auth).
-    """
-    app, db_manager, server_manager = serve_test_app
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+# Import utility functions from conftest.py
+# Note: Fixtures are automatically available from conftest.py
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))
+from conftest import wait_for_server_status, wait_for_condition
 
 
 # ============================================================================
@@ -182,7 +116,7 @@ class TestConfigurationManagement:
 
         # Delete server config
         response = await client.delete("/api/servers/test-memory-server")
-        assert response.status_code in [200, 400, 403, 404]
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
 
 
 # ============================================================================
@@ -218,15 +152,17 @@ class TestServerOperations:
         data = response.json()
         assert "message" in data or "status" in data
 
-        # Wait for server to initialize
-        await asyncio.sleep(2)
+        # Wait for server to reach running state (up to 30 seconds)
+        success = await wait_for_server_status(client, "lifecycle-test-server", "running", timeout=30.0)
+        if not success:
+            # Try alternate status value
+            success = await wait_for_server_status(client, "lifecycle-test-server", "started", timeout=5.0)
+        assert success, "Server failed to start within 30 seconds"
 
-        # Check status
+        # Verify server details
         response = await client.get("/api/servers/lifecycle-test-server/status")
         assert response.status_code == 200
         data = response.json()
-        status_field = data.get("state") or data.get("status")
-        assert status_field in ["running", "started"]
         assert "pid" in data and data["pid"] is not None
 
         # Restart server
@@ -234,9 +170,13 @@ class TestServerOperations:
         response = await client.post("/api/servers/lifecycle-test-server/restart")
         assert response.status_code == 200
 
-        await asyncio.sleep(2)
+        # Wait for server to restart and reach running state
+        success = await wait_for_server_status(client, "lifecycle-test-server", "running", timeout=30.0)
+        if not success:
+            success = await wait_for_server_status(client, "lifecycle-test-server", "started", timeout=5.0)
+        assert success, "Server failed to restart within 30 seconds"
 
-        # After restart, verify server is running
+        # Verify server is running
         response = await client.get("/api/servers/lifecycle-test-server/status")
         assert response.status_code == 200
         data = response.json()
@@ -247,18 +187,20 @@ class TestServerOperations:
         response = await client.post("/api/servers/lifecycle-test-server/stop")
         assert response.status_code == 200
 
-        await asyncio.sleep(1)
+        # Wait for server to stop (check for either stopped status or 404)
+        async def check_stopped():
+            response = await client.get("/api/servers/lifecycle-test-server/status")
+            if response.status_code == 404:
+                return True
+            if response.status_code == 200:
+                data = response.json()
+                status_field = data.get("state") or data.get("status")
+                if status_field and status_field in ["stopped", "not_found", "not found"]:
+                    return True
+            return False
 
-        # Check final status
-        response = await client.get("/api/servers/lifecycle-test-server/status")
-        # 404 is acceptable - means server stopped and cleaned up
-        if response.status_code == 404:
-            return
-        assert response.status_code == 200
-        data = response.json()
-        status_field = data.get("state") or data.get("status")
-        if status_field:
-            assert status_field in ["stopped", "not_found", "not found"]
+        success = await wait_for_condition(check_stopped, timeout=10.0)
+        assert success, "Server failed to stop within 10 seconds"
 
 
 # ============================================================================
@@ -287,7 +229,12 @@ class TestEnvironmentManagement:
         }
         await client.post("/api/servers", json=server_config)
         await client.post("/api/servers/env-test-server/start")
-        await asyncio.sleep(2)
+
+        # Wait for server to start
+        success = await wait_for_server_status(client, "env-test-server", "running", timeout=30.0)
+        if not success:
+            success = await wait_for_server_status(client, "env-test-server", "started", timeout=5.0)
+        assert success, "Server failed to start within 30 seconds"
 
         # Get environment variables
         response = await client.get("/api/servers/env-test-server/instance/env")
@@ -303,8 +250,11 @@ class TestEnvironmentManagement:
         response = await client.put("/api/servers/env-test-server/instance/env", json=new_env)
         assert response.status_code == 200
 
-        # Wait for restart
-        await asyncio.sleep(3)
+        # Wait for server to restart
+        success = await wait_for_server_status(client, "env-test-server", "running", timeout=30.0)
+        if not success:
+            success = await wait_for_server_status(client, "env-test-server", "started", timeout=5.0)
+        assert success, "Server failed to restart after env update within 30 seconds"
 
         # Verify new env vars
         response = await client.get("/api/servers/env-test-server/instance/env")
@@ -356,7 +306,11 @@ class TestConcurrentOperations:
         success_count = sum(1 for r in responses if not isinstance(r, Exception) and r.status_code == 200)
         assert success_count >= 1, f"At least one start should succeed, got {success_count}"
 
-        await asyncio.sleep(2)
+        # Wait for server to reach running state
+        success = await wait_for_server_status(client, "concurrent-test-server", "running", timeout=30.0)
+        if not success:
+            success = await wait_for_server_status(client, "concurrent-test-server", "started", timeout=5.0)
+        assert success, "Server failed to start after concurrent requests within 30 seconds"
 
         # Verify server is running
         response = await client.get("/api/servers/concurrent-test-server/status")
@@ -397,7 +351,12 @@ class TestErrorHandling:
             await client.post("/api/servers", json=server_config)
             await client.post(f"/api/servers/shutdown-test-{i}/start")
 
-        await asyncio.sleep(3)
+        # Wait for all servers to start
+        for i in range(3):
+            success = await wait_for_server_status(client, f"shutdown-test-{i}", "running", timeout=30.0)
+            if not success:
+                success = await wait_for_server_status(client, f"shutdown-test-{i}", "started", timeout=5.0)
+            assert success, f"Server shutdown-test-{i} failed to start within 30 seconds"
 
         # Verify all servers are running
         for i in range(3):
@@ -447,8 +406,14 @@ class TestToolManagement:
         response = await client.post("/api/servers/tool-discovery-test/start")
         assert response.status_code == 200
 
-        # Wait for server to start and discover tools
-        await asyncio.sleep(5)
+        # Wait for server to start
+        success = await wait_for_server_status(client, "tool-discovery-test", "running", timeout=30.0)
+        if not success:
+            success = await wait_for_server_status(client, "tool-discovery-test", "started", timeout=5.0)
+        assert success, "Server failed to start within 30 seconds"
+
+        # Allow additional time for tool discovery (tools may be discovered after server starts)
+        await asyncio.sleep(2)
 
         # Get tools
         response = await client.get("/api/servers/tool-discovery-test/tools")
@@ -487,7 +452,13 @@ class TestToolManagement:
         await client.post("/api/servers/tool-execution-test/start")
 
         # Wait for server to start
-        await asyncio.sleep(5)
+        success = await wait_for_server_status(client, "tool-execution-test", "running", timeout=30.0)
+        if not success:
+            success = await wait_for_server_status(client, "tool-execution-test", "started", timeout=5.0)
+        assert success, "Server failed to start within 30 seconds"
+
+        # Allow additional time for tool discovery
+        await asyncio.sleep(2)
 
         # Get available tools
         response = await client.get("/api/servers/tool-execution-test/tools")
@@ -507,6 +478,10 @@ class TestToolManagement:
                 tool_to_execute = tool
                 break
 
+        # Ensure we found an appropriate tool
+        assert tool_to_execute is not None, \
+            f"Expected store/add tool in {[t['name'] for t in tools]}"
+
         if tool_to_execute:
             # Execute the tool
             tool_params = {
@@ -525,7 +500,10 @@ class TestToolManagement:
                     json={"arguments": tool_params}
                 )
 
-            assert response.status_code in [200, 400, 404]
+            # Tool execution should succeed (200) or fail with validation error (400)
+            # 404 is acceptable only if endpoint/tool not found
+            assert response.status_code in [200, 400, 404], \
+                f"Expected 200/400/404, got {response.status_code}: {response.text}"
 
             if response.status_code == 200:
                 result = response.json()

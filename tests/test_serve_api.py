@@ -41,78 +41,7 @@ from fluidmcp.cli.server import create_app
 from fluidmcp.cli.repositories.database import DatabaseManager
 from fluidmcp.cli.services.server_manager import ServerManager
 
-
-# ============================================================================
-# Test Fixtures
-# ============================================================================
-
-@pytest.fixture
-def mongodb_uri():
-    """MongoDB URI for testing."""
-    return os.getenv("FMCP_TEST_MONGODB_URI", "mongodb://localhost:27017")
-
-
-@pytest.fixture
-def test_db_name():
-    """Generate unique test database name."""
-    return f"fluidmcp_test_{uuid.uuid4().hex[:8]}"
-
-
-@pytest.fixture
-async def mongodb_test_connection(mongodb_uri, test_db_name):
-    """
-    MongoDB connection for integration tests.
-    Uses environment variable FMCP_TEST_MONGODB_URI or defaults to localhost.
-    """
-    # Create database manager
-    manager = DatabaseManager(mongodb_uri, test_db_name)
-    await manager.connect()
-
-    yield manager
-
-    # Cleanup: drop test database
-    try:
-        await manager.client.drop_database(test_db_name)
-    except Exception:
-        pass  # Best effort cleanup
-    await manager.close()
-
-
-@pytest.fixture
-async def serve_test_app(mongodb_test_connection):
-    """
-    Creates FastAPI app with MongoDB backend for integration testing.
-    Uses insecure mode (no authentication) to simplify testing.
-    Returns tuple: (app, database_manager, server_manager)
-    """
-    # Create managers
-    db_manager = mongodb_test_connection
-    server_manager = ServerManager(db_manager)
-
-    # Create app using server.create_app() in insecure mode
-    app = await create_app(
-        db_manager=db_manager,
-        server_manager=server_manager,
-        secure_mode=False,  # Insecure mode - no authentication
-        token=None,
-        allowed_origins=["http://localhost:3000"]
-    )
-
-    yield app, db_manager, server_manager
-
-    # Cleanup: stop all servers
-    await server_manager.shutdown_all()
-
-
-@pytest.fixture
-async def api_client(serve_test_app):
-    """
-    httpx.AsyncClient for making API requests (insecure mode, no auth).
-    """
-    app, db_manager, server_manager = serve_test_app
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+# Shared fixtures are now in conftest.py
 
 
 # ============================================================================
@@ -233,5 +162,5 @@ class TestErrorHandling:
         # Should return False for failed connection
         assert result is False, "Connection should fail and return False"
 
-        # Should fail within configured timeout (default 30 seconds)
+        # Should fail within configured timeout (default 30 seconds, allow 5s buffer)
         assert elapsed_time < 35, f"Connection timeout took {elapsed_time}s, expected < 35s"
