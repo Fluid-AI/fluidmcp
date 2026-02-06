@@ -254,34 +254,38 @@ class LLMMetricsCollector:
             "# TYPE fluidmcp_llm_errors_by_status counter",
         ]
 
+        # Take snapshot under lock to minimize lock hold time
         with self._lock:
-            for model_id, metrics in self._metrics.items():
-                # Escape special characters in label values for Prometheus format
-                safe_model_id = self._escape_label_value(model_id)
-                # Handle potential None provider_type
-                safe_provider = self._escape_label_value(metrics.provider_type or "unknown")
-                labels = f'model_id="{safe_model_id}",provider="{safe_provider}"'
+            metrics_snapshot = copy.deepcopy(self._metrics)
 
-                # Request counts
-                lines.append(f'fluidmcp_llm_requests_total{{{labels}}} {metrics.total_requests}')
-                lines.append(f'fluidmcp_llm_requests_successful{{{labels}}} {metrics.successful_requests}')
-                lines.append(f'fluidmcp_llm_requests_failed{{{labels}}} {metrics.failed_requests}')
+        # Format Prometheus output without holding lock
+        for model_id, metrics in metrics_snapshot.items():
+            # Escape special characters in label values for Prometheus format
+            safe_model_id = self._escape_label_value(model_id)
+            # Handle potential None provider_type
+            safe_provider = self._escape_label_value(metrics.provider_type or "unknown")
+            labels = f'model_id="{safe_model_id}",provider="{safe_provider}"'
 
-                # Latency
-                lines.append(f'fluidmcp_llm_latency_seconds{{{labels},stat="avg"}} {metrics.avg_latency():.6f}')
-                if metrics.min_latency != float('inf'):
-                    lines.append(f'fluidmcp_llm_latency_seconds{{{labels},stat="min"}} {metrics.min_latency:.6f}')
-                lines.append(f'fluidmcp_llm_latency_seconds{{{labels},stat="max"}} {metrics.max_latency:.6f}')
+            # Request counts
+            lines.append(f'fluidmcp_llm_requests_total{{{labels}}} {metrics.total_requests}')
+            lines.append(f'fluidmcp_llm_requests_successful{{{labels}}} {metrics.successful_requests}')
+            lines.append(f'fluidmcp_llm_requests_failed{{{labels}}} {metrics.failed_requests}')
 
-                # Token usage
-                lines.append(f'fluidmcp_llm_tokens_total{{{labels},type="prompt"}} {metrics.total_prompt_tokens}')
-                lines.append(f'fluidmcp_llm_tokens_total{{{labels},type="completion"}} {metrics.total_completion_tokens}')
-                lines.append(f'fluidmcp_llm_tokens_total{{{labels},type="total"}} {metrics.total_tokens}')
+            # Latency
+            lines.append(f'fluidmcp_llm_latency_seconds{{{labels},stat="avg"}} {metrics.avg_latency():.6f}')
+            if metrics.min_latency != float('inf'):
+                lines.append(f'fluidmcp_llm_latency_seconds{{{labels},stat="min"}} {metrics.min_latency:.6f}')
+            lines.append(f'fluidmcp_llm_latency_seconds{{{labels},stat="max"}} {metrics.max_latency:.6f}')
 
-                # Errors by status
-                for status_code, count in metrics.errors_by_status.items():
-                    error_labels = f'{labels},status_code="{status_code}"'
-                    lines.append(f'fluidmcp_llm_errors_by_status{{{error_labels}}} {count}')
+            # Token usage
+            lines.append(f'fluidmcp_llm_tokens_total{{{labels},type="prompt"}} {metrics.total_prompt_tokens}')
+            lines.append(f'fluidmcp_llm_tokens_total{{{labels},type="completion"}} {metrics.total_completion_tokens}')
+            lines.append(f'fluidmcp_llm_tokens_total{{{labels},type="total"}} {metrics.total_tokens}')
+
+            # Errors by status
+            for status_code, count in metrics.errors_by_status.items():
+                error_labels = f'{labels},status_code="{status_code}"'
+                lines.append(f'fluidmcp_llm_errors_by_status{{{error_labels}}} {count}')
 
         # Add uptime
         uptime = time.time() - self._start_time
@@ -298,38 +302,41 @@ class LLMMetricsCollector:
         Returns:
             Dictionary containing all metrics
         """
+        # Take snapshot under lock to minimize lock hold time
         with self._lock:
-            result = {
-                "uptime_seconds": time.time() - self._start_time,
-                "models": {}
+            uptime_seconds = time.time() - self._start_time
+            metrics_snapshot = copy.deepcopy(self._metrics)
+
+        # Build JSON result without holding lock
+        result = {
+            "uptime_seconds": uptime_seconds,
+            "models": {}
+        }
+
+        for model_id, metrics in metrics_snapshot.items():
+            result["models"][model_id] = {
+                "provider_type": metrics.provider_type,
+                "requests": {
+                    "total": metrics.total_requests,
+                    "successful": metrics.successful_requests,
+                    "failed": metrics.failed_requests,
+                    "success_rate_percent": round(metrics.success_rate(), 2),
+                    "error_rate_percent": round(metrics.error_rate(), 2),
+                },
+                "latency": {
+                    "avg_seconds": round(metrics.avg_latency(), 3),
+                    "min_seconds": round(metrics.min_latency, 3) if metrics.min_latency != float('inf') else None,
+                    "max_seconds": round(metrics.max_latency, 3),
+                },
+                "tokens": {
+                    "prompt": metrics.total_prompt_tokens,
+                    "completion": metrics.total_completion_tokens,
+                    "total": metrics.total_tokens,
+                },
+                "errors_by_status": dict(metrics.errors_by_status),
             }
 
-            for model_id, metrics in self._metrics.items():
-                # Work on a deep copy to avoid exposing internal mutable state
-                metrics_copy = copy.deepcopy(metrics)
-                result["models"][model_id] = {
-                    "provider_type": metrics_copy.provider_type,
-                    "requests": {
-                        "total": metrics_copy.total_requests,
-                        "successful": metrics_copy.successful_requests,
-                        "failed": metrics_copy.failed_requests,
-                        "success_rate_percent": round(metrics_copy.success_rate(), 2),
-                        "error_rate_percent": round(metrics_copy.error_rate(), 2),
-                    },
-                    "latency": {
-                        "avg_seconds": round(metrics_copy.avg_latency(), 3),
-                        "min_seconds": round(metrics_copy.min_latency, 3) if metrics_copy.min_latency != float('inf') else None,
-                        "max_seconds": round(metrics_copy.max_latency, 3),
-                    },
-                    "tokens": {
-                        "prompt": metrics_copy.total_prompt_tokens,
-                        "completion": metrics_copy.total_completion_tokens,
-                        "total": metrics_copy.total_tokens,
-                    },
-                    "errors_by_status": dict(metrics_copy.errors_by_status),
-                }
-
-            return result
+        return result
 
 
 # Global metrics collector instance with thread-safe initialization

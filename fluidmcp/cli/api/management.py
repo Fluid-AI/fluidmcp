@@ -1547,7 +1547,10 @@ async def unified_chat_completions(
                     ) as response:
                         response.raise_for_status()
 
-                        # Record successful streaming request after status check
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+
+                        # Record successful streaming request after stream completes
                         # Note: Token usage not available for streaming responses
                         collector.record_request_success(
                             model_id=model_id,
@@ -1555,9 +1558,6 @@ async def unified_chat_completions(
                             prompt_tokens=0,
                             completion_tokens=0
                         )
-
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
@@ -1708,7 +1708,10 @@ async def unified_completions(
                     ) as response:
                         response.raise_for_status()
 
-                        # Record successful streaming request after status check
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+
+                        # Record successful streaming request after stream completes
                         # Note: Token usage not available for streaming responses
                         collector.record_request_success(
                             model_id=model_id,
@@ -1716,9 +1719,6 @@ async def unified_completions(
                             prompt_tokens=0,
                             completion_tokens=0
                         )
-
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
