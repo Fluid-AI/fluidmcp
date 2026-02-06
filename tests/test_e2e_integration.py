@@ -251,22 +251,14 @@ class TestFluidMCPE2E:
     ):
         """Test FluidMCP unified endpoint with Replicate backend."""
         # This requires FluidMCP to be running with a configured Replicate model
+        # Model ID should be provided via REPLICATE_MODEL_ID environment variable
+        model_id = os.getenv("REPLICATE_MODEL_ID")
+        if not model_id:
+            pytest.skip("REPLICATE_MODEL_ID environment variable not set")
+
+        logger.info(f"Testing with Replicate model: {model_id}")
+
         async with httpx.AsyncClient(timeout=60.0) as client:
-            # Try to find a replicate model
-            models_response = await client.get(f"{fluidmcp_url}/api/replicate/models")
-
-            if models_response.status_code == 401:
-                pytest.skip("FluidMCP secure mode enabled")
-
-            if models_response.status_code == 404:
-                pytest.skip("No Replicate models configured in FluidMCP")
-
-            models_data = models_response.json()
-            if not models_data.get("models"):
-                pytest.skip("No Replicate models available")
-
-            model_id = models_data["models"][0]["id"]
-            logger.info(f"Testing with Replicate model: {model_id}")
 
             # Test unified endpoint
             response = await client.post(

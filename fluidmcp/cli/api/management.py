@@ -1647,7 +1647,7 @@ async def unified_completions(
 
     # Initialize metrics collection
     collector = get_metrics_collector()
-    start_time = time.time()
+    start_time = collector.record_request_start(model_id, provider_type)
 
     if provider_type == "vllm":
         # Proxy to vLLM's native completions endpoint

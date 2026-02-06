@@ -7,7 +7,6 @@ Provides Prometheus-compatible metrics endpoint for monitoring and alerting.
 
 import time
 from typing import Dict, Optional, Any
-from collections import defaultdict
 from dataclasses import dataclass, field
 from threading import Lock
 from loguru import logger

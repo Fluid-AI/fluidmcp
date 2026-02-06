@@ -23,7 +23,6 @@ Configuration:
 """
 
 import os
-import json
 from locust import HttpUser, task, between, events
 from loguru import logger
 
@@ -51,24 +50,12 @@ class LLMInferenceUser(HttpUser):
         if self.auth_token:
             self.client.headers = {"Authorization": f"Bearer {self.auth_token}"}
 
-        # Discover available models if not specified
+        # Use default model if not specified via environment
+        # Note: Model discovery endpoint /api/replicate/models has been deprecated
+        # in favor of unified API. Users should specify MODEL_ID environment variable.
         if not self.model_id:
-            try:
-                response = self.client.get("/api/replicate/models", name="/api/replicate/models [setup]")
-                if response.status_code == 200:
-                    models = response.json().get("models", [])
-                    if models:
-                        self.model_id = models[0]["id"]
-                        logger.info(f"Using model: {self.model_id}")
-                    else:
-                        logger.warning("No models available, using default")
-                        self.model_id = "default"
-                else:
-                    logger.warning(f"Failed to list models: {response.status_code}")
-                    self.model_id = "default"
-            except Exception as e:
-                logger.error(f"Error discovering models: {e}")
-                self.model_id = "default"
+            logger.warning("MODEL_ID not set, using default model id 'default'")
+            self.model_id = "default"
 
         logger.info(f"User started, targeting model: {self.model_id}")
 

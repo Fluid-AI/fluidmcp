@@ -1708,7 +1708,8 @@ class TestLogRotation:
                         if hasattr(process, 'process') and process.process:
                             try:
                                 process.process.kill()
-                            except:
+                            except Exception:
+                                # Ignore errors during cleanup
                                 pass
 
     @patch('os.replace')
