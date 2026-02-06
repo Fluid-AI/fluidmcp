@@ -60,6 +60,8 @@ def sanitize_command_for_logging(command_parts: list) -> str:
     """
     # Exact flag names that should trigger redaction
     # Using exact matching to avoid false positives like --api-key-rotation
+    # Note: Single-word entries like 'token', 'secret', 'password' are handled
+    # by sensitive_segments below to avoid duplication
     sensitive_flags = {
         # API keys (exact and with prefixes)
         'api-key', 'apikey', 'api_key',
@@ -67,13 +69,12 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         # Access keys
         'access-key', 'accesskey', 'access_key',
         # Secret keys
-        'secret-key', 'secretkey', 'secret_key', 'secret',
+        'secret-key', 'secretkey', 'secret_key',
         # Auth keys
-        'auth-key', 'authkey', 'auth_key', 'auth', 'authentication',
+        'auth-key', 'authkey', 'auth_key', 'authentication',
         # Tokens
-        'token', 'auth-token', 'access-token', 'bearer-token',
-        # Passwords
-        'password', 'passwd', 'pwd', 'pass',
+        'auth-token', 'access-token', 'bearer-token',
+        # Passwords - 'pass' is too generic for exact match
         # Credentials
         'credential', 'credentials',
     }
@@ -98,12 +99,18 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         segments = re.split(r'[-_]+', flag_name)
 
         # Single-word sensitive indicators
+        # These catch flags like --token, --secret, --auth, etc.
         sensitive_segments = {
             "token",
             "secret",
             "password",
             "passwd",
             "pwd",
+            "pass",
+            "auth",
+            "authentication",
+            "credential",
+            "credentials",
         }
         if any(seg in sensitive_segments for seg in segments):
             return True

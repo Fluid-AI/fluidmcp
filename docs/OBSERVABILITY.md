@@ -192,7 +192,7 @@ Use this dashboard JSON:
         "title": "Success Rate",
         "targets": [
           {
-            "expr": "fluidmcp_llm_requests_successful / (fluidmcp_llm_requests_total > 0)"
+            "expr": "fluidmcp_llm_requests_successful / clamp_min(fluidmcp_llm_requests_total, 1)"
           }
         ]
       },
@@ -226,7 +226,7 @@ rate(fluidmcp_llm_requests_total[5m])
 
 **Error rate percentage:**
 ```promql
-(rate(fluidmcp_llm_requests_failed[5m]) / (rate(fluidmcp_llm_requests_total[5m]) > 0)) * 100
+(rate(fluidmcp_llm_requests_failed[5m]) / clamp_min(rate(fluidmcp_llm_requests_total[5m]), 1)) * 100
 ```
 
 **Max (worst-case) latency:**
