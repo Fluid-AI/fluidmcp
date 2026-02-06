@@ -1477,14 +1477,16 @@ async def unified_chat_completions(
 
     logger.info(f"Chat completion request for model '{model_id}' (type: {provider_type})")
 
-    # Initialize metrics collection
+    # Initialize metrics collector (record start after config validation)
     collector = get_metrics_collector()
-    start_time = collector.record_request_start(model_id, provider_type)
 
     # Route to appropriate provider handler
     if provider_type == "replicate":
         # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
         # The adapter already converts httpx errors to HTTPException, no need to catch them here
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
+
         try:
             timeout = request_body.get("timeout", 300)
             response = await replicate_chat_completion(model_id, request_body, timeout)
@@ -1527,6 +1529,9 @@ async def unified_chat_completions(
         if not base_url:
             raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
 
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
+
         # Check if streaming is requested
         is_streaming = request_body.get("stream", False)
 
@@ -1543,6 +1548,15 @@ async def unified_chat_completions(
                         response.raise_for_status()
                         async for chunk in response.aiter_bytes():
                             yield chunk
+
+                    # Record successful streaming request
+                    # Note: Token usage not available for streaming responses
+                    collector.record_request_success(
+                        model_id=model_id,
+                        start_time=start_time,
+                        prompt_tokens=0,
+                        completion_tokens=0
+                    )
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
@@ -1555,11 +1569,27 @@ async def unified_chat_completions(
                         error_text = str(e)
 
                     logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+
+                    # Record failed streaming request
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=e.response.status_code
+                    )
+
                     # Emit SSE error event with proper JSON escaping
                     error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
                     logger.error(f"vLLM streaming connection error: {e}")
+
+                    # Record connection error
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=502
+                    )
+
                     # Emit SSE error event with proper JSON escaping
                     error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
@@ -1645,9 +1675,8 @@ async def unified_completions(
     if not provider_type:
         raise HTTPException(404, f"Model '{model_id}' not found in configuration")
 
-    # Initialize metrics collection
+    # Initialize metrics collector (record start after config validation)
     collector = get_metrics_collector()
-    start_time = collector.record_request_start(model_id, provider_type)
 
     if provider_type == "vllm":
         # Proxy to vLLM's native completions endpoint
@@ -1659,6 +1688,9 @@ async def unified_completions(
 
         if not base_url:
             raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
 
         # Check if streaming is requested
         is_streaming = request_body.get("stream", False)
@@ -1676,6 +1708,15 @@ async def unified_completions(
                         response.raise_for_status()
                         async for chunk in response.aiter_bytes():
                             yield chunk
+
+                    # Record successful streaming request
+                    # Note: Token usage not available for streaming responses
+                    collector.record_request_success(
+                        model_id=model_id,
+                        start_time=start_time,
+                        prompt_tokens=0,
+                        completion_tokens=0
+                    )
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
@@ -1688,11 +1729,27 @@ async def unified_completions(
                         error_text = str(e)
 
                     logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+
+                    # Record failed streaming request
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=e.response.status_code
+                    )
+
                     # Emit SSE error event with proper JSON escaping
                     error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
                     logger.error(f"vLLM streaming connection error: {e}")
+
+                    # Record connection error
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=502
+                    )
+
                     # Emit SSE error event with proper JSON escaping
                     error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
