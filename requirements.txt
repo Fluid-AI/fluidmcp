@@ -46,3 +46,5 @@ typing_extensions==4.13.2
 urllib3==2.4.0
 uvicorn==0.34.2
 uv==0.7.2
+python-jose[cryptography]==3.3.0
+authlib==1.2.1
