@@ -12,6 +12,7 @@ import re
 import time
 import httpx
 import asyncio
+import threading
 from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
@@ -73,6 +74,7 @@ class ReplicateClient:
             api_key_expanded = os.path.expandvars(api_key_raw)
             # Check if any ${VAR} or $VAR pattern was not resolved
             # Match the same pattern that os.path.expandvars() uses (any alphanumeric + underscore)
+            # Support both uppercase and lowercase variable names (e.g., $PATH, $api_key)
             if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_raw):
                 if api_key_expanded == api_key_raw:
                     # SECURITY: Do NOT expose the actual API key value in error messages
@@ -110,8 +112,33 @@ class ReplicateClient:
             )
         self.base_url = (endpoints or {}).get("base_url", REPLICATE_API_BASE)
         self.default_params = default_params or {}
-        self.timeout = config.get("timeout", DEFAULT_TIMEOUT)
-        self.max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
+
+        # Validate numeric configuration fields
+        timeout = config.get("timeout", DEFAULT_TIMEOUT)
+        if not isinstance(timeout, (int, float)):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'timeout' config: "
+                f"expected a number, got {type(timeout).__name__}"
+            )
+        if timeout <= 0:
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'timeout' config: "
+                f"must be positive, got {timeout}"
+            )
+        self.timeout = timeout
+
+        max_retries = config.get("max_retries", DEFAULT_MAX_RETRIES)
+        if not isinstance(max_retries, int):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'max_retries' config: "
+                f"expected an integer, got {type(max_retries).__name__}"
+            )
+        if max_retries < 0:
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'max_retries' config: "
+                f"must be non-negative, got {max_retries}"
+            )
+        self.max_retries = max_retries
 
         # Store rate limit config for later initialization (after event loop is running)
         rate_limit = config.get("rate_limit")
@@ -337,7 +364,17 @@ class ReplicateClient:
         max_stream_seconds: Optional[float] = None
     ) -> AsyncIterator[Any]:
         """
-        Stream prediction output as it's generated.
+        Stream prediction output incrementally via polling (NOT true SSE streaming).
+
+        ⚠️ IMPORTANT: This is NOT real-time token-by-token streaming. Replicate's API
+        is polling-based, so this method polls every 0.5 seconds and yields incremental
+        output. For true SSE streaming, use providers like vLLM or OpenAI.
+
+        The polling implementation:
+        1. Creates a prediction
+        2. Polls status every 0.5 seconds
+        3. Yields new output when detected
+        4. Continues until prediction succeeds/fails or timeout
 
         Args:
             input_data: Input parameters for the model
@@ -350,6 +387,11 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
             asyncio.TimeoutError: If prediction exceeds max_stream_seconds
+            RuntimeError: If prediction fails with error
+
+        Note:
+            This method is deprecated for OpenAI-compatible endpoints. Use the
+            polling mechanism directly or switch to a provider with native streaming.
         """
         # Create prediction (polling-based incremental output)
         prediction = await self.predict(input_data, version=version, stream=False)
@@ -450,17 +492,45 @@ class ReplicateClient:
             httpx.HTTPError: If API request fails
         """
         # Parse model owner and name from model string
-        if "/" in self.model_name:
-            owner, name = self.model_name.split("/", 1)
-            response = await self.client.get(f"/models/{owner}/{name}")
-            response.raise_for_status()
-            return response.json()
-        else:
-            raise ValueError(f"Invalid model format: {self.model_name}. Expected 'owner/model-name'")
+        if "/" not in self.model_name:
+            raise ValueError(f"Invalid model format: '{self.model_name}'. Expected 'owner/model-name' format")
+
+        parts = self.model_name.split("/")
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid model format: '{self.model_name}'. "
+                f"Expected exactly one slash in 'owner/model-name' format, got {len(parts)-1} slashes"
+            )
+
+        owner, name = parts
+        if not owner or not name:
+            raise ValueError(
+                f"Invalid model format: '{self.model_name}'. "
+                f"Both owner and model-name must be non-empty"
+            )
+
+        response = await self.client.get(f"/models/{owner}/{name}")
+        response.raise_for_status()
+        return response.json()
 
     async def health_check(self) -> bool:
         """
         Check if the Replicate API is accessible and the model is available.
+
+        ⚠️ LIMITATION: This health check only verifies that:
+        1. The Replicate API is reachable
+        2. The model metadata can be retrieved (get_model_info succeeds)
+
+        It does NOT verify:
+        - Whether your API key has inference permissions for this model
+        - Whether the model is currently available for predictions
+        - Whether you have sufficient credits/quota
+
+        A passing health check means the model exists and is publicly accessible,
+        but predictions may still fail if you lack inference permissions or quota.
+
+        For production deployments, consider implementing a warmup prediction
+        (create + cancel) to fully validate credentials and permissions.
 
         Returns:
             True if API is accessible and model exists, False otherwise
@@ -492,15 +562,8 @@ class ReplicateClient:
 
 # Global registry of active Replicate clients
 _replicate_clients: Dict[str, ReplicateClient] = {}
-_registry_lock: Optional[asyncio.Lock] = None
-
-
-def _get_registry_lock() -> asyncio.Lock:
-    """Get or create the global registry lock (lazy initialization to avoid event loop issues)."""
-    global _registry_lock
-    if _registry_lock is None:
-        _registry_lock = asyncio.Lock()
-    return _registry_lock
+# Thread-safety lock for registry operations
+_registry_lock = threading.RLock()
 
 
 async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]]) -> Dict[str, ReplicateClient]:
@@ -549,7 +612,8 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
                     logger.debug(f"Skipping rate limiter configuration for '{model_id}': {e}")
 
                 clients[model_id] = client
-                async with _get_registry_lock():
+                # Thread-safe registry update
+                with _registry_lock:
                     _replicate_clients[model_id] = client
                 logger.info(f"Successfully initialized Replicate model '{model_id}'")
             else:
@@ -580,11 +644,14 @@ async def stop_all_replicate_models() -> None:
     """
     global _replicate_clients
 
-    async with _get_registry_lock():
-        logger.info(f"Stopping {len(_replicate_clients)} Replicate client(s)")
+    # Thread-safe snapshot creation
+    with _registry_lock:
+        clients_count = len(_replicate_clients)
         # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
         # await client.close() yields control, allowing concurrent modifications
         clients_snapshot = list(_replicate_clients.items())
+
+    logger.info(f"Stopping {clients_count} Replicate client(s)")
 
     for model_id, client in clients_snapshot:
         try:
@@ -593,7 +660,8 @@ async def stop_all_replicate_models() -> None:
         except Exception as e:
             logger.error(f"Error stopping Replicate client '{model_id}': {e}")
 
-    async with _get_registry_lock():
+    # Thread-safe registry clear
+    with _registry_lock:
         _replicate_clients.clear()
     logger.info("All Replicate clients stopped")
 
@@ -608,7 +676,9 @@ def get_replicate_client(model_id: str) -> Optional[ReplicateClient]:
     Returns:
         ReplicateClient instance or None if not found
     """
-    return _replicate_clients.get(model_id)
+    # Thread-safe registry read
+    with _registry_lock:
+        return _replicate_clients.get(model_id)
 
 
 def list_replicate_models() -> List[str]:
@@ -618,4 +688,6 @@ def list_replicate_models() -> List[str]:
     Returns:
         List of model identifiers
     """
-    return list(_replicate_clients.keys())
+    # Thread-safe registry read
+    with _registry_lock:
+        return list(_replicate_clients.keys())

@@ -14,7 +14,6 @@ FluidMCP supports running AI models via **Replicate's cloud API**, enabling infe
 - HTTP client for Replicate API
 - Automatic retry logic and error handling
 - Health monitoring
-- Streaming support
 - Model lifecycle management
 
 ## Key Features
@@ -24,7 +23,6 @@ FluidMCP supports running AI models via **Replicate's cloud API**, enabling infe
 ✅ **Simple setup** - Just API key needed
 ✅ **Wide model selection** - Access to Meta Llama, Mistral, CodeLlama, Stable Diffusion, and thousands more
 ✅ **Automatic retries** - Built-in error recovery
-✅ **Streaming support** - Real-time output generation
 
 ## Quick Start
 
@@ -82,21 +80,10 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
     "temperature": 0.7,
     "max_tokens": 1000
   }'
-
-# Stream chat completions (use -N flag for curl to disable buffering)
-curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama-2-70b",
-    "messages": [
-      {
-        "role": "user",
-        "content": "Write a haiku about coding"
-      }
-    ],
-    "stream": true
-  }'
 ```
+
+**Streaming Support**: Replicate models do not currently support streaming (`"stream": true`) due to Replicate's polling-based API architecture. Streaming requests will return a 501 error. For real-time output requirements, consider using vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
+
 
 **Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/{model_id}/v1/...` routes shown above.
 
@@ -346,27 +333,21 @@ POST /api/llm/{model_id}/v1/chat/completions
     }
   ],
   "usage": {
-    "prompt_tokens": 20,
-    "completion_tokens": 100,
-    "total_tokens": 120
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
   }
+  // Note: Replicate API doesn't provide token counts, so usage fields are always 0
 }
 ```
 
-### Streaming Responses
-Set `"stream": true` in the request:
+### Streaming Not Supported
 
-```bash
-curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama-2-70b",
-    "messages": [{"role": "user", "content": "Tell me a story"}],
-    "stream": true
-  }'
-```
+Replicate-backed models do not support **OpenAI-compatible streaming** via `"stream": true` on the `/api/llm/...` endpoints. Such requests will return HTTP 501 (Not Implemented) because Replicate's API is fundamentally polling-based.
 
-**Note**: Replicate doesn't support native streaming yet. FluidMCP implements streaming by polling the Replicate prediction and emitting incremental OpenAI-compatible SSE chunks (`delta.content`) as the output grows, rather than waiting to return a single final response.
+FluidMCP also exposes a legacy, Replicate-specific SSE endpoint at `/api/replicate/models/{model_id}/stream` that streams the results of polling Replicate; this endpoint is **deprecated** and is not a replacement for OpenAI-style token-by-token streaming.
+
+For real-time streaming requirements, use vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
 ### Using with OpenAI Python Client
 
@@ -566,7 +547,7 @@ pytest tests/test_replicate_client.py -v
 pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_client
 ```
 
-**Test Coverage**: 22 tests covering:
+**Test Coverage**: 25 tests covering:
 - Client initialization
 - Prediction creation and retrieval
 - Streaming
@@ -575,6 +556,32 @@ pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_clie
 - Model management
 
 All tests use mocked HTTP responses (no actual Replicate API calls).
+
+## Limitations
+
+### Streaming Not Supported
+
+Replicate models do not currently support streaming responses (`"stream": true` in requests). This is due to Replicate's polling-based API architecture:
+
+- **Why**: Replicate predictions are asynchronous jobs that must be polled for completion
+- **Alternative**: Use vLLM, Ollama, or other providers for real-time streaming requirements
+- **Behavior**: Requests with `"stream": true` return HTTP 501 (Not Implemented)
+
+### Polling-Based Architecture
+
+Unlike vLLM which provides instant responses, Replicate uses a prediction-polling model:
+
+- Predictions are created as async jobs
+- FluidMCP polls every 1-5 seconds for completion
+- This adds latency compared to synchronous inference
+- Best suited for non-interactive use cases
+
+### Rate Limiting
+
+- Replicate enforces API rate limits at the account level
+- Client-side rate limiting is available via `rate_limit` config (token bucket algorithm)
+- High-volume usage may hit 429 (Too Many Requests) errors
+- Consider implementing request queuing for production use
 
 ## Comparison: Replicate vs vLLM
 

@@ -209,10 +209,13 @@ class TestReplicateClientPredictions:
     @pytest.mark.asyncio
     async def test_prediction_retry_on_failure(self, replicate_config, mock_http_client):
         """Test retry logic on transient errors (network errors and 5xx)."""
+        # Create a mock request for httpx.RequestError
+        mock_request = httpx.Request("POST", "https://api.replicate.com/v1/predictions")
+
         # First two calls fail with retryable errors, third succeeds
         mock_http_client.post.side_effect = [
-            httpx.RequestError("Network error"),
-            httpx.RequestError("Network error"),
+            httpx.RequestError("Network error", request=mock_request),
+            httpx.RequestError("Network error", request=mock_request),
             Mock(json=lambda: {"id": "pred_123", "status": "starting"}, raise_for_status=Mock())
         ]
 
@@ -232,8 +235,11 @@ class TestReplicateClientPredictions:
     @pytest.mark.asyncio
     async def test_prediction_fails_after_max_retries(self, replicate_config, mock_http_client):
         """Test that prediction fails after max retries on transient errors."""
+        # Create a mock request for httpx.RequestError
+        mock_request = httpx.Request("POST", "https://api.replicate.com/v1/predictions")
+
         # All calls fail with retryable errors
-        mock_http_client.post.side_effect = httpx.RequestError("Network error")
+        mock_http_client.post.side_effect = httpx.RequestError("Network error", request=mock_request)
 
         original_client = ReplicateClient("test", replicate_config)
         await original_client.client.aclose()  # Close original to prevent leak

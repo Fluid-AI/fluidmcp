@@ -426,20 +426,24 @@ def run_servers(
             # Register shutdown event to cleanup Replicate clients on same event loop
             @app.on_event("shutdown")
             async def shutdown_replicate_models():
-                """Cleanup Replicate models and HTTP clients when FastAPI server shuts down."""
+                """Cleanup Replicate models when FastAPI server shuts down."""
                 try:
                     await stop_all_replicate_models()
                     logger.info("Replicate clients shutdown completed")
                 except Exception as e:
                     logger.error(f"Error during Replicate clients shutdown: {e}")
 
-                # Cleanup management API's shared HTTP client
-                try:
-                    from ..api.management import cleanup_http_client
-                    await cleanup_http_client()
-                    logger.info("Management HTTP client shutdown completed")
-                except Exception as e:
-                    logger.error(f"Error during management HTTP client shutdown: {e}")
+        # Register global shutdown event for HTTP client cleanup (used by vLLM proxy and other features)
+        # This runs regardless of whether Replicate models are configured
+        @app.on_event("shutdown")
+        async def shutdown_http_client():
+            """Cleanup management API's shared HTTP client (used for vLLM proxying and more)."""
+            try:
+                from ..api.management import cleanup_http_client
+                await cleanup_http_client()
+                logger.info("Management HTTP client shutdown completed")
+            except Exception as e:
+                logger.error(f"Error during management HTTP client shutdown: {e}")
 
         # Final check: warn if no models of any type actually launched/initialized
         vllm_launched = bool(_llm_processes)

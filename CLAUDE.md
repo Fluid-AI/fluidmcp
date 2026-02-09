@@ -219,7 +219,7 @@ FluidMCP supports running AI models via **Replicate's cloud API** for inference 
 - **Simple setup** - Just API key needed
 - **Wide model selection** - Access to thousands of models (Llama, Mistral, CodeLlama, etc.)
 - **Automatic retries** - Built-in error recovery
-- **Streaming support** - Real-time output generation
+- **No OpenAI-style streaming** - Unified OpenAI endpoints return 501 for `stream: true` (polling-based API)
 
 ### Quick Start
 
@@ -331,7 +331,7 @@ Find models at [replicate.com/explore](https://replicate.com/explore):
 See [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) for complete documentation including:
 - API endpoints
 - Error handling and retries
-- Streaming predictions
+- Polling-based predictions
 - Cost management tips
 - Security best practices
 - Troubleshooting guide
@@ -343,7 +343,7 @@ See [examples/replicate-inference.json](examples/replicate-inference.json) for a
 ### Testing
 
 ```bash
-# Run Replicate client tests (22 tests)
+# Run Replicate client tests (25 tests)
 pytest tests/test_replicate_client.py -v
 
 # Run with coverage
@@ -364,7 +364,7 @@ pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_clie
 ### Implementation Files
 
 - [fluidmcp/cli/services/replicate_client.py](fluidmcp/cli/services/replicate_client.py) - Core HTTP client
-- [tests/test_replicate_client.py](tests/test_replicate_client.py) - Comprehensive tests (22 tests)
+- [tests/test_replicate_client.py](tests/test_replicate_client.py) - Comprehensive tests (25 tests)
 - [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) - Complete documentation
 - [examples/replicate-inference.json](examples/replicate-inference.json) - Example configuration
 
@@ -483,7 +483,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "ollama": {
-      "type": "vllm",
+      "type": "ollama",
       "command": "ollama",
       "args": ["serve"],
       "endpoints": {"base_url": "http://localhost:11434"},

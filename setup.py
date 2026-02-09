@@ -29,7 +29,7 @@ setup(
         "boto3",  # Added boto3 for S3 operations
         "fastapi",
         "uvicorn",
-        "httpx"  # Required for Replicate client
+        "httpx==0.28.1"  # Required for Replicate client (pinned to match requirements.txt)
     ],
     entry_points={
         'console_scripts': [

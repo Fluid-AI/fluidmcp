@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 from loguru import logger
 
 from .replicate_client import get_replicate_client
+from ..utils.error_utils import truncate_error_message
 
 
 def openai_messages_to_prompt(messages: List[Dict[str, str]]) -> str:
@@ -86,7 +87,15 @@ def openai_to_replicate_input(openai_request: Dict[str, Any]) -> Dict[str, Any]:
         replicate_input["top_p"] = openai_request["top_p"]
 
     if "stop" in openai_request:
-        replicate_input["stop_sequences"] = openai_request["stop"]
+        # Normalize stop sequences to list (OpenAI allows string or list)
+        stop_value = openai_request["stop"]
+        if isinstance(stop_value, str):
+            replicate_input["stop_sequences"] = [stop_value]
+        elif isinstance(stop_value, list):
+            replicate_input["stop_sequences"] = stop_value
+        else:
+            # Unexpected type, skip (will use model default)
+            pass
 
     return replicate_input
 
@@ -180,6 +189,13 @@ async def replicate_chat_completion(
     if not client:
         raise HTTPException(404, f"Model '{model_id}' not found or not a Replicate model")
 
+    # Check if streaming is requested
+    if openai_request.get("stream", False):
+        raise HTTPException(
+            501,
+            "Streaming is not supported for Replicate models. Set 'stream': false or omit it."
+        )
+
     # Convert OpenAI request to Replicate input
     replicate_input = openai_to_replicate_input(openai_request)
     logger.debug(f"Converted OpenAI request to Replicate input for '{model_id}'")
@@ -234,12 +250,14 @@ async def replicate_chat_completion(
 
             elif status == "failed":
                 error = status_result.get("error", "Unknown error")
+                # Truncate error to prevent information leakage
+                error_truncated = truncate_error_message(error)
                 logger.error(f"Prediction {prediction_id} failed: {error}")
-                raise HTTPException(500, f"Prediction failed: {error}")
+                raise HTTPException(500, f"Prediction failed: {error_truncated}")
 
             elif status == "canceled":
                 logger.warning(f"Prediction {prediction_id} was canceled")
-                raise HTTPException(499, "Prediction was canceled")
+                raise HTTPException(409, "Prediction was canceled by the upstream provider")
 
             # Still processing, wait before next poll
             await asyncio.sleep(poll_interval)
@@ -270,245 +288,3 @@ async def replicate_chat_completion(
         except Exception as e:
             logger.error(f"Error polling prediction {prediction_id}: {e}")
             raise HTTPException(500, "Error checking prediction status")
-
-
-async def replicate_chat_completion_stream(
-    model_id: str,
-    openai_request: Dict[str, Any],
-    timeout: int = 300
-):
-    """
-    Stream chat completion from Replicate in OpenAI SSE format.
-
-    Since Replicate doesn't support true streaming, this polls the prediction
-    and yields SSE chunks as the output becomes available.
-
-    Args:
-        model_id: The FluidMCP model identifier
-        openai_request: OpenAI-format chat completion request
-        timeout: Maximum seconds to wait for completion
-
-    Yields:
-        SSE-formatted chunks in OpenAI streaming format
-
-    Example SSE output:
-        data: {"id":"chatcmpl-123","choices":[{"delta":{"content":"Hello"}}]}
-
-        data: {"id":"chatcmpl-123","choices":[{"delta":{"content":" world"}}]}
-
-        data: [DONE]
-    """
-    # Get Replicate client for this model
-    client = get_replicate_client(model_id)
-
-    if client is None:
-        logger.error(f"Replicate model '{model_id}' not found or not initialized")
-        error_chunk = {
-            "error": {
-                "message": f"Model '{model_id}' not found or not initialized. Check configuration and health checks.",
-                "type": "model_not_found",
-                "code": "model_unavailable"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        return
-
-    # Convert OpenAI request to Replicate input
-    replicate_input = openai_to_replicate_input(openai_request)
-    logger.debug(f"Starting streaming prediction for '{model_id}'")
-
-    # Create prediction
-    try:
-        prediction = await client.predict(input_data=replicate_input)
-        prediction_id = prediction.get("id")
-        logger.info(f"Created streaming prediction {prediction_id} for model '{model_id}'")
-    except httpx.HTTPStatusError as e:
-        status_code = e.response.status_code if e.response is not None else 502
-        upstream_request_id = (
-            e.response.headers.get("x-request-id")
-            if e.response is not None
-            else None
-        )
-        log_msg = f"Replicate upstream HTTP error {status_code}"
-        if upstream_request_id:
-            log_msg += f" (request_id={upstream_request_id})"
-        logger.error(f"{log_msg}: {e}")
-        # Yield error as SSE
-        error_msg = f"Replicate upstream error (HTTP {status_code})"
-        if upstream_request_id:
-            error_msg += f" (request_id={upstream_request_id})"
-        error_chunk = {
-            "error": {
-                "message": error_msg,
-                "type": "upstream_error",
-                "code": "prediction_creation_failed"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        return
-    except httpx.RequestError as e:
-        logger.error(f"Failed to connect to Replicate upstream service: {e}")
-        error_chunk = {
-            "error": {
-                "message": "Failed to connect to Replicate upstream service",
-                "type": "connection_error",
-                "code": "prediction_creation_failed"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        return
-    except Exception as e:
-        logger.error(f"Failed to create streaming prediction for '{model_id}': {e}")
-        # Yield error as SSE - keep message for non-HTTP errors (debugging/testing)
-        error_chunk = {
-            "error": {
-                "message": f"Failed to create prediction: {str(e)}",
-                "type": "prediction_error",
-                "code": "prediction_creation_failed"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        return
-
-    # Generate unique chat completion ID
-    import uuid
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
-    created_timestamp = int(time.time())
-
-    # Track last output length for delta calculation
-    last_output_length = 0
-
-    # Poll until prediction completes
-    start_time = time.time()
-    poll_interval = 0.5  # Faster polling for streaming (500ms)
-    max_poll_interval = 2.0  # Cap at 2 seconds for streaming
-
-    try:
-        while True:
-            elapsed = time.time() - start_time
-            if elapsed > timeout:
-                logger.warning(f"Streaming prediction {prediction_id} timed out")
-                error_chunk = {
-                    "error": {
-                        "message": f"Prediction timed out after {timeout} seconds",
-                        "type": "timeout",
-                        "code": "prediction_timeout"
-                    }
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-                return
-
-            # Get prediction status
-            try:
-                status_result = await client.get_prediction(prediction_id)
-                status = status_result.get("status")
-                output = status_result.get("output", "")
-
-                # Handle different statuses
-                if status == "succeeded":
-                    # Send final delta if there's remaining output
-                    if isinstance(output, str) and len(output) > last_output_length:
-                        delta_content = output[last_output_length:]
-                        chunk = {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created_timestamp,
-                            "model": model_id,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"content": delta_content},
-                                "finish_reason": None
-                            }]
-                        }
-                        yield f"data: {json.dumps(chunk)}\n\n"
-
-                    # Send final chunk with finish_reason
-                    final_chunk = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_timestamp,
-                        "model": model_id,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }]
-                    }
-                    yield f"data: {json.dumps(final_chunk)}\n\n"
-                    yield "data: [DONE]\n\n"
-                    logger.info(f"Streaming prediction {prediction_id} completed")
-                    return
-
-                elif status == "failed":
-                    error = status_result.get("error", "Unknown error")
-                    logger.error(f"Streaming prediction {prediction_id} failed: {error}")
-                    error_chunk = {
-                        "error": {
-                            "message": f"Prediction failed: {error}",
-                            "type": "prediction_error",
-                            "code": "prediction_failed"
-                        }
-                    }
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
-                    return
-
-                elif status == "canceled":
-                    logger.warning(f"Streaming prediction {prediction_id} was canceled")
-                    error_chunk = {
-                        "error": {
-                            "message": "Prediction was canceled",
-                            "type": "prediction_error",
-                            "code": "prediction_canceled"
-                        }
-                    }
-                    yield f"data: {json.dumps(error_chunk)}\n\n"
-                    return
-
-                # Still processing - check if there's new output to stream
-                if isinstance(output, str) and len(output) > last_output_length:
-                    delta_content = output[last_output_length:]
-                    last_output_length = len(output)
-
-                    # Yield delta chunk
-                    chunk = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created_timestamp,
-                        "model": model_id,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": delta_content},
-                            "finish_reason": None
-                        }]
-                    }
-                    yield f"data: {json.dumps(chunk)}\n\n"
-                    logger.debug(f"Streamed {len(delta_content)} chars from prediction {prediction_id}")
-
-                # Wait before next poll
-                await asyncio.sleep(poll_interval)
-
-                # Exponential backoff for polling interval (but faster than non-streaming)
-                poll_interval = min(poll_interval * 1.3, max_poll_interval)
-
-            except Exception as e:
-                logger.error(f"Error polling streaming prediction {prediction_id}: {e}")
-                error_chunk = {
-                    "error": {
-                        "message": f"Error checking prediction status: {str(e)}",
-                        "type": "polling_error",
-                        "code": "status_check_failed"
-                    }
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n"
-                return
-
-    except Exception as e:
-        logger.error(f"Unexpected error in streaming prediction {prediction_id}: {e}")
-        error_chunk = {
-            "error": {
-                "message": f"Unexpected error: {str(e)}",
-                "type": "server_error",
-                "code": "internal_error"
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
