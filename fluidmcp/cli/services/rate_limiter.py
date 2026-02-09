@@ -31,10 +31,18 @@ class TokenBucketRateLimiter:
         Initialize rate limiter.
 
         Args:
-            rate: Tokens added per second
-            capacity: Maximum bucket size
+            rate: Tokens added per second (must be positive)
+            capacity: Maximum bucket size (must be positive)
+
+        Raises:
+            ValueError: If rate or capacity are not positive
         """
-        self.rate = rate
+        if not isinstance(rate, (int, float)) or rate <= 0:
+            raise ValueError(f"rate must be a positive number, got {rate!r}")
+        if not isinstance(capacity, int) or capacity <= 0:
+            raise ValueError(f"capacity must be a positive integer, got {capacity!r}")
+
+        self.rate = float(rate)
         self.capacity = capacity
         self.tokens = float(capacity)
         self.last_update = time.monotonic()
@@ -119,8 +127,10 @@ async def get_rate_limiter(
         await limiter.acquire()
     """
     # Default rate limits (conservative to avoid API errors)
-    rate = rate or 10.0  # 10 requests/second
-    capacity = capacity or 20  # Allow bursts up to 20
+    if rate is None:
+        rate = 10.0  # 10 requests/second
+    if capacity is None:
+        capacity = 20  # Allow bursts up to 20
 
     async with _get_limiter_lock():
         if model_id not in _rate_limiters:

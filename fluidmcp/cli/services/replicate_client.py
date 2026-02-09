@@ -153,18 +153,58 @@ class ReplicateClient:
                 f"Replicate model '{model_id}' has invalid 'rate_limit' config: "
                 f"expected a dict, got {type(rate_limit).__name__}"
             )
+        # Validate rate limit fields if provided
+        if isinstance(rate_limit, dict):
+            for key in ("requests_per_second", "burst_capacity"):
+                value = rate_limit.get(key)
+                if value is None:
+                    continue
+                if not isinstance(value, (int, float)):
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.{key}' config: "
+                        f"expected a number, got {type(value).__name__}"
+                    )
+                if value <= 0:
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.{key}' config: "
+                        f"must be positive, got {value}"
+                    )
         self.rate_limit_config = rate_limit or {}
 
-        # Store cache config
+        # Store cache config with validation
         cache_config = config.get("cache")
         if cache_config is not None and not isinstance(cache_config, dict):
             raise ValueError(
                 f"Replicate model '{model_id}' has invalid 'cache' config: "
                 f"expected a dict, got {type(cache_config).__name__}"
             )
-        self.cache_enabled = cache_config.get("enabled", False) if cache_config else False
-        self.cache_ttl = cache_config.get("ttl", 300) if cache_config else 300
-        self.cache_max_size = cache_config.get("max_size", 1000) if cache_config else 1000
+
+        # Defaults for cache settings
+        self.cache_enabled = False
+        self.cache_ttl = 300
+        self.cache_max_size = 1000
+
+        if cache_config:
+            # Enabled flag
+            self.cache_enabled = cache_config.get("enabled", False)
+
+            # TTL: must be a positive int/float
+            ttl = cache_config.get("ttl", 300)
+            if not isinstance(ttl, (int, float)) or ttl <= 0:
+                raise ValueError(
+                    f"Replicate model '{model_id}' has invalid cache 'ttl' config: "
+                    f"expected a positive number, got {ttl!r} (type {type(ttl).__name__})"
+                )
+            self.cache_ttl = ttl
+
+            # max_size: must be a positive int
+            max_size = cache_config.get("max_size", 1000)
+            if not isinstance(max_size, int) or max_size <= 0:
+                raise ValueError(
+                    f"Replicate model '{model_id}' has invalid cache 'max_size' config: "
+                    f"expected a positive int, got {max_size!r} (type {type(max_size).__name__})"
+                )
+            self.cache_max_size = max_size
 
         # Initialize HTTP client
         self.client = httpx.AsyncClient(
@@ -242,15 +282,23 @@ class ReplicateClient:
                 }
 
                 async def fetch_prediction():
-                    # Apply rate limiting before making request
-                    rate_limiter = await get_rate_limiter(self.model_id)
+                    # Apply rate limiting before making request (with model-specific config)
+                    rate_limiter = await get_rate_limiter(
+                        self.model_id,
+                        rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+                        capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+                    )
                     await rate_limiter.acquire()
                     return await self._execute_prediction(endpoint, payload)
 
                 return await cache.get_or_fetch(cache_key_data, fetch_prediction)
 
-        # No cache - apply rate limiting and execute directly
-        rate_limiter = await get_rate_limiter(self.model_id)
+        # No cache - apply rate limiting and execute directly (with model-specific config)
+        rate_limiter = await get_rate_limiter(
+            self.model_id,
+            rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+            capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+        )
         await rate_limiter.acquire()
         return await self._execute_prediction(endpoint, payload)
 
@@ -359,13 +407,12 @@ class ReplicateClient:
             httpx.HTTPError: If API request fails
         """
         # Apply rate limiting (cancellation counts against API rate limits)
-        if self.rate_limit_config:
-            rate_limiter = await get_rate_limiter(
-                self.model_id,
-                rate=self.rate_limit_config.get("requests_per_second"),
-                capacity=self.rate_limit_config.get("burst_capacity")
-            )
-            await rate_limiter.acquire()
+        rate_limiter = await get_rate_limiter(
+            self.model_id,
+            rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+            capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+        )
+        await rate_limiter.acquire()
 
         logger.info(f"Canceling prediction {prediction_id} for model '{self.model_id}'")
         response = await self.client.post(f"/predictions/{prediction_id}/cancel")

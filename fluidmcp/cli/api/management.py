@@ -53,9 +53,11 @@ async def cleanup_http_client():
     if _http_client is not None:
         try:
             await _http_client.aclose()
-            _http_client = None
         except Exception as e:
             logger.error(f"Error closing management HTTP client: {e}")
+        finally:
+            # Always clear the reference so the client can be recreated if needed
+            _http_client = None
 
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -205,7 +207,7 @@ def sanitize_input(value: Any) -> Any:
             if isinstance(key, str) and key.startswith("$"):
                 raise HTTPException(
                     400,
-                    f"MongoDB operator not allowed in input keys: {key}"
+                    "MongoDB operator-style keys (starting with '$') are not allowed in input"
                 )
         # Recursively sanitize dictionary values
         return {k: sanitize_input(v) for k, v in value.items()}
