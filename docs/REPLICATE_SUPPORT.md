@@ -598,6 +598,61 @@ curl http://localhost:8099/api/metrics/rate-limiters/llama-2-70b
    Cost savings = (cache_hits / total_requests) * total_api_cost
    ```
 
+### Unified Metrics Integration (Prometheus)
+
+Replicate metrics are automatically integrated with FluidMCP's unified Prometheus metrics system. When you query the API endpoints above, the metrics are also updated in the global registry for Prometheus scraping.
+
+**Prometheus Metrics Exported**:
+
+```
+# Cache metrics (global, no labels)
+fluidmcp_replicate_cache_hits_total          # Total cache hits
+fluidmcp_replicate_cache_misses_total        # Total cache misses
+fluidmcp_replicate_cache_size                # Current cache size
+fluidmcp_replicate_cache_hit_rate            # Hit rate (0.0-1.0 ratio)
+
+# Rate limiter metrics (per-model labels)
+fluidmcp_replicate_rate_limiter_tokens{model_id="..."}         # Available tokens
+fluidmcp_replicate_rate_limiter_utilization{model_id="..."}    # Utilization (0.0-1.0 ratio)
+fluidmcp_replicate_rate_limiter_capacity{model_id="..."}       # Maximum capacity
+fluidmcp_replicate_rate_limiter_rate{model_id="..."}           # Refill rate (tokens/sec)
+```
+
+**Prometheus Scrape Configuration**:
+
+```yaml
+scrape_configs:
+  - job_name: 'fluidmcp'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8099']
+    metrics_path: '/metrics'  # FluidMCP exposes Prometheus metrics here
+```
+
+**Example Prometheus Queries**:
+
+```promql
+# Cache hit rate over time
+rate(fluidmcp_replicate_cache_hits_total[5m]) /
+  (rate(fluidmcp_replicate_cache_hits_total[5m]) + rate(fluidmcp_replicate_cache_misses_total[5m]))
+
+# Models approaching rate limit (>80% utilization)
+fluidmcp_replicate_rate_limiter_utilization > 0.8
+
+# Total API calls saved by caching
+fluidmcp_replicate_cache_hits_total
+
+# Average available tokens across all models
+avg(fluidmcp_replicate_rate_limiter_tokens)
+```
+
+**Integration Details**:
+
+- Metrics are auto-registered on startup (via `replicate_metrics.py`)
+- Each API call to `/api/metrics/*` endpoints updates the Prometheus metrics
+- No additional configuration required - works out of the box
+- Compatible with Grafana, Prometheus AlertManager, etc.
+
 ## Cost Management
 
 Replicate charges based on compute time. Tips to manage costs:

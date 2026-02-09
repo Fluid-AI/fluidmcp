@@ -2074,20 +2074,29 @@ async def get_cache_stats(token: str = Depends(get_token)):
     - Current cache size
     - TTL configuration
 
+    Also updates the unified metrics registry for Prometheus scraping.
+
     Returns:
         Cache statistics dict
     """
     from ..services.response_cache import peek_response_cache
+    from ..services.replicate_metrics import update_cache_metrics
 
     # Peek at existing cache without creating it
     cache = await peek_response_cache()
     if cache is None:
+        # Update metrics (will set all to 0)
+        await update_cache_metrics()
         return {
             "enabled": False,
             "message": "Cache is not initialized (no models with caching enabled have been used)"
         }
 
     stats = await cache.get_stats()
+
+    # Update unified metrics registry
+    await update_cache_metrics()
+
     return {
         "enabled": True,
         **stats
@@ -2120,13 +2129,18 @@ async def get_rate_limiter_stats(token: str = Depends(get_token)):
     Get rate limiter statistics for all models.
 
     Returns available token counts for each model's rate limiter.
+    Also updates the unified metrics registry for Prometheus scraping.
 
     Returns:
         Dict mapping model_id to available tokens
     """
     from ..services.rate_limiter import get_all_rate_limiter_stats
+    from ..services.replicate_metrics import update_rate_limiter_metrics
 
     stats = await get_all_rate_limiter_stats()
+
+    # Update unified metrics registry
+    await update_rate_limiter_metrics()
 
     return {
         "rate_limiters": stats,
@@ -2142,6 +2156,8 @@ async def get_model_rate_limiter_stats(
     """
     Get rate limiter statistics for a specific model.
 
+    Also updates the unified metrics registry for Prometheus scraping.
+
     Args:
         model_id: Model identifier
 
@@ -2149,6 +2165,7 @@ async def get_model_rate_limiter_stats(
         Rate limiter stats including available tokens and configuration
     """
     from ..services.rate_limiter import get_all_rate_limiter_stats
+    from ..services.replicate_metrics import update_rate_limiter_metrics
 
     # Use thread-safe snapshot helper to avoid race conditions
     stats = await get_all_rate_limiter_stats()
@@ -2156,6 +2173,9 @@ async def get_model_rate_limiter_stats(
 
     if model_stats is None:
         raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
+
+    # Update unified metrics registry
+    await update_rate_limiter_metrics()
 
     return {
         "model_id": model_id,
