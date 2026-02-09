@@ -15,8 +15,9 @@ import asyncio
 from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
-# Import rate limiter at module level for efficiency
+# Import rate limiter and cache at module level for efficiency
 from .rate_limiter import get_rate_limiter, configure_rate_limiter
+from .response_cache import get_response_cache
 
 # Constants
 DEFAULT_TIMEOUT = 60.0  # Default timeout for API requests (seconds)
@@ -121,6 +122,17 @@ class ReplicateClient:
             )
         self.rate_limit_config = rate_limit or {}
 
+        # Store cache config
+        cache_config = config.get("cache")
+        if cache_config is not None and not isinstance(cache_config, dict):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'cache' config: "
+                f"expected a dict, got {type(cache_config).__name__}"
+            )
+        self.cache_enabled = cache_config.get("enabled", False) if cache_config else False
+        self.cache_ttl = cache_config.get("ttl", 300) if cache_config else 300
+        self.cache_max_size = cache_config.get("max_size", 1000) if cache_config else 1000
+
         # Initialize HTTP client
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -181,10 +193,40 @@ class ReplicateClient:
 
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
-        # Apply rate limiting before making request
+        # Check cache if enabled (skip if streaming or webhook)
+        if self.cache_enabled and not stream and not webhook:
+            cache = await get_response_cache(
+                ttl=self.cache_ttl,
+                max_size=self.cache_max_size,
+                enabled=True
+            )
+            if cache:
+                # Use cache key based on model + input + version
+                cache_key_data = {
+                    "model_id": self.model_id,
+                    "input": merged_input,
+                    "version": version
+                }
+
+                async def fetch_prediction():
+                    # Apply rate limiting before making request
+                    rate_limiter = await get_rate_limiter(self.model_id)
+                    await rate_limiter.acquire()
+                    return await self._execute_prediction(endpoint, payload)
+
+                return await cache.get_or_fetch(cache_key_data, fetch_prediction)
+
+        # No cache - apply rate limiting and execute directly
         rate_limiter = await get_rate_limiter(self.model_id)
         await rate_limiter.acquire()
+        return await self._execute_prediction(endpoint, payload)
 
+    async def _execute_prediction(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute prediction with retry logic.
+
+        Internal method split out to support caching.
+        """
         # Retry logic (max_retries = number of retries AFTER initial attempt)
         last_error = None
         for attempt in range(self.max_retries + 1):

@@ -138,6 +138,11 @@ curl -N -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 | `default_params` | ❌ No | `{}` | Default parameters merged with each prediction request |
 | `timeout` | ❌ No | `60.0` | HTTP request timeout in seconds |
 | `max_retries` | ❌ No | `3` | Maximum retry attempts for failed requests |
+| `cache.enabled` | ❌ No | `false` | Enable response caching (reduces API calls for identical requests) |
+| `cache.ttl` | ❌ No | `300` | Cache time-to-live in seconds (5 minutes default) |
+| `cache.max_size` | ❌ No | `1000` | Maximum number of cached responses |
+| `rate_limit.requests_per_second` | ❌ No | `10` | Rate limit for API requests per second |
+| `rate_limit.burst_capacity` | ❌ No | `20` | Burst capacity for rate limiter |
 
 ### Model Identifier Format
 
@@ -221,6 +226,46 @@ curl -X POST http://localhost:8099/api/llm/codellama/v1/chat/completions \
     ]
   }'
 ```
+
+### Production Configuration with Caching and Rate Limiting
+
+For production use, enable caching and rate limiting to optimize API usage and costs:
+
+```json
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llama-production": {
+      "type": "replicate",
+      "model": "meta/llama-2-70b-chat",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 1000
+      },
+      "cache": {
+        "enabled": true,
+        "ttl": 3600,
+        "max_size": 5000
+      },
+      "rate_limit": {
+        "requests_per_second": 5,
+        "burst_capacity": 10
+      },
+      "timeout": 120,
+      "max_retries": 3
+    }
+  }
+}
+```
+
+**Benefits:**
+- **Caching**: Identical requests return cached responses instantly, saving API calls and costs
+- **Rate Limiting**: Prevents exceeding Replicate's rate limits (token bucket algorithm)
+- **Retries**: Automatic retry with exponential backoff for transient errors
+- **Timeouts**: Prevents hanging requests
+
+**Note**: Caching is disabled for streaming and webhook requests to ensure real-time behavior.
 
 ### Multiple Models
 

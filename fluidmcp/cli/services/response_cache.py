@@ -1,25 +1,35 @@
 """
 Response caching layer for API calls.
 
-⚠️  IMPORTANT: This module is NOT currently integrated into the application.
-It provides caching infrastructure but is not wired into any production code paths.
+Provides LRU cache with TTL for Replicate API responses to reduce costs and improve performance.
 
-Status: EXPERIMENTAL / NOT IN USE
+Features:
+- Time-to-live (TTL) expiration
+- LRU eviction when max size reached
+- Thread-safe for async operations
+- Prevents duplicate concurrent fetches (request coalescing)
 
-This module was developed as part of enhancement work but is not yet integrated.
-Before using in production:
-1. Wire it into actual API call paths (currently it's only tested, not used)
-2. Add cache invalidation strategy
-3. Add monitoring and metrics
-4. Test under production load
-5. Document cache key generation and TTL policies
+Integration:
+- Integrated with Replicate client when cache.enabled=true in config
+- Automatically skipped for streaming and webhook requests
+- Cache key based on model ID, input parameters, and version
 
-To use this caching layer:
-- Call get_response_cache() with enabled=True
-- Wire it into your API call paths using the get_or_fetch() method
-- See tests/test_response_cache.py for usage examples
-
-DO NOT assume this is active - it requires explicit integration.
+Usage:
+Enable caching in your config:
+```json
+{
+  "llmModels": {
+    "model-id": {
+      "type": "replicate",
+      "cache": {
+        "enabled": true,
+        "ttl": 300,
+        "max_size": 1000
+      }
+    }
+  }
+}
+```
 """
 
 import asyncio
