@@ -15,8 +15,8 @@ def register_replicate_metrics():
     Register Replicate-specific metrics with the global metrics registry.
 
     Metrics registered:
-    - fluidmcp_replicate_cache_hits_total: Total cache hits
-    - fluidmcp_replicate_cache_misses_total: Total cache misses
+    - fluidmcp_replicate_cache_hits: Current cache hits (Gauge)
+    - fluidmcp_replicate_cache_misses: Current cache misses (Gauge)
     - fluidmcp_replicate_cache_size: Current number of cached entries
     - fluidmcp_replicate_cache_hit_rate: Cache hit rate (0.0-1.0)
     - fluidmcp_replicate_rate_limiter_tokens: Available tokens for rate limiter
@@ -25,15 +25,16 @@ def register_replicate_metrics():
     registry = get_registry()
 
     # Cache metrics (using Gauge because cache stats track absolute values, not deltas)
+    # Note: Not using _total suffix per Prometheus naming convention (reserved for Counters)
     registry.register(Gauge(
-        "fluidmcp_replicate_cache_hits_total",
-        "Total number of cache hits for Replicate responses",
+        "fluidmcp_replicate_cache_hits",
+        "Current number of cache hits for Replicate responses (since startup/clear)",
         labels=[]  # Global cache, no per-model labels
     ))
 
     registry.register(Gauge(
-        "fluidmcp_replicate_cache_misses_total",
-        "Total number of cache misses for Replicate responses",
+        "fluidmcp_replicate_cache_misses",
+        "Current number of cache misses for Replicate responses (since startup/clear)",
         labels=[]
     ))
 
@@ -91,8 +92,8 @@ async def update_cache_metrics():
         # Cache not initialized, set all metrics to 0 using proper API
         registry = get_registry()
 
-        hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits_total")
-        misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses_total")
+        hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits")
+        misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses")
         size_metric = registry.get_metric("fluidmcp_replicate_cache_size")
         hit_rate_metric = registry.get_metric("fluidmcp_replicate_cache_hit_rate")
 
@@ -114,11 +115,11 @@ async def update_cache_metrics():
     # Update metrics using proper Gauge API (thread-safe)
     registry = get_registry()
 
-    hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits_total")
+    hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits")
     if hits_metric:
         hits_metric.set(float(stats["hits"]))
 
-    misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses_total")
+    misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses")
     if misses_metric:
         misses_metric.set(float(stats["misses"]))
 

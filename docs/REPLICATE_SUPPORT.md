@@ -128,8 +128,10 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 | `cache.enabled` | ❌ No | `false` | Enable response caching (reduces API calls for identical requests) |
 | `cache.ttl` | ❌ No | `300` | Cache time-to-live in seconds (5 minutes default) - **Note**: Only the first model to enable caching sets global TTL |
 | `cache.max_size` | ❌ No | `1000` | Maximum number of cached responses - **Note**: Only the first model to enable caching sets global max_size |
-| `rate_limit.requests_per_second` | ❌ No | `10` | Rate limit for API requests per second |
-| `rate_limit.burst_capacity` | ❌ No | `20` | Burst capacity for rate limiter |
+| `rate_limit.requests_per_second` | ❌ No | `10` | Rate limit for API requests per second - **Always active with defaults** |
+| `rate_limit.burst_capacity` | ❌ No | `20` | Burst capacity for rate limiter - **Always active with defaults** |
+
+**Note on Rate Limiting**: Rate limiting is **always enabled** with default values (10 req/s, burst 20) to prevent hitting Replicate's server-side limits. Omitting `rate_limit` config does NOT disable rate limiting - it uses conservative defaults. To customize limits, provide explicit `rate_limit` configuration.
 
 ### Cache Architecture Note
 
@@ -606,8 +608,8 @@ Replicate metrics are automatically integrated with FluidMCP's unified Prometheu
 
 ```
 # Cache metrics (global, no labels)
-fluidmcp_replicate_cache_hits_total          # Total cache hits
-fluidmcp_replicate_cache_misses_total        # Total cache misses
+fluidmcp_replicate_cache_hits          # Total cache hits
+fluidmcp_replicate_cache_misses        # Total cache misses
 fluidmcp_replicate_cache_size                # Current cache size
 fluidmcp_replicate_cache_hit_rate            # Hit rate (0.0-1.0 ratio)
 
@@ -633,8 +635,8 @@ scrape_configs:
 
 ```promql
 # Cache hit ratio (current snapshot since last restart/clear)
-fluidmcp_replicate_cache_hits_total /
-  (fluidmcp_replicate_cache_hits_total + fluidmcp_replicate_cache_misses_total)
+fluidmcp_replicate_cache_hits /
+  (fluidmcp_replicate_cache_hits + fluidmcp_replicate_cache_misses)
 
 # Cache hit rate (pre-computed as ratio 0.0-1.0)
 fluidmcp_replicate_cache_hit_rate
@@ -643,7 +645,7 @@ fluidmcp_replicate_cache_hit_rate
 fluidmcp_replicate_rate_limiter_utilization > 0.8
 
 # Current cumulative API calls saved by caching (since last restart/cache clear)
-fluidmcp_replicate_cache_hits_total
+fluidmcp_replicate_cache_hits
 
 # Average available tokens across all models
 avg(fluidmcp_replicate_rate_limiter_tokens)

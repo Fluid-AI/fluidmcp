@@ -15,8 +15,8 @@ def test_replicate_metrics_registered():
     registry = get_registry()
 
     # Check cache metrics are registered
-    assert registry.get_metric("fluidmcp_replicate_cache_hits_total") is not None
-    assert registry.get_metric("fluidmcp_replicate_cache_misses_total") is not None
+    assert registry.get_metric("fluidmcp_replicate_cache_hits") is not None
+    assert registry.get_metric("fluidmcp_replicate_cache_misses") is not None
     assert registry.get_metric("fluidmcp_replicate_cache_size") is not None
     assert registry.get_metric("fluidmcp_replicate_cache_hit_rate") is not None
 
@@ -35,7 +35,7 @@ async def test_update_cache_metrics_no_cache():
 
     # Verify metrics are set to 0
     registry = get_registry()
-    hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits_total")
+    hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits")
     assert hits_metric.samples[()] == 0
 
 
@@ -57,10 +57,10 @@ async def test_update_cache_metrics_with_cache():
     # Verify metrics are updated
     registry = get_registry()
 
-    hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits_total")
+    hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits")
     assert hits_metric.samples[()] == 42.0
 
-    misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses_total")
+    misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses")
     assert misses_metric.samples[()] == 8.0
 
     size_metric = registry.get_metric("fluidmcp_replicate_cache_size")

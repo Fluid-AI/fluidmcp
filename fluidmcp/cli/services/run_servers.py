@@ -1072,12 +1072,15 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
             from .replicate_metrics import update_cache_metrics, update_rate_limiter_metrics
             await update_cache_metrics()
             await update_rate_limiter_metrics()
-        except ImportError:
-            # Replicate metrics module not available (optional dependency)
-            pass
+        except ImportError as e:
+            # Replicate metrics module import failed (unexpected, should be part of codebase)
+            logger.warning(f"Failed to import Replicate metrics (unexpected packaging issue): {e}")
+        except ModuleNotFoundError as e:
+            # Missing dependency (truly optional, should not happen in normal deployment)
+            logger.debug(f"Replicate metrics module not found (optional dependency): {e}")
         except Exception as e:
-            # Log but don't fail metrics endpoint if Replicate metrics fail
-            logger.warning(f"Failed to update Replicate metrics: {e}")
+            # Other errors - log with stack trace but don't fail metrics endpoint
+            logger.warning(f"Failed to update Replicate metrics: {e}", exc_info=True)
 
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)

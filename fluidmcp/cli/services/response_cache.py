@@ -59,7 +59,7 @@ class ResponseCache:
         result = await cache.get_or_fetch("key", async_fetch_function)
     """
 
-    def __init__(self, ttl: int = 300, max_size: int = 1000):
+    def __init__(self, ttl: float = 300.0, max_size: int = 1000):
         """
         Initialize response cache.
 
@@ -194,22 +194,23 @@ class ResponseCache:
                 else:
                     # Expired - remove from cache
                     del self._cache[key]
-                    self._misses += 1
                     logger.debug(f"Cache MISS (expired): {key[:16]}...")
             else:
-                self._misses += 1
                 logger.debug(f"Cache MISS: {key[:16]}...")
 
             # Check if another task is already fetching
             future = self._in_flight.get(key)
             if future is None:
                 # First task to start fetching for this key: create and register future
+                # Only this task counts as a true miss (triggers actual fetch)
+                self._misses += 1
                 future = asyncio.get_running_loop().create_future()
                 self._in_flight[key] = future
                 created_future = True
-                logger.debug(f"Starting new fetch for key: {key[:16]}...")
+                logger.debug(f"Starting new fetch for key: {key[:16]}... (counted as miss)")
             else:
-                logger.debug(f"Waiting for in-flight fetch: {key[:16]}...")
+                # Another task is already fetching - coalesce without counting as miss
+                logger.debug(f"Waiting for in-flight fetch: {key[:16]}... (coalesced, not counted as miss)")
 
         if not created_future:
             # Another task is already fetching; just await its result
@@ -318,7 +319,7 @@ def _get_cache_lock() -> asyncio.Lock:
 
 
 async def get_response_cache(
-    ttl: int = 300,
+    ttl: float = 300.0,
     max_size: int = 1000,
     enabled: bool = True
 ) -> Optional[ResponseCache]:
