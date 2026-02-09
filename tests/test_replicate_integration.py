@@ -233,5 +233,6 @@ def test_integration_environment_setup():
     """Verify integration test environment is configured."""
     api_token = os.getenv("REPLICATE_API_TOKEN")
     assert api_token is not None, "REPLICATE_API_TOKEN must be set for integration tests"
-    assert api_token.startswith("r8_"), "REPLICATE_API_TOKEN should start with 'r8_'"
-    assert len(api_token) > 20, "REPLICATE_API_TOKEN seems too short"
+    # Validate basic token shape without assuming specific prefix (Replicate doesn't guarantee 'r8_')
+    assert len(api_token) > 20, "REPLICATE_API_TOKEN seems too short (expected >20 characters)"
+    assert not api_token.isspace(), "REPLICATE_API_TOKEN cannot be whitespace only"

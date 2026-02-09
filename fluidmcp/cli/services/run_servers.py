@@ -1072,12 +1072,13 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
             from .replicate_metrics import update_cache_metrics, update_rate_limiter_metrics
             await update_cache_metrics()
             await update_rate_limiter_metrics()
+        except ModuleNotFoundError as e:
+            # Missing dependency (truly optional, should not happen in normal deployment)
+            # Must catch ModuleNotFoundError first (subclass of ImportError)
+            logger.debug(f"Replicate metrics module not found (optional dependency): {e}")
         except ImportError as e:
             # Replicate metrics module import failed (unexpected, should be part of codebase)
             logger.warning(f"Failed to import Replicate metrics (unexpected packaging issue): {e}")
-        except ModuleNotFoundError as e:
-            # Missing dependency (truly optional, should not happen in normal deployment)
-            logger.debug(f"Replicate metrics module not found (optional dependency): {e}")
         except Exception as e:
             # Other errors - log with stack trace but don't fail metrics endpoint
             logger.warning(f"Failed to update Replicate metrics: {e}", exc_info=True)

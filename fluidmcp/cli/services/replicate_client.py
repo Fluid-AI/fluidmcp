@@ -167,13 +167,13 @@ class ReplicateClient:
                         f"must be positive, got {rps}"
                     )
 
-            # Validate burst_capacity (must be an integer)
+            # Validate burst_capacity (must be an integer or integer-valued float)
             burst = rate_limit.get("burst_capacity")
             if burst is not None:
                 if not isinstance(burst, (int, float)):
                     raise ValueError(
                         f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
-                        f"expected an integer, got {type(burst).__name__}"
+                        f"expected an integer or integer-valued float (e.g., 10 or 10.0), got {type(burst).__name__}"
                     )
                 if burst <= 0:
                     raise ValueError(
