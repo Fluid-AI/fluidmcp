@@ -126,10 +126,23 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 | `timeout` | ❌ No | `60.0` | HTTP request timeout in seconds |
 | `max_retries` | ❌ No | `3` | Maximum retry attempts for failed requests |
 | `cache.enabled` | ❌ No | `false` | Enable response caching (reduces API calls for identical requests) |
-| `cache.ttl` | ❌ No | `300` | Cache time-to-live in seconds (5 minutes default) |
-| `cache.max_size` | ❌ No | `1000` | Maximum number of cached responses |
+| `cache.ttl` | ❌ No | `300` | Cache time-to-live in seconds (5 minutes default) - **Note**: Only the first model to enable caching sets global TTL |
+| `cache.max_size` | ❌ No | `1000` | Maximum number of cached responses - **Note**: Only the first model to enable caching sets global max_size |
 | `rate_limit.requests_per_second` | ❌ No | `10` | Rate limit for API requests per second |
 | `rate_limit.burst_capacity` | ❌ No | `20` | Burst capacity for rate limiter |
+
+### Cache Architecture Note
+
+**Important**: FluidMCP uses a **single global cache** shared across all Replicate models. The `cache.ttl` and `cache.max_size` settings from the **first model** that enables caching will be used for all subsequent models.
+
+This means:
+- ✅ All models share the same cache (efficient for duplicate requests across models)
+- ⚠️ Per-model cache settings (different TTL/max_size) are not supported
+- ⚠️ If Model A sets `ttl=300` and Model B sets `ttl=600`, only Model A's `ttl=300` is used
+
+**Recommendation**: If you need different cache settings for different models, configure the first model with the most conservative settings (lowest TTL, smallest max_size) that work for all models.
+
+**Future Enhancement**: Per-model caching with individual TTL/max_size settings could be implemented by maintaining a dictionary of caches keyed by `(ttl, max_size)` or `model_id`. See [response_cache.py:325](../fluidmcp/cli/services/response_cache.py) for implementation notes.
 
 ### Model Identifier Format
 

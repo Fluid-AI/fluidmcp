@@ -288,6 +288,10 @@ class ReplicateClient:
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
         # Check cache if enabled (skip if streaming or webhook)
+        # NOTE: get_response_cache() returns a GLOBAL cache instance. The ttl/max_size
+        # parameters here are only used if the cache hasn't been initialized yet.
+        # Once initialized, these parameters are ignored for subsequent models.
+        # See response_cache.py:325 for the global cache limitation.
         if self.cache_enabled and not stream and not webhook:
             cache = await get_response_cache(
                 ttl=self.cache_ttl,
