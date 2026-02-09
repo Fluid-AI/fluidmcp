@@ -202,13 +202,19 @@ def sanitize_input(value: Any) -> Any:
         HTTPException: If MongoDB operator detected in dict keys
     """
     if isinstance(value, dict):
-        # Check for MongoDB operators in dictionary keys (most dangerous)
+        # Check for MongoDB operators and dot notation in dictionary keys (most dangerous)
         for key in value.keys():
-            if isinstance(key, str) and key.startswith("$"):
-                raise HTTPException(
-                    400,
-                    "MongoDB operator-style keys (starting with '$') are not allowed in input"
-                )
+            if isinstance(key, str):
+                if key.startswith("$"):
+                    raise HTTPException(
+                        400,
+                        "MongoDB operator-style keys (starting with '$') are not allowed in input"
+                    )
+                if "." in key:
+                    raise HTTPException(
+                        400,
+                        "Dictionary keys containing '.' (dot notation) are not allowed in input"
+                    )
         # Recursively sanitize dictionary values
         return {k: sanitize_input(v) for k, v in value.items()}
     elif isinstance(value, list):
@@ -2071,16 +2077,16 @@ async def get_cache_stats(token: str = Depends(get_token)):
     Returns:
         Cache statistics dict
     """
-    from ..services.response_cache import get_response_cache
+    from ..services.response_cache import _response_cache
 
-    cache = await get_response_cache(enabled=True)
-    if not cache:
+    # Peek at existing cache without creating it
+    if _response_cache is None:
         return {
             "enabled": False,
-            "message": "Cache is not enabled"
+            "message": "Cache is not initialized (no models with caching enabled have been used)"
         }
 
-    stats = await cache.get_stats()
+    stats = await _response_cache.get_stats()
     return {
         "enabled": True,
         **stats
@@ -2117,17 +2123,9 @@ async def get_rate_limiter_stats(token: str = Depends(get_token)):
     Returns:
         Dict mapping model_id to available tokens
     """
-    from ..services.rate_limiter import _rate_limiters
+    from ..services.rate_limiter import get_all_rate_limiter_stats
 
-    stats = {}
-    for model_id, limiter in _rate_limiters.items():
-        available = await limiter.get_available_tokens()
-        stats[model_id] = {
-            "available_tokens": round(available, 2),
-            "capacity": limiter.capacity,
-            "rate": limiter.rate,
-            "utilization_pct": round((1 - available / limiter.capacity) * 100, 2)
-        }
+    stats = await get_all_rate_limiter_stats()
 
     return {
         "rate_limiters": stats,

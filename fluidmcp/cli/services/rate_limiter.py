@@ -7,7 +7,7 @@ on a per-model basis.
 
 import asyncio
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from loguru import logger
 
 
@@ -59,6 +59,13 @@ class TokenBucketRateLimiter:
 
         Raises:
             ValueError: If tokens > capacity (impossible to acquire)
+
+        Note:
+            Current implementation holds the lock during sleep, which can cause
+            head-of-line blocking under high contention (1000+ req/sec). This is
+            intentional for simplicity and works fine for typical use cases.
+            For high-throughput scenarios, consider releasing the lock before sleep
+            and re-checking tokens after waking (see GitHub issue for optimization PR).
         """
         if tokens > self.capacity:
             raise ValueError(f"Cannot acquire {tokens} tokens (capacity: {self.capacity})")
@@ -167,3 +174,31 @@ async def clear_rate_limiters() -> None:
     async with _get_limiter_lock():
         _rate_limiters.clear()
     logger.debug("Cleared all rate limiters")
+
+
+async def get_all_rate_limiter_stats() -> Dict[str, Dict[str, Any]]:
+    """
+    Get statistics for all rate limiters (thread-safe snapshot).
+
+    Returns a snapshot of all rate limiters with their current stats.
+    This avoids race conditions when iterating the global registry.
+
+    Returns:
+        Dict mapping model_id to stats (available_tokens, capacity, rate, utilization_pct)
+    """
+    async with _get_limiter_lock():
+        # Take a snapshot of all limiters under lock
+        limiters_snapshot = dict(_rate_limiters)
+
+    # Now query each limiter's stats outside the global lock
+    stats = {}
+    for model_id, limiter in limiters_snapshot.items():
+        available = await limiter.get_available_tokens()
+        stats[model_id] = {
+            "available_tokens": round(available, 2),
+            "capacity": limiter.capacity,
+            "rate": limiter.rate,
+            "utilization_pct": round((1 - available / limiter.capacity) * 100, 2)
+        }
+
+    return stats

@@ -133,33 +133,39 @@ class TestReplicateAdapterIntegration:
 
         # Temporarily inject config (in real code, this comes from registry)
         from fluidmcp.cli.services import replicate_client
-        replicate_client._replicate_clients["test-model"] = ReplicateClient("test-model", model_config)
+        client = ReplicateClient("test-model", model_config)
+        replicate_client._replicate_clients["test-model"] = client
 
-        # Make chat completion request
-        request = {
-            "model": "test-model",
-            "messages": [
-                {"role": "user", "content": "What is 2+2?"}
-            ],
-            "temperature": 0.7,
-            "max_tokens": 50
-        }
+        try:
+            # Make chat completion request
+            request = {
+                "model": "test-model",
+                "messages": [
+                    {"role": "user", "content": "What is 2+2?"}
+                ],
+                "temperature": 0.7,
+                "max_tokens": 50
+            }
 
-        response = await replicate_chat_completion("test-model", request, timeout=60)
+            response = await replicate_chat_completion("test-model", request, timeout=60)
 
-        # Verify OpenAI-format response
-        assert "id" in response
-        assert "object" in response
-        assert response["object"] == "chat.completion"
-        assert "choices" in response
-        assert len(response["choices"]) > 0
-        assert "message" in response["choices"][0]
-        assert "content" in response["choices"][0]["message"]
-        assert response["choices"][0]["finish_reason"] == "stop"
+            # Verify OpenAI-format response
+            assert "id" in response
+            assert "object" in response
+            assert response["object"] == "chat.completion"
+            assert "choices" in response
+            assert len(response["choices"]) > 0
+            assert "message" in response["choices"][0]
+            assert "content" in response["choices"][0]["message"]
+            assert response["choices"][0]["finish_reason"] == "stop"
 
-        # Content should be non-empty
-        content = response["choices"][0]["message"]["content"]
-        assert len(content) > 0
+            # Content should be non-empty
+            content = response["choices"][0]["message"]["content"]
+            assert len(content) > 0
+        finally:
+            # Clean up: remove client from registry and close it
+            replicate_client._replicate_clients.pop("test-model", None)
+            await client.close()
 
     async def test_openai_to_replicate_conversion(self):
         """Test that OpenAI format converts correctly to Replicate."""

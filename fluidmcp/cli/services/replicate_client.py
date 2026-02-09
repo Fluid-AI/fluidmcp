@@ -153,20 +153,43 @@ class ReplicateClient:
             )
         # Validate rate limit fields if provided
         if isinstance(rate_limit, dict):
-            for key in ("requests_per_second", "burst_capacity"):
-                value = rate_limit.get(key)
-                if value is None:
-                    continue
-                if not isinstance(value, (int, float)):
+            # Validate requests_per_second (can be int or float)
+            rps = rate_limit.get("requests_per_second")
+            if rps is not None:
+                if not isinstance(rps, (int, float)):
                     raise ValueError(
-                        f"Replicate model '{model_id}' has invalid 'rate_limit.{key}' config: "
-                        f"expected a number, got {type(value).__name__}"
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.requests_per_second' config: "
+                        f"expected a number, got {type(rps).__name__}"
                     )
-                if value <= 0:
+                if rps <= 0:
                     raise ValueError(
-                        f"Replicate model '{model_id}' has invalid 'rate_limit.{key}' config: "
-                        f"must be positive, got {value}"
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.requests_per_second' config: "
+                        f"must be positive, got {rps}"
                     )
+
+            # Validate burst_capacity (must be an integer)
+            burst = rate_limit.get("burst_capacity")
+            if burst is not None:
+                if not isinstance(burst, (int, float)):
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
+                        f"expected an integer, got {type(burst).__name__}"
+                    )
+                if burst <= 0:
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
+                        f"must be positive, got {burst}"
+                    )
+                # Allow float values that are exact integers (e.g., 10.0)
+                if isinstance(burst, float):
+                    if not burst.is_integer():
+                        raise ValueError(
+                            f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
+                            f"must be an integer value, got {burst}"
+                        )
+                    # Coerce to int for TokenBucketRateLimiter
+                    rate_limit["burst_capacity"] = int(burst)
+
         self.rate_limit_config = rate_limit or {}
 
         # Store cache config with validation
