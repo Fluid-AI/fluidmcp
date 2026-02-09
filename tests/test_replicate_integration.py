@@ -40,23 +40,26 @@ class TestReplicateClientIntegration:
         }
         client = ReplicateClient("tiny-llm", config)
 
-        # Create prediction
-        prediction = await client.predict(input_data={"prompt": "Hello"})
+        try:
+            # Create prediction
+            prediction = await client.predict(input_data={"prompt": "Hello"})
 
-        assert "id" in prediction
-        assert prediction["status"] in ["starting", "processing", "succeeded"]
-        prediction_id = prediction["id"]
+            assert "id" in prediction
+            assert prediction["status"] in ["starting", "processing", "succeeded"]
+            prediction_id = prediction["id"]
 
-        # Poll until complete (with timeout)
-        max_polls = 30
-        for _ in range(max_polls):
-            status = await client.get_prediction(prediction_id)
-            if status["status"] in ["succeeded", "failed", "canceled"]:
-                break
-            await asyncio.sleep(2)
+            # Poll until complete (with timeout)
+            max_polls = 30
+            for _ in range(max_polls):
+                status = await client.get_prediction(prediction_id)
+                if status["status"] in ["succeeded", "failed", "canceled"]:
+                    break
+                await asyncio.sleep(2)
 
-        # Check final status
-        assert status["status"] == "succeeded"
+            # Check final status
+            assert status["status"] == "succeeded"
+        finally:
+            await client.close()
         assert "output" in status
 
     async def test_replicate_client_retry_logic(self):
@@ -69,9 +72,12 @@ class TestReplicateClientIntegration:
         }
         client = ReplicateClient("test-model", config)
 
-        # Make a valid request (should succeed without retries)
-        prediction = await client.predict(input_data={"prompt": "Test"})
-        assert "id" in prediction
+        try:
+            # Make a valid request (should succeed without retries)
+            prediction = await client.predict(input_data={"prompt": "Test"})
+            assert "id" in prediction
+        finally:
+            await client.close()
 
     async def test_invalid_api_key_fails(self):
         """Test that invalid API key raises appropriate error."""
@@ -83,8 +89,11 @@ class TestReplicateClientIntegration:
         }
         client = ReplicateClient("test-model", config)
 
-        with pytest.raises(Exception):  # Should raise auth error
-            await client.predict(input_data={"prompt": "Test"})
+        try:
+            with pytest.raises(Exception):  # Should raise auth error
+                await client.predict(input_data={"prompt": "Test"})
+        finally:
+            await client.close()
 
     async def test_nonexistent_model_fails(self):
         """Test that nonexistent model raises error."""
@@ -96,8 +105,11 @@ class TestReplicateClientIntegration:
         }
         client = ReplicateClient("fake-model", config)
 
-        with pytest.raises(Exception):  # Should raise 404 or similar
-            await client.predict(input_data={"prompt": "Test"})
+        try:
+            with pytest.raises(Exception):  # Should raise 404 or similar
+                await client.predict(input_data={"prompt": "Test"})
+        finally:
+            await client.close()
 
 
 @pytest.mark.integration

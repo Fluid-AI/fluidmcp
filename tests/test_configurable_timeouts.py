@@ -52,17 +52,19 @@ class TestConfigurableTimeouts:
                     timeout=1  # Very short custom timeout
                 )
 
-    async def test_per_model_timeout_from_config(self):
-        """Test that per-model timeout config is used."""
-        # This test verifies that timeout can be configured per model
-        # in the model config (stored in registry)
+    async def test_request_timeout_parameter(self):
+        """Test that explicit request timeout parameter is respected."""
+        # This test verifies that the adapter accepts and uses
+        # an explicit timeout parameter passed at request time.
+        # Note: The client's configured timeout (from model config) is
+        # currently not read by the adapter - only explicit timeouts are supported.
 
         # Model config with custom timeout
         model_config = {
             "type": "replicate",
             "model": "meta/llama-2-70b-chat",
             "api_key": "test_key",
-            "timeout": 120,  # Custom timeout
+            "timeout": 120,  # Client timeout (not currently used by adapter)
             "max_retries": 2
         }
 
@@ -76,11 +78,11 @@ class TestConfigurableTimeouts:
         })
 
         with patch('fluidmcp.cli.services.replicate_openai_adapter.get_replicate_client', return_value=mock_client):
-            # Timeout from request should override config
+            # Explicit request timeout parameter
             response = await replicate_chat_completion(
                 "test-model",
                 {"messages": [{"role": "user", "content": "Hi"}]},
-                timeout=180  # Request timeout overrides config
+                timeout=180  # Explicit timeout at request time
             )
 
         assert response is not None

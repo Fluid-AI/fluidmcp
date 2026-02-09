@@ -326,16 +326,22 @@ class TestMongoDBInjectionPrevention:
         import pytest
 
         # Operator in top-level key
-        with pytest.raises(HTTPException, match="MongoDB operator not allowed"):
+        with pytest.raises(HTTPException) as excinfo:
             sanitize_input({"$where": "malicious code"})
+        assert "MongoDB operator-style keys" in excinfo.value.detail
+        assert "are not allowed in input" in excinfo.value.detail
 
         # Operator in nested key
-        with pytest.raises(HTTPException, match="MongoDB operator not allowed"):
+        with pytest.raises(HTTPException) as excinfo:
             sanitize_input({"user": {"$ne": None}})
+        assert "MongoDB operator-style keys" in excinfo.value.detail
+        assert "are not allowed in input" in excinfo.value.detail
 
         # Multiple operators
-        with pytest.raises(HTTPException, match="MongoDB operator not allowed"):
+        with pytest.raises(HTTPException) as excinfo:
             sanitize_input({"$or": [{"$gt": 5}]})
+        assert "MongoDB operator-style keys" in excinfo.value.detail
+        assert "are not allowed in input" in excinfo.value.detail
 
 
 class TestCompleteValidationFlow:

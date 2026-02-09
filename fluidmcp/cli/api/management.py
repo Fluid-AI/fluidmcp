@@ -2051,3 +2051,136 @@ async def check_model_health(
             "healthy": False,
             "error": str(e)
         }
+
+
+# ============================================================================
+# Observability & Metrics Endpoints (Cache, Rate Limiting)
+# ============================================================================
+
+@router.get("/metrics/cache/stats")
+async def get_cache_stats(token: str = Depends(get_token)):
+    """
+    Get response cache statistics.
+
+    Returns cache performance metrics including:
+    - Hit/miss counts
+    - Hit rate percentage
+    - Current cache size
+    - TTL configuration
+
+    Returns:
+        Cache statistics dict
+    """
+    from ..services.response_cache import get_response_cache
+
+    cache = await get_response_cache(enabled=True)
+    if not cache:
+        return {
+            "enabled": False,
+            "message": "Cache is not enabled"
+        }
+
+    stats = await cache.get_stats()
+    return {
+        "enabled": True,
+        **stats
+    }
+
+
+@router.post("/metrics/cache/clear")
+async def clear_cache(token: str = Depends(get_token)):
+    """
+    Clear all cached responses.
+
+    Useful for testing or forcing fresh API calls.
+
+    Returns:
+        Number of entries cleared
+    """
+    from ..services.response_cache import clear_response_cache
+
+    count = await clear_response_cache()
+    logger.info(f"Cache cleared via API: {count} entries removed")
+    return {
+        "message": f"Cache cleared successfully",
+        "entries_cleared": count
+    }
+
+
+@router.get("/metrics/rate-limiters")
+async def get_rate_limiter_stats(token: str = Depends(get_token)):
+    """
+    Get rate limiter statistics for all models.
+
+    Returns available token counts for each model's rate limiter.
+
+    Returns:
+        Dict mapping model_id to available tokens
+    """
+    from ..services.rate_limiter import _rate_limiters
+
+    stats = {}
+    for model_id, limiter in _rate_limiters.items():
+        available = await limiter.get_available_tokens()
+        stats[model_id] = {
+            "available_tokens": round(available, 2),
+            "capacity": limiter.capacity,
+            "rate": limiter.rate,
+            "utilization_pct": round((1 - available / limiter.capacity) * 100, 2)
+        }
+
+    return {
+        "rate_limiters": stats,
+        "total_models": len(stats)
+    }
+
+
+@router.get("/metrics/rate-limiters/{model_id}")
+async def get_model_rate_limiter_stats(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get rate limiter statistics for a specific model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Rate limiter stats including available tokens and configuration
+    """
+    from ..services.rate_limiter import _rate_limiters
+
+    if model_id not in _rate_limiters:
+        raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
+
+    limiter = _rate_limiters[model_id]
+    available = await limiter.get_available_tokens()
+
+    return {
+        "model_id": model_id,
+        "available_tokens": round(available, 2),
+        "capacity": limiter.capacity,
+        "rate": limiter.rate,
+        "utilization_pct": round((1 - available / limiter.capacity) * 100, 2)
+    }
+
+
+@router.post("/metrics/rate-limiters/clear")
+async def clear_rate_limiters(token: str = Depends(get_token)):
+    """
+    Clear all rate limiters.
+
+    Removes all rate limiter instances. New limiters will be created
+    on next API call with default configuration.
+
+    Returns:
+        Success message
+    """
+    from ..services.rate_limiter import clear_rate_limiters as _clear
+
+    await _clear()
+    logger.info("All rate limiters cleared via API")
+    return {
+        "message": "All rate limiters cleared successfully"
+    }

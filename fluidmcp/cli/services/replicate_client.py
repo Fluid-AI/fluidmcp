@@ -72,16 +72,14 @@ class ReplicateClient:
         api_key_raw = config["api_key"]
         if isinstance(api_key_raw, str):
             api_key_expanded = os.path.expandvars(api_key_raw)
-            # Check if any ${VAR} or $VAR pattern was not resolved
-            # Match the same pattern that os.path.expandvars() uses (any alphanumeric + underscore)
-            # Support both uppercase and lowercase variable names (e.g., $PATH, $api_key)
-            if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_raw):
-                if api_key_expanded == api_key_raw:
-                    # SECURITY: Do NOT expose the actual API key value in error messages
-                    raise ValueError(
-                        f"Replicate model '{model_id}' has unresolved environment variable "
-                        f"in 'api_key'. Make sure the environment variable is set."
-                    )
+            # Check if any ${VAR} or $VAR pattern remains unresolved after expansion
+            # This catches both fully and partially unresolved placeholders
+            if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_expanded):
+                # SECURITY: Do NOT expose the actual API key value in error messages
+                raise ValueError(
+                    f"Replicate model '{model_id}' has unresolved environment variable "
+                    f"in 'api_key'. Make sure the environment variable is set."
+                )
             self.api_key = api_key_expanded
         else:
             self.api_key = api_key_raw
@@ -385,8 +383,12 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
         """
-        # Apply rate limiting
-        rate_limiter = await get_rate_limiter(self.model_id)
+        # Apply rate limiting using the configured rate and capacity for this model
+        rate_limiter = await get_rate_limiter(
+            self.model_id,
+            rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+            capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+        )
         await rate_limiter.acquire()
 
         response = await self.client.get(f"/predictions/{prediction_id}")
