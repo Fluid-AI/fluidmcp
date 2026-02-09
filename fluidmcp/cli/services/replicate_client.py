@@ -87,16 +87,22 @@ class ReplicateClient:
             self.api_key = api_key_raw
 
         # Validate API key is not empty or whitespace-only
-        if not self.api_key or (isinstance(self.api_key, str) and not self.api_key.strip()):
+        if not self.api_key:
             raise ValueError(
-                f"Replicate model '{model_id}' has empty or whitespace-only API key"
+                f"Replicate model '{model_id}' has empty API key"
             )
 
-        # Validate minimum API key length (Replicate API keys are typically 40+ characters)
-        if isinstance(self.api_key, str) and len(self.api_key.strip()) < 8:
-            raise ValueError(
-                f"Replicate model '{model_id}' API key is too short (minimum 8 characters)"
-            )
+        # Additional validation for string API keys
+        if isinstance(self.api_key, str):
+            if not self.api_key.strip():
+                raise ValueError(
+                    f"Replicate model '{model_id}' has whitespace-only API key"
+                )
+            # Validate minimum API key length (Replicate API keys are typically 40+ characters)
+            if len(self.api_key.strip()) < 8:
+                raise ValueError(
+                    f"Replicate model '{model_id}' API key is too short (minimum 8 characters)"
+                )
         # Validate optional dict-typed configuration fields
         endpoints = config.get("endpoints")
         if endpoints is not None and not isinstance(endpoints, dict):
@@ -352,6 +358,15 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
         """
+        # Apply rate limiting (cancellation counts against API rate limits)
+        if self.rate_limit_config:
+            rate_limiter = await get_rate_limiter(
+                self.model_id,
+                rate=self.rate_limit_config.get("requests_per_second"),
+                capacity=self.rate_limit_config.get("burst_capacity")
+            )
+            await rate_limiter.acquire()
+
         logger.info(f"Canceling prediction {prediction_id} for model '{self.model_id}'")
         response = await self.client.post(f"/predictions/{prediction_id}/cancel")
         response.raise_for_status()

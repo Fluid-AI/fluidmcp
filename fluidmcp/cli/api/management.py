@@ -28,7 +28,7 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 # Constants
-MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
+MAX_ERROR_MESSAGE_LENGTH = 1000  # Limit error messages to prevent DoS via large responses and protect sensitive data
 
 # Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None

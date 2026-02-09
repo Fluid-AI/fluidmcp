@@ -218,3 +218,19 @@ class TestResponseCache:
         """Test that caching can be disabled."""
         cache = await get_response_cache(enabled=False)
         assert cache is None
+
+    def test_invalid_ttl_raises_error(self):
+        """Test that invalid TTL raises ValueError."""
+        with pytest.raises(ValueError, match="ttl must be positive"):
+            ResponseCache(ttl=0, max_size=100)
+
+        with pytest.raises(ValueError, match="ttl must be positive"):
+            ResponseCache(ttl=-1, max_size=100)
+
+    def test_invalid_max_size_raises_error(self):
+        """Test that invalid max_size raises ValueError."""
+        with pytest.raises(ValueError, match="max_size must be positive"):
+            ResponseCache(ttl=300, max_size=0)
+
+        with pytest.raises(ValueError, match="max_size must be positive"):
+            ResponseCache(ttl=300, max_size=-10)

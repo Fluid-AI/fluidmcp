@@ -64,9 +64,17 @@ class ResponseCache:
         Initialize response cache.
 
         Args:
-            ttl: Seconds until cached entries expire
-            max_size: Maximum cache size (LRU eviction)
+            ttl: Seconds until cached entries expire (must be positive)
+            max_size: Maximum cache size for LRU eviction (must be positive)
+
+        Raises:
+            ValueError: If ttl or max_size are not positive
         """
+        if ttl <= 0:
+            raise ValueError(f"ttl must be positive, got {ttl}")
+        if max_size <= 0:
+            raise ValueError(f"max_size must be positive, got {max_size}")
+
         self.ttl = ttl
         self.max_size = max_size
         self._cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
@@ -212,19 +220,22 @@ class ResponseCache:
             value = await fetch_fn()
             await self.set(key, value)
 
-            # Mark future as done
+            # Mark future as done - set result BEFORE removing from registry
+            # to avoid race condition where another task awaits removed future
             async with self._lock:
-                in_flight_future = self._in_flight.pop(key, None)
+                in_flight_future = self._in_flight.get(key)
                 if in_flight_future is not None and not in_flight_future.done():
                     in_flight_future.set_result(value)
+                self._in_flight.pop(key, None)
 
             return value
         except Exception as e:
-            # Mark future as failed and remove from in-flight
+            # Mark future as failed - set exception BEFORE removing from registry
             async with self._lock:
-                in_flight_future = self._in_flight.pop(key, None)
+                in_flight_future = self._in_flight.get(key)
                 if in_flight_future is not None and not in_flight_future.done():
                     in_flight_future.set_exception(e)
+                self._in_flight.pop(key, None)
             raise
 
     async def invalidate(self, data: Any) -> bool:
