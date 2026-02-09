@@ -134,7 +134,9 @@ class TestReplicateAdapterIntegration:
         # Temporarily inject config (in real code, this comes from registry)
         from fluidmcp.cli.services import replicate_client
         client = ReplicateClient("test-model", model_config)
-        replicate_client._replicate_clients["test-model"] = client
+        # Protect registry mutation with lock to prevent race conditions
+        with replicate_client._registry_lock:
+            replicate_client._replicate_clients["test-model"] = client
 
         try:
             # Make chat completion request
@@ -164,7 +166,8 @@ class TestReplicateAdapterIntegration:
             assert len(content) > 0
         finally:
             # Clean up: remove client from registry and close it
-            replicate_client._replicate_clients.pop("test-model", None)
+            with replicate_client._registry_lock:
+                replicate_client._replicate_clients.pop("test-model", None)
             await client.close()
 
     async def test_openai_to_replicate_conversion(self):
@@ -205,7 +208,9 @@ class TestReplicateAdapterIntegration:
             "max_retries": 0
         }
         client = ReplicateClient("timeout-test", timeout_config)
-        replicate_client._replicate_clients["timeout-test"] = client
+        # Protect registry mutation with lock to prevent race conditions
+        with replicate_client._registry_lock:
+            replicate_client._replicate_clients["timeout-test"] = client
 
         try:
             request = {
@@ -219,12 +224,21 @@ class TestReplicateAdapterIntegration:
                 response = await replicate_chat_completion("timeout-test", request, timeout=1)
                 # If it succeeds, that's fine - model was fast
                 assert "choices" in response
+            except asyncio.TimeoutError:
+                # Expected timeout - this is what we're testing
+                pass
+            except httpx.TimeoutException:
+                # HTTP client timeout - also acceptable
+                pass
             except Exception as e:
-                # Should be a timeout error
-                assert "timeout" in str(e).lower() or "timed out" in str(e).lower()
+                # Other exceptions should contain timeout in message
+                error_msg = str(e).lower()
+                if "timeout" not in error_msg and "timed out" not in error_msg:
+                    pytest.fail(f"Unexpected exception in timeout test: {type(e).__name__}: {e}")
         finally:
             # Clean up: remove client from registry and close it
-            replicate_client._replicate_clients.pop("timeout-test", None)
+            with replicate_client._registry_lock:
+                replicate_client._replicate_clients.pop("timeout-test", None)
             await client.close()
 
 
