@@ -446,6 +446,145 @@ Solution: Verify model identifier format is `owner/model-name`.
 ```
 Solution: Increase `timeout` value in configuration.
 
+## Observability & Metrics
+
+FluidMCP provides metrics endpoints to monitor cache performance and rate limiter utilization.
+
+### Cache Statistics
+
+Get cache performance metrics:
+
+```bash
+curl http://localhost:8099/api/metrics/cache/stats
+```
+
+**Response**:
+```json
+{
+  "enabled": true,
+  "hits": 150,
+  "misses": 50,
+  "size": 45,
+  "max_size": 1000,
+  "hit_rate": 75.0,
+  "ttl": 300
+}
+```
+
+**Metrics**:
+- `hits` - Number of cache hits (requests served from cache)
+- `misses` - Number of cache misses (requests that hit API)
+- `hit_rate` - Cache effectiveness percentage (hits / total * 100)
+- `size` - Current number of cached entries
+- `max_size` - Maximum cache capacity (LRU eviction when exceeded)
+- `ttl` - Time-to-live in seconds (how long entries stay cached)
+
+**Use Cases**:
+- Monitor cache effectiveness (aim for >70% hit rate)
+- Identify if cache size needs adjustment
+- Track cost savings from reduced API calls
+
+### Clear Cache
+
+Force fresh API calls by clearing cache:
+
+```bash
+curl -X POST http://localhost:8099/api/metrics/cache/clear
+```
+
+**Response**:
+```json
+{
+  "message": "Cache cleared successfully",
+  "entries_cleared": 45
+}
+```
+
+Useful for testing or when you need to bypass cached responses.
+
+### Rate Limiter Statistics
+
+Get rate limiter stats for all models:
+
+```bash
+curl http://localhost:8099/api/metrics/rate-limiters
+```
+
+**Response**:
+```json
+{
+  "rate_limiters": {
+    "llama-2-70b": {
+      "available_tokens": 18.5,
+      "capacity": 20,
+      "rate": 10.0,
+      "utilization_pct": 7.5
+    },
+    "mistral-7b": {
+      "available_tokens": 15.2,
+      "capacity": 20,
+      "rate": 5.0,
+      "utilization_pct": 24.0
+    }
+  },
+  "total_models": 2
+}
+```
+
+**Metrics per model**:
+- `available_tokens` - Tokens available for immediate use
+- `capacity` - Burst capacity (max tokens in bucket)
+- `rate` - Tokens per second (steady-state rate)
+- `utilization_pct` - How much capacity is in use (100% = fully throttled)
+
+**Use Cases**:
+- Check if rate limits are being hit (utilization > 80%)
+- Identify which models need higher rate limits
+- Monitor API call patterns
+
+### Per-Model Rate Limiter Stats
+
+Get stats for a specific model:
+
+```bash
+curl http://localhost:8099/api/metrics/rate-limiters/llama-2-70b
+```
+
+**Response**:
+```json
+{
+  "model_id": "llama-2-70b",
+  "available_tokens": 18.5,
+  "capacity": 20,
+  "rate": 10.0,
+  "utilization_pct": 7.5
+}
+```
+
+### Monitoring Best Practices
+
+1. **Track cache hit rates** - Monitor `/api/metrics/cache/stats` every 5-10 minutes
+   - Hit rate < 50%: Cache TTL too short or max_size too small
+   - Hit rate > 90%: Consider increasing cache size for more savings
+
+2. **Monitor rate limiter utilization** - Check `/api/metrics/rate-limiters` periodically
+   - Utilization > 80%: Increase `rate` or `burst_capacity` in config
+   - Utilization < 20%: Rate limits may be too conservative
+
+3. **Set up alerts**:
+   ```bash
+   # Alert if cache hit rate drops below 60%
+   curl http://localhost:8099/api/metrics/cache/stats | jq '.hit_rate < 60'
+
+   # Alert if any model exceeds 90% utilization
+   curl http://localhost:8099/api/metrics/rate-limiters | jq '.rate_limiters[].utilization_pct > 90'
+   ```
+
+4. **Cost tracking** - Use cache hits to estimate cost savings:
+   ```
+   Cost savings = (cache_hits / total_requests) * total_api_cost
+   ```
+
 ## Cost Management
 
 Replicate charges based on compute time. Tips to manage costs:
