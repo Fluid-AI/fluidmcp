@@ -1,0 +1,35 @@
+{
+  "name": "Stock Analyzer",
+  "version": "1.0.0",
+  "description": "Real-Time Stock + News Analyzer MCP Server using Yahoo Finance",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "stock-analyzer": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/stock-analyzer-mcp/server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "get_stock_price",
+      "description": "Get real-time stock price and key metrics"
+    },
+    {
+      "name": "get_stock_news",
+      "description": "Get latest news articles for a stock"
+    },
+    {
+      "name": "get_stock_history",
+      "description": "Get historical stock price data"
+    },
+    {
+      "name": "analyze_stock",
+      "description": "Comprehensive stock analysis"
+    },
+    {
+      "name": "compare_stocks",
+      "description": "Compare multiple stocks side by side"
+    }
+  ]
+}

@@ -46,3 +46,4 @@ typing_extensions==4.13.2
 urllib3==2.4.0
 uvicorn==0.34.2
 uv==0.7.2
+yfinance>=0.2.36

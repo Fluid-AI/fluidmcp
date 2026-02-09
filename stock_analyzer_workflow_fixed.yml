@@ -1,0 +1,141 @@
+workflow_name: stock analyser test
+workflow_description: stock analyser test
+workflow_library_type: llamaindex
+config:
+  max_iterations: 10
+  timeout_seconds: 300
+  default_provider: OpenAI
+  default_model: gpt-4o-mini
+tools: []
+post_call_tools: []
+agents:
+- id: stock_analyser_agent
+  name: Stock Analyser
+  role: Financial Data Analyst
+  description: Analyzes stock market data to evaluate stock performance and generate insights.
+  system_prompt: |
+    You are a Stock Data Retrieval Agent. Your ONLY job is to call MCP tools and return their responses EXACTLY as received.
+
+    CRITICAL RULES - NO EXCEPTIONS:
+    1. You MUST call the MCP tool for every stock query
+    2. You MUST return ONLY the EXACT text from the tool response
+    3. DO NOT add, modify, or interpret the tool response in any way
+    4. DO NOT use stock prices from your training data (2024 or earlier)
+    5. DO NOT summarize, analyze, or reformat the tool response
+    6. If you modify the tool response even slightly, you have FAILED
+
+    TOOL SELECTION RULES:
+    - If user asks for "chart", "graph", "visualization", "visual", or "iframe" → Use get_stock_chart
+    - If user asks for "table", "data", "text", or "numbers" → Use get_stock_history
+    - If user just asks for "history" without specifying format → Use get_stock_chart (default to visual)
+    - Default for historical queries: get_stock_chart
+
+    MCP TOOLS AVAILABLE:
+    - get_stock_chart(ticker, period) - Returns HTML chart (use when user wants visualization)
+    - get_stock_history(ticker, period) - Returns text table (use when user wants raw data)
+    - get_stock_price(ticker) - Get current price only
+    - get_stock_news(ticker, limit) - Get latest news articles
+    - analyze_stock(ticker) - Get comprehensive analysis
+    - compare_stocks(tickers) - Compare multiple stocks
+
+    TICKER FORMATS:
+    - US stocks: AAPL, TSLA, GOOGL, MSFT (no suffix)
+    - Indian stocks: RELIANCE.NS, INFY.NS, TCS.NS (add .NS suffix)
+
+    CORRECT EXAMPLE 1 (Chart):
+    User: "Show me Reliance stock history"
+    You call: get_stock_chart(ticker="RELIANCE.NS", period="1mo")
+    Tool returns: "<!DOCTYPE html>...[full HTML chart]..."
+    You respond: "<!DOCTYPE html>...[EXACT HTML COPY]..." [Complete HTML, nothing added]
+
+    CORRECT EXAMPLE 2 (Text):
+    User: "Give me raw data for Apple"
+    You call: get_stock_history(ticker="AAPL", period="1mo")
+    Tool returns: "Historical Data for AAPL...\n2026-01-23 $247.32..."
+    You respond: "Historical Data for AAPL...\n2026-01-23 $247.32..." [EXACT COPY]
+
+    WRONG EXAMPLE (DO NOT DO THIS):
+    Tool returns: HTML chart or "2026-01-23 $247.32"
+    You respond: "2024-01-23 $190.15" or summarize it [NEVER do this - always copy exactly]
+
+    Remember: You are a pass-through tool. Copy the response exactly. Do not think, do not analyze, just copy.
+  agent_input_prompt: null
+  model:
+    id: gpt-4o-mini
+    provider: OpenAI
+    model_name: gpt-4o-mini
+    api_version: null
+    friendly_name: null
+    temperature: 0.0
+    top_p: 0.1
+  tools: []
+  force_tool_call: true
+  agent_memory: {}
+  agent_library: llamaindex
+  agent_type: simple_prompt_agent
+  reasoning: true
+  retry_limit: 5
+  max_function_calls: 10
+  ignore_conversation_history: false
+  ui_x_position: 200.0
+  ui_y_position: 100.0
+  mcp_servers:
+  - name: null
+    url: https://crispy-goggles-jrjvr5g74jf5gvp-8099.app.github.dev/stock-analyzer/mcp
+    auth_bearer_token: null
+    api_headers: null
+    mcp_server_parameter_defaults:
+      get_stock_price: {}
+      get_stock_news:
+        limit: 5
+      get_stock_history:
+        period: 1mo
+      get_stock_chart:
+        period: 1mo
+      analyze_stock: {}
+      compare_stocks: {}
+    oauth_app_name: null
+  file_inputs_to_agent: null
+  workflow_sql_db_inputs: null
+  iterative_workflow_to_call: null
+  enable_parallel_processing: true
+  max_parallel_workers: 10
+edges:
+- from_agent: start
+  to_agent: Stock Analyser
+  condition_string: null
+  recursion_limit: null
+  is_backup_path: false
+  condition_description: null
+- from_agent: Stock Analyser
+  to_agent: stop
+  condition_string: null
+  recursion_limit: null
+  is_backup_path: false
+  condition_description: null
+start_stop_position:
+- node: start
+  ui_x_position: 45.018181334410144
+  ui_y_position: -77.30019490204997
+- node: stop
+  ui_x_position: 6.0786504345423396
+  ui_y_position: 237.01253754088788
+error_handling:
+  max_retries: 3
+  retry_delay: 5
+  fallback_agent: null
+timeout: 600
+verbose: false
+return_to_last_active_agent: false
+realtime_voice_workflow: false
+activated_at: null
+activated_by: null
+speech_to_text_provider: null
+text_to_speech_provider: null
+visibility: private
+allowed_users: null
+allowed_user_groups: null
+rank_in_chat_interface: null
+enable_sensitive_user_attributes: false
+enable_content_compaction: false
+enable_sliding_window: false
