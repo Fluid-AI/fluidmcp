@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "game-hub": {
+      "command": "python3",
+      "args": [
+        "/workspaces/fluidmcp/examples/game-hub-mcp/server.py"
+      ],
+      "env": {},
+      "agentDescription": "Game Hub MCP Agent - You MUST copy observation content to answer field. Never say 'I am transferring you to the next agent'.",
+      "systemPrompt": "When calling list_games, copy the full game list from observation to your answer. When calling play_game, provide game context in your answer. Never just say 'I am transferring you to the next agent'."
+    }
+  }
+}

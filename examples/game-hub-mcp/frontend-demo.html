@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Snake Game - Frontend Demo</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+
+    h1 {
+      color: #667eea;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #666;
+      margin-bottom: 30px;
+    }
+
+    .settings {
+      background: #f8f9fa;
+      padding: 20px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    .settings h3 {
+      color: #667eea;
+      margin-bottom: 15px;
+    }
+
+    .form-group {
+      display: inline-block;
+      margin-right: 20px;
+      margin-bottom: 10px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      color: #555;
+      font-weight: 600;
+    }
+
+    select {
+      padding: 10px 15px;
+      border: 2px solid #ddd;
+      border-radius: 5px;
+      font-size: 14px;
+      min-width: 150px;
+      cursor: pointer;
+      transition: border-color 0.3s;
+    }
+
+    select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .button-group {
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 15px 30px;
+      font-size: 16px;
+      border-radius: 25px;
+      cursor: pointer;
+      margin: 5px;
+      transition: transform 0.2s, box-shadow 0.2s;
+      font-weight: bold;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    #game-container {
+      margin-top: 20px;
+      min-height: 100px;
+    }
+
+    #game-container iframe {
+      width: 100%;
+      height: 800px;
+      border: 3px solid #667eea;
+      border-radius: 10px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #667eea;
+      font-size: 18px;
+    }
+
+    .loading::after {
+      content: '...';
+      animation: dots 1.5s steps(4, end) infinite;
+    }
+
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
+    }
+
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 20px;
+      border-left: 4px solid #c33;
+    }
+
+    .info-box {
+      background: #e8f4ff;
+      color: #0066cc;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      border-left: 4px solid #0066cc;
+    }
+
+    .info-box code {
+      background: #fff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+
+    @media (max-width: 768px) {
+      .form-group {
+        display: block;
+        margin-bottom: 15px;
+      }
+
+      button {
+        display: block;
+        width: 100%;
+        margin: 10px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🐍 Snake Game - Frontend Demo</h1>
+    <p class="subtitle">This demo shows how the backend sends complete HTML/JavaScript to the frontend</p>
+
+    <div class="info-box">
+      <strong>📡 Backend Endpoint:</strong> <code id="endpoint-display">http://localhost:8099/snake-game/mcp</code>
+      <br>
+      <strong>ℹ️ How it works:</strong> The MCP backend generates complete game HTML and sends it to this frontend, which displays it in an iframe.
+    </div>
+
+    <div class="settings">
+      <h3>⚙️ Game Settings</h3>
+
+      <div class="form-group">
+        <label for="difficulty">Difficulty Level:</label>
+        <select id="difficulty">
+          <option value="easy">🟢 Easy (Slower)</option>
+          <option value="medium" selected>🟡 Medium (Normal)</option>
+          <option value="hard">🔴 Hard (Faster)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="boardSize">Board Size:</label>
+        <select id="boardSize">
+          <option value="small">Small (20x20)</option>
+          <option value="medium" selected>Medium (30x30)</option>
+          <option value="large">Large (40x40)</option>
+        </select>
+      </div>
+
+      <div class="button-group">
+        <button onclick="startGame()" id="startBtn">
+          🎮 Start Game (In Page)
+        </button>
+        <button onclick="startGameNewTab()" id="newTabBtn">
+          🪟 Start in New Tab
+        </button>
+        <button onclick="getHighScores()" id="scoresBtn">
+          🏆 View High Scores
+        </button>
+      </div>
+    </div>
+
+    <div id="game-container"></div>
+  </div>
+
+  <script>
+    // MCP Backend endpoint
+    const MCP_ENDPOINT = 'http://localhost:8099/snake-game/mcp';
+
+    // Update endpoint display if different
+    document.getElementById('endpoint-display').textContent = MCP_ENDPOINT;
+
+    /**
+     * Call an MCP tool on the backend
+     */
+    async function callMCPTool(toolName, args = {}) {
+      const response = await fetch(MCP_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          "jsonrpc": "2.0",
+          "id": Date.now(),
+          "method": "tools/call",
+          "params": {
+            "name": toolName,
+            "arguments": args
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error.message);
+      }
+
+      // Parse the nested JSON response
+      return JSON.parse(data.result.content[0].text);
+    }
+
+    /**
+     * Start the game and display in iframe (in-page)
+     */
+    async function startGame() {
+      const container = document.getElementById('game-container');
+      const startBtn = document.getElementById('startBtn');
+      const newTabBtn = document.getElementById('newTabBtn');
+
+      try {
+        // Disable buttons and show loading
+        startBtn.disabled = true;
+        newTabBtn.disabled = true;
+        container.innerHTML = '<div class="loading">Loading game from backend</div>';
+
+        // Get settings
+        const difficulty = document.getElementById('difficulty').value;
+        const boardSize = document.getElementById('boardSize').value;
+
+        console.log('Calling MCP backend with:', { difficulty, board_size: boardSize });
+
+        // Call MCP backend to get the game HTML
+        const result = await callMCPTool('start_game', {
+          difficulty: difficulty,
+          board_size: boardSize
+        });
+
+        console.log('Backend response:', result);
+
+        // Get the complete game HTML from backend
+        const gameHTML = result.game_ui;
+
+        console.log('Received game HTML, length:', gameHTML.length);
+
+        // Clear container and create iframe
+        container.innerHTML = '';
+        const iframe = document.createElement('iframe');
+
+        // Add iframe to page
+        container.appendChild(iframe);
+
+        // Write the backend-generated HTML to iframe
+        iframe.contentWindow.document.open();
+        iframe.contentWindow.document.write(gameHTML);
+        iframe.contentWindow.document.close();
+
+        console.log('Game loaded successfully!');
+
+      } catch (error) {
+        console.error('Error starting game:', error);
+        container.innerHTML = `
+          <div class="error">
+            <strong>❌ Error:</strong> ${error.message}
+            <br><br>
+            <strong>Make sure the MCP server is running:</strong>
+            <br>
+            <code>fluidmcp run examples/snake-game-config.json --file --start-server</code>
+          </div>
+        `;
+      } finally {
+        // Re-enable buttons
+        startBtn.disabled = false;
+        newTabBtn.disabled = false;
+      }
+    }
+
+    /**
+     * Start the game in a new tab
+     */
+    async function startGameNewTab() {
+      const startBtn = document.getElementById('startBtn');
+      const newTabBtn = document.getElementById('newTabBtn');
+
+      try {
+        // Disable buttons
+        startBtn.disabled = true;
+        newTabBtn.disabled = true;
+
+        // Get settings
+        const difficulty = document.getElementById('difficulty').value;
+        const boardSize = document.getElementById('boardSize').value;
+
+        console.log('Calling MCP backend for new tab...');
+
+        // Call MCP backend
+        const result = await callMCPTool('start_game', {
+          difficulty: difficulty,
+          board_size: boardSize
+        });
+
+        // Get the HTML from backend
+        const gameHTML = result.game_ui;
+
+        // Create blob and open in new tab
+        const blob = new Blob([gameHTML], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+
+        console.log('Game opened in new tab!');
+
+      } catch (error) {
+        console.error('Error:', error);
+        alert('Error: ' + error.message + '\n\nMake sure the MCP server is running.');
+      } finally {
+        // Re-enable buttons
+        startBtn.disabled = false;
+        newTabBtn.disabled = false;
+      }
+    }
+
+    /**
+     * Get and display high scores
+     */
+    async function getHighScores() {
+      const container = document.getElementById('game-container');
+      const scoresBtn = document.getElementById('scoresBtn');
+
+      try {
+        scoresBtn.disabled = true;
+        container.innerHTML = '<div class="loading">Loading high scores</div>';
+
+        // Call MCP backend
+        const result = await callMCPTool('get_high_scores', {
+          limit: 10
+        });
+
+        console.log('High scores:', result);
+
+        // Display scores
+        if (result.high_scores.length === 0) {
+          container.innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #666;">
+              <h3>No high scores yet!</h3>
+              <p>Play some games to set records.</p>
+            </div>
+          `;
+        } else {
+          let html = '<div style="background: #f8f9fa; padding: 20px; border-radius: 10px;">';
+          html += '<h3 style="color: #667eea; margin-bottom: 15px;">🏆 High Scores</h3>';
+          html += '<table style="width: 100%; border-collapse: collapse;">';
+          html += '<tr style="border-bottom: 2px solid #667eea;">';
+          html += '<th style="padding: 10px; text-align: left;">Rank</th>';
+          html += '<th style="padding: 10px; text-align: left;">Player</th>';
+          html += '<th style="padding: 10px; text-align: left;">Score</th>';
+          html += '<th style="padding: 10px; text-align: left;">Difficulty</th>';
+          html += '<th style="padding: 10px; text-align: left;">Date</th>';
+          html += '</tr>';
+
+          result.high_scores.forEach((score, index) => {
+            const date = new Date(score.timestamp).toLocaleDateString();
+            html += `<tr style="border-bottom: 1px solid #ddd;">`;
+            html += `<td style="padding: 10px;">#${index + 1}</td>`;
+            html += `<td style="padding: 10px;">${score.player_name}</td>`;
+            html += `<td style="padding: 10px; font-weight: bold;">${score.score}</td>`;
+            html += `<td style="padding: 10px;">${score.difficulty}</td>`;
+            html += `<td style="padding: 10px;">${date}</td>`;
+            html += `</tr>`;
+          });
+
+          html += '</table></div>';
+          container.innerHTML = html;
+        }
+
+      } catch (error) {
+        console.error('Error getting scores:', error);
+        container.innerHTML = `
+          <div class="error">
+            <strong>❌ Error:</strong> ${error.message}
+          </div>
+        `;
+      } finally {
+        scoresBtn.disabled = false;
+      }
+    }
+
+    // Show instructions on page load
+    window.addEventListener('load', () => {
+      console.log('Frontend Demo loaded');
+      console.log('MCP Endpoint:', MCP_ENDPOINT);
+      console.log('Ready to receive game HTML from backend!');
+    });
+  </script>
+</body>
+</html>
