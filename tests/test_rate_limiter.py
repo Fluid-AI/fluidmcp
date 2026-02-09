@@ -29,7 +29,7 @@ class TestTokenBucketRateLimiter:
         elapsed = time.monotonic() - start
 
         assert elapsed < 0.1  # Should be nearly instant
-        assert limiter.get_available_tokens() == pytest.approx(5.0, abs=1.0)
+        assert await limiter.get_available_tokens() == pytest.approx(5.0, abs=1.0)
 
     async def test_acquire_blocks_when_full(self):
         """Test that acquire blocks when tokens exhausted."""
@@ -37,7 +37,7 @@ class TestTokenBucketRateLimiter:
 
         # Exhaust all tokens
         await limiter.acquire(tokens=10)
-        assert limiter.get_available_tokens() == pytest.approx(0.0, abs=0.5)
+        assert await limiter.get_available_tokens() == pytest.approx(0.0, abs=0.5)
 
         # Next acquire should block
         start = time.monotonic()
@@ -65,14 +65,14 @@ class TestTokenBucketRateLimiter:
 
     async def test_multiple_models(self):
         """Test rate limiters for multiple models are independent."""
-        clear_rate_limiters()
+        await clear_rate_limiters()
 
         limiter1 = await get_rate_limiter("model-1", rate=10, capacity=10)
         limiter2 = await get_rate_limiter("model-2", rate=5, capacity=5)
 
         # Exhaust model-1
         await limiter1.acquire(tokens=10)
-        assert limiter1.get_available_tokens() == pytest.approx(0.0, abs=0.5)
+        assert await limiter1.get_available_tokens() == pytest.approx(0.0, abs=0.5)
 
         # Model-2 should still have tokens
         start = time.monotonic()
@@ -88,12 +88,12 @@ class TestTokenBucketRateLimiter:
 
         # Exhaust tokens
         await limiter.acquire(tokens=10)
-        assert limiter.get_available_tokens() == pytest.approx(0.0, abs=0.5)
+        assert await limiter.get_available_tokens() == pytest.approx(0.0, abs=0.5)
 
         # Wait for replenishment
         await asyncio.sleep(0.5)  # 0.5s * 10 tokens/s = 5 tokens
 
-        available = limiter.get_available_tokens()
+        available = await limiter.get_available_tokens()
         assert available >= 4.0  # At least 4 tokens
         assert available <= 6.0  # Not more than 6
 
@@ -140,7 +140,7 @@ class TestTokenBucketRateLimiter:
 
     async def test_configure_rate_limiter(self):
         """Test runtime configuration of rate limiters."""
-        clear_rate_limiters()
+        await clear_rate_limiters()
 
         # Create with default rate
         limiter1 = await get_rate_limiter("test-model", rate=10, capacity=10)
@@ -167,15 +167,15 @@ class TestTokenBucketRateLimiter:
         limiter = TokenBucketRateLimiter(rate=10, capacity=10)
 
         # Initially full
-        assert limiter.get_available_tokens() == pytest.approx(10.0, abs=0.1)
+        assert await limiter.get_available_tokens() == pytest.approx(10.0, abs=0.1)
 
         # After acquiring
         await limiter.acquire(tokens=3)
-        assert limiter.get_available_tokens() == pytest.approx(7.0, abs=0.5)
+        assert await limiter.get_available_tokens() == pytest.approx(7.0, abs=0.5)
 
         # After waiting
         await asyncio.sleep(0.3)  # 3 tokens should replenish
-        assert limiter.get_available_tokens() == pytest.approx(10.0, abs=1.0)
+        assert await limiter.get_available_tokens() == pytest.approx(10.0, abs=1.0)
 
 
 @pytest.mark.asyncio
@@ -184,7 +184,7 @@ class TestRateLimiterIntegration:
 
     async def test_rate_limiter_prevents_burst(self):
         """Test that rate limiter prevents rapid burst requests."""
-        clear_rate_limiters()
+        await clear_rate_limiters()
 
         # Configure very restrictive rate limit
         limiter = await get_rate_limiter("test-model", rate=2, capacity=2)
@@ -201,7 +201,7 @@ class TestRateLimiterIntegration:
 
     async def test_rate_limiter_shared_across_calls(self):
         """Test that same model uses same rate limiter instance."""
-        clear_rate_limiters()
+        await clear_rate_limiters()
 
         limiter1 = await get_rate_limiter("shared-model", rate=10, capacity=10)
         limiter2 = await get_rate_limiter("shared-model", rate=10, capacity=10)
@@ -212,4 +212,4 @@ class TestRateLimiterIntegration:
         await limiter1.acquire(tokens=10)
 
         # limiter2 should also be exhausted
-        assert limiter2.get_available_tokens() == pytest.approx(0.0, abs=0.5)
+        assert await limiter2.get_available_tokens() == pytest.approx(0.0, abs=0.5)

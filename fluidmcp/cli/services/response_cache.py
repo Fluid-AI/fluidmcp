@@ -251,29 +251,38 @@ class ResponseCache:
             logger.info(f"Cache cleared: {count} entries removed")
             return count
 
-    def get_stats(self) -> Dict[str, Any]:
+    async def get_stats(self) -> Dict[str, Any]:
         """
         Get cache statistics.
 
         Returns:
             Dict with hits, misses, size, hit_rate
         """
-        total = self._hits + self._misses
-        hit_rate = (self._hits / total * 100) if total > 0 else 0.0
+        async with self._lock:
+            total = self._hits + self._misses
+            hit_rate = (self._hits / total * 100) if total > 0 else 0.0
 
-        return {
-            "hits": self._hits,
-            "misses": self._misses,
-            "size": len(self._cache),
-            "max_size": self.max_size,
-            "hit_rate": round(hit_rate, 2),
-            "ttl": self.ttl
-        }
+            return {
+                "hits": self._hits,
+                "misses": self._misses,
+                "size": len(self._cache),
+                "max_size": self.max_size,
+                "hit_rate": round(hit_rate, 2),
+                "ttl": self.ttl
+            }
 
 
 # Global cache instance
 _response_cache: Optional[ResponseCache] = None
-_cache_lock = asyncio.Lock()
+_cache_lock: Optional[asyncio.Lock] = None
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    """Get or create the global lock (lazy initialization to avoid event loop issues)."""
+    global _cache_lock
+    if _cache_lock is None:
+        _cache_lock = asyncio.Lock()
+    return _cache_lock
 
 
 async def get_response_cache(
@@ -302,7 +311,7 @@ async def get_response_cache(
 
     global _response_cache
 
-    async with _cache_lock:
+    async with _get_cache_lock():
         if _response_cache is None:
             _response_cache = ResponseCache(ttl=ttl, max_size=max_size)
             logger.info(f"Initialized response cache: TTL={ttl}s, max_size={max_size}")
@@ -314,6 +323,7 @@ async def clear_response_cache() -> int:
     """Clear global response cache."""
     global _response_cache
 
-    if _response_cache:
-        return await _response_cache.clear()
-    return 0
+    async with _get_cache_lock():
+        if _response_cache:
+            return await _response_cache.clear()
+        return 0

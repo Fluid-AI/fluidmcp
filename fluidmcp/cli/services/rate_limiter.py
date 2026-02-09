@@ -77,16 +77,25 @@ class TokenBucketRateLimiter:
                 logger.debug(f"Rate limit reached, waiting {wait_time:.2f}s for {tokens} token(s)")
                 await asyncio.sleep(wait_time)
 
-    def get_available_tokens(self) -> float:
+    async def get_available_tokens(self) -> float:
         """Get current number of available tokens without acquiring."""
-        now = time.monotonic()
-        elapsed = now - self.last_update
-        return min(self.capacity, self.tokens + elapsed * self.rate)
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last_update
+            return min(self.capacity, self.tokens + elapsed * self.rate)
 
 
 # Global registry of rate limiters per model
 _rate_limiters: Dict[str, TokenBucketRateLimiter] = {}
-_limiter_lock = asyncio.Lock()
+_limiter_lock: Optional[asyncio.Lock] = None
+
+
+def _get_limiter_lock() -> asyncio.Lock:
+    """Get or create the global lock (lazy initialization to avoid event loop issues)."""
+    global _limiter_lock
+    if _limiter_lock is None:
+        _limiter_lock = asyncio.Lock()
+    return _limiter_lock
 
 
 async def get_rate_limiter(
@@ -113,7 +122,7 @@ async def get_rate_limiter(
     rate = rate or 10.0  # 10 requests/second
     capacity = capacity or 20  # Allow bursts up to 20
 
-    async with _limiter_lock:
+    async with _get_limiter_lock():
         if model_id not in _rate_limiters:
             _rate_limiters[model_id] = TokenBucketRateLimiter(rate, capacity)
             logger.info(f"Created rate limiter for '{model_id}': {rate} req/s, capacity {capacity}")
@@ -137,13 +146,14 @@ async def configure_rate_limiter(
     Example:
         await configure_rate_limiter("llama-2-70b", rate=5, capacity=10)
     """
-    async with _limiter_lock:
+    async with _get_limiter_lock():
         _rate_limiters[model_id] = TokenBucketRateLimiter(rate, capacity)
         logger.info(f"Configured rate limiter for '{model_id}': {rate} req/s, capacity {capacity}")
 
 
-def clear_rate_limiters() -> None:
+async def clear_rate_limiters() -> None:
     """Clear all rate limiters (useful for testing)."""
     global _rate_limiters
-    _rate_limiters.clear()
+    async with _get_limiter_lock():
+        _rate_limiters.clear()
     logger.debug("Cleared all rate limiters")

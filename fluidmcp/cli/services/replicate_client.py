@@ -15,6 +15,9 @@ import asyncio
 from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
+# Import rate limiter at module level for efficiency
+from .rate_limiter import get_rate_limiter, configure_rate_limiter
+
 # Constants
 DEFAULT_TIMEOUT = 60.0  # Default timeout for API requests (seconds)
 DEFAULT_MAX_RETRIES = 3  # Default maximum retry attempts for failed requests
@@ -179,7 +182,6 @@ class ReplicateClient:
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
         # Apply rate limiting before making request
-        from .rate_limiter import get_rate_limiter
         rate_limiter = await get_rate_limiter(self.model_id)
         await rate_limiter.acquire()
 
@@ -261,7 +263,6 @@ class ReplicateClient:
             httpx.HTTPError: If API request fails
         """
         # Apply rate limiting
-        from .rate_limiter import get_rate_limiter
         rate_limiter = await get_rate_limiter(self.model_id)
         await rate_limiter.acquire()
 
@@ -449,6 +450,15 @@ class ReplicateClient:
 
 # Global registry of active Replicate clients
 _replicate_clients: Dict[str, ReplicateClient] = {}
+_registry_lock: Optional[asyncio.Lock] = None
+
+
+def _get_registry_lock() -> asyncio.Lock:
+    """Get or create the global registry lock (lazy initialization to avoid event loop issues)."""
+    global _registry_lock
+    if _registry_lock is None:
+        _registry_lock = asyncio.Lock()
+    return _registry_lock
 
 
 async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]]) -> Dict[str, ReplicateClient]:
@@ -486,7 +496,6 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
                 try:
                     rate_limit_config = getattr(client, 'rate_limit_config', {})
                     if rate_limit_config and isinstance(rate_limit_config, dict):
-                        from .rate_limiter import configure_rate_limiter
                         requests_per_second = rate_limit_config.get("requests_per_second", 10)
                         burst_capacity = rate_limit_config.get("burst_capacity", 20)
                         await configure_rate_limiter(model_id, requests_per_second, burst_capacity)
@@ -498,7 +507,8 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
                     logger.debug(f"Skipping rate limiter configuration for '{model_id}': {e}")
 
                 clients[model_id] = client
-                _replicate_clients[model_id] = client
+                async with _get_registry_lock():
+                    _replicate_clients[model_id] = client
                 logger.info(f"Successfully initialized Replicate model '{model_id}'")
             else:
                 logger.error(f"Health check failed for Replicate model '{model_id}'")
@@ -528,11 +538,11 @@ async def stop_all_replicate_models() -> None:
     """
     global _replicate_clients
 
-    logger.info(f"Stopping {len(_replicate_clients)} Replicate client(s)")
-
-    # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
-    # await client.close() yields control, allowing concurrent modifications
-    clients_snapshot = list(_replicate_clients.items())
+    async with _get_registry_lock():
+        logger.info(f"Stopping {len(_replicate_clients)} Replicate client(s)")
+        # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
+        # await client.close() yields control, allowing concurrent modifications
+        clients_snapshot = list(_replicate_clients.items())
 
     for model_id, client in clients_snapshot:
         try:
@@ -541,7 +551,8 @@ async def stop_all_replicate_models() -> None:
         except Exception as e:
             logger.error(f"Error stopping Replicate client '{model_id}': {e}")
 
-    _replicate_clients.clear()
+    async with _get_registry_lock():
+        _replicate_clients.clear()
     logger.info("All Replicate clients stopped")
 
 

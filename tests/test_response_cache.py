@@ -157,7 +157,7 @@ class TestResponseCache:
         # Miss
         await cache.get("key2")
 
-        stats = cache.get_stats()
+        stats = await cache.get_stats()
 
         assert stats["hits"] == 1
         assert stats["misses"] == 1
