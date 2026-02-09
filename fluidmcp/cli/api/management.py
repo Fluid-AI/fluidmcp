@@ -2077,16 +2077,17 @@ async def get_cache_stats(token: str = Depends(get_token)):
     Returns:
         Cache statistics dict
     """
-    from ..services.response_cache import _response_cache
+    from ..services.response_cache import peek_response_cache
 
     # Peek at existing cache without creating it
-    if _response_cache is None:
+    cache = await peek_response_cache()
+    if cache is None:
         return {
             "enabled": False,
             "message": "Cache is not initialized (no models with caching enabled have been used)"
         }
 
-    stats = await _response_cache.get_stats()
+    stats = await cache.get_stats()
     return {
         "enabled": True,
         **stats

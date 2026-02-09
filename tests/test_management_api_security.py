@@ -322,9 +322,6 @@ class TestMongoDBInjectionPrevention:
 
     def test_sanitize_rejects_operator_in_dict_keys(self):
         """Test that MongoDB operators in dict keys raise an exception."""
-        from fastapi import HTTPException
-        import pytest
-
         # Operator in top-level key
         with pytest.raises(HTTPException) as excinfo:
             sanitize_input({"$where": "malicious code"})

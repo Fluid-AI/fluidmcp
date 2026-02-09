@@ -320,9 +320,16 @@ async def get_response_cache(
     """
     Get or create global response cache.
 
+    Note:
+        This returns a single global cache instance. Per-model cache configuration
+        (different TTL/max_size per model) is not currently supported - the cache
+        settings from the first model to initialize the cache will be used for all
+        models. For per-model caching with different settings, a future enhancement
+        could maintain a dict of caches keyed by (ttl, max_size) or model_id.
+
     Args:
-        ttl: Time-to-live in seconds
-        max_size: Maximum cache size
+        ttl: Time-to-live in seconds (only used on first initialization)
+        max_size: Maximum cache size (only used on first initialization)
         enabled: Whether caching is enabled
 
     Returns:
@@ -344,6 +351,19 @@ async def get_response_cache(
             logger.info(f"Initialized response cache: TTL={ttl}s, max_size={max_size}")
 
         return _response_cache
+
+
+async def peek_response_cache() -> Optional[ResponseCache]:
+    """
+    Peek at existing cache without creating it.
+
+    Returns None if cache hasn't been initialized yet.
+    Used by metrics endpoints to avoid side effects.
+
+    Returns:
+        Existing ResponseCache instance or None
+    """
+    return _response_cache
 
 
 async def clear_response_cache() -> int:

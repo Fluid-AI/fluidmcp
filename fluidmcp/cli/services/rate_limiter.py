@@ -101,6 +101,11 @@ class TokenBucketRateLimiter:
 
 
 # Global registry of rate limiters per model
+# Note: This registry grows monotonically and limiters are never evicted.
+# In long-running processes with many distinct model_id values, this can
+# cause unbounded memory growth. For production systems that dynamically
+# create/destroy models, consider adding explicit cleanup (remove_rate_limiter)
+# or periodic pruning of inactive limiters.
 _rate_limiters: Dict[str, TokenBucketRateLimiter] = {}
 _limiter_lock: Optional[asyncio.Lock] = None
 
