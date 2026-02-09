@@ -229,18 +229,23 @@ class ResponseCache:
                 self._in_flight.pop(key, None)
 
             return value
-        except Exception as e:
+        except BaseException as e:
             # Mark future as failed - set exception BEFORE removing from registry
+            # BaseException catches Exception, CancelledError, and other async exceptions
             async with self._lock:
                 in_flight_future = self._in_flight.get(key)
                 if in_flight_future is not None and not in_flight_future.done():
-                    in_flight_future.set_exception(e)
-                    # Retrieve the exception to avoid "Future exception was never retrieved"
-                    # warnings when no other task is awaiting this future
-                    try:
-                        _ = in_flight_future.exception()
-                    except Exception:
-                        pass  # Exception already set, ignore
+                    # For CancelledError, cancel the future instead of set_exception
+                    if isinstance(e, asyncio.CancelledError):
+                        in_flight_future.cancel()
+                    else:
+                        in_flight_future.set_exception(e)
+                        # Retrieve the exception to avoid "Future exception was never retrieved"
+                        # warnings when no other task is awaiting this future
+                        try:
+                            _ = in_flight_future.exception()
+                        except Exception:
+                            pass  # Exception already set, ignore
                 self._in_flight.pop(key, None)
             raise
 

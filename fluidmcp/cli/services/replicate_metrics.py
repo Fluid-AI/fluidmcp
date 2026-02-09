@@ -5,10 +5,9 @@ Registers Replicate-specific metrics (cache, rate limiter) with the unified
 FluidMCP metrics system for Prometheus-compatible monitoring.
 """
 
-from typing import Optional
 from loguru import logger
 
-from .metrics import get_registry, Counter, Gauge
+from .metrics import get_registry, Gauge
 
 
 def register_replicate_metrics():
@@ -25,14 +24,14 @@ def register_replicate_metrics():
     """
     registry = get_registry()
 
-    # Cache metrics
-    registry.register(Counter(
+    # Cache metrics (using Gauge because cache stats track absolute values, not deltas)
+    registry.register(Gauge(
         "fluidmcp_replicate_cache_hits_total",
         "Total number of cache hits for Replicate responses",
         labels=[]  # Global cache, no per-model labels
     ))
 
-    registry.register(Counter(
+    registry.register(Gauge(
         "fluidmcp_replicate_cache_misses_total",
         "Total number of cache misses for Replicate responses",
         labels=[]
@@ -89,7 +88,7 @@ async def update_cache_metrics():
 
     cache = await peek_response_cache()
     if cache is None:
-        # Cache not initialized, clear metrics
+        # Cache not initialized, set all metrics to 0 using proper API
         registry = get_registry()
 
         hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits_total")
@@ -97,40 +96,40 @@ async def update_cache_metrics():
         size_metric = registry.get_metric("fluidmcp_replicate_cache_size")
         hit_rate_metric = registry.get_metric("fluidmcp_replicate_cache_hit_rate")
 
-        # Set all to 0
+        # Set all to 0 using Gauge.set() (thread-safe)
         if hits_metric:
-            hits_metric.samples[()] = 0
+            hits_metric.set(0.0)
         if misses_metric:
-            misses_metric.samples[()] = 0
+            misses_metric.set(0.0)
         if size_metric:
-            size_metric.samples[()] = 0
+            size_metric.set(0.0)
         if hit_rate_metric:
-            hit_rate_metric.samples[()] = 0.0
+            hit_rate_metric.set(0.0)
 
         return
 
     # Get cache stats
     stats = await cache.get_stats()
 
-    # Update metrics
+    # Update metrics using proper Gauge API (thread-safe)
     registry = get_registry()
 
     hits_metric = registry.get_metric("fluidmcp_replicate_cache_hits_total")
     if hits_metric:
-        hits_metric.samples[()] = float(stats["hits"])
+        hits_metric.set(float(stats["hits"]))
 
     misses_metric = registry.get_metric("fluidmcp_replicate_cache_misses_total")
     if misses_metric:
-        misses_metric.samples[()] = float(stats["misses"])
+        misses_metric.set(float(stats["misses"]))
 
     size_metric = registry.get_metric("fluidmcp_replicate_cache_size")
     if size_metric:
-        size_metric.samples[()] = float(stats["size"])
+        size_metric.set(float(stats["size"]))
 
     hit_rate_metric = registry.get_metric("fluidmcp_replicate_cache_hit_rate")
     if hit_rate_metric:
         # Convert percentage to ratio (0.0-1.0)
-        hit_rate_metric.samples[()] = stats["hit_rate"] / 100.0
+        hit_rate_metric.set(stats["hit_rate"] / 100.0)
 
 
 async def update_rate_limiter_metrics():
@@ -145,34 +144,43 @@ async def update_rate_limiter_metrics():
     # Get all rate limiter stats
     all_stats = await get_all_rate_limiter_stats()
 
-    if not all_stats:
-        # No rate limiters active, nothing to update
-        return
-
     registry = get_registry()
+
+    if not all_stats:
+        # No rate limiters active: clear all per-model samples to avoid stale series
+        tokens_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_tokens")
+        utilization_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_utilization")
+        capacity_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_capacity")
+        rate_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_rate")
+
+        for metric in (tokens_metric, utilization_metric, capacity_metric, rate_metric):
+            if metric:
+                # Clear all samples (thread-safe via metric lock)
+                with metric._lock:
+                    metric.samples.clear()
+        return
 
     tokens_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_tokens")
     utilization_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_utilization")
     capacity_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_capacity")
     rate_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_rate")
 
-    # Update metrics for each model
+    # Update metrics for each model using proper Gauge API (thread-safe)
     for model_id, stats in all_stats.items():
         label_values = {"model_id": model_id}
-        label_key = (model_id,)
 
         if tokens_metric:
-            tokens_metric.samples[label_key] = stats["available_tokens"]
+            tokens_metric.set(stats["available_tokens"], label_values)
 
         if utilization_metric:
             # Convert percentage to ratio (0.0-1.0)
-            utilization_metric.samples[label_key] = stats["utilization_pct"] / 100.0
+            utilization_metric.set(stats["utilization_pct"] / 100.0, label_values)
 
         if capacity_metric:
-            capacity_metric.samples[label_key] = float(stats["capacity"])
+            capacity_metric.set(float(stats["capacity"]), label_values)
 
         if rate_metric:
-            rate_metric.samples[label_key] = stats["rate"]
+            rate_metric.set(stats["rate"], label_values)
 
 
 # Auto-register metrics on module import

@@ -5,7 +5,6 @@ Tests for Replicate metrics integration with unified metrics system.
 import pytest
 from fluidmcp.cli.services.metrics import get_registry
 from fluidmcp.cli.services.replicate_metrics import (
-    register_replicate_metrics,
     update_cache_metrics,
     update_rate_limiter_metrics
 )
@@ -93,8 +92,8 @@ async def test_update_rate_limiter_metrics_with_limiter():
     # Clear existing limiters first
     await clear_rate_limiters()
 
-    # Create a test rate limiter
-    limiter = await get_rate_limiter("test-model", rate=5.0, capacity=10)
+    # Create a test rate limiter (variable unused but needed to populate registry)
+    await get_rate_limiter("test-model", rate=5.0, capacity=10)
 
     # Update metrics
     await update_rate_limiter_metrics()
@@ -129,7 +128,8 @@ async def test_metrics_render_prometheus_format():
 
     # Clear and setup test data
     await clear_rate_limiters()
-    limiter = await get_rate_limiter("test-model-prom", rate=10.0, capacity=20)
+    # Create limiter (variable unused but needed to populate registry)
+    await get_rate_limiter("test-model-prom", rate=10.0, capacity=20)
 
     # Update metrics
     await update_rate_limiter_metrics()
