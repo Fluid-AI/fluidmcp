@@ -632,24 +632,30 @@ scrape_configs:
 **Example Prometheus Queries**:
 
 ```promql
-# Cache hit rate over time
-rate(fluidmcp_replicate_cache_hits_total[5m]) /
-  (rate(fluidmcp_replicate_cache_hits_total[5m]) + rate(fluidmcp_replicate_cache_misses_total[5m]))
+# Cache hit ratio (current snapshot since last restart/clear)
+fluidmcp_replicate_cache_hits_total /
+  (fluidmcp_replicate_cache_hits_total + fluidmcp_replicate_cache_misses_total)
+
+# Cache hit rate (pre-computed as ratio 0.0-1.0)
+fluidmcp_replicate_cache_hit_rate
 
 # Models approaching rate limit (>80% utilization)
 fluidmcp_replicate_rate_limiter_utilization > 0.8
 
-# Total API calls saved by caching
+# Current cumulative API calls saved by caching (since last restart/cache clear)
 fluidmcp_replicate_cache_hits_total
 
 # Average available tokens across all models
 avg(fluidmcp_replicate_rate_limiter_tokens)
 ```
 
+**Important**: Cache metrics are Gauges (absolute values) that may reset on cache clear. Do not use `rate()` or `increase()` functions on these metrics. For tracking changes over time, use the raw gauge values or the pre-computed `hit_rate` metric.
+
 **Integration Details**:
 
 - Metrics are auto-registered on startup (via `replicate_metrics.py`)
-- Each API call to `/api/metrics/*` endpoints updates the Prometheus metrics
+- Metrics automatically updated on every Prometheus scrape of `/metrics` endpoint
+- Manual updates also available via `/api/metrics/*` REST endpoints
 - No additional configuration required - works out of the box
 - Compatible with Grafana, Prometheus AlertManager, etc.
 

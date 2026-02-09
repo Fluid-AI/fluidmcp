@@ -155,9 +155,8 @@ async def update_rate_limiter_metrics():
 
         for metric in (tokens_metric, utilization_metric, capacity_metric, rate_metric):
             if metric:
-                # Clear all samples (thread-safe via metric lock)
-                with metric._lock:
-                    metric.samples.clear()
+                # Clear all samples using public API (thread-safe)
+                metric.clear_samples()
         return
 
     tokens_metric = registry.get_metric("fluidmcp_replicate_rate_limiter_tokens")
