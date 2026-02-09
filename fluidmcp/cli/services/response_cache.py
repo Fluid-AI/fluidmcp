@@ -235,6 +235,12 @@ class ResponseCache:
                 in_flight_future = self._in_flight.get(key)
                 if in_flight_future is not None and not in_flight_future.done():
                     in_flight_future.set_exception(e)
+                    # Retrieve the exception to avoid "Future exception was never retrieved"
+                    # warnings when no other task is awaiting this future
+                    try:
+                        _ = in_flight_future.exception()
+                    except Exception:
+                        pass  # Exception already set, ignore
                 self._in_flight.pop(key, None)
             raise
 

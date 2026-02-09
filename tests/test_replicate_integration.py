@@ -204,22 +204,28 @@ class TestReplicateAdapterIntegration:
             "timeout": 1,  # 1 second timeout
             "max_retries": 0
         }
-        replicate_client._replicate_clients["timeout-test"] = ReplicateClient("timeout-test", timeout_config)
+        client = ReplicateClient("timeout-test", timeout_config)
+        replicate_client._replicate_clients["timeout-test"] = client
 
-        request = {
-            "model": "timeout-test",
-            "messages": [{"role": "user", "content": "Long task"}]
-        }
-
-        # Should timeout (flan-t5 might be fast enough, so this might not always fail)
-        # But the timeout mechanism should be invoked
         try:
-            response = await replicate_chat_completion("timeout-test", request, timeout=1)
-            # If it succeeds, that's fine - model was fast
-            assert "choices" in response
-        except Exception as e:
-            # Should be a timeout error
-            assert "timeout" in str(e).lower() or "timed out" in str(e).lower()
+            request = {
+                "model": "timeout-test",
+                "messages": [{"role": "user", "content": "Long task"}]
+            }
+
+            # Should timeout (flan-t5 might be fast enough, so this might not always fail)
+            # But the timeout mechanism should be invoked
+            try:
+                response = await replicate_chat_completion("timeout-test", request, timeout=1)
+                # If it succeeds, that's fine - model was fast
+                assert "choices" in response
+            except Exception as e:
+                # Should be a timeout error
+                assert "timeout" in str(e).lower() or "timed out" in str(e).lower()
+        finally:
+            # Clean up: remove client from registry and close it
+            replicate_client._replicate_clients.pop("timeout-test", None)
+            await client.close()
 
 
 @pytest.mark.integration

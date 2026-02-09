@@ -53,18 +53,21 @@ class TestConfigurableTimeouts:
                 )
 
     async def test_request_timeout_parameter(self):
-        """Test that explicit request timeout parameter is respected."""
-        # This test verifies that the adapter accepts and uses
-        # an explicit timeout parameter passed at request time.
-        # Note: The client's configured timeout (from model config) is
-        # currently not read by the adapter - only explicit timeouts are supported.
+        """
+        Test that explicit request timeout parameter is respected.
 
+        Note: This test verifies request-level timeout overrides.
+        Model-level timeout (client.config['timeout'] = 120) is used by
+        ReplicateClient for API calls. The OpenAI adapter requires an
+        explicit timeout parameter for end-to-end timeout control, which
+        can override the client's default on a per-request basis.
+        """
         # Model config with custom timeout
         model_config = {
             "type": "replicate",
             "model": "meta/llama-2-70b-chat",
             "api_key": "test_key",
-            "timeout": 120,  # Client timeout (not currently used by adapter)
+            "timeout": 120,  # Client default timeout (used if no override)
             "max_retries": 2
         }
 

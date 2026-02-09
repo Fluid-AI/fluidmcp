@@ -2147,20 +2147,18 @@ async def get_model_rate_limiter_stats(
     Returns:
         Rate limiter stats including available tokens and configuration
     """
-    from ..services.rate_limiter import _rate_limiters
+    from ..services.rate_limiter import get_all_rate_limiter_stats
 
-    if model_id not in _rate_limiters:
+    # Use thread-safe snapshot helper to avoid race conditions
+    stats = await get_all_rate_limiter_stats()
+    model_stats = stats.get(model_id)
+
+    if model_stats is None:
         raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
-
-    limiter = _rate_limiters[model_id]
-    available = await limiter.get_available_tokens()
 
     return {
         "model_id": model_id,
-        "available_tokens": round(available, 2),
-        "capacity": limiter.capacity,
-        "rate": limiter.rate,
-        "utilization_pct": round((1 - available / limiter.capacity) * 100, 2)
+        **model_stats
     }
 
 
