@@ -73,6 +73,7 @@ def is_placeholder(value: str) -> bool:
         'changeme', 'change_me', 'change-me',
         'replace_me', 'replace-me', 'replaceme',
         'todo', 'tbd', 'fixme',
+        'none', 'null',  # Special null-like values
         'example', 'sample', 'test',
         'your_key', 'your_token', 'your_password',
         'my_key', 'my_token', 'my_password',

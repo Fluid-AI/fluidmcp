@@ -29,7 +29,7 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 # Constants
-MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
+MAX_ERROR_MESSAGE_LENGTH = 1000  # Limit error messages to prevent DoS via large responses and protect sensitive data
 
 # Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None
@@ -52,8 +52,13 @@ async def cleanup_http_client():
     """Close the shared HTTP client to prevent resource leaks."""
     global _http_client
     if _http_client is not None:
-        await _http_client.aclose()
-        _http_client = None
+        try:
+            await _http_client.aclose()
+        except Exception as e:
+            logger.error(f"Error closing management HTTP client: {e}")
+        finally:
+            # Always clear the reference so the client can be recreated if needed
+            _http_client = None
 
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -133,11 +138,17 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     """
     Extract user identifier from bearer token.
 
-    For now, uses a simple approach:
-    - In secure mode: Uses the token itself as user ID (simple but works)
-    - In non-secure mode: Returns "anonymous"
+    ⚠️  WARNING: NOT PRODUCTION READY ⚠️
+    This implementation uses a SHA-256 hash of the bearer token as the user ID.
+    For production use, implement proper JWT authentication with:
+    - Token signature verification
+    - Expiration checking
+    - Role-based access control (RBAC)
+    - User claims extraction (email, user_id, roles)
 
-    Future: Parse JWT tokens to extract user email/ID from claims
+    Current behavior:
+    - In secure mode: Uses SHA-256 hash of token as user ID
+    - In non-secure mode: Returns "anonymous"
 
     Returns:
         User identifier string
@@ -150,16 +161,12 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if not credentials or not credentials.credentials:
         return "anonymous"
 
-    # For now, use token as user ID (simple approach)
-    # TODO: Implement proper JWT authentication with role claims
-    # Current implementation uses first 8 chars of token (~33 bits entropy)
-    # which is insufficient for production security. Replace with JWT decode
-    # to extract user_id/email/role claims.
+    # Use secure hash of token as user ID to avoid weak 8-char prefix
+    # This provides better security than 8-char prefix but still needs JWT for production
+    import hashlib
     token = credentials.credentials
-
-    # Simple user extraction: use first 8 chars of token as user ID
-    # This ensures different tokens = different users but provides weak security
-    user_id = f"user_{token[:8]}"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    user_id = f"user_{token_hash[:16]}"  # Use first 16 hex chars (64 bits) of hash
 
     return user_id
 
@@ -175,27 +182,53 @@ def sanitize_input(value: Any) -> Any:
     """
     Sanitize user input to prevent MongoDB injection attacks.
 
-    Removes MongoDB operators and special characters from input.
+    ⚠️  WARNING: This is a basic defense layer. For production:
+    - Use MongoDB's query parameterization
+    - Validate input types strictly at API boundaries
+    - Use schema validation (Pydantic models)
+    - Never construct queries by string concatenation
+
+    This function:
+    - Rejects dict keys that start with "$" (MongoDB-style operators)
+    - Leaves string values unchanged (no escaping performed)
+    - Recursively sanitizes nested dicts and lists
 
     Args:
         value: Input value to sanitize
 
     Returns:
         Sanitized value
+
+    Raises:
+        HTTPException: If MongoDB operator detected in dict keys
     """
-    if isinstance(value, str):
-        # Remove MongoDB operator prefixes
-        if value.startswith("$"):
-            value = value.lstrip("$")
-        # Remove braces that could be part of injection attempts
-        value = value.replace("{", "").replace("}", "")
-    elif isinstance(value, dict):
+    if isinstance(value, dict):
+        # Check for MongoDB operators and dot notation in dictionary keys (most dangerous)
+        for key in value.keys():
+            if isinstance(key, str):
+                if key.startswith("$"):
+                    raise HTTPException(
+                        400,
+                        "MongoDB operator-style keys (starting with '$') are not allowed in input"
+                    )
+                if "." in key:
+                    raise HTTPException(
+                        400,
+                        "Dictionary keys containing '.' (dot notation) are not allowed in input"
+                    )
         # Recursively sanitize dictionary values
         return {k: sanitize_input(v) for k, v in value.items()}
     elif isinstance(value, list):
         # Recursively sanitize list items
         return [sanitize_input(item) for item in value]
-    return value
+    elif isinstance(value, str):
+        # For string values, MongoDB operators are generally safe but can be escaped
+        # Don't modify the string - let MongoDB handle it with parameterized queries
+        # Removing $ or {} can break legitimate values
+        return value
+    else:
+        # Primitive types (int, float, bool, None) are safe
+        return value
 
 
 def validate_server_config(config: Dict[str, Any]) -> None:

@@ -1066,6 +1066,23 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
             collector = MetricsCollector(server_name)
             collector.set_uptime(uptime)
 
+        # Update Replicate metrics (cache and rate limiters) before rendering
+        # This ensures Prometheus scrapes always reflect current state
+        try:
+            from .replicate_metrics import update_cache_metrics, update_rate_limiter_metrics
+            await update_cache_metrics()
+            await update_rate_limiter_metrics()
+        except ModuleNotFoundError as e:
+            # Missing dependency (truly optional, should not happen in normal deployment)
+            # Must catch ModuleNotFoundError first (subclass of ImportError)
+            logger.debug(f"Replicate metrics module not found (optional dependency): {e}")
+        except ImportError as e:
+            # Replicate metrics module import failed (unexpected, should be part of codebase)
+            logger.warning(f"Failed to import Replicate metrics (unexpected packaging issue): {e}")
+        except Exception as e:
+            # Other errors - log with stack trace but don't fail metrics endpoint
+            logger.warning(f"Failed to update Replicate metrics: {e}", exc_info=True)
+
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
         return PlainTextResponse(

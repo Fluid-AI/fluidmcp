@@ -80,11 +80,11 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
     "temperature": 0.7,
     "max_tokens": 1000
   }'
-
 ```
 
 **Streaming Support**: Replicate models do not currently support streaming (`"stream": true`) due to Replicate's polling-based API architecture. Streaming requests will return a 501 error. For real-time output requirements, consider using vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
+**Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/{model_id}/v1/...` routes shown above.
 ## Configuration Format
 
 ### Complete Example
@@ -123,6 +123,26 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 | `default_params` | ❌ No | `{}` | Default parameters merged with each prediction request |
 | `timeout` | ❌ No | `60.0` | HTTP request timeout in seconds |
 | `max_retries` | ❌ No | `3` | Maximum retry attempts for failed requests |
+| `cache.enabled` | ❌ No | `false` | Enable response caching (reduces API calls for identical requests) |
+| `cache.ttl` | ❌ No | `300` | Cache time-to-live in seconds (5 minutes default) - **Note**: Only the first model to enable caching sets global TTL |
+| `cache.max_size` | ❌ No | `1000` | Maximum number of cached responses - **Note**: Only the first model to enable caching sets global max_size |
+| `rate_limit.requests_per_second` | ❌ No | `10` | Rate limit for API requests per second - **Always active with defaults** |
+| `rate_limit.burst_capacity` | ❌ No | `20` | Burst capacity for rate limiter - **Always active with defaults** |
+
+**Note on Rate Limiting**: Rate limiting is **always enabled** with default values (10 req/s, burst 20) to prevent hitting Replicate's server-side limits. Omitting `rate_limit` config does NOT disable rate limiting - it uses conservative defaults. To customize limits, provide explicit `rate_limit` configuration.
+
+### Cache Architecture Note
+
+**Important**: FluidMCP uses a **single global cache** shared across all Replicate models. The `cache.ttl` and `cache.max_size` settings from the **first model** that enables caching will be used for all subsequent models.
+
+This means:
+- ✅ All models share the same cache (efficient for duplicate requests across models)
+- ⚠️ Per-model cache settings (different TTL/max_size) are not supported
+- ⚠️ If Model A sets `ttl=300` and Model B sets `ttl=600`, only Model A's `ttl=300` is used
+
+**Recommendation**: If you need different cache settings for different models, configure the first model with the most conservative settings (lowest TTL, smallest max_size) that work for all models.
+
+**Future Enhancement**: Per-model caching with individual TTL/max_size settings could be implemented by maintaining a dictionary of caches keyed by `(ttl, max_size)` or `model_id`. See [response_cache.py:325](../fluidmcp/cli/services/response_cache.py) for implementation notes.
 
 ### Model Identifier Format
 
@@ -206,6 +226,46 @@ curl -X POST http://localhost:8099/api/llm/codellama/v1/chat/completions \
     ]
   }'
 ```
+
+### Production Configuration with Caching and Rate Limiting
+
+For production use, enable caching and rate limiting to optimize API usage and costs:
+
+```json
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llama-production": {
+      "type": "replicate",
+      "model": "meta/llama-2-70b-chat",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 1000
+      },
+      "cache": {
+        "enabled": true,
+        "ttl": 3600,
+        "max_size": 5000
+      },
+      "rate_limit": {
+        "requests_per_second": 5,
+        "burst_capacity": 10
+      },
+      "timeout": 120,
+      "max_retries": 3
+    }
+  }
+}
+```
+
+**Benefits:**
+- **Caching**: Identical requests return cached responses instantly, saving API calls and costs
+- **Rate Limiting**: Prevents exceeding Replicate's rate limits (token bucket algorithm)
+- **Retries**: Automatic retry with exponential backoff for transient errors
+- **Timeouts**: Prevents hanging requests
+
+**Note**: Caching is disabled for streaming and webhook requests to ensure real-time behavior.
 
 ### Multiple Models
 
@@ -397,6 +457,206 @@ Solution: Verify model identifier format is `owner/model-name`.
 ```
 Solution: Increase `timeout` value in configuration.
 
+## Observability & Metrics
+
+FluidMCP provides metrics endpoints to monitor cache performance and rate limiter utilization.
+
+### Cache Statistics
+
+Get cache performance metrics:
+
+```bash
+curl http://localhost:8099/api/metrics/cache/stats
+```
+
+**Response**:
+```json
+{
+  "enabled": true,
+  "hits": 150,
+  "misses": 50,
+  "size": 45,
+  "max_size": 1000,
+  "hit_rate": 75.0,
+  "ttl": 300
+}
+```
+
+**Metrics**:
+- `hits` - Number of cache hits (requests served from cache)
+- `misses` - Number of cache misses (requests that hit API)
+- `hit_rate` - Cache effectiveness percentage (hits / total * 100)
+- `size` - Current number of cached entries
+- `max_size` - Maximum cache capacity (LRU eviction when exceeded)
+- `ttl` - Time-to-live in seconds (how long entries stay cached)
+
+**Use Cases**:
+- Monitor cache effectiveness (aim for >70% hit rate)
+- Identify if cache size needs adjustment
+- Track cost savings from reduced API calls
+
+### Clear Cache
+
+Force fresh API calls by clearing cache:
+
+```bash
+curl -X POST http://localhost:8099/api/metrics/cache/clear
+```
+
+**Response**:
+```json
+{
+  "message": "Cache cleared successfully",
+  "entries_cleared": 45
+}
+```
+
+Useful for testing or when you need to bypass cached responses.
+
+### Rate Limiter Statistics
+
+Get rate limiter stats for all models:
+
+```bash
+curl http://localhost:8099/api/metrics/rate-limiters
+```
+
+**Response**:
+```json
+{
+  "rate_limiters": {
+    "llama-2-70b": {
+      "available_tokens": 18.5,
+      "capacity": 20,
+      "rate": 10.0,
+      "utilization_pct": 7.5
+    },
+    "mistral-7b": {
+      "available_tokens": 15.2,
+      "capacity": 20,
+      "rate": 5.0,
+      "utilization_pct": 24.0
+    }
+  },
+  "total_models": 2
+}
+```
+
+**Metrics per model**:
+- `available_tokens` - Tokens available for immediate use
+- `capacity` - Burst capacity (max tokens in bucket)
+- `rate` - Tokens per second (steady-state rate)
+- `utilization_pct` - How much capacity is in use (100% = fully throttled)
+
+**Use Cases**:
+- Check if rate limits are being hit (utilization > 80%)
+- Identify which models need higher rate limits
+- Monitor API call patterns
+
+### Per-Model Rate Limiter Stats
+
+Get stats for a specific model:
+
+```bash
+curl http://localhost:8099/api/metrics/rate-limiters/llama-2-70b
+```
+
+**Response**:
+```json
+{
+  "model_id": "llama-2-70b",
+  "available_tokens": 18.5,
+  "capacity": 20,
+  "rate": 10.0,
+  "utilization_pct": 7.5
+}
+```
+
+### Monitoring Best Practices
+
+1. **Track cache hit rates** - Monitor `/api/metrics/cache/stats` every 5-10 minutes
+   - Hit rate < 50%: Cache TTL too short or max_size too small
+   - Hit rate > 90%: Consider increasing cache size for more savings
+
+2. **Monitor rate limiter utilization** - Check `/api/metrics/rate-limiters` periodically
+   - Utilization > 80%: Increase `rate` or `burst_capacity` in config
+   - Utilization < 20%: Rate limits may be too conservative
+
+3. **Set up alerts**:
+   ```bash
+   # Alert if cache hit rate drops below 60%
+   curl http://localhost:8099/api/metrics/cache/stats | jq '.hit_rate < 60'
+
+   # Alert if any model exceeds 90% utilization
+   curl http://localhost:8099/api/metrics/rate-limiters | jq '.rate_limiters[].utilization_pct > 90'
+   ```
+
+4. **Cost tracking** - Use cache hits to estimate cost savings:
+   ```
+   Cost savings = (cache_hits / total_requests) * total_api_cost
+   ```
+
+### Unified Metrics Integration (Prometheus)
+
+Replicate metrics are automatically integrated with FluidMCP's unified Prometheus metrics system. When you query the API endpoints above, the metrics are also updated in the global registry for Prometheus scraping.
+
+**Prometheus Metrics Exported**:
+
+```
+# Cache metrics (global, no labels)
+fluidmcp_replicate_cache_hits          # Total cache hits
+fluidmcp_replicate_cache_misses        # Total cache misses
+fluidmcp_replicate_cache_size                # Current cache size
+fluidmcp_replicate_cache_hit_rate            # Hit rate (0.0-1.0 ratio)
+
+# Rate limiter metrics (per-model labels)
+fluidmcp_replicate_rate_limiter_tokens{model_id="..."}         # Available tokens
+fluidmcp_replicate_rate_limiter_utilization{model_id="..."}    # Utilization (0.0-1.0 ratio)
+fluidmcp_replicate_rate_limiter_capacity{model_id="..."}       # Maximum capacity
+fluidmcp_replicate_rate_limiter_rate{model_id="..."}           # Refill rate (tokens/sec)
+```
+
+**Prometheus Scrape Configuration**:
+
+```yaml
+scrape_configs:
+  - job_name: 'fluidmcp'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8099']
+    metrics_path: '/metrics'  # FluidMCP exposes Prometheus metrics here
+```
+
+**Example Prometheus Queries**:
+
+```promql
+# Cache hit ratio (current snapshot since last restart/clear)
+fluidmcp_replicate_cache_hits /
+  (fluidmcp_replicate_cache_hits + fluidmcp_replicate_cache_misses)
+
+# Cache hit rate (pre-computed as ratio 0.0-1.0)
+fluidmcp_replicate_cache_hit_rate
+
+# Models approaching rate limit (>80% utilization)
+fluidmcp_replicate_rate_limiter_utilization > 0.8
+
+# Current cumulative API calls saved by caching (since last restart/cache clear)
+fluidmcp_replicate_cache_hits
+
+# Average available tokens across all models
+avg(fluidmcp_replicate_rate_limiter_tokens)
+```
+
+**Important**: Cache metrics are Gauges (absolute values) that may reset on cache clear. Do not use `rate()` or `increase()` functions on these metrics. For tracking changes over time, use the raw gauge values or the pre-computed `hit_rate` metric.
+
+**Integration Details**:
+
+- Metrics are auto-registered on startup (via `replicate_metrics.py`)
+- Metrics automatically updated on every Prometheus scrape of `/metrics` endpoint
+- Manual updates also available via `/api/metrics/*` REST endpoints
+- No additional configuration required - works out of the box
+- Compatible with Grafana, Prometheus AlertManager, etc.
+
 ## Cost Management
 
 Replicate charges based on compute time. Tips to manage costs:
@@ -530,7 +790,7 @@ Unlike vLLM which provides instant responses, Replicate uses a prediction-pollin
 ### Rate Limiting
 
 - Replicate enforces API rate limits at the account level
-- No client-side throttling is currently implemented
+- Client-side rate limiting is available via `rate_limit` config (token bucket algorithm)
 - High-volume usage may hit 429 (Too Many Requests) errors
 - Consider implementing request queuing for production use
 
