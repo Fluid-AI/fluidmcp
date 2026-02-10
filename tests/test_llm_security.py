@@ -329,114 +329,17 @@ class TestEnhancedAPIKeyDetection:
 
 
 class TestLogRotation:
-    """Test log rotation functionality."""
+    """
+    Log rotation behavior is covered in launcher/integration tests.
 
-    def test_log_rotation_basic(self, tmp_path):
-        """Test basic log rotation creates correct backup files."""
-        from fluidmcp.cli.services.llm_launcher import LLMProcess
+    This security-focused test module avoids duplicating log rotation
+    behavior tests, which are owned by:
+      - tests/test_llm_launcher.py::TestLogRotation
+      - tests/test_llm_integration.py::TestLogRotation
 
-        log_file = tmp_path / "test.log"
-        log_file.write_text("original content")
-
-        process = LLMProcess("test-model", {
-            "command": "echo",
-            "args": ["test"]
-        })
-
-        process._rotate_log_files(str(log_file))
-
-        # Original log should be moved to .1
-        assert not log_file.exists()
-        assert (tmp_path / "test.log.1").exists()
-        assert (tmp_path / "test.log.1").read_text() == "original content"
-
-    def test_log_rotation_sequence(self, tmp_path):
-        """Test log rotation correctly moves files in sequence."""
-        from fluidmcp.cli.services.llm_launcher import LLMProcess
-
-        log_file = tmp_path / "test.log"
-
-        # Create existing backups
-        (tmp_path / "test.log.1").write_text("backup1")
-        (tmp_path / "test.log.2").write_text("backup2")
-        (tmp_path / "test.log.3").write_text("backup3")
-        log_file.write_text("current")
-
-        process = LLMProcess("test-model", {
-            "command": "echo",
-            "args": ["test"]
-        })
-
-        process._rotate_log_files(str(log_file))
-
-        # Check rotation sequence
-        assert (tmp_path / "test.log.1").read_text() == "current"
-        assert (tmp_path / "test.log.2").read_text() == "backup1"
-        assert (tmp_path / "test.log.3").read_text() == "backup2"
-        assert (tmp_path / "test.log.4").read_text() == "backup3"
-
-    def test_log_rotation_removes_oldest(self, tmp_path):
-        """Test that oldest backup (>LOG_BACKUP_COUNT) is removed."""
-        from fluidmcp.cli.services.llm_launcher import LLMProcess, LOG_BACKUP_COUNT
-
-        log_file = tmp_path / "test.log"
-
-        # Create max backups + current
-        for i in range(1, LOG_BACKUP_COUNT + 1):
-            (tmp_path / f"test.log.{i}").write_text(f"backup{i}")
-        log_file.write_text("current")
-
-        process = LLMProcess("test-model", {
-            "command": "echo",
-            "args": ["test"]
-        })
-
-        process._rotate_log_files(str(log_file))
-
-        # Oldest backup should be removed
-        assert not (tmp_path / f"test.log.{LOG_BACKUP_COUNT + 1}").exists()
-
-        # All other backups should exist
-        for i in range(1, LOG_BACKUP_COUNT + 1):
-            assert (tmp_path / f"test.log.{i}").exists()
-
-    def test_log_rotation_missing_intermediate_file(self, tmp_path):
-        """Test rotation handles missing intermediate backup files."""
-        from fluidmcp.cli.services.llm_launcher import LLMProcess
-
-        log_file = tmp_path / "test.log"
-
-        # Create backups with gap (.2 missing)
-        (tmp_path / "test.log.1").write_text("backup1")
-        (tmp_path / "test.log.3").write_text("backup3")
-        log_file.write_text("current")
-
-        process = LLMProcess("test-model", {
-            "command": "echo",
-            "args": ["test"]
-        })
-
-        # Should not crash
-        process._rotate_log_files(str(log_file))
-
-        assert (tmp_path / "test.log.1").exists()
-        assert (tmp_path / "test.log.2").exists()  # backup1 moved here
-        assert (tmp_path / "test.log.4").exists()  # backup3 moved here
-
-    def test_log_rotation_file_not_exists(self, tmp_path):
-        """Test rotation when log file doesn't exist (shouldn't crash)."""
-        from fluidmcp.cli.services.llm_launcher import LLMProcess
-
-        log_file = tmp_path / "nonexistent.log"
-
-        process = LLMProcess("test-model", {
-            "command": "echo",
-            "args": ["test"]
-        })
-
-        # Should not crash
-        process._rotate_log_files(str(log_file))
-
-        # No files should be created
-        assert not log_file.exists()
-        assert not (tmp_path / "nonexistent.log.1").exists()
+    NOTE: If you need to add security-related tests for logging (e.g.,
+    ensuring no sensitive data is written to rotated logs), prefer to add
+    them alongside other sanitization tests in this module rather than
+    re-testing the mechanics of log rotation itself.
+    """
+    pass

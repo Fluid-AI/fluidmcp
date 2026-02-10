@@ -298,6 +298,46 @@ class TestReplicateClientPredictions:
         assert result["status"] == "canceled"
         mock_http_client.post.assert_called_once_with("/predictions/pred_abc123/cancel")
 
+    @pytest.mark.asyncio
+    async def test_get_prediction_empty_id_raises_error(self, replicate_config):
+        """Test that get_prediction raises ValueError for empty prediction_id."""
+        client = ReplicateClient("test", replicate_config)
+
+        with pytest.raises(ValueError, match="Invalid prediction_id.*Expected a non-empty string"):
+            await client.get_prediction("")
+
+        await client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_get_prediction_whitespace_id_raises_error(self, replicate_config):
+        """Test that get_prediction raises ValueError for whitespace-only prediction_id."""
+        client = ReplicateClient("test", replicate_config)
+
+        with pytest.raises(ValueError, match="Invalid prediction_id.*Expected a non-empty string"):
+            await client.get_prediction("   ")
+
+        await client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_cancel_prediction_empty_id_raises_error(self, replicate_config):
+        """Test that cancel_prediction raises ValueError for empty prediction_id."""
+        client = ReplicateClient("test", replicate_config)
+
+        with pytest.raises(ValueError, match="Invalid prediction_id.*Expected a non-empty string"):
+            await client.cancel_prediction("")
+
+        await client.client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_cancel_prediction_whitespace_id_raises_error(self, replicate_config):
+        """Test that cancel_prediction raises ValueError for whitespace-only prediction_id."""
+        client = ReplicateClient("test", replicate_config)
+
+        with pytest.raises(ValueError, match="Invalid prediction_id.*Expected a non-empty string"):
+            await client.cancel_prediction("   ")
+
+        await client.client.aclose()
+
 
 class TestReplicateClientStreaming:
     """Test streaming predictions."""

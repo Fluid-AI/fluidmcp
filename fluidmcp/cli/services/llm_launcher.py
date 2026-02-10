@@ -100,13 +100,14 @@ def sanitize_command_for_logging(command_parts: list) -> str:
 
         # Single-word sensitive indicators
         # These catch flags like --token, --secret, --auth, etc.
+        # Note: "pass" is intentionally excluded to avoid false positives
+        # with legitimate flags like --pass-through, --bypass, etc.
         sensitive_segments = {
             "token",
             "secret",
             "password",
             "passwd",
             "pwd",
-            "pass",
             "auth",
             "authentication",
             "credential",

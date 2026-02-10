@@ -396,7 +396,7 @@ curl -X POST http://localhost:8099/api/llm/test-model/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "test"}]}'
 
 # Check metrics
-curl http://localhost:8099/api/metrics/test-model
+curl http://localhost:8099/api/metrics/models/test-model
 ```
 
 ### High Latency

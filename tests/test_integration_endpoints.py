@@ -265,7 +265,8 @@ class TestErrorHandling:
         )
 
         # Should fail validation (either 422 or 404 depending on route matching)
-        assert response.status_code in [404, 422, 500]
+        # 404 if model not found, 422 if model found but validation fails
+        assert response.status_code in [404, 422]
 
     def test_unsupported_provider_type(self, client):
         """Test error when provider type is not supported."""
