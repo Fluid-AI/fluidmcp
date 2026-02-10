@@ -219,6 +219,10 @@ class TestResponseCache:
         cache = await get_response_cache(enabled=False)
         assert cache is None
 
+
+class TestResponseCacheValidation:
+    """Test suite for ResponseCache validation (synchronous tests)."""
+
     def test_invalid_ttl_raises_error(self):
         """Test that invalid TTL raises ValueError."""
         with pytest.raises(ValueError, match="ttl must be positive"):
