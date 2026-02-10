@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "city-intelligence": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/server.py"],
+      "env": {}
+    },
+    "weather": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/weather_server.py"],
+      "env": {}
+    },
+    "places": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/places_server.py"],
+      "env": {}
+    },
+    "maps": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/maps_server.py"],
+      "env": {}
+    }
+  }
+}

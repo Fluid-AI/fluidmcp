@@ -1,0 +1,19 @@
+{
+  "name": "City Intelligence",
+  "version": "1.0.0",
+  "description": "Orchestrates weather, places, and maps services to create interactive city trip plans with visual output",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "city-intelligence": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "plan_city_trip",
+      "description": "Plan a multi-day trip with weather, attractions, and itinerary (returns interactive HTML)"
+    }
+  ]
+}

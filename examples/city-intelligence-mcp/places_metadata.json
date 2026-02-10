@@ -1,0 +1,19 @@
+{
+  "name": "Places Service",
+  "version": "1.0.0",
+  "description": "Tourist attractions and POI MCP server using OpenStreetMap Overpass API (free, no API key required)",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "places": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/places_server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "get_attractions",
+      "description": "Get tourist attractions and points of interest for any city globally"
+    }
+  ]
+}

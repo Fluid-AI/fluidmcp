@@ -1,0 +1,19 @@
+{
+  "name": "Weather Service",
+  "version": "1.0.0",
+  "description": "Weather forecast MCP server using Open-Meteo API (free, no API key required)",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "weather": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/weather_server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "get_forecast",
+      "description": "Get weather forecast for any city globally"
+    }
+  ]
+}

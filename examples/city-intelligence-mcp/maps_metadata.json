@@ -1,0 +1,19 @@
+{
+  "name": "Maps & Itinerary Service",
+  "version": "1.0.0",
+  "description": "Creates day-by-day itineraries from attractions with optional OSRM routing (free, no API key required)",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "maps": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/city-intelligence-mcp/maps_server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "create_itinerary",
+      "description": "Create a day-by-day itinerary with timing and routing"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "Mumbai": [
+    {"name": "Gateway of India", "type": "Monument", "coordinates": {"lat": 18.9220, "lon": 72.8347}},
+    {"name": "Taj Mahal Palace Hotel", "type": "Historic Hotel", "coordinates": {"lat": 18.9216, "lon": 72.8330}},
+    {"name": "Marine Drive", "type": "Promenade", "coordinates": {"lat": 18.9432, "lon": 72.8236}},
+    {"name": "Chhatrapati Shivaji Terminus", "type": "Railway Station", "coordinates": {"lat": 18.9398, "lon": 72.8355}},
+    {"name": "Haji Ali Dargah", "type": "Religious Site", "coordinates": {"lat": 18.9826, "lon": 72.8089}},
+    {"name": "Elephanta Caves", "type": "UNESCO Site", "coordinates": {"lat": 18.9633, "lon": 72.9315}},
+    {"name": "Sanjay Gandhi National Park", "type": "Park", "coordinates": {"lat": 19.2147, "lon": 72.9101}},
+    {"name": "Juhu Beach", "type": "Beach", "coordinates": {"lat": 19.0990, "lon": 72.8265}}
+  ],
+  "Paris": [
+    {"name": "Eiffel Tower", "type": "Monument", "coordinates": {"lat": 48.8584, "lon": 2.2945}},
+    {"name": "Louvre Museum", "type": "Museum", "coordinates": {"lat": 48.8606, "lon": 2.3376}},
+    {"name": "Notre-Dame Cathedral", "type": "Cathedral", "coordinates": {"lat": 48.8530, "lon": 2.3499}},
+    {"name": "Arc de Triomphe", "type": "Monument", "coordinates": {"lat": 48.8738, "lon": 2.2950}},
+    {"name": "Sacré-Cœur", "type": "Basilica", "coordinates": {"lat": 48.8867, "lon": 2.3431}},
+    {"name": "Versailles Palace", "type": "Palace", "coordinates": {"lat": 48.8049, "lon": 2.1204}},
+    {"name": "Musée d'Orsay", "type": "Museum", "coordinates": {"lat": 48.8600, "lon": 2.3266}},
+    {"name": "Champs-Élysées", "type": "Avenue", "coordinates": {"lat": 48.8698, "lon": 2.3078}}
+  ],
+  "London": [
+    {"name": "Tower of London", "type": "Historic Castle", "coordinates": {"lat": 51.5081, "lon": -0.0759}},
+    {"name": "British Museum", "type": "Museum", "coordinates": {"lat": 51.5194, "lon": -0.1270}},
+    {"name": "Buckingham Palace", "type": "Palace", "coordinates": {"lat": 51.5014, "lon": -0.1419}},
+    {"name": "Big Ben", "type": "Clock Tower", "coordinates": {"lat": 51.5007, "lon": -0.1246}},
+    {"name": "London Eye", "type": "Observation Wheel", "coordinates": {"lat": 51.5033, "lon": -0.1195}},
+    {"name": "Westminster Abbey", "type": "Church", "coordinates": {"lat": 51.4994, "lon": -0.1273}},
+    {"name": "Tower Bridge", "type": "Bridge", "coordinates": {"lat": 51.5055, "lon": -0.0754}},
+    {"name": "Hyde Park", "type": "Park", "coordinates": {"lat": 51.5074, "lon": -0.1657}}
+  ],
+  "Tokyo": [
+    {"name": "Senso-ji Temple", "type": "Temple", "coordinates": {"lat": 35.7148, "lon": 139.7967}},
+    {"name": "Tokyo Skytree", "type": "Tower", "coordinates": {"lat": 35.7101, "lon": 139.8107}},
+    {"name": "Meiji Shrine", "type": "Shrine", "coordinates": {"lat": 35.6764, "lon": 139.6993}},
+    {"name": "Imperial Palace", "type": "Palace", "coordinates": {"lat": 35.6852, "lon": 139.7528}},
+    {"name": "Shibuya Crossing", "type": "Landmark", "coordinates": {"lat": 35.6595, "lon": 139.7004}},
+    {"name": "Tokyo Tower", "type": "Tower", "coordinates": {"lat": 35.6586, "lon": 139.7454}},
+    {"name": "Tsukiji Outer Market", "type": "Market", "coordinates": {"lat": 35.6654, "lon": 139.7707}},
+    {"name": "Ueno Park", "type": "Park", "coordinates": {"lat": 35.7153, "lon": 139.7739}}
+  ],
+  "New York": [
+    {"name": "Statue of Liberty", "type": "Monument", "coordinates": {"lat": 40.6892, "lon": -74.0445}},
+    {"name": "Central Park", "type": "Park", "coordinates": {"lat": 40.7829, "lon": -73.9654}},
+    {"name": "Empire State Building", "type": "Skyscraper", "coordinates": {"lat": 40.7484, "lon": -73.9857}},
+    {"name": "Times Square", "type": "Commercial District", "coordinates": {"lat": 40.7580, "lon": -73.9855}},
+    {"name": "Brooklyn Bridge", "type": "Bridge", "coordinates": {"lat": 40.7061, "lon": -73.9969}},
+    {"name": "Metropolitan Museum of Art", "type": "Museum", "coordinates": {"lat": 40.7794, "lon": -73.9632}},
+    {"name": "9/11 Memorial", "type": "Memorial", "coordinates": {"lat": 40.7115, "lon": -74.0134}},
+    {"name": "Rockefeller Center", "type": "Complex", "coordinates": {"lat": 40.7587, "lon": -73.9787}}
+  ],
+  "Sydney": [
+    {"name": "Sydney Opera House", "type": "Concert Hall", "coordinates": {"lat": -33.8568, "lon": 151.2153}},
+    {"name": "Sydney Harbour Bridge", "type": "Bridge", "coordinates": {"lat": -33.8523, "lon": 151.2108}},
+    {"name": "Bondi Beach", "type": "Beach", "coordinates": {"lat": -33.8915, "lon": 151.2767}},
+    {"name": "The Rocks", "type": "Historic Area", "coordinates": {"lat": -33.8587, "lon": 151.2089}},
+    {"name": "Darling Harbour", "type": "Harbour", "coordinates": {"lat": -33.8734, "lon": 151.1988}},
+    {"name": "Royal Botanic Garden", "type": "Garden", "coordinates": {"lat": -33.8642, "lon": 151.2166}},
+    {"name": "Taronga Zoo", "type": "Zoo", "coordinates": {"lat": -33.8433, "lon": 151.2411}},
+    {"name": "Blue Mountains", "type": "Natural Park", "coordinates": {"lat": -33.7094, "lon": 150.3113}}
+  ]
+}
