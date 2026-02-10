@@ -1,5 +1,4 @@
 import React from 'react';
-import './McpContentView.css';
 
 interface McpContent {
   type: 'text' | 'image' | 'resource' | string;
@@ -88,26 +87,60 @@ function isSafeUrl(uri: string): boolean {
 
 export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
   if (!Array.isArray(content) || content.length === 0) {
-    return <div className="mcp-content-empty">No content to display</div>;
+    return (
+      <div style={{ 
+        padding: '1rem',
+        color: 'rgba(255, 255, 255, 0.6)',
+        textAlign: 'center'
+      }}>
+        No content to display
+      </div>
+    );
   }
 
   return (
-    <div className="mcp-content-container">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       {content.map((item, index) => {
         // Handle text content
         if (item.type === 'text' && item.text) {
           // Type guard: ensure text is a string
           if (typeof item.text !== 'string') {
             return (
-              <div key={index} className="mcp-content-warning">
+              <div 
+                key={index} 
+                style={{
+                  padding: '1rem',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fca5a5'
+                }}
+              >
                 <strong>⚠️ Text Validation Failed:</strong> Invalid text data type
               </div>
             );
           }
 
           return (
-            <div key={index} className="mcp-content-text">
-              <pre>{item.text}</pre>
+            <div 
+              key={index} 
+              style={{
+                padding: '1.5rem',
+                background: 'linear-gradient(to bottom right, rgba(59, 130, 246, 0.05), rgba(139, 92, 246, 0.05))',
+                border: '1px solid rgba(99, 102, 241, 0.2)',
+                borderRadius: '0.75rem'
+              }}
+            >
+              <div style={{ 
+                color: '#e5e7eb',
+                fontSize: '1rem',
+                lineHeight: '1.8',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontFamily: 'system-ui, -apple-system, sans-serif'
+              }}>
+                {item.text}
+              </div>
             </div>
           );
         }
@@ -117,7 +150,16 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
           // Type guards: ensure data and mimeType are strings
           if (typeof item.data !== 'string' || typeof item.mimeType !== 'string') {
             return (
-              <div key={index} className="mcp-content-warning">
+              <div 
+                key={index} 
+                style={{
+                  padding: '1rem',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fca5a5'
+                }}
+              >
                 <strong>⚠️ Image Validation Failed:</strong> Invalid image data type
               </div>
             );
@@ -127,7 +169,16 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
 
           if (!validation.valid) {
             return (
-              <div key={index} className="mcp-content-warning">
+              <div 
+                key={index} 
+                style={{
+                  padding: '1rem',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fca5a5'
+                }}
+              >
                 <strong>⚠️ Image Validation Failed:</strong> {validation.error}
               </div>
             );
@@ -135,10 +186,29 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
 
           const imageUrl = `data:${item.mimeType};base64,${item.data}`;
           return (
-            <div key={index} className="mcp-content-image">
-              <img src={imageUrl} alt={`Result ${index + 1}`} />
-              <div className="mcp-content-image-info">
-                <span className="mcp-content-mime">{item.mimeType}</span>
+            <div 
+              key={index} 
+              style={{
+                padding: '1rem',
+                background: 'rgba(0, 0, 0, 0.2)',
+                borderRadius: '0.5rem'
+              }}
+            >
+              <img 
+                src={imageUrl} 
+                alt={`Result ${index + 1}`}
+                style={{
+                  maxWidth: '100%',
+                  height: 'auto',
+                  borderRadius: '0.375rem'
+                }}
+              />
+              <div style={{ 
+                marginTop: '0.5rem',
+                fontSize: '0.875rem',
+                color: 'rgba(255, 255, 255, 0.6)'
+              }}>
+                <span>{item.mimeType}</span>
               </div>
             </div>
           );
@@ -149,7 +219,16 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
           // Type guard: ensure URI is a string
           if (typeof item.uri !== 'string') {
             return (
-              <div key={index} className="mcp-content-warning">
+              <div 
+                key={index} 
+                style={{
+                  padding: '1rem',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fca5a5'
+                }}
+              >
                 <strong>⚠️ URL Validation Failed:</strong> Invalid URI data type
               </div>
             );
@@ -157,9 +236,18 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
 
           if (!isSafeUrl(item.uri)) {
             return (
-              <div key={index} className="mcp-content-warning">
+              <div 
+                key={index} 
+                style={{
+                  padding: '1rem',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '0.5rem',
+                  color: '#fca5a5'
+                }}
+              >
                 <strong>⚠️ Unsafe URL:</strong> <code>{item.uri}</code>
-                <p className="mcp-content-warning-detail">
+                <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
                   Only HTTP and HTTPS URLs are allowed for security reasons.
                 </p>
               </div>
@@ -167,8 +255,26 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
           }
 
           return (
-            <div key={index} className="mcp-content-resource">
-              <a href={item.uri} target="_blank" rel="noopener noreferrer">
+            <div 
+              key={index} 
+              style={{
+                padding: '1rem',
+                background: 'rgba(0, 0, 0, 0.2)',
+                borderRadius: '0.5rem'
+              }}
+            >
+              <a 
+                href={item.uri} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                style={{
+                  color: '#60a5fa',
+                  textDecoration: 'none',
+                  transition: 'color 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.color = '#93c5fd'}
+                onMouseLeave={(e) => e.currentTarget.style.color = '#60a5fa'}
+              >
                 {item.uri}
               </a>
             </div>
@@ -177,8 +283,24 @@ export const McpContentView: React.FC<McpContentViewProps> = ({ content }) => {
 
         // Fallback for unknown types
         return (
-          <div key={index} className="mcp-content-unknown">
-            <pre>{JSON.stringify(item, null, 2)}</pre>
+          <div 
+            key={index} 
+            style={{
+              padding: '1rem',
+              background: 'rgba(0, 0, 0, 0.2)',
+              borderRadius: '0.5rem'
+            }}
+          >
+            <pre style={{ 
+              margin: 0,
+              color: '#e5e7eb',
+              fontSize: '0.875rem',
+              lineHeight: '1.6',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word'
+            }}>
+              {JSON.stringify(item, null, 2)}
+            </pre>
           </div>
         );
       })}

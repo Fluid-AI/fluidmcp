@@ -24,31 +24,71 @@ export const BooleanInput: React.FC<BooleanInputProps> = ({
 
   return (
     <div className="form-field">
-      <div className="checkbox-wrapper">
-        <label className="checkbox-label">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <label style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '0.75rem',
+          cursor: 'pointer',
+          userSelect: 'none',
+          paddingTop: '0.5rem'
+        }}>
           <input
             type="checkbox"
             id={name}
             name={name}
             checked={value}
             onChange={(e) => onChange(e.target.checked)}
-            className={error ? 'error' : ''}
+            style={{
+              width: '1.25rem',
+              height: '1.25rem',
+              cursor: 'pointer',
+              accentColor: '#6366f1',
+              flexShrink: 0
+            }}
             aria-invalid={error ? 'true' : 'false'}
             aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
             aria-required={required}
           />
-          <span>
+          <span style={{ 
+            color: error ? '#ef4444' : '#e5e7eb',
+            fontSize: '0.95rem',
+            lineHeight: '1.5'
+          }}>
             {label}
-            {required && <span className="required">*</span>}
+            {required && <span style={{ color: '#ef4444', marginLeft: '0.25rem' }}>*</span>}
           </span>
         </label>
 
         {schema.description && (
-          <p id={descId} className="field-description">{schema.description}</p>
+          <p 
+            id={descId} 
+            style={{ 
+              color: 'rgba(255, 255, 255, 0.6)', 
+              fontSize: '0.875rem',
+              margin: 0,
+              paddingLeft: '2rem'
+            }}
+          >
+            {schema.description}
+          </p>
         )}
       </div>
 
-      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
+      {error && (
+        <span 
+          id={errorId} 
+          style={{ 
+            color: '#ef4444', 
+            fontSize: '0.875rem',
+            display: 'block',
+            marginTop: '0.5rem'
+          }} 
+          role="alert"
+        >
+          {error}
+        </span>
+      )}
     </div>
   );
 };
