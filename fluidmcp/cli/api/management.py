@@ -1953,8 +1953,9 @@ async def reset_metrics(
     collector = get_metrics_collector()
     collector.reset_metrics(model_id)
 
+    target = "all models" if not model_id else f"model '{model_id}'"
     return {
-        "message": f"Metrics reset successfully for {'all models' if not model_id else f\"model '{model_id}'\"}"
+        "message": f"Metrics reset successfully for {target}"
     }
 
 
