@@ -1,0 +1,22 @@
+{
+  "name": "netlify-deploy-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that generates static websites and deploys them to Netlify",
+  "main": "server.py",
+  "scripts": {
+    "start": "python3 server.py"
+  },
+  "keywords": [
+    "mcp",
+    "netlify",
+    "deployment",
+    "website-generator",
+    "static-sites",
+    "model-context-protocol"
+  ],
+  "author": "FluidMCP",
+  "license": "MIT",
+  "dependencies": {
+    "netlify-cli": "^17.0.0"
+  }
+}

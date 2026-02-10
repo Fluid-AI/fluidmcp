@@ -555,6 +555,8 @@ def create_dynamic_router(server_manager):
     Returns:
         APIRouter with dynamic dispatch endpoints
     """
+    from .metrics import MetricsCollector, RequestTimer
+
     router = APIRouter()
 
     @router.post("/{server_name}/mcp", tags=["mcp"])

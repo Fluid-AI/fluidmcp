@@ -1,0 +1,32 @@
+{
+  "name": "netlify-deploy-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that generates static websites and deploys them to Netlify",
+  "author": "FluidMCP",
+  "license": "MIT",
+  "mcp": {
+    "command": "python3",
+    "args": ["server.py"],
+    "env": {}
+  },
+  "tools": [
+    {
+      "name": "generate_and_deploy_website",
+      "description": "Generate a static website from a prompt and automatically deploy it to Netlify"
+    },
+    {
+      "name": "generate_website_files",
+      "description": "Generate website files without deploying"
+    },
+    {
+      "name": "deploy_to_netlify",
+      "description": "Deploy an existing project directory to Netlify"
+    }
+  ],
+  "categories": ["deployment", "web-development", "static-sites"],
+  "tags": ["netlify", "deployment", "website-generator", "mcp"],
+  "requirements": {
+    "python": ">=3.8",
+    "system": ["netlify-cli"]
+  }
+}
