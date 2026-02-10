@@ -1,5 +1,8 @@
 import React from 'react';
 import type { JsonSchemaProperty } from '../../types/server';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 interface StringInputProps {
   name: string;
@@ -24,31 +27,33 @@ export const StringInput: React.FC<StringInputProps> = ({
   const descId = schema.description ? `${name}-desc` : undefined;
 
   return (
-    <div className="form-field">
-      <label htmlFor={name}>
+    <div className="space-y-2">
+      <Label htmlFor={name} className="text-sm font-medium text-zinc-200">
         {label}
-        {required && <span className="required">*</span>}
-      </label>
+        {required && <span className="text-red-400 ml-1">*</span>}
+      </Label>
 
       {schema.description && (
-        <p id={descId} className="field-description">{schema.description}</p>
+        <p id={descId} className="text-xs text-zinc-400">
+          {schema.description}
+        </p>
       )}
 
       {isTextarea ? (
-        <textarea
+        <Textarea
           id={name}
           name={name}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={schema.default || ''}
           rows={5}
-          className={error ? 'error' : ''}
+          className={error ? 'border-red-500 focus-visible:ring-red-500' : ''}
           aria-invalid={error ? 'true' : 'false'}
           aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
           aria-required={required}
         />
       ) : (
-        <input
+        <Input
           type={schema.format === 'email' ? 'email' : schema.format === 'url' ? 'url' : 'text'}
           id={name}
           name={name}
@@ -57,14 +62,18 @@ export const StringInput: React.FC<StringInputProps> = ({
           placeholder={schema.default || ''}
           minLength={schema.minLength}
           maxLength={schema.maxLength}
-          className={error ? 'error' : ''}
+          className={error ? 'border-red-500 focus-visible:ring-red-500' : ''}
           aria-invalid={error ? 'true' : 'false'}
           aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
           aria-required={required}
         />
       )}
 
-      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
+      {error && (
+        <p id={errorId} className="text-xs text-red-400 mt-1" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 };

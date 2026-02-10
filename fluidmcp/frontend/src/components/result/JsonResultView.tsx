@@ -16,18 +16,18 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) =>
 
   if (data === null) {
     return (
-      <div className="json-line">
-        {name && <span className="json-key">{name}: </span>}
-        <span className="json-null">null</span>
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+        <span style={{ color: '#6b7280', fontStyle: 'italic' }}>null</span>
       </div>
     );
   }
 
   if (data === undefined) {
     return (
-      <div className="json-line">
-        {name && <span className="json-key">{name}: </span>}
-        <span className="json-null">undefined</span>
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+        <span style={{ color: '#6b7280', fontStyle: 'italic' }}>undefined</span>
       </div>
     );
   }
@@ -38,18 +38,27 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) =>
   if (type === 'string') {
     const strData = data as string;
     return (
-      <div className="json-line">
-        {name && <span className="json-key">{name}: </span>}
-        <span className="json-string">"{strData}"</span>
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+        <span style={{ color: '#86efac' }}>"{strData}"</span>
       </div>
     );
   }
 
-  if (type === 'number' || type === 'boolean') {
+  if (type === 'number') {
     return (
-      <div className="json-line">
-        {name && <span className="json-key">{name}: </span>}
-        <span className={`json-${type}`}>{String(data)}</span>
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+        <span style={{ color: '#fbbf24' }}>{String(data)}</span>
+      </div>
+    );
+  }
+
+  if (type === 'boolean') {
+    return (
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+        <span style={{ color: '#c084fc' }}>{String(data)}</span>
       </div>
     );
   }
@@ -58,29 +67,35 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) =>
   if (Array.isArray(data)) {
     if (data.length === 0) {
       return (
-        <div className="json-line">
-          {name && <span className="json-key">{name}: </span>}
-          <span>[]</span>
+        <div style={{ marginBottom: '0.35rem' }}>
+          {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+          <span style={{ color: '#e5e7eb' }}>[]</span>
         </div>
       );
     }
 
     return (
-      <div className="json-line">
-        {name && <span className="json-key">{name}: </span>}
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
         <span
-          className="json-toggle"
           onClick={() => setIsCollapsed(!isCollapsed)}
+          style={{ 
+            cursor: 'pointer', 
+            userSelect: 'none',
+            color: '#9ca3af',
+            marginRight: '0.5rem',
+            fontSize: '0.85rem'
+          }}
         >
           {isCollapsed ? '▶' : '▼'}
         </span>
-        <span>{isCollapsed ? `[${data.length} items]` : '['}</span>
+        <span style={{ color: '#e5e7eb' }}>{isCollapsed ? `[${data.length} items]` : '['}</span>
         {!isCollapsed && (
-          <div className="json-children">
+          <div style={{ marginLeft: '2rem', marginTop: '0.25rem' }}>
             {data.map((item, idx) => (
               <JsonNode key={idx} name={`[${idx}]`} data={item} expandAll={expandAll} />
             ))}
-            <div>]</div>
+            <div style={{ color: '#e5e7eb', marginTop: '0.25rem' }}>]</div>
           </div>
         )}
       </div>
@@ -93,36 +108,42 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) =>
     const keys = Object.keys(objData);
     if (keys.length === 0) {
       return (
-        <div className="json-line">
-          {name && <span className="json-key">{name}: </span>}
-          <span>{'{}'}</span>
+        <div style={{ marginBottom: '0.35rem' }}>
+          {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
+          <span style={{ color: '#e5e7eb' }}>{'{}'}</span>
         </div>
       );
     }
 
     return (
-      <div className="json-line">
-        {name && <span className="json-key">{name}: </span>}
+      <div style={{ marginBottom: '0.35rem' }}>
+        {name && <span style={{ color: '#93c5fd', marginRight: '0.5rem', fontWeight: '500' }}>{name}: </span>}
         <span
-          className="json-toggle"
           onClick={() => setIsCollapsed(!isCollapsed)}
+          style={{ 
+            cursor: 'pointer', 
+            userSelect: 'none',
+            color: '#9ca3af',
+            marginRight: '0.5rem',
+            fontSize: '0.85rem'
+          }}
         >
           {isCollapsed ? '▶' : '▼'}
         </span>
-        <span>{isCollapsed ? `{${keys.length} keys}` : '{'}</span>
+        <span style={{ color: '#e5e7eb' }}>{isCollapsed ? `{${keys.length} keys}` : '{'}</span>
         {!isCollapsed && (
-          <div className="json-children">
+          <div style={{ marginLeft: '2rem', marginTop: '0.25rem' }}>
             {keys.map((key) => (
               <JsonNode key={key} name={key} data={objData[key]} expandAll={expandAll} />
             ))}
-            <div>{'}'}</div>
+            <div style={{ color: '#e5e7eb', marginTop: '0.25rem' }}>{'}'}</div>
           </div>
         )}
       </div>
     );
   }
 
-  return <div className="json-line">{String(data)}</div>;
+  return <div style={{ marginBottom: '0.35rem', color: '#e5e7eb' }}>{String(data)}</div>;
 };
 
 interface JsonResultViewProps {
@@ -132,7 +153,12 @@ interface JsonResultViewProps {
 
 export const JsonResultView: React.FC<JsonResultViewProps> = ({ data, expandAll = false }) => {
   return (
-    <div className="json-viewer">
+    <div style={{ 
+      fontFamily: 'ui-monospace, monospace',
+      fontSize: '0.95rem',
+      lineHeight: '1.8',
+      padding: '0.5rem 0'
+    }}>
       <JsonNode data={data} expandAll={expandAll} />
     </div>
   );
