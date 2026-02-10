@@ -681,7 +681,8 @@ def main():
         # else use the provided token and set it in the environment variables
         os.environ["FMCP_BEARER_TOKEN"] = token
         os.environ["FMCP_SECURE_MODE"] = "true"
-        logger.info(f"Secure mode enabled. Bearer token (prefix: {token[:8]}...)")
+        # SECURITY: Do not log any part of the actual token
+        logger.info("Secure mode enabled with bearer token authentication")
 
     # version flag
     if args.version:

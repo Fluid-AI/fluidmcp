@@ -133,7 +133,8 @@ class TestReplicateClientInitialization:
             "api_key": "${REPLICATE_UNSET_TOKEN}"
         }
 
-        with pytest.raises(ValueError, match="unresolved environment variable.*REPLICATE_UNSET_TOKEN"):
+        # Updated to match security-hardened error message (no longer exposes variable name)
+        with pytest.raises(ValueError, match="unresolved environment variable"):
             ReplicateClient("test", config)
 
     @pytest.mark.asyncio

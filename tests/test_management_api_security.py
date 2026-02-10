@@ -229,22 +229,21 @@ class TestMongoDBInjectionPrevention:
     """Tests for MongoDB injection prevention via input sanitization."""
 
     def test_sanitize_string_with_operator(self):
-        """Test sanitization of strings with MongoDB operators."""
+        """Test that string values with $ are preserved (safe in parameterized queries)."""
         input_str = "$where: function() { return true; }"
         result = sanitize_input(input_str)
-        assert not result.startswith("$")
-        assert "{" not in result
-        assert "}" not in result
+        # String values are safe in MongoDB parameterized queries
+        assert result == input_str
 
     def test_sanitize_string_with_braces(self):
-        """Test sanitization removes braces."""
+        """Test that braces in strings are preserved (safe in values)."""
         input_str = "test{injection}attempt"
         result = sanitize_input(input_str)
-        assert "{" not in result
-        assert "}" not in result
+        # Braces in string values are safe
+        assert result == input_str
 
     def test_sanitize_nested_dict(self):
-        """Test recursive sanitization of nested dictionaries."""
+        """Test recursive sanitization preserves string values."""
         input_dict = {
             "name": "$admin",
             "config": {
@@ -256,24 +255,24 @@ class TestMongoDBInjectionPrevention:
         }
         result = sanitize_input(input_dict)
 
-        assert not result["name"].startswith("$")
-        assert not result["config"]["command"].startswith("$")
-        assert not result["config"]["nested"]["deep"].startswith("$")
-        assert "{" not in result["config"]["command"]
-        assert "}" not in result["config"]["command"]
+        # String values with $ are preserved
+        assert result["name"] == "$admin"
+        assert result["config"]["command"] == "${injection}"
+        assert result["config"]["nested"]["deep"] == "$operator"
 
     def test_sanitize_list(self):
-        """Test recursive sanitization of lists."""
+        """Test recursive sanitization preserves string values in lists."""
         input_list = ["$item1", "normal", "${item2}", ["$nested"]]
         result = sanitize_input(input_list)
 
-        assert not result[0].startswith("$")
+        # String values with $ are preserved
+        assert result[0] == "$item1"
         assert result[1] == "normal"
-        assert not result[2].startswith("$")
-        assert not result[3][0].startswith("$")
+        assert result[2] == "${item2}"
+        assert result[3][0] == "$nested"
 
     def test_sanitize_mixed_structures(self):
-        """Test sanitization of complex mixed structures."""
+        """Test sanitization preserves string values in complex structures."""
         input_data = {
             "servers": [
                 {
@@ -288,11 +287,12 @@ class TestMongoDBInjectionPrevention:
         }
         result = sanitize_input(input_data)
 
-        assert not result["servers"][0]["name"].startswith("$")
-        assert not result["servers"][0]["args"][0].startswith("$")
+        # String values with $ are preserved
+        assert result["servers"][0]["name"] == "$admin"
+        assert result["servers"][0]["args"][0] == "${value}"
         assert result["servers"][0]["args"][1] == "normal"
         assert result["config"]["enabled"] is True
-        assert not result["config"]["value"].startswith("$")
+        assert result["config"]["value"] == "$test"
 
     def test_sanitize_preserves_valid_data(self):
         """Test that sanitization preserves valid data."""
@@ -319,6 +319,26 @@ class TestMongoDBInjectionPrevention:
         assert sanitize_input(True) is True
         assert sanitize_input(None) is None
         assert sanitize_input(3.14) == 3.14
+
+    def test_sanitize_rejects_operator_in_dict_keys(self):
+        """Test that MongoDB operators in dict keys raise an exception."""
+        # Operator in top-level key
+        with pytest.raises(HTTPException) as excinfo:
+            sanitize_input({"$where": "malicious code"})
+        assert "MongoDB operator-style keys" in excinfo.value.detail
+        assert "are not allowed in input" in excinfo.value.detail
+
+        # Operator in nested key
+        with pytest.raises(HTTPException) as excinfo:
+            sanitize_input({"user": {"$ne": None}})
+        assert "MongoDB operator-style keys" in excinfo.value.detail
+        assert "are not allowed in input" in excinfo.value.detail
+
+        # Multiple operators
+        with pytest.raises(HTTPException) as excinfo:
+            sanitize_input({"$or": [{"$gt": 5}]})
+        assert "MongoDB operator-style keys" in excinfo.value.detail
+        assert "are not allowed in input" in excinfo.value.detail
 
 
 class TestCompleteValidationFlow:

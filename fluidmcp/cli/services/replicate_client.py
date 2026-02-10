@@ -16,6 +16,10 @@ import threading
 from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
+# Import rate limiter and cache at module level for efficiency
+from .rate_limiter import get_rate_limiter, configure_rate_limiter
+from .response_cache import get_response_cache
+
 # Constants
 DEFAULT_TIMEOUT = 60.0  # Default timeout for API requests (seconds)
 DEFAULT_MAX_RETRIES = 3  # Default maximum retry attempts for failed requests
@@ -68,17 +72,35 @@ class ReplicateClient:
         api_key_raw = config["api_key"]
         if isinstance(api_key_raw, str):
             api_key_expanded = os.path.expandvars(api_key_raw)
-            # Check if ${VAR} or $VAR pattern was not resolved
-            # Support both uppercase and lowercase variable names (e.g., $PATH, $api_key)
-            if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_raw):
-                if api_key_expanded == api_key_raw:
-                    raise ValueError(
-                        f"Replicate model '{model_id}' has unresolved environment variable "
-                        f"in 'api_key': {api_key_raw!r}. Make sure the environment variable is set."
-                    )
+            # Check if any ${VAR} or $VAR pattern remains unresolved after expansion
+            # This catches both fully and partially unresolved placeholders
+            if re.search(r'\$\{[^}]+\}|\$[a-zA-Z_][a-zA-Z0-9_]*', api_key_expanded):
+                # SECURITY: Do NOT expose the actual API key value in error messages
+                raise ValueError(
+                    f"Replicate model '{model_id}' has unresolved environment variable "
+                    f"in 'api_key'. Make sure the environment variable is set."
+                )
             self.api_key = api_key_expanded
         else:
             self.api_key = api_key_raw
+
+        # Validate API key is not empty or whitespace-only
+        if not self.api_key:
+            raise ValueError(
+                f"Replicate model '{model_id}' has empty API key"
+            )
+
+        # Additional validation for string API keys
+        if isinstance(self.api_key, str):
+            if not self.api_key.strip():
+                raise ValueError(
+                    f"Replicate model '{model_id}' has whitespace-only API key"
+                )
+            # Validate minimum API key length (Replicate API keys are typically 40+ characters)
+            if len(self.api_key.strip()) < 8:
+                raise ValueError(
+                    f"Replicate model '{model_id}' API key is too short (minimum 8 characters)"
+                )
         # Validate optional dict-typed configuration fields
         endpoints = config.get("endpoints")
         if endpoints is not None and not isinstance(endpoints, dict):
@@ -121,6 +143,89 @@ class ReplicateClient:
                 f"must be non-negative, got {max_retries}"
             )
         self.max_retries = max_retries
+
+        # Store rate limit config for later initialization (after event loop is running)
+        rate_limit = config.get("rate_limit")
+        if rate_limit is not None and not isinstance(rate_limit, dict):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'rate_limit' config: "
+                f"expected a dict, got {type(rate_limit).__name__}"
+            )
+        # Validate rate limit fields if provided
+        if isinstance(rate_limit, dict):
+            # Validate requests_per_second (can be int or float)
+            rps = rate_limit.get("requests_per_second")
+            if rps is not None:
+                if not isinstance(rps, (int, float)):
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.requests_per_second' config: "
+                        f"expected a number, got {type(rps).__name__}"
+                    )
+                if rps <= 0:
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.requests_per_second' config: "
+                        f"must be positive, got {rps}"
+                    )
+
+            # Validate burst_capacity (must be an integer or integer-valued float)
+            burst = rate_limit.get("burst_capacity")
+            if burst is not None:
+                if not isinstance(burst, (int, float)):
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
+                        f"expected an integer or integer-valued float (e.g., 10 or 10.0), got {type(burst).__name__}"
+                    )
+                if burst <= 0:
+                    raise ValueError(
+                        f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
+                        f"must be positive, got {burst}"
+                    )
+                # Allow float values that are exact integers (e.g., 10.0)
+                if isinstance(burst, float):
+                    if not burst.is_integer():
+                        raise ValueError(
+                            f"Replicate model '{model_id}' has invalid 'rate_limit.burst_capacity' config: "
+                            f"must be an integer value, got {burst}"
+                        )
+                    # Coerce to int for TokenBucketRateLimiter
+                    rate_limit["burst_capacity"] = int(burst)
+
+        self.rate_limit_config = rate_limit or {}
+
+        # Store cache config with validation
+        cache_config = config.get("cache")
+        if cache_config is not None and not isinstance(cache_config, dict):
+            raise ValueError(
+                f"Replicate model '{model_id}' has invalid 'cache' config: "
+                f"expected a dict, got {type(cache_config).__name__}"
+            )
+
+        # Defaults for cache settings
+        self.cache_enabled = False
+        self.cache_ttl = 300
+        self.cache_max_size = 1000
+
+        if cache_config:
+            # Enabled flag
+            self.cache_enabled = cache_config.get("enabled", False)
+
+            # TTL: must be a positive int/float
+            ttl = cache_config.get("ttl", 300)
+            if not isinstance(ttl, (int, float)) or ttl <= 0:
+                raise ValueError(
+                    f"Replicate model '{model_id}' has invalid cache 'ttl' config: "
+                    f"expected a positive number, got {ttl!r} (type {type(ttl).__name__})"
+                )
+            self.cache_ttl = ttl
+
+            # max_size: must be a positive int
+            max_size = cache_config.get("max_size", 1000)
+            if not isinstance(max_size, int) or max_size <= 0:
+                raise ValueError(
+                    f"Replicate model '{model_id}' has invalid cache 'max_size' config: "
+                    f"expected a positive int, got {max_size!r} (type {type(max_size).__name__})"
+                )
+            self.cache_max_size = max_size
 
         # Initialize HTTP client
         self.client = httpx.AsyncClient(
@@ -182,6 +287,52 @@ class ReplicateClient:
 
         logger.debug(f"Creating prediction for model '{self.model_id}' with input keys: {list(merged_input.keys())}")
 
+        # Check cache if enabled (skip if streaming or webhook)
+        # NOTE: get_response_cache() returns a GLOBAL cache instance. The ttl/max_size
+        # parameters here are only used if the cache hasn't been initialized yet.
+        # Once initialized, these parameters are ignored for subsequent models.
+        # See response_cache.py:325 for the global cache limitation.
+        if self.cache_enabled and not stream and not webhook:
+            cache = await get_response_cache(
+                ttl=self.cache_ttl,
+                max_size=self.cache_max_size,
+                enabled=True
+            )
+            if cache:
+                # Use cache key based on model + input + version
+                cache_key_data = {
+                    "model_id": self.model_id,
+                    "input": merged_input,
+                    "version": version
+                }
+
+                async def fetch_prediction():
+                    # Apply rate limiting before making request (with model-specific config)
+                    rate_limiter = await get_rate_limiter(
+                        self.model_id,
+                        rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+                        capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+                    )
+                    await rate_limiter.acquire()
+                    return await self._execute_prediction(endpoint, payload)
+
+                return await cache.get_or_fetch(cache_key_data, fetch_prediction)
+
+        # No cache - apply rate limiting and execute directly (with model-specific config)
+        rate_limiter = await get_rate_limiter(
+            self.model_id,
+            rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+            capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+        )
+        await rate_limiter.acquire()
+        return await self._execute_prediction(endpoint, payload)
+
+    async def _execute_prediction(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute prediction with retry logic.
+
+        Internal method split out to support caching.
+        """
         # Retry logic (max_retries = number of retries AFTER initial attempt)
         last_error = None
         for attempt in range(self.max_retries + 1):
@@ -259,6 +410,14 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
         """
+        # Apply rate limiting using the configured rate and capacity for this model
+        rate_limiter = await get_rate_limiter(
+            self.model_id,
+            rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+            capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+        )
+        await rate_limiter.acquire()
+
         response = await self.client.get(f"/predictions/{prediction_id}")
         response.raise_for_status()
         return response.json()
@@ -276,6 +435,14 @@ class ReplicateClient:
         Raises:
             httpx.HTTPError: If API request fails
         """
+        # Apply rate limiting (cancellation counts against API rate limits)
+        rate_limiter = await get_rate_limiter(
+            self.model_id,
+            rate=self.rate_limit_config.get("requests_per_second") if self.rate_limit_config else None,
+            capacity=self.rate_limit_config.get("burst_capacity") if self.rate_limit_config else None
+        )
+        await rate_limiter.acquire()
+
         logger.info(f"Canceling prediction {prediction_id} for model '{self.model_id}'")
         response = await self.client.post(f"/predictions/{prediction_id}/cancel")
         response.raise_for_status()
@@ -469,8 +636,11 @@ class ReplicateClient:
 
     async def close(self) -> None:
         """Close the HTTP client and cleanup resources."""
-        await self.client.aclose()
-        logger.info(f"Closed Replicate client for model '{self.model_id}'")
+        try:
+            await self.client.aclose()
+            logger.info(f"Closed Replicate client for model '{self.model_id}'")
+        except Exception as e:
+            logger.error(f"Error closing Replicate client '{self.model_id}': {e}")
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -518,6 +688,20 @@ async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]
 
             # Run health check
             if await client.health_check():
+                # Configure rate limiter if specified
+                try:
+                    rate_limit_config = getattr(client, 'rate_limit_config', {})
+                    if rate_limit_config and isinstance(rate_limit_config, dict):
+                        requests_per_second = rate_limit_config.get("requests_per_second", 10)
+                        burst_capacity = rate_limit_config.get("burst_capacity", 20)
+                        await configure_rate_limiter(model_id, requests_per_second, burst_capacity)
+                        logger.debug(
+                            f"Configured rate limiter for '{model_id}': "
+                            f"{requests_per_second} req/s, burst {burst_capacity}"
+                        )
+                except Exception as e:
+                    logger.debug(f"Skipping rate limiter configuration for '{model_id}': {e}")
+
                 clients[model_id] = client
                 # Thread-safe registry update
                 with _registry_lock:
