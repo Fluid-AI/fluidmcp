@@ -2011,8 +2011,9 @@ async def clear_cache(token: str = Depends(get_token)):
     """
     from ..services.response_cache import clear_response_cache
 
-    await clear_response_cache()
-    return {"message": "Cache cleared successfully", "entries_cleared": 0}
+    count = await clear_response_cache()
+    logger.info(f"Cache cleared via API: {count} entries removed")
+    return {"message": "Cache cleared successfully", "entries_cleared": count}
 
 
 @router.get("/metrics/rate-limiters")
@@ -2035,7 +2036,10 @@ async def get_rate_limiter_stats(token: str = Depends(get_token)):
     # Update unified metrics registry
     await update_rate_limiter_metrics()
 
-    return stats
+    return {
+        "rate_limiters": stats,
+        "total_models": len(stats)
+    }
 
 
 @router.get("/metrics/rate-limiters/{model_id}")
@@ -2051,15 +2055,22 @@ async def get_model_rate_limiter_stats(
 
     Returns:
         Rate limiter stats including available tokens, capacity, and utilization
-    """
-    from ..services.rate_limiter import get_rate_limiter
 
-    limiter = await get_rate_limiter(model_id)
-    stats = limiter.get_stats()
+    Raises:
+        HTTPException(404): If no rate limiter exists for the model
+    """
+    from ..services.rate_limiter import get_all_rate_limiter_stats
+
+    # Use get_all to avoid creating limiters as side effect
+    stats = await get_all_rate_limiter_stats()
+    model_stats = stats.get(model_id)
+
+    if model_stats is None:
+        raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
 
     return {
         "model_id": model_id,
-        **stats
+        **model_stats
     }
 
 

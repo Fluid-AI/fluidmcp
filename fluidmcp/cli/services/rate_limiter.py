@@ -177,12 +177,19 @@ async def configure_rate_limiter(
         logger.info(f"Configured rate limiter for '{model_id}': {rate} req/s, capacity {capacity}")
 
 
-async def clear_rate_limiters() -> None:
-    """Clear all rate limiters (useful for testing)."""
+async def clear_rate_limiters() -> int:
+    """
+    Clear all rate limiters (useful for testing).
+
+    Returns:
+        Number of rate limiters that were cleared
+    """
     global _rate_limiters
     async with _get_limiter_lock():
+        count = len(_rate_limiters)
         _rate_limiters.clear()
-    logger.debug("Cleared all rate limiters")
+    logger.debug(f"Cleared {count} rate limiter(s)")
+    return count
 
 
 async def get_all_rate_limiter_stats() -> Dict[str, Dict[str, Any]]:

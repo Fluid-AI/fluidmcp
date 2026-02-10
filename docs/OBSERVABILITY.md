@@ -30,7 +30,7 @@ curl http://localhost:8099/api/metrics
 curl http://localhost:8099/api/metrics/json
 
 # Specific model
-curl http://localhost:8099/api/metrics/llama-2-70b
+curl http://localhost:8099/api/metrics/models/llama-2-70b
 ```
 
 ---
@@ -108,13 +108,13 @@ Returns JSON format metrics for all models.
 }
 ```
 
-### `GET /api/metrics/{model_id}`
+### `GET /api/metrics/models/{model_id}`
 
 Returns detailed metrics for a specific model.
 
 **Example:**
 ```bash
-curl http://localhost:8099/api/metrics/llama-2-70b
+curl http://localhost:8099/api/metrics/models/llama-2-70b
 ```
 
 **Response:**
