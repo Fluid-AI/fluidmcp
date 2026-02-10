@@ -1543,13 +1543,14 @@ async def unified_chat_completions(
             )
             raise
         except Exception as e:
-            # Record unexpected error
+            # Record unexpected error and log details
             collector.record_request_failure(
                 model_id=model_id,
                 start_time=start_time,
                 status_code=500
             )
-            raise
+            logger.exception(f"Unexpected error in chat completions for model '{model_id}': {e}")
+            raise HTTPException(500, f"Internal server error while processing request for model '{model_id}'")
 
     elif provider_type == "vllm":
         # Proxy to vLLM's native OpenAI-compatible endpoint

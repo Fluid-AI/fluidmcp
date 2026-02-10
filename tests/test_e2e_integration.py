@@ -306,11 +306,3 @@ class TestLoadAndConcurrency:
             success_count = sum(1 for r in results if r == 200)
             logger.info(f"Concurrent requests: {success_count}/5 succeeded")
             assert success_count >= 3  # At least 60% success rate
-
-
-# Pytest marker for easy filtering
-def pytest_configure(config):
-    """Add custom markers."""
-    config.addinivalue_line(
-        "markers", "e2e: mark test as end-to-end integration test"
-    )

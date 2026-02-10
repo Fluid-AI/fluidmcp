@@ -69,7 +69,7 @@ class LLMMetricsCollector:
         """Initialize metrics collector."""
         self._metrics: Dict[str, ModelMetrics] = {}
         self._lock = Lock()
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
         logger.info("Initialized LLM metrics collector")
 
     def record_request_start(self, model_id: str, provider_type: str) -> float:
@@ -81,7 +81,7 @@ class LLMMetricsCollector:
             provider_type: Provider type (replicate, vllm, etc.)
 
         Returns:
-            Start timestamp for latency calculation
+            Start timestamp for latency calculation (monotonic time)
         """
         with self._lock:
             if model_id not in self._metrics:
@@ -89,7 +89,7 @@ class LLMMetricsCollector:
 
             self._metrics[model_id].total_requests += 1
 
-        return time.time()
+        return time.monotonic()
 
     def record_request_success(
         self,
@@ -103,11 +103,11 @@ class LLMMetricsCollector:
 
         Args:
             model_id: Model identifier
-            start_time: Request start timestamp
+            start_time: Request start timestamp (from monotonic clock)
             prompt_tokens: Number of prompt tokens used
             completion_tokens: Number of completion tokens generated
         """
-        latency = time.time() - start_time
+        latency = time.monotonic() - start_time
 
         with self._lock:
             if model_id not in self._metrics:
@@ -141,10 +141,10 @@ class LLMMetricsCollector:
 
         Args:
             model_id: Model identifier
-            start_time: Request start timestamp
+            start_time: Request start timestamp (from monotonic clock)
             status_code: HTTP status code of the error
         """
-        latency = time.time() - start_time
+        latency = time.monotonic() - start_time
 
         with self._lock:
             if model_id not in self._metrics:
@@ -211,7 +211,7 @@ class LLMMetricsCollector:
                     logger.info(f"Reset metrics for model '{model_id}'")
             else:
                 self._metrics.clear()
-                self._start_time = time.time()
+                self._start_time = time.monotonic()
                 logger.info("Reset all metrics")
 
     @staticmethod
@@ -287,8 +287,8 @@ class LLMMetricsCollector:
                 error_labels = f'{labels},status_code="{status_code}"'
                 lines.append(f'fluidmcp_llm_errors_by_status{{{error_labels}}} {count}')
 
-        # Add uptime
-        uptime = time.time() - self._start_time
+        # Add uptime (monotonic clock for accuracy)
+        uptime = time.monotonic() - self._start_time
         lines.append(f'# HELP fluidmcp_uptime_seconds Time since metrics collection started')
         lines.append(f'# TYPE fluidmcp_uptime_seconds gauge')
         lines.append(f'fluidmcp_uptime_seconds {uptime:.0f}')
@@ -304,7 +304,7 @@ class LLMMetricsCollector:
         """
         # Take snapshot under lock to minimize lock hold time
         with self._lock:
-            uptime_seconds = time.time() - self._start_time
+            uptime_seconds = time.monotonic() - self._start_time
             metrics_snapshot = copy.deepcopy(self._metrics)
 
         # Build JSON result without holding lock
