@@ -56,8 +56,15 @@ def load_deployment_history():
     """Load deployment history from file"""
     if DEPLOYMENT_HISTORY.exists():
         try:
+            # Clear any OS-level file caching by opening with direct I/O intent
+            import os
+            # First, get fresh file stats to ensure no stale metadata
+            os.stat(DEPLOYMENT_HISTORY)
+
             with open(DEPLOYMENT_HISTORY, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                logger.debug(f"Loaded deployment history: {len(data)} entries")
+                return data
         except Exception as e:
             logger.error(f"Error loading deployment history: {e}")
             return []
@@ -66,9 +73,12 @@ def load_deployment_history():
 
 def save_deployment_history(deployments):
     """Save deployment history to file"""
+    import os
     try:
         with open(DEPLOYMENT_HISTORY, 'w') as f:
             json.dump(deployments, f, indent=2)
+            f.flush()  # Flush Python's buffer
+            os.fsync(f.fileno())  # Force OS to write to disk immediately
     except Exception as e:
         logger.error(f"Error saving deployment history: {e}")
 
@@ -760,7 +770,16 @@ def generate_and_deploy_in_background(site_type: str, site_name: str, custom_con
             log_to_file(f"[Step 5] ERROR: Could not find {site_name} in history to update!")
 
         save_deployment_history(deployments)
-        log_to_file(f"[Step 5] Saved deployment history - COMPLETE!")
+        log_to_file(f"[Step 5] Saved deployment history - COMPLETE at {datetime.now().isoformat()}!")
+
+        # Verify the save worked by reading it back
+        verify_data = load_deployment_history()
+        verify_entry = next((d for d in reversed(verify_data) if d.get("site_name") == site_name), None)
+        if verify_entry and verify_entry.get("deployment_status") == "deployed":
+            log_to_file(f"[Step 5] ✓ VERIFIED: History file shows {site_name} as 'deployed'")
+        else:
+            log_to_file(f"[Step 5] ✗ WARNING: Verification failed! Entry not found or wrong status")
+
         log_to_file(f"[FINAL] Successfully completed deployment for {site_name}")
 
     except Exception as e:
@@ -982,9 +1001,16 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
         elif name == "list_deployed_sites":
             filter_query = arguments.get("filter", "").strip().lower()
-            logger.info(f"Listing deployed sites (filter: '{filter_query}')")
+            logger.info(f"[LIST TOOL] Listing deployed sites (filter: '{filter_query}') at {datetime.now().isoformat()}")
 
             deployments = load_deployment_history()
+            logger.info(f"[LIST TOOL] Loaded {len(deployments)} total deployments from history")
+
+            # Log the last 3 entries for debugging
+            if deployments:
+                logger.info(f"[LIST TOOL] Last 3 entries:")
+                for d in deployments[-3:]:
+                    logger.info(f"[LIST TOOL]   - {d.get('site_name')}: {d.get('deployment_status')} @ {d.get('deployed_at', d.get('created_at', 'no time'))[:19]}")
 
             # Filter to show:
             # - All "generating" and "deploying" sites (new Vercel sites)
@@ -994,6 +1020,8 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
                 if d.get("deployment_status") in ["generating", "deploying"]
                 or (d.get("deployment_status") == "deployed" and "vercel.app" in d.get("deploy_url", ""))
             ]
+
+            logger.info(f"[LIST TOOL] Filtered to {len(active_deployments)} active Vercel deployments")
 
             if not active_deployments:
                 result_text = "No sites have been successfully deployed yet. Use create_and_deploy_site to deploy your first website!"
