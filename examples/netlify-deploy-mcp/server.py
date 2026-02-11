@@ -155,6 +155,15 @@ Code Quality:
 - Comment only complex logic, not obvious code
 - DRY principle - no code repetition
 
+CRITICAL - NO INFINITE LOADING:
+- **NEVER** create loading screens that wait indefinitely for external APIs or data
+- **NEVER** use setTimeout/setInterval that blocks the main content from showing
+- The app MUST show its main interface immediately on page load
+- If you need to simulate loading, use a SHORT animation (max 1-2 seconds) then show content
+- All apps must be fully self-contained and work without external APIs
+- Use mock/sample data that's already in the code, not fetched from APIs
+- If showing a loading state, it should transition to the main app within 1-2 seconds maximum
+
 Return your response in THREE separate markdown code blocks (NOT as JSON):
 
 ```html
@@ -670,7 +679,8 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
             return [TextContent(type="text", text=result_text)]
 
         elif name == "list_deployed_sites":
-            logger.info("Listing deployed sites")
+            filter_query = arguments.get("filter", "").strip().lower()
+            logger.info(f"Listing deployed sites (filter: '{filter_query}')")
 
             deployments = load_deployment_history()
 
@@ -684,7 +694,36 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
                 result_text = "No sites have been successfully deployed yet. Use create_and_deploy_site to deploy your first website!"
                 return [TextContent(type="text", text=result_text)]
 
-            result_lines = ["Your Deployed Sites:\n"]
+            # If filter is provided, search through ALL deployments for matches
+            if filter_query:
+                # Normalize filter query: replace separators with spaces for flexible matching
+                # "scientific calculator" should match "scientific_calculator" or "scientific-calculator"
+                normalized_filter = filter_query.replace("_", " ").replace("-", " ")
+
+                filtered_deployments = []
+                for d in active_deployments:
+                    # Normalize searchable fields the same way
+                    site_name = d.get("site_name", "").lower().replace("_", " ").replace("-", " ")
+                    prompt = d.get("prompt", "").lower()
+                    site_type = d.get("site_type", "").lower()
+
+                    # Match filter against site name, prompt, or type
+                    if (normalized_filter in site_name or
+                        filter_query in prompt or
+                        filter_query in site_type):
+                        filtered_deployments.append(d)
+
+                active_deployments = filtered_deployments
+
+                if not active_deployments:
+                    result_text = f"No deployed sites found matching '{arguments.get('filter', '')}'. Try a different search term."
+                    return [TextContent(type="text", text=result_text)]
+
+                result_lines = [f"Deployed Sites Matching '{arguments.get('filter', '')}':\n"]
+            else:
+                # No filter: Only show the most recent deployment to avoid overwhelming users
+                active_deployments = active_deployments[-1:]  # Last 1 deployment only
+                result_lines = ["Your Recently Deployed Site:\n"]
             for idx, deployment in enumerate(active_deployments, 1):
                 site_name = deployment.get("site_name", "Unknown")
                 site_type = deployment.get("site_type", "Unknown")
@@ -727,11 +766,30 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
                 result_lines.append("")
 
-            deployed_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deployed")
-            deploying_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deploying")
-            generating_count = sum(1 for d in active_deployments if d.get("deployment_status") == "generating")
+            # Add helpful note for users
+            if len(active_deployments) == 1:
+                # Single result - show specific status message
+                if deployment_status == "deployed":
+                    result_lines.append("✨ Your site is live! Click the URL above to view it.")
+                elif deployment_status == "deploying":
+                    result_lines.append("⏳ Your site is being deployed. Check back in 60 seconds for the live URL.")
+                elif deployment_status == "generating":
+                    result_lines.append("⚙️ AI is generating your website. Check back in 30 seconds for deployment status.")
+            else:
+                # Multiple results - show summary
+                deployed_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deployed")
+                deploying_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deploying")
+                generating_count = sum(1 for d in active_deployments if d.get("deployment_status") == "generating")
 
-            result_lines.append(f"Total: {len(active_deployments)} site(s) | ✅ Live: {deployed_count} | 🔄 Deploying: {deploying_count} | ⚙️ Generating: {generating_count}")
+                summary_parts = []
+                if deployed_count > 0:
+                    summary_parts.append(f"✅ {deployed_count} live")
+                if deploying_count > 0:
+                    summary_parts.append(f"🔄 {deploying_count} deploying")
+                if generating_count > 0:
+                    summary_parts.append(f"⚙️ {generating_count} generating")
+
+                result_lines.append(f"Summary: {' | '.join(summary_parts)}")
 
             result_text = "\n".join(result_lines)
             return [TextContent(type="text", text=result_text)]
