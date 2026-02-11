@@ -175,7 +175,8 @@ def create_itinerary_direct(city: str, days: int, attractions: list):
                 "time": current_time.strftime("%H:%M"),
                 "activity": attraction["name"],
                 "duration_minutes": visit_duration,
-                "travel_to_next_minutes": travel_time if i < len(day_attractions) - 1 else 0
+                "travel_to_next_minutes": travel_time if i < len(day_attractions) - 1 else 0,
+                "coordinates": attraction.get("coordinates")
             })
 
             current_time += timedelta(minutes=visit_duration + travel_time)
@@ -226,15 +227,23 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
 
         for activity in day["schedule"]:
             travel_text = f' <span class="text-muted-foreground">• {activity["travel_to_next_minutes"]} min travel</span>' if activity["travel_to_next_minutes"] > 0 else ''
+            coords = activity.get("coordinates")
+            clickable_class = "cursor-pointer hover:bg-primary/10" if coords else ""
+            location_icon = '<svg class="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>' if coords else ""
+            data_attrs = f'data-lat="{coords["lat"]}" data-lon="{coords["lon"]}" data-name="{activity["activity"]}" onclick="showOnMap(this)"' if coords else ''
+
             itinerary_content += f'''
-                <div class="group flex gap-4 p-4 rounded-lg border bg-muted/30 hover:bg-muted/50 hover:border-primary/50 transition-all">
+                <div class="group flex gap-4 p-4 rounded-lg border bg-muted/30 hover:bg-muted/50 hover:border-primary/50 transition-all {clickable_class}" {data_attrs}>
                     <div class="flex-shrink-0">
                         <span class="inline-flex items-center justify-center w-20 h-12 rounded-lg bg-primary/20 text-primary font-semibold text-sm">
                             {activity["time"]}
                         </span>
                     </div>
                     <div class="flex-1 min-w-0">
-                        <h4 class="font-medium text-foreground mb-1">{activity["activity"]}</h4>
+                        <div class="flex items-center gap-2 mb-1">
+                            <h4 class="font-medium text-foreground">{activity["activity"]}</h4>
+                            {location_icon}
+                        </div>
                         <p class="text-sm text-muted-foreground">
                             <span class="inline-flex items-center gap-1">
                                 {activity["duration_minutes"]} min{travel_text}
@@ -306,6 +315,21 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
     <div class="space-y-6">
         {itinerary_content}
     </div>
+    <script>
+        function showOnMap(element) {{
+            const lat = parseFloat(element.getAttribute('data-lat'));
+            const lon = parseFloat(element.getAttribute('data-lon'));
+            const name = element.getAttribute('data-name');
+
+            // Send message to parent window to zoom to location
+            window.parent.postMessage({{
+                type: 'zoomToLocation',
+                lat: lat,
+                lon: lon,
+                name: name
+            }}, '*');
+        }}
+    </script>
 </body>
 </html>'''
 
@@ -633,6 +657,9 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
         }}
 
         // Initialize Leaflet map
+        let map = null;
+        const markers = {{}};
+
         if (placesData.attractions && placesData.attractions.length > 0) {{
             // Get first attraction's coordinates for initial center
             const firstAttraction = placesData.attractions[0];
@@ -640,7 +667,7 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
             const centerLon = firstAttraction.coordinates.lon;
 
             // Initialize map
-            const map = L.map('map').setView([centerLat, centerLon], 13);
+            map = L.map('map').setView([centerLat, centerLon], 13);
 
             // Add OpenStreetMap tiles (free, no API key needed)
             L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
@@ -660,11 +687,14 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
                 // Create popup content
                 const popupContent = `
                     <div style="font-family: -apple-system, sans-serif;">
-                        <strong style="font-size: 14px; color: #8b5cf6;">${{attraction.name}}</strong><br>
+                        <strong style="font-size: 14px; color: hsl(210, 100%, 60%);">${{attraction.name}}</strong><br>
                         <span style="font-size: 12px; color: #a0a0b0;">${{attraction.type || 'Attraction'}}</span>
                     </div>
                 `;
                 marker.bindPopup(popupContent);
+
+                // Store marker reference by name
+                markers[attraction.name] = marker;
 
                 // Add to bounds for auto-fit
                 bounds.push([lat, lon]);
@@ -675,6 +705,36 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
                 map.fitBounds(bounds, {{ padding: [50, 50] }});
             }}
         }}
+
+        // Listen for messages from iframe to zoom to locations
+        window.addEventListener('message', function(event) {{
+            if (event.data.type === 'zoomToLocation') {{
+                const {{ lat, lon, name }} = event.data;
+
+                // Scroll to map section smoothly
+                const mapSection = document.querySelector('#map');
+                if (mapSection) {{
+                    mapSection.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                }}
+
+                // Zoom to location after a short delay (for smooth scroll)
+                setTimeout(() => {{
+                    if (map) {{
+                        // Zoom to the location
+                        map.flyTo([lat, lon], 16, {{
+                            duration: 1.5
+                        }});
+
+                        // Open the marker popup if it exists
+                        if (markers[name]) {{
+                            setTimeout(() => {{
+                                markers[name].openPopup();
+                            }}, 1500);
+                        }}
+                    }}
+                }}, 500);
+            }}
+        }});
     </script>
 </body>
 </html>'''
