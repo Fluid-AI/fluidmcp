@@ -27,7 +27,15 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
-    logging.warning("Anthropic SDK not installed. Dynamic website generation will be limited to templates.")
+    logging.warning("Anthropic SDK not installed.")
+
+# Try to import Google Gemini for dynamic website generation (free alternative)
+try:
+    from google import genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logging.warning("Google Genai SDK not installed. Install with: pip install google-genai")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +71,30 @@ def save_deployment_history(deployments):
             json.dump(deployments, f, indent=2)
     except Exception as e:
         logger.error(f"Error saving deployment history: {e}")
+
+
+def clean_display_url(url: str) -> str:
+    """
+    Clean Vercel URL for display by removing team name suffixes.
+
+    Converts:
+    https://simple-calculator-20260211074502-shivam-swamis-projects.vercel.app/
+    To:
+    https://simple-calculator-20260211074502.vercel.app/
+
+    Preserves the actual URL in history for tracking purposes.
+    """
+    if not url or not isinstance(url, str):
+        return url
+
+    # Pattern: Match timestamp (14 digits), capture it, then remove team name suffix
+    # Vercel URLs format: {site-name}-{timestamp}-{team-name}-projects.vercel.app
+    # We want to keep: {site-name}-{timestamp}.vercel.app
+    import re
+    cleaned_url = re.sub(r'(-\d{14})-[a-z0-9-]+-projects\.vercel\.app', r'\1.vercel.app', url)
+
+    # If pattern didn't match (e.g., URL without timestamp), return original URL
+    return cleaned_url
 
 
 def detect_site_type_from_prompt(prompt: str) -> tuple[str, str]:
@@ -111,18 +143,61 @@ def detect_site_type_from_prompt(prompt: str) -> tuple[str, str]:
 
 async def generate_custom_website_with_ai(prompt: str, site_name: str) -> Dict[str, str]:
     """
-    Use Claude API to generate a custom single-page application based on the prompt.
+    Use AI API (Anthropic Claude or Google Gemini) to generate a custom single-page application based on the prompt.
     Returns a dict with 'html', 'css', and 'js' keys.
-    """
-    if not ANTHROPIC_AVAILABLE:
-        raise RuntimeError("Anthropic SDK not installed. Install with: pip install anthropic")
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY environment variable is required for custom website generation")
+    Priority:
+    1. Try Anthropic Claude if ANTHROPIC_API_KEY is available
+    2. Fall back to Google Gemini if GEMINI_API_KEY is available (FREE)
+    """
+    # Check which APIs are available
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+
+    use_anthropic = ANTHROPIC_AVAILABLE and anthropic_key
+    use_gemini = GEMINI_AVAILABLE and gemini_key
+
+    if not use_anthropic and not use_gemini:
+        raise RuntimeError(
+            "No AI API configured. Please set one of:\n"
+            "  - ANTHROPIC_API_KEY (requires credits)\n"
+            "  - GEMINI_API_KEY (free at https://aistudio.google.com/apikey)\n"
+            "\nInstall SDKs with: pip install anthropic google-generativeai"
+        )
 
     logger.info(f"Generating custom website with AI for prompt: {prompt}")
 
+    # Try Anthropic first (if available)
+    if use_anthropic:
+        try:
+            logger.info("Using Anthropic Claude API...")
+            return await _generate_with_anthropic(prompt, site_name, anthropic_key)
+        except Exception as e:
+            error_msg = str(e).lower()
+            # If it's a credit/billing error, try Gemini fallback
+            if "credit" in error_msg or "billing" in error_msg or "quota" in error_msg:
+                logger.warning(f"Anthropic API failed (likely no credits): {e}")
+                if use_gemini:
+                    logger.info("Falling back to Google Gemini (free API)...")
+                    return await _generate_with_gemini(prompt, site_name, gemini_key)
+                else:
+                    raise RuntimeError(
+                        f"Anthropic API failed: {e}\n"
+                        "Get a FREE Gemini API key at https://aistudio.google.com/apikey\n"
+                        "Install with: pip install google-generativeai"
+                    )
+            else:
+                # Other errors, re-raise
+                raise
+
+    # Use Gemini if it's the only option available
+    if use_gemini:
+        logger.info("Using Google Gemini API (free)...")
+        return await _generate_with_gemini(prompt, site_name, gemini_key)
+
+
+async def _generate_with_anthropic(prompt: str, site_name: str, api_key: str) -> Dict[str, str]:
+    """Generate website using Anthropic Claude API"""
     client = anthropic.Anthropic(api_key=api_key)
 
     system_prompt = """You are an expert full-stack web developer who creates PRODUCTION-READY, beautiful, and highly functional single-page applications.
@@ -314,6 +389,160 @@ Be creative and build something impressive that looks and feels professional."""
         raise RuntimeError(f"Failed to generate custom website: {e}")
 
 
+async def _generate_with_gemini(prompt: str, site_name: str, api_key: str) -> Dict[str, str]:
+    """Generate website using Google Gemini API (FREE)"""
+    from google import genai as genai_new
+    client = genai_new.Client(api_key=api_key)
+
+    system_prompt = """You are an expert full-stack web developer who creates PRODUCTION-READY, beautiful, and highly functional single-page applications.
+
+Your code must be:
+- **Professional Grade**: Clean, well-structured, maintainable code with best practices
+- **Fully Functional**: All features work perfectly with proper event handling and state management
+- **Visually Stunning**: Modern design with smooth animations, beautiful gradients, professional color schemes
+- **Responsive**: Perfect on all devices (mobile, tablet, desktop) with mobile-first approach
+- **Interactive**: Rich user interactions with hover effects, transitions, loading states, success/error feedback
+- **Data Persistent**: Use localStorage/sessionStorage intelligently for state persistence
+- **Error Handling**: Comprehensive error handling with user-friendly error messages
+- **Accessible**: Proper ARIA labels, keyboard navigation, semantic HTML
+- **Performance Optimized**: Fast loading, efficient DOM manipulation, debounced events where needed
+
+Design Guidelines:
+- Use modern CSS (Grid, Flexbox, CSS Variables, Animations, Transforms)
+- Beautiful color schemes (use gradients, shadows, modern palettes)
+- Smooth transitions and micro-interactions
+- Professional typography with proper hierarchy
+- White space and visual breathing room
+- Icons using emoji or Unicode symbols (no external dependencies)
+- Loading states and skeleton screens where appropriate
+- Toast notifications or feedback for user actions
+
+Code Quality:
+- Vanilla JavaScript with ES6+ features (classes, arrow functions, destructuring, async/await)
+- Modular code structure with clear separation of concerns
+- Descriptive variable/function names
+- Comment only complex logic, not obvious code
+- DRY principle - no code repetition
+
+CRITICAL - NO LOADING SCREENS OR SPLASH SCREENS:
+- **ABSOLUTELY NO loading screens, splash screens, or delayed content**
+- **DO NOT create elements with id="loading-screen" or class="loading"**
+- **DO NOT use setTimeout/setInterval to delay showing content**
+- **DO NOT show "Loading...", spinners, progress bars, or "Please wait" messages**
+- The app interface MUST be visible IMMEDIATELY on page load (no delays, no animations blocking content)
+- All content must appear within 100ms of page load
+- All apps must be fully self-contained with inline/hardcoded data (no API calls, no fetch, no external data)
+- User should see a fully functional app the instant the page loads
+- You can add loading states for USER ACTIONS (button clicks), but NOT for initial page load
+
+Return your response in THREE separate markdown code blocks (NOT as JSON):
+
+```html
+<!DOCTYPE html>
+... complete HTML code here ...
+```
+
+```css
+/* complete CSS code here */
+```
+
+```javascript
+// complete JavaScript code here
+```
+
+The HTML must include proper DOCTYPE, meta tags, and link to style.css and script.js.
+CSS and JS are separate file contents. Do NOT wrap in JSON - use markdown code blocks."""
+
+    user_prompt = f"""Create a production-ready single-page application: {prompt}
+
+Requirements:
+- Make it fully functional with ALL necessary features
+- Use stunning modern design with beautiful UI
+- Add thoughtful interactions and animations
+- Include proper error handling and loading states
+- Make it intuitive and user-friendly
+- Add any features that make sense for this type of app
+
+Be creative and build something impressive that looks and feels professional.
+
+{system_prompt}"""
+
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=user_prompt
+        )
+        response_text = response.text
+        logger.info("Received Gemini AI response, extracting code blocks...")
+
+        # Extract code blocks (same logic as Anthropic)
+        result = {}
+
+        # Extract HTML
+        if "```html" in response_text:
+            html_start = response_text.find("```html") + 7
+            html_end = response_text.find("```", html_start)
+            result["html"] = response_text[html_start:html_end].strip()
+            logger.info(f"Extracted HTML ({len(result['html'])} chars)")
+
+        # Extract CSS
+        if "```css" in response_text:
+            css_start = response_text.find("```css") + 6
+            css_end = response_text.find("```", css_start)
+            result["css"] = response_text[css_start:css_end].strip()
+            logger.info(f"Extracted CSS ({len(result['css'])} chars)")
+
+        # Extract JavaScript
+        if "```javascript" in response_text:
+            js_start = response_text.find("```javascript") + 13
+            js_end = response_text.find("```", js_start)
+            result["js"] = response_text[js_start:js_end].strip()
+            logger.info(f"Extracted JS ({len(result['js'])} chars)")
+        elif "```js" in response_text:
+            js_start = response_text.find("```js") + 5
+            js_end = response_text.find("```", js_start)
+            result["js"] = response_text[js_start:js_end].strip()
+            logger.info(f"Extracted JS ({len(result['js'])} chars)")
+
+        # Check if extraction succeeded
+        if all(key in result for key in ["html", "css", "js"]):
+            logger.info("✓ Successfully extracted all code blocks from Gemini response")
+
+            # CRITICAL: Validate and fix HTML to ensure CSS/JS are properly linked
+            html = result["html"]
+
+            # Check if HTML has correct stylesheet link
+            if 'href="style.css"' not in html and "href='style.css'" not in html:
+                logger.warning("⚠️ HTML missing proper CSS link - this will break styling!")
+                logger.warning("   Looking for: href=\"style.css\"")
+                # Try to fix by injecting proper link if <head> exists
+                if '<head>' in html:
+                    html = html.replace('</head>', '    <link rel="stylesheet" href="style.css">\n</head>')
+                    logger.info("   ✓ Automatically added <link rel=\"stylesheet\" href=\"style.css\">")
+                    result["html"] = html
+
+            # Check if HTML has correct script link
+            if 'src="script.js"' not in html and "src='script.js'" not in html:
+                logger.warning("⚠️ HTML missing proper JS link - this will break interactivity!")
+                logger.warning("   Looking for: src=\"script.js\"")
+                # Try to fix by injecting proper script if </body> exists
+                if '</body>' in html:
+                    html = html.replace('</body>', '    <script src="script.js"></script>\n</body>')
+                    logger.info("   ✓ Automatically added <script src=\"script.js\"></script>")
+                    result["html"] = html
+
+            logger.info("✓ HTML validation complete - CSS and JS links verified")
+            return result
+
+        # If extraction failed
+        missing_keys = [k for k in ["html", "css", "js"] if k not in result]
+        raise RuntimeError(f"Failed to extract required code blocks. Missing: {missing_keys}. Response preview: {response_text[:500]}")
+
+    except Exception as e:
+        logger.error(f"Gemini AI generation failed: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to generate custom website with Gemini: {e}")
+
+
 async def update_website_with_ai(site_name: str, modification_request: str, original_prompt: str) -> Dict[str, str]:
     """
     Update an existing website based on modification request.
@@ -423,66 +652,137 @@ Keep everything else the same. Make sure all features still work perfectly."""
 
 def generate_and_deploy_in_background(site_type: str, site_name: str, custom_content: Dict, prompt: str):
     """Generate website and deploy to Vercel in the background using a separate thread"""
+
+    # CRITICAL: Write to /tmp FIRST to prove thread started
+    # This happens BEFORE any other operations that might fail
+    import sys
+    emergency_log = f"/tmp/thread_emergency_{site_name}.log"
     try:
-        logger.info(f"[Thread] Starting background generation and deployment for {site_name}")
+        with open(emergency_log, 'w') as f:
+            f.write(f"THREAD STARTED at {datetime.now().isoformat()}\n")
+            f.write(f"Args: site_type={site_type}, site_name={site_name}, prompt={prompt[:50]}\n")
+            f.write(f"SITES_DIR={SITES_DIR}\n")
+            f.write(f"Thread ID: {threading.current_thread().ident}\n")
+    except Exception as e:
+        sys.stderr.write(f"EMERGENCY LOG FAILED: {e}\n")
+        sys.stderr.flush()
+
+    # Write to a separate log file for debugging
+    thread_log_file = SITES_DIR / f"deployment_thread_{site_name}.log"
+
+    def log_to_file(msg):
+        """Log to both logger and file"""
+        logger.info(msg)
+        try:
+            with open(thread_log_file, 'a') as f:
+                f.write(f"{datetime.now().isoformat()} - {msg}\n")
+        except Exception as e:
+            # Also write to emergency log if normal log fails
+            try:
+                with open(emergency_log, 'a') as f:
+                    f.write(f"LOG ERROR: {e}\n")
+                    f.write(f"Message was: {msg}\n")
+            except:
+                pass
+
+    try:
+        log_to_file("=" * 80)
+        log_to_file(f"[BACKGROUND DEPLOYMENT STARTED] {site_name}")
+        log_to_file(f"[Thread] Prompt: {prompt[:100]}...")
+        log_to_file("=" * 80)
 
         # Update status to "generating"
+        log_to_file("[Step 1] Loading deployment history...")
         deployments = load_deployment_history()
+        log_to_file(f"[Step 1] Found {len(deployments)} existing deployments")
+
+        found = False
         for dep in reversed(deployments):
             if dep.get("site_name") == site_name and dep.get("deployment_status") == "generating":
                 dep["deployment_status"] = "generating"
                 dep["generation_started_at"] = datetime.now().isoformat()
+                found = True
+                log_to_file(f"[Step 1] Updated status to 'generating' for {site_name}")
                 break
+
+        if not found:
+            log_to_file(f"[Step 1] WARNING: Could not find deployment record for {site_name}")
+
         save_deployment_history(deployments)
+        log_to_file("[Step 1] Saved deployment history")
 
         # Run async generation in a new event loop (thread-safe)
+        log_to_file("[Step 2] Creating new event loop...")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         # Generate website files
+        log_to_file(f"[Step 2] Generating website files (type={site_type})...")
         project_path = loop.run_until_complete(generate_website(site_type, site_name, custom_content, prompt))
-        logger.info(f"[Thread] Website generated at: {project_path}")
+        log_to_file(f"[Step 2] Website generated at: {project_path}")
 
         # Update status to "deploying"
+        log_to_file("[Step 3] Updating status to 'deploying'...")
         deployments = load_deployment_history()
         for dep in reversed(deployments):
             if dep.get("site_name") == site_name:
                 dep["deployment_status"] = "deploying"
                 dep["generation_completed_at"] = datetime.now().isoformat()
                 dep["project_path"] = str(project_path)
+                log_to_file(f"[Step 3] Updated deployment record")
                 break
         save_deployment_history(deployments)
+        log_to_file("[Step 3] Saved deployment history")
 
         # Deploy to Vercel
+        log_to_file("[Step 4] Deploying to Vercel...")
         deploy_url = loop.run_until_complete(deploy_to_vercel_internal(str(project_path), site_name))
         loop.close()
-
-        logger.info(f"[Thread] Background deployment successful: {deploy_url}")
+        log_to_file(f"[Step 4] Background deployment successful: {deploy_url}")
 
         # Update deployment history with successful URL
+        log_to_file("[Step 5] Updating deployment history with final URL...")
         deployments = load_deployment_history()
+        log_to_file(f"[Step 5] Loaded history, has {len(deployments)} entries")
+
+        updated = False
         for dep in reversed(deployments):
             if dep.get("site_name") == site_name:
+                old_status = dep.get("deployment_status")
                 dep["deploy_url"] = deploy_url
                 dep["deployment_status"] = "deployed"
                 dep["deployed_at"] = datetime.now().isoformat()
+                log_to_file(f"[Step 5] Updated {site_name}: {old_status} -> deployed, URL={deploy_url}")
+                updated = True
                 break
-        save_deployment_history(deployments)
 
-        logger.info(f"[Thread] Updated deployment history for {site_name}")
+        if not updated:
+            log_to_file(f"[Step 5] ERROR: Could not find {site_name} in history to update!")
+
+        save_deployment_history(deployments)
+        log_to_file(f"[Step 5] Saved deployment history - COMPLETE!")
+        log_to_file(f"[FINAL] Successfully completed deployment for {site_name}")
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        log_to_file(f"[ERROR] Background generation/deployment failed for {site_name}")
+        log_to_file(f"[ERROR] Exception: {e}")
+        log_to_file(f"[ERROR] Traceback:\n{error_details}")
         logger.error(f"[Thread] Background generation/deployment failed for {site_name}: {e}", exc_info=True)
 
         # Update deployment history with failure
+        log_to_file("[ERROR] Updating deployment history with failure status...")
         deployments = load_deployment_history()
         for dep in reversed(deployments):
             if dep.get("site_name") == site_name:
                 dep["deployment_status"] = "failed"
                 dep["error"] = str(e)
                 dep["failed_at"] = datetime.now().isoformat()
+                log_to_file(f"[ERROR] Marked {site_name} as failed in history")
                 break
         save_deployment_history(deployments)
+        log_to_file("[ERROR] Saved deployment history with failure status")
 
 
 def deploy_in_background_sync(project_path: str, site_name: str, site_type: str, prompt: str):
@@ -530,7 +830,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="create_and_deploy_site",
-            description="Generate a static website from a natural language prompt and automatically deploy it to Vercel. Works for ANY type of single-page application (todo apps, calculators, timers, social media pages, etc). Returns deployment confirmation. CRITICAL: When responding to the user, ALWAYS say 'Vercel' or 'Vercel platform' - NEVER EVER mention 'Netlify' or 'Netlify platform' in your response. The deployment platform is VERCEL, not Netlify. IMPORTANT: Always show the complete response to the user - tell them their site is being generated and deployed to Vercel, and they should check back in 90-120 seconds.",
+            description="Generate a static website from a natural language prompt using AI (Anthropic Claude or FREE Google Gemini) and automatically deploy it to Vercel. Works for ANY type of single-page application (todo apps, calculators, timers, social media pages, etc). Returns ONLY deployment START confirmation - NOT the final URL. Uses Google Gemini FREE API. CRITICAL RESPONSE RULES: (1) This tool STARTS deployment in background (2) NEVER return a URL immediately after calling this tool (3) Tell user to use list_deployed_sites after 90-120 seconds to get the final URL (4) ONLY mention 'Vercel' platform, NEVER 'Netlify' (5) All URLs end in '.vercel.app' NOT '.netlify.app' (6) DO NOT construct URLs manually - ONLY use URLs from list_deployed_sites tool result (7) If asked about the same deployment again, call list_deployed_sites to check current status before responding",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -560,75 +860,6 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="generate_and_deploy_website",
-            description="Generate a static website from a prompt and automatically deploy it to Vercel. Returns the live URL. Supports todo app, portfolio website, and landing page.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "site_type": {
-                        "type": "string",
-                        "description": "Type of website to generate",
-                        "enum": ["todo", "portfolio", "landing"]
-                    },
-                    "site_name": {
-                        "type": "string",
-                        "description": "Name for the site (used for directory and Vercel site name)"
-                    },
-                    "custom_content": {
-                        "type": "object",
-                        "description": "Custom content for the website (optional)",
-                        "properties": {
-                            "title": {"type": "string"},
-                            "description": {"type": "string"},
-                            "additional_sections": {"type": "array", "items": {"type": "string"}}
-                        }
-                    }
-                },
-                "required": ["site_type", "site_name"]
-            }
-        ),
-        Tool(
-            name="generate_website_files",
-            description="Generate website files without deploying. Useful for testing or manual deployment.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "site_type": {
-                        "type": "string",
-                        "description": "Type of website to generate",
-                        "enum": ["todo", "portfolio", "landing"]
-                    },
-                    "site_name": {
-                        "type": "string",
-                        "description": "Name for the site directory"
-                    },
-                    "custom_content": {
-                        "type": "object",
-                        "description": "Custom content for the website (optional)"
-                    }
-                },
-                "required": ["site_type", "site_name"]
-            }
-        ),
-        Tool(
-            name="deploy_to_vercel",
-            description="Deploy an existing project directory to Vercel. Returns the live Vercel URL.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project_path": {
-                        "type": "string",
-                        "description": "Path to the project directory to deploy"
-                    },
-                    "site_name": {
-                        "type": "string",
-                        "description": "Name for the Vercel deployment (optional, will use directory name if not provided)"
-                    }
-                },
-                "required": ["project_path"]
-            }
-        ),
-        Tool(
             name="update_and_redeploy_site",
             description="Update an existing deployed website with modifications. Use this when the user wants to change something about their current site (change colors, add features, modify content, etc.). This will regenerate the site with the requested changes and redeploy it.",
             inputSchema={
@@ -654,18 +885,34 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     """
     Handle tool calls
 
-    IMPORTANT: This MCP server deploys to VERCEL, not Netlify.
-    When generating responses, ALWAYS mention "Vercel" or "Vercel platform", NEVER "Netlify".
+    CRITICAL: This MCP server deploys ONLY to VERCEL, never to Netlify.
+    The user has migrated from Netlify to Vercel.
+    When generating ANY response to the user:
+    - ALWAYS say "Vercel" or "Vercel platform"
+    - NEVER mention "Netlify" or "Netlify platform"
+    - NEVER use "netlify.app" URLs - only "vercel.app"
+    - This is a Vercel deployment server, not a Netlify deployment server
     """
     try:
         if arguments is None:
             arguments = {}
 
         if name == "create_and_deploy_site":
+            # CRITICAL DEBUG: Write to file to verify tool is called
+            with open("/tmp/vercel_tool_called.log", "a") as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"Tool called at: {datetime.now().isoformat()}\n")
+                f.write(f"Arguments: {arguments}\n")
+                f.write(f"{'='*80}\n")
+
             prompt = arguments.get("prompt", "")
             site_name = arguments.get("site_name")
 
-            logger.info(f"Creating and deploying site from prompt: {prompt}")
+            logger.info("=" * 80)
+            logger.info(f"[TOOL CALL] create_and_deploy_site")
+            logger.info(f"[TOOL CALL] Prompt: {prompt}")
+            logger.info(f"[TOOL CALL] Custom site_name: {site_name}")
+            logger.info("=" * 80)
 
             # Detect site type from prompt
             site_type, auto_site_name = detect_site_type_from_prompt(prompt)
@@ -678,10 +925,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             else:
                 final_site_name = auto_site_name
 
-            logger.info(f"Detected site type: {site_type}, site name: {final_site_name}")
+            logger.info(f"[TOOL CALL] Detected site type: {site_type}")
+            logger.info(f"[TOOL CALL] Final site name: {final_site_name}")
 
             # Save to history as "generating" (not "deploying" yet)
+            logger.info(f"[TOOL CALL] Loading deployment history...")
             deployments = load_deployment_history()
+            logger.info(f"[TOOL CALL] Current history has {len(deployments)} entries")
+
             deployment_record = {
                 "site_name": final_site_name,
                 "site_type": site_type,
@@ -692,17 +943,22 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 "deployment_status": "generating"
             }
             deployments.append(deployment_record)
+            logger.info(f"[TOOL CALL] Added deployment record for {final_site_name}")
+
             save_deployment_history(deployments)
+            logger.info(f"[TOOL CALL] Saved deployment history (now has {len(deployments)} entries)")
 
             # Start generation AND deployment in background thread
             # This ensures we return immediately (no timeout)
+            logger.info(f"[TOOL CALL] Creating background thread...")
             thread = threading.Thread(
                 target=generate_and_deploy_in_background,
                 args=(site_type, final_site_name, {}, prompt),
                 daemon=True
             )
             thread.start()
-            logger.info(f"Started generation+deployment thread for {final_site_name}")
+            logger.info(f"[TOOL CALL] Thread started! Thread ID: {thread.ident}, Is Alive: {thread.is_alive()}")
+            logger.info(f"[TOOL CALL] Returning response to agent...")
 
             # Return immediately
             site_type_name = {
@@ -730,10 +986,13 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
             deployments = load_deployment_history()
 
-            # Filter to only show deployed, deploying, and generating sites (hide failed)
+            # Filter to show:
+            # - All "generating" and "deploying" sites (new Vercel sites)
+            # - Only "deployed" sites with vercel.app URLs (exclude old Netlify sites)
             active_deployments = [
                 d for d in deployments
-                if d.get("deployment_status") in ["deployed", "deploying", "generating"]
+                if d.get("deployment_status") in ["generating", "deploying"]
+                or (d.get("deployment_status") == "deployed" and "vercel.app" in d.get("deploy_url", ""))
             ]
 
             if not active_deployments:
@@ -778,9 +1037,12 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
                 result_lines = [f"Deployed Sites Matching '{arguments.get('filter', '')}':\n"]
             else:
-                # No filter: Only show the most recent deployment to avoid overwhelming users
-                active_deployments = active_deployments[-1:]  # Last 1 deployment only
-                result_lines = ["Your Recently Deployed Site:\n"]
+                # No filter: Show recent 5 deployments (or less if fewer exist)
+                active_deployments = active_deployments[-5:]  # Last 5 deployments
+                if len(active_deployments) == 1:
+                    result_lines = ["Your Recently Deployed Site:\n"]
+                else:
+                    result_lines = [f"Your {len(active_deployments)} Most Recent Deployments:\n"]
             for idx, deployment in enumerate(active_deployments, 1):
                 site_name = deployment.get("site_name", "Unknown")
                 site_type = deployment.get("site_type", "Unknown")
@@ -812,7 +1074,9 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
                 result_lines.append(f"   Type: {site_type.capitalize()}")
 
                 if deployment_status == "deployed":
-                    result_lines.append(f"   Live URL: {deploy_url}")
+                    # Clean URL for display (removes team name suffix)
+                    display_url = clean_display_url(deploy_url)
+                    result_lines.append(f"   Live URL: {display_url}")
                     result_lines.append(f"   Deployed: {time_str}")
                     result_lines.append(f"   ✅ Site is live on Vercel! Click the URL above to visit it now.")
                 elif deployment_status == "deploying":
@@ -853,73 +1117,6 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
             result_text = "\n".join(result_lines)
             return [TextContent(type="text", text=result_text)]
-
-        elif name == "generate_and_deploy_website":
-            site_type = arguments.get("site_type")
-            site_name = arguments.get("site_name")
-            custom_content = arguments.get("custom_content", {})
-
-            logger.info(f"Generating and deploying {site_type} website: {site_name}")
-
-            # Generate the website files
-            project_path = await generate_website(site_type, site_name, custom_content)
-
-            # Deploy to Vercel
-            deploy_url = await deploy_to_vercel_internal(project_path, site_name)
-
-            result = {
-                "status": "success",
-                "message": f"Successfully generated and deployed {site_type} website",
-                "site_name": site_name,
-                "project_path": str(project_path),
-                "live_url": deploy_url,
-                "site_type": site_type
-            }
-
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "generate_website_files":
-            site_type = arguments.get("site_type")
-            site_name = arguments.get("site_name")
-            custom_content = arguments.get("custom_content", {})
-
-            logger.info(f"Generating {site_type} website files: {site_name}")
-
-            # Generate the website files
-            project_path = await generate_website(site_type, site_name, custom_content)
-
-            result = {
-                "status": "success",
-                "message": f"Successfully generated {site_type} website files",
-                "site_name": site_name,
-                "project_path": str(project_path),
-                "site_type": site_type,
-                "files": ["index.html", "style.css", "script.js"]
-            }
-
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-
-        elif name == "deploy_to_vercel":
-            project_path = arguments.get("project_path")
-            site_name = arguments.get("site_name")
-
-            if not site_name:
-                site_name = Path(project_path).name
-
-            logger.info(f"Deploying to Vercel: {project_path}")
-
-            # Deploy to Vercel
-            deploy_url = await deploy_to_vercel_internal(project_path, site_name)
-
-            result = {
-                "status": "success",
-                "message": "Successfully deployed to Vercel",
-                "site_name": site_name,
-                "project_path": project_path,
-                "live_url": deploy_url
-            }
-
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif name == "update_and_redeploy_site":
             site_name = arguments.get("site_name")
@@ -1000,11 +1197,42 @@ Check deployment status with 'list_deployed_sites' tool to get your live URL onc
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
     except Exception as e:
-        logger.error(f"Error executing {name}: {str(e)}")
+        import sys
+        import traceback
+
+        # Log to multiple places to ensure visibility
+        error_msg = f"Error executing {name}: {str(e)}"
+        error_traceback = traceback.format_exc()
+
+        # 1. Standard logger
+        logger.error(error_msg)
+        logger.error(error_traceback)
+
+        # 2. Write to stderr directly
+        sys.stderr.write(f"\n{'='*80}\n")
+        sys.stderr.write(f"MCP TOOL ERROR: {error_msg}\n")
+        sys.stderr.write(f"{error_traceback}\n")
+        sys.stderr.write(f"{'='*80}\n")
+        sys.stderr.flush()
+
+        # 3. Write to debug file
+        try:
+            with open("/tmp/vercel_mcp_errors.log", "a") as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"Time: {datetime.now().isoformat()}\n")
+                f.write(f"Tool: {name}\n")
+                f.write(f"Arguments: {arguments}\n")
+                f.write(f"Error: {error_msg}\n")
+                f.write(f"Traceback:\n{error_traceback}\n")
+                f.write(f"{'='*80}\n")
+        except:
+            pass
+
         error_result = {
             "status": "error",
             "message": str(e),
-            "tool": name
+            "tool": name,
+            "traceback": error_traceback
         }
         return [TextContent(type="text", text=json.dumps(error_result, indent=2))]
 
@@ -2553,6 +2781,31 @@ async def deploy_to_vercel_internal(project_path: str, site_name: str) -> str:
 
 async def main():
     """Run the MCP server"""
+    import sys
+
+    # CRITICAL: Startup banner to verify code version
+    startup_msg = f"""
+{'='*80}
+VERCEL DEPLOY MCP SERVER - DEBUG VERSION
+Started at: {datetime.now().isoformat()}
+Python: {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}
+Gemini Available: {GEMINI_AVAILABLE}
+Anthropic Available: {ANTHROPIC_AVAILABLE}
+History File: {DEPLOYMENT_HISTORY}
+Debug Logging: ENABLED
+{'='*80}
+"""
+    logger.info(startup_msg)
+    sys.stderr.write(startup_msg + "\n")
+    sys.stderr.flush()
+
+    # Also write to file
+    try:
+        with open("/tmp/vercel_mcp_startup.log", "w") as f:
+            f.write(startup_msg)
+    except:
+        pass
+
     logger.info("Starting Vercel Deploy MCP Server")
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await app.run(
