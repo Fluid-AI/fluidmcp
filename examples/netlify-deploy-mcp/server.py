@@ -2555,28 +2555,45 @@ async def deploy_to_netlify_internal(project_path: str, site_name: str) -> str:
 
         deploy_data = deploy_response.json()
 
+        # Debug: Log the full response to understand what Vercel returns
+        logger.info(f"Vercel API response keys: {list(deploy_data.keys())}")
+
         # Vercel returns the deployment URL (unique with hash)
         deployment_url = deploy_data.get("url")
         deployment_id = deploy_data.get("id")
 
-        # Try to get cleaner production alias URL if available
+        # Look for production/alias URLs in multiple fields
         alias_urls = deploy_data.get("alias", [])
+        aliases_field = deploy_data.get("aliases", [])  # Some versions use "aliases"
 
-        # Construct the clean production URL: {site-name}.vercel.app
-        # This is Vercel's standard production URL format
-        production_url = f"https://{site_name}.vercel.app"
+        logger.info(f"Deployment URL: {deployment_url}")
+        logger.info(f"Alias URLs: {alias_urls}")
+        logger.info(f"Aliases field: {aliases_field}")
 
+        # IMPORTANT: Use the actual URL from Vercel's response
+        # Priority: alias > deployment URL (deployment URL includes hash, alias is clean)
         if alias_urls and len(alias_urls) > 0:
-            # Use the alias from Vercel if available (most reliable)
+            # Use the alias from Vercel (clean production URL)
             deploy_url = alias_urls[0]
             if not deploy_url.startswith("http"):
                 deploy_url = f"https://{deploy_url}"
-            logger.info(f"Using Vercel-assigned alias URL: {deploy_url}")
+            logger.info(f"✓ Using Vercel alias URL: {deploy_url}")
+        elif aliases_field and len(aliases_field) > 0:
+            # Try alternate field name
+            deploy_url = aliases_field[0]
+            if not deploy_url.startswith("http"):
+                deploy_url = f"https://{deploy_url}"
+            logger.info(f"✓ Using Vercel aliases field URL: {deploy_url}")
+        elif deployment_url:
+            # Fallback: Use deployment-specific URL (with hash but guaranteed to work)
+            deploy_url = deployment_url
+            if not deploy_url.startswith("http"):
+                deploy_url = f"https://{deploy_url}"
+            logger.info(f"⚠ Using deployment-specific URL (has hash): {deploy_url}")
         else:
-            # Use constructed production URL (Vercel auto-assigns this)
-            deploy_url = production_url
-            logger.info(f"Using constructed production URL: {deploy_url}")
-            logger.info(f"Deployment-specific URL: https://{deployment_url}")
+            # Last resort fallback (shouldn't happen)
+            deploy_url = f"https://{site_name}.vercel.app"
+            logger.info(f"⚠ WARNING: Using constructed URL (may be incorrect): {deploy_url}")
 
         logger.info(f"Successfully deployed to Vercel!")
         logger.info(f"Deployment ID: {deployment_id}")
