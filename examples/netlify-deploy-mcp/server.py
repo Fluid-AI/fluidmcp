@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Vercel Deploy MCP Server
-Generates static websites and deploys them to Vercel
-(Note: Internal code references 'netlify' for backwards compatibility, but deployment uses Vercel API)
+Generates static websites with AI and deploys them to Vercel
 """
 
 import asyncio
@@ -32,13 +31,13 @@ except ImportError:
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("netlify-deploy-mcp")
+logger = logging.getLogger("vercel-deploy-mcp")
 
 # Initialize MCP server
-app = Server("netlify-deploy")
+app = Server("vercel-deploy")
 
 # Base directory for generated sites
-SITES_DIR = Path.home() / ".netlify-mcp" / "sites"
+SITES_DIR = Path.home() / ".vercel-mcp" / "sites"
 SITES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Deployment history file
@@ -423,7 +422,7 @@ Keep everything else the same. Make sure all features still work perfectly."""
 
 
 def generate_and_deploy_in_background(site_type: str, site_name: str, custom_content: Dict, prompt: str):
-    """Generate website and deploy to Netlify in the background using a separate thread"""
+    """Generate website and deploy to Vercel in the background using a separate thread"""
     try:
         logger.info(f"[Thread] Starting background generation and deployment for {site_name}")
 
@@ -454,8 +453,8 @@ def generate_and_deploy_in_background(site_type: str, site_name: str, custom_con
                 break
         save_deployment_history(deployments)
 
-        # Deploy to Netlify
-        deploy_url = loop.run_until_complete(deploy_to_netlify_internal(str(project_path), site_name))
+        # Deploy to Vercel
+        deploy_url = loop.run_until_complete(deploy_to_vercel_internal(str(project_path), site_name))
         loop.close()
 
         logger.info(f"[Thread] Background deployment successful: {deploy_url}")
@@ -487,14 +486,14 @@ def generate_and_deploy_in_background(site_type: str, site_name: str, custom_con
 
 
 def deploy_in_background_sync(project_path: str, site_name: str, site_type: str, prompt: str):
-    """Deploy to Netlify in the background using a separate thread (for already-generated sites)"""
+    """Deploy to Vercel in the background using a separate thread (for already-generated sites)"""
     try:
         logger.info(f"[Thread] Starting background deployment for {site_name}")
 
         # Run async deployment in a new event loop (thread-safe)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        deploy_url = loop.run_until_complete(deploy_to_netlify_internal(project_path, site_name))
+        deploy_url = loop.run_until_complete(deploy_to_vercel_internal(project_path, site_name))
         loop.close()
 
         logger.info(f"[Thread] Background deployment successful: {deploy_url}")
@@ -612,7 +611,7 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="deploy_to_netlify",
+            name="deploy_to_vercel",
             description="Deploy an existing project directory to Vercel. Returns the live Vercel URL.",
             inputSchema={
                 "type": "object",
@@ -672,7 +671,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             site_type, auto_site_name = detect_site_type_from_prompt(prompt)
 
             # Use provided site_name or auto-generated one
-            # ALWAYS append timestamp to ensure uniqueness on Netlify
+            # ALWAYS append timestamp to ensure uniqueness on Vercel
             if site_name:
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 final_site_name = f"{site_name}-{timestamp}"
@@ -865,8 +864,8 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
             # Generate the website files
             project_path = await generate_website(site_type, site_name, custom_content)
 
-            # Deploy to Netlify
-            deploy_url = await deploy_to_netlify_internal(project_path, site_name)
+            # Deploy to Vercel
+            deploy_url = await deploy_to_vercel_internal(project_path, site_name)
 
             result = {
                 "status": "success",
@@ -895,22 +894,22 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
                 "site_name": site_name,
                 "project_path": str(project_path),
                 "site_type": site_type,
-                "files": ["index.html", "style.css", "script.js", "netlify.toml"]
+                "files": ["index.html", "style.css", "script.js"]
             }
 
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
-        elif name == "deploy_to_netlify":
+        elif name == "deploy_to_vercel":
             project_path = arguments.get("project_path")
             site_name = arguments.get("site_name")
 
             if not site_name:
                 site_name = Path(project_path).name
 
-            logger.info(f"Deploying to Netlify: {project_path}")
+            logger.info(f"Deploying to Vercel: {project_path}")
 
-            # Deploy to Netlify
-            deploy_url = await deploy_to_netlify_internal(project_path, site_name)
+            # Deploy to Vercel
+            deploy_url = await deploy_to_vercel_internal(project_path, site_name)
 
             result = {
                 "status": "success",
@@ -956,9 +955,6 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
                 (project_dir / "index.html").write_text(updated_code["html"])
                 (project_dir / "style.css").write_text(updated_code["css"])
                 (project_dir / "script.js").write_text(updated_code["js"])
-
-                # Create netlify.toml
-                await create_netlify_config(project_dir)
 
                 logger.info(f"Updated website files generated at: {project_dir}")
 
@@ -1044,9 +1040,6 @@ async def generate_website(site_type: str, site_name: str, custom_content: Dict,
         logger.info("Custom website generated successfully with AI")
     else:
         raise ValueError(f"Unknown site type: {site_type}")
-
-    # Create netlify.toml
-    await create_netlify_config(project_dir)
 
     logger.info(f"Successfully generated {site_type} website files")
     return project_dir
@@ -2435,66 +2428,15 @@ document.querySelectorAll('.feature-card, .benefit-item').forEach(el => {
     (project_dir / "script.js").write_text(js_content)
 
 
-async def create_netlify_config(project_dir: Path):
-    """Create netlify.toml configuration"""
-    config_content = """[build]
-  publish = "."
-  command = "echo 'No build required for static site'"
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200"""
-
-    (project_dir / "netlify.toml").write_text(config_content)
-
-
-async def check_and_install_netlify_cli() -> bool:
-    """Check if Netlify CLI is installed, and attempt to install if not"""
-    try:
-        # Check if netlify is installed
-        result = subprocess.run(
-            ["netlify", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode == 0:
-            logger.info(f"Netlify CLI is installed: {result.stdout.strip()}")
-            return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # Try to install Netlify CLI automatically
-    logger.info("Netlify CLI not found. Attempting to install...")
-    try:
-        install_result = subprocess.run(
-            ["npm", "install", "-g", "netlify-cli"],
-            capture_output=True,
-            text=True,
-            timeout=120  # 2 minutes for installation
-        )
-
-        if install_result.returncode == 0:
-            logger.info("Successfully installed Netlify CLI")
-            return True
-        else:
-            logger.error(f"Failed to install Netlify CLI: {install_result.stderr}")
-            return False
-    except Exception as e:
-        logger.error(f"Error installing Netlify CLI: {e}")
-        return False
-
-
-async def deploy_to_netlify_internal(project_path: str, site_name: str) -> str:
-    """Deploy to Vercel using API (simpler and more reliable than Netlify)"""
+async def deploy_to_vercel_internal(project_path: str, site_name: str) -> str:
+    """Deploy to Vercel using API"""
     project_dir = Path(project_path)
 
     if not project_dir.exists():
         raise FileNotFoundError(f"Project directory not found: {project_path}")
 
     # Check for auth token
-    vercel_token = os.environ.get("VERCEL_TOKEN") or os.environ.get("NETLIFY_AUTH_TOKEN")  # Support both for backwards compatibility
+    vercel_token = os.environ.get("VERCEL_TOKEN")
     if not vercel_token:
         raise RuntimeError("VERCEL_TOKEN environment variable is required")
 
@@ -2611,7 +2553,7 @@ async def deploy_to_netlify_internal(project_path: str, site_name: str) -> str:
 
 async def main():
     """Run the MCP server"""
-    logger.info("Starting Netlify Deploy MCP Server")
+    logger.info("Starting Vercel Deploy MCP Server")
     async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
         await app.run(
             read_stream,
