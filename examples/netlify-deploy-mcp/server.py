@@ -155,14 +155,16 @@ Code Quality:
 - Comment only complex logic, not obvious code
 - DRY principle - no code repetition
 
-CRITICAL - NO INFINITE LOADING:
-- **NEVER** create loading screens that wait indefinitely for external APIs or data
-- **NEVER** use setTimeout/setInterval that blocks the main content from showing
-- The app MUST show its main interface immediately on page load
-- If you need to simulate loading, use a SHORT animation (max 1-2 seconds) then show content
-- All apps must be fully self-contained and work without external APIs
-- Use mock/sample data that's already in the code, not fetched from APIs
-- If showing a loading state, it should transition to the main app within 1-2 seconds maximum
+CRITICAL - NO LOADING SCREENS OR SPLASH SCREENS:
+- **ABSOLUTELY NO loading screens, splash screens, or delayed content**
+- **DO NOT create elements with id="loading-screen" or class="loading"**
+- **DO NOT use setTimeout/setInterval to delay showing content**
+- **DO NOT show "Loading...", spinners, progress bars, or "Please wait" messages**
+- The app interface MUST be visible IMMEDIATELY on page load (no delays, no animations blocking content)
+- All content must appear within 100ms of page load
+- All apps must be fully self-contained with inline/hardcoded data (no API calls, no fetch, no external data)
+- User should see a fully functional app the instant the page loads
+- You can add loading states for USER ACTIONS (button clicks), but NOT for initial page load
 
 Return your response in THREE separate markdown code blocks (NOT as JSON):
 
@@ -239,6 +241,25 @@ Be creative and build something impressive that looks and feels professional."""
         # Check if markdown extraction succeeded
         if all(key in result for key in ["html", "css", "js"]):
             logger.info("Successfully extracted code from markdown blocks")
+
+            # Validate: Check for loading screens (common issue)
+            html_lower = result["html"].lower()
+            problematic_patterns = [
+                "loading-screen",
+                "id=\"loading\"",
+                "class=\"loading\"",
+                "please wait",
+                "<div class=\"loader\"",
+                "<div class=\"spinner\"",
+                "loading....",
+            ]
+
+            found_patterns = [p for p in problematic_patterns if p in html_lower]
+            if found_patterns:
+                logger.warning(f"⚠️ Generated HTML contains loading screen patterns: {found_patterns}")
+                logger.warning("This may cause the site to appear broken. AI ignored NO LOADING SCREEN instruction.")
+                # Don't fail - just warn. The site might still work if JS properly removes it.
+
             return result
 
         # Fallback: Try JSON format (legacy)
@@ -489,7 +510,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="create_and_deploy_site",
-            description="Generate a static website from a natural language prompt and automatically deploy it to Netlify. Automatically detects whether to create a todo app, portfolio, or landing page based on the prompt. Returns the live Netlify URL.",
+            description="Generate a static website from a natural language prompt and automatically deploy it to Netlify. Works for ANY type of single-page application (todo apps, calculators, timers, social media pages, etc). Returns deployment confirmation. IMPORTANT: Always show the complete response to the user - tell them their site is being generated and they should check back in 90-120 seconds.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -507,13 +528,13 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_deployed_sites",
-            description="List all websites that have been deployed through this MCP server. Shows site names, types, deployment times, and file paths.",
+            description="List all websites that have been deployed through this MCP server. Shows site names, types, deployment times, and live URLs. IMPORTANT: Always show the complete results to the user in your response - don't just say 'transferring to next agent'. The user wants to see the deployment information.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "filter": {
                         "type": "string",
-                        "description": "Optional filter (not used currently, for future expansion)"
+                        "description": "Optional search filter to find specific deployments (e.g., 'calculator', 'todo', 'social media'). Matches against site names and prompts."
                     }
                 }
             }
