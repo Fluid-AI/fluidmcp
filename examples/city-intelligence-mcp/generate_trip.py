@@ -11,6 +11,7 @@ import sys
 import argparse
 from datetime import datetime, timedelta
 import httpx
+import html as html_module
 
 # Weather code mapping (WMO)
 WEATHER_CODES = {
@@ -202,305 +203,256 @@ def create_itinerary(city: str, days: int, attractions: list):
     return itinerary
 
 
-def generate_html(city: str, days: int, weather_data, places_data, itinerary):
-    """Generate the complete HTML page"""
+def generate_html(city: str, days: int, weather: dict, places: dict, itinerary: list):
+    """Generate interactive HTML"""
+    # Calculate stats
+    avg_temp = "N/A"
+    weather_summary = "Weather data unavailable"
+    weather_json = json.dumps({"forecast": []})
 
-    # Calculate summaries
-    if weather_data and weather_data.get("forecast"):
-        temps = [d["temp_high"] for d in weather_data["forecast"]]
-        avg_temp = round(sum(temps) / len(temps), 1)
-        conditions = list(set(d["conditions"] for d in weather_data["forecast"][:3]))
-        weather_summary = ", ".join(conditions)
-    else:
-        avg_temp = "N/A"
-        weather_summary = "Weather data unavailable"
+    if weather and weather.get("forecast"):
+        temps = [d["temp_high"] for d in weather["forecast"]]
+        avg_temp = f"{sum(temps) / len(temps):.1f}"
+        conditions = [d["conditions"] for d in weather["forecast"][:3]]
+        weather_summary = ", ".join(set(conditions))
+        weather_json = json.dumps(weather)
 
-    num_attractions = len(places_data.get("attractions", [])) if places_data else 0
+    num_attractions = len(places.get("attractions", [])) if places else 0
+    places_json = json.dumps(places if places else {"attractions": []})
     total_activities = sum(len(day["schedule"]) for day in itinerary)
 
-    weather_json = json.dumps(weather_data or {"forecast": []})
-    places_json = json.dumps(places_data or {"attractions": []})
-
-    # Generate itinerary HTML
-    itinerary_html = ""
+    # Generate itinerary HTML with Tailwind classes
+    itinerary_content = ""
     for day in itinerary:
-        activities_html = ""
+        itinerary_content += f'''<div class="rounded-lg border bg-card p-6 shadow-sm">
+            <div class="flex items-center gap-2 border-b pb-4 mb-4">
+                <span class="text-2xl">📅</span>
+                <h3 class="text-xl font-semibold text-primary">Day {day["day"]}</h3>
+                <span class="text-muted-foreground">· {day["date"]}</span>
+            </div>
+            <div class="space-y-3">'''
+
         for activity in day["schedule"]:
-            emoji = "🍽️" if activity["type"] == "meal" else "📍"
-            travel_str = f" • 🚗 {activity['travel_to_next_minutes']} min to next" if activity["travel_to_next_minutes"] > 0 else ""
+            travel_text = f' <span class="text-muted-foreground">• 🚗 {activity["travel_to_next_minutes"]} min to next</span>' if activity["travel_to_next_minutes"] > 0 else ''
+            itinerary_content += f'''
+                <div class="group flex gap-4 p-4 rounded-lg border bg-muted/30 hover:bg-muted/50 hover:border-primary/50 transition-all">
+                    <div class="flex-shrink-0">
+                        <span class="inline-flex items-center justify-center w-16 h-16 rounded-lg bg-primary/10 text-primary font-semibold text-sm">
+                            {activity["time"]}
+                        </span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h4 class="font-medium text-foreground mb-1">{activity["activity"]}</h4>
+                        <p class="text-sm text-muted-foreground">
+                            <span class="inline-flex items-center gap-1">
+                                ⏱️ {activity["duration_minutes"]} min{travel_text}
+                            </span>
+                        </p>
+                    </div>
+                </div>'''
 
-            activities_html += f'''
-            <div class="activity">
-                <div class="time">{activity["time"]}</div>
-                <div class="activity-details">
-                    <div class="activity-name">{emoji} {activity["activity"]}</div>
-                    <div class="duration">⏱️ {activity["duration_minutes"]} min{travel_str}</div>
-                </div>
-            </div>'''
+        itinerary_content += '</div></div>'
 
-        itinerary_html += f'''
-        <div class="day">
-            <div class="day-header">📅 Day {day["day"]} - {day["date"]}</div>
-            {activities_html}
-        </div>'''
-
-    if not itinerary_html:
-        itinerary_html = '<div style="text-align: center; padding: 40px; color: #a0a0b0;">No itinerary available</div>'
-
-    itinerary_iframe = f'''<!DOCTYPE html>
+    # Wrap itinerary with complete HTML including modern Tailwind styles for iframe
+    itinerary_html = f'''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {{
+            theme: {{
+                extend: {{
+                    colors: {{
+                        border: "hsl(240 3.7% 15.9%)",
+                        background: "hsl(240 10% 3.9%)",
+                        foreground: "hsl(0 0% 98%)",
+                        primary: {{
+                            DEFAULT: "hsl(263 70% 50.4%)",
+                            foreground: "hsl(0 0% 98%)"
+                        }},
+                        muted: {{
+                            DEFAULT: "hsl(240 3.7% 15.9%)",
+                            foreground: "hsl(240 5% 64.9%)"
+                        }},
+                        card: {{
+                            DEFAULT: "hsl(240 10% 3.9%)",
+                            foreground: "hsl(0 0% 98%)"
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    </script>
     <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #16162a;
-            color: #e0e0e0;
-            padding: 20px;
-        }}
-        .day {{
-            background: #1a1a2e;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 24px;
-            border: 1px solid #2a2a3e;
-        }}
-        .day-header {{
-            font-size: 20px;
-            color: #8b5cf6;
-            font-weight: 600;
-            margin-bottom: 20px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid #2a2a3e;
-        }}
-        .activity {{
-            display: flex;
-            gap: 20px;
-            padding: 16px;
-            margin-bottom: 12px;
-            background: #2a2a3e;
-            border-radius: 8px;
-            border-left: 4px solid #8b5cf6;
-            transition: all 0.2s ease;
-        }}
-        .activity:hover {{
-            background: #323248;
-            border-left-color: #a78bfa;
-        }}
-        .time {{
-            color: #8b5cf6;
-            font-weight: bold;
-            font-size: 14px;
-            min-width: 60px;
-        }}
-        .activity-details {{
-            flex: 1;
-        }}
-        .activity-name {{
-            font-size: 16px;
-            color: #e0e0e0;
-            margin-bottom: 6px;
-        }}
-        .duration {{
-            font-size: 13px;
-            color: #a0a0b0;
-        }}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {{ font-family: 'Inter', sans-serif; }}
     </style>
 </head>
-<body>
-    {itinerary_html}
+<body class="bg-background text-foreground antialiased p-4">
+    <div class="space-y-6">
+        {itinerary_content}
+    </div>
 </body>
 </html>'''
 
-    # Escape for srcdoc
-    import html
-    itinerary_escaped = html.escape(itinerary_iframe)
+    itinerary_html_escaped = html_module.escape(itinerary_html).replace('"', '&quot;')
 
-    # Main HTML
-    return f'''<!DOCTYPE html>
+    # Generate full HTML with Tailwind CSS (shadcn-inspired design)
+    html_content = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{city} Trip Plan</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        tailwind.config = {{
+            theme: {{
+                extend: {{
+                    colors: {{
+                        border: "hsl(240 3.7% 15.9%)",
+                        input: "hsl(240 3.7% 15.9%)",
+                        ring: "hsl(263 70% 50.4%)",
+                        background: "hsl(240 10% 3.9%)",
+                        foreground: "hsl(0 0% 98%)",
+                        primary: {{
+                            DEFAULT: "hsl(263 70% 50.4%)",
+                            foreground: "hsl(0 0% 98%)"
+                        }},
+                        secondary: {{
+                            DEFAULT: "hsl(240 3.7% 15.9%)",
+                            foreground: "hsl(0 0% 98%)"
+                        }},
+                        muted: {{
+                            DEFAULT: "hsl(240 3.7% 15.9%)",
+                            foreground: "hsl(240 5% 64.9%)"
+                        }},
+                        accent: {{
+                            DEFAULT: "hsl(240 3.7% 15.9%)",
+                            foreground: "hsl(0 0% 98%)"
+                        }},
+                        card: {{
+                            DEFAULT: "hsl(240 10% 3.9%)",
+                            foreground: "hsl(0 0% 98%)"
+                        }}
+                    }},
+                    borderRadius: {{
+                        lg: "0.5rem",
+                        md: "0.375rem",
+                        sm: "0.25rem"
+                    }}
+                }}
+            }}
+        }}
+    </script>
     <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f0f1e;
-            color: #e0e0e0;
-            padding: 20px;
-            line-height: 1.6;
-        }}
-        .container {{
-            max-width: 1400px;
-            margin: 0 auto;
-            background: #1a1a2e;
-            border-radius: 12px;
-            padding: 30px;
-            border: 1px solid #2a2a3e;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-        }}
-        .header {{
-            border-bottom: 2px solid #2a2a3e;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-        }}
-        h1 {{
-            font-size: 32px;
-            color: #e0e0e0;
-            font-weight: 600;
-        }}
-        .city-name {{
-            color: #8b5cf6;
-            font-weight: bold;
-        }}
-        .subtitle {{
-            color: #a0a0b0;
-            font-size: 14px;
-            margin-top: 8px;
-        }}
-        .city-cards {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }}
-        .card {{
-            background: #2a2a3e;
-            border-radius: 12px;
-            padding: 24px;
-            border: 1px solid #3a3a4e;
-            transition: all 0.3s ease;
-        }}
-        .card:hover {{
-            transform: translateY(-5px);
-            border-color: #8b5cf6;
-            box-shadow: 0 8px 20px rgba(139,92,246,0.3);
-        }}
-        .card-title {{
-            font-size: 12px;
-            color: #a0a0b0;
-            margin-bottom: 12px;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            font-weight: 600;
-        }}
-        .card-value {{
-            font-size: 36px;
-            color: #8b5cf6;
-            font-weight: bold;
-            margin-bottom: 8px;
-        }}
-        .card-subtitle {{
-            color: #a0a0b0;
-            font-size: 14px;
-        }}
-        .chart-section {{
-            margin: 40px 0;
-        }}
-        .chart-section h2 {{
-            font-size: 24px;
-            margin-bottom: 20px;
-            color: #e0e0e0;
-        }}
-        .chart-container {{
-            background: #16162a;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            height: 320px;
-            border: 1px solid #2a2a3e;
-        }}
-        .itinerary-section {{
-            margin-top: 40px;
-        }}
-        .itinerary-section h2 {{
-            font-size: 24px;
-            margin-bottom: 20px;
-            color: #e0e0e0;
-        }}
-        .itinerary-frame {{
-            width: 100%;
-            height: 600px;
-            border: none;
-            border-radius: 12px;
-            background: #16162a;
-            border: 1px solid #2a2a3e;
-        }}
-        .map-section {{
-            margin: 40px 0;
-        }}
-        .map-section h2 {{
-            font-size: 24px;
-            margin-bottom: 20px;
-            color: #e0e0e0;
-        }}
-        #map {{
-            height: 500px;
-            width: 100%;
-            border-radius: 12px;
-            border: 1px solid #2a2a3e;
-        }}
-        .leaflet-popup-content-wrapper {{
-            background: #1a1a2e;
-            color: #e0e0e0;
-        }}
-        .leaflet-popup-tip {{
-            background: #1a1a2e;
-        }}
-        @media (max-width: 768px) {{
-            .container {{ padding: 20px; }}
-            h1 {{ font-size: 24px; }}
-            .city-cards {{ grid-template-columns: 1fr; }}
-            .chart-container {{ height: 250px; }}
-            .itinerary-frame {{ height: 500px; }}
-        }}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        .chart-canvas {{ height: 300px !important; }}
+        #map {{ height: 500px; width: 100%; border-radius: 0.75rem; }}
+        .leaflet-popup-content-wrapper {{ background: hsl(240 10% 3.9%); color: hsl(0 0% 98%); border: 1px solid hsl(240 3.7% 15.9%); }}
+        .leaflet-popup-tip {{ background: hsl(240 10% 3.9%); }}
+        .leaflet-container {{ border-radius: 0.75rem; }}
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🏙️ <span class="city-name">{city}</span> - {days}-Day Trip</h1>
-            <div class="subtitle">Your personalized itinerary with live weather and local attractions</div>
-        </div>
-        <div class="city-cards">
-            <div class="card">
-                <div class="card-title">☀️ Weather</div>
-                <div class="card-value">{avg_temp}°C</div>
-                <div class="card-subtitle">{weather_summary}</div>
-            </div>
-            <div class="card">
-                <div class="card-title">🎯 Attractions</div>
-                <div class="card-value">{num_attractions}</div>
-                <div class="card-subtitle">Places to visit</div>
-            </div>
-            <div class="card">
-                <div class="card-title">📅 Activities</div>
-                <div class="card-value">{total_activities}</div>
-                <div class="card-subtitle">Planned over {days} days</div>
+<body class="bg-background text-foreground antialiased">
+    <!-- Gradient Background -->
+    <div class="fixed inset-0 -z-10 bg-gradient-to-br from-background via-background to-purple-950/20"></div>
+
+    <div class="container mx-auto max-w-7xl p-4 md:p-8">
+        <!-- Header Section -->
+        <div class="mb-8 space-y-2">
+            <div class="flex items-center gap-3">
+                <div class="rounded-lg bg-primary/10 p-3">
+                    <span class="text-3xl">🏙️</span>
+                </div>
+                <div>
+                    <h1 class="text-4xl font-bold tracking-tight">
+                        <span class="text-primary">{city}</span>
+                        <span class="text-muted-foreground"> · {days}-Day Trip</span>
+                    </h1>
+                    <p class="text-muted-foreground mt-1">Your personalized itinerary with live weather and local attractions</p>
+                </div>
             </div>
         </div>
-        <div class="map-section">
-            <h2>🗺️ Attractions Map</h2>
-            <div id="map"></div>
-        </div>
-        <div class="chart-section">
-            <h2>📊 Weather Forecast</h2>
-            <div class="chart-container">
-                <canvas id="tempChart"></canvas>
+
+        <!-- Stats Cards -->
+        <div class="grid gap-4 md:grid-cols-3 mb-8">
+            <div class="group relative overflow-hidden rounded-lg border bg-card p-6 shadow-sm transition-all hover:shadow-md hover:border-primary/50">
+                <div class="flex items-center justify-between">
+                    <div class="space-y-1">
+                        <p class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Weather</p>
+                        <p class="text-3xl font-bold text-primary">{avg_temp}°C</p>
+                        <p class="text-sm text-muted-foreground">{weather_summary}</p>
+                    </div>
+                    <div class="text-5xl opacity-20 group-hover:opacity-30 transition-opacity">☀️</div>
+                </div>
             </div>
-            <div class="chart-container">
-                <canvas id="precipChart"></canvas>
+
+            <div class="group relative overflow-hidden rounded-lg border bg-card p-6 shadow-sm transition-all hover:shadow-md hover:border-primary/50">
+                <div class="flex items-center justify-between">
+                    <div class="space-y-1">
+                        <p class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Attractions</p>
+                        <p class="text-3xl font-bold text-primary">{num_attractions}</p>
+                        <p class="text-sm text-muted-foreground">Places to visit</p>
+                    </div>
+                    <div class="text-5xl opacity-20 group-hover:opacity-30 transition-opacity">🎯</div>
+                </div>
+            </div>
+
+            <div class="group relative overflow-hidden rounded-lg border bg-card p-6 shadow-sm transition-all hover:shadow-md hover:border-primary/50">
+                <div class="flex items-center justify-between">
+                    <div class="space-y-1">
+                        <p class="text-sm font-medium text-muted-foreground uppercase tracking-wider">Activities</p>
+                        <p class="text-3xl font-bold text-primary">{total_activities}</p>
+                        <p class="text-sm text-muted-foreground">Over {days} days</p>
+                    </div>
+                    <div class="text-5xl opacity-20 group-hover:opacity-30 transition-opacity">📅</div>
+                </div>
             </div>
         </div>
-        <div class="itinerary-section">
-            <h2>🗓️ Day-by-Day Itinerary</h2>
-            <iframe class="itinerary-frame" srcdoc='{itinerary_escaped}'></iframe>
+
+        <!-- Map Section -->
+        <div class="mb-8 rounded-lg border bg-card p-6 shadow-sm">
+            <div class="flex items-center gap-2 mb-4">
+                <span class="text-2xl">🗺️</span>
+                <h2 class="text-2xl font-semibold">Attractions Map</h2>
+            </div>
+            <div id="map" class="rounded-lg border overflow-hidden"></div>
+        </div>
+
+        <!-- Weather Charts -->
+        <div class="mb-8 space-y-4">
+            <div class="flex items-center gap-2 mb-4">
+                <span class="text-2xl">📊</span>
+                <h2 class="text-2xl font-semibold">Weather Forecast</h2>
+            </div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <div class="rounded-lg border bg-card p-6 shadow-sm">
+                    <h3 class="text-sm font-medium text-muted-foreground mb-4 uppercase tracking-wider">Temperature</h3>
+                    <div class="chart-canvas">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                </div>
+                <div class="rounded-lg border bg-card p-6 shadow-sm">
+                    <h3 class="text-sm font-medium text-muted-foreground mb-4 uppercase tracking-wider">Precipitation</h3>
+                    <div class="chart-canvas">
+                        <canvas id="precipChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Itinerary Section -->
+        <div class="rounded-lg border bg-card p-6 shadow-sm">
+            <div class="flex items-center gap-2 mb-4">
+                <span class="text-2xl">🗓️</span>
+                <h2 class="text-2xl font-semibold">Day-by-Day Itinerary</h2>
+            </div>
+            <iframe class="w-full h-[600px] rounded-lg border-0 bg-background" srcdoc='{itinerary_html_escaped}'></iframe>
         </div>
     </div>
     <script>
@@ -512,41 +464,64 @@ def generate_html(city: str, days: int, weather_data, places_data, itinerary):
                 type: 'line',
                 data: {{
                     labels: weatherData.forecast.map(d => d.date),
-                    datasets: [
-                        {{
-                            label: 'High Temperature (°C)',
-                            data: weatherData.forecast.map(d => d.temp_high),
-                            borderColor: '#f59e0b',
-                            backgroundColor: 'rgba(245,158,11,0.2)',
-                            tension: 0.4,
-                            fill: true
-                        }},
-                        {{
-                            label: 'Low Temperature (°C)',
-                            data: weatherData.forecast.map(d => d.temp_low),
-                            borderColor: '#3b82f6',
-                            backgroundColor: 'rgba(59,130,246,0.2)',
-                            tension: 0.4,
-                            fill: true
-                        }}
-                    ]
+                    datasets: [{{
+                        label: 'High',
+                        data: weatherData.forecast.map(d => d.temp_high),
+                        borderColor: 'hsl(263, 70%, 50.4%)',
+                        backgroundColor: 'hsla(263, 70%, 50.4%, 0.1)',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: 'hsl(263, 70%, 50.4%)',
+                        pointBorderColor: 'hsl(240, 10%, 3.9%)',
+                        pointBorderWidth: 2
+                    }}, {{
+                        label: 'Low',
+                        data: weatherData.forecast.map(d => d.temp_low),
+                        borderColor: 'hsl(217, 91%, 60%)',
+                        backgroundColor: 'hsla(217, 91%, 60%, 0.1)',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        fill: true,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: 'hsl(217, 91%, 60%)',
+                        pointBorderColor: 'hsl(240, 10%, 3.9%)',
+                        pointBorderWidth: 2
+                    }}]
                 }},
                 options: {{
                     responsive: true,
                     maintainAspectRatio: false,
+                    interaction: {{ mode: 'index', intersect: false }},
                     scales: {{
                         y: {{
-                            ticks: {{ color: '#a0a0b0' }},
-                            grid: {{ color: '#2a2a3e' }}
+                            ticks: {{ color: 'hsl(240, 5%, 64.9%)', font: {{ size: 12 }} }},
+                            grid: {{ color: 'hsl(240, 3.7%, 15.9%)', drawBorder: false }},
+                            border: {{ display: false }}
                         }},
                         x: {{
-                            ticks: {{ color: '#a0a0b0' }},
-                            grid: {{ color: '#2a2a3e' }}
+                            ticks: {{ color: 'hsl(240, 5%, 64.9%)', font: {{ size: 12 }} }},
+                            grid: {{ display: false }},
+                            border: {{ display: false }}
                         }}
                     }},
                     plugins: {{
                         legend: {{
-                            labels: {{ color: '#e0e0e0', font: {{ size: 12 }} }}
+                            labels: {{ color: 'hsl(0, 0%, 98%)', font: {{ size: 13, weight: '500' }}, padding: 15 }},
+                            position: 'top',
+                            align: 'end'
+                        }},
+                        tooltip: {{
+                            backgroundColor: 'hsl(240, 10%, 3.9%)',
+                            titleColor: 'hsl(0, 0%, 98%)',
+                            bodyColor: 'hsl(240, 5%, 64.9%)',
+                            borderColor: 'hsl(240, 3.7%, 15.9%)',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: true
                         }}
                     }}
                 }}
@@ -557,11 +532,11 @@ def generate_html(city: str, days: int, weather_data, places_data, itinerary):
                 data: {{
                     labels: weatherData.forecast.map(d => d.date),
                     datasets: [{{
-                        label: 'Precipitation Chance (%)',
+                        label: 'Precipitation Chance',
                         data: weatherData.forecast.map(d => d.precipitation_chance),
-                        backgroundColor: '#8b5cf6',
-                        borderColor: '#7c3aed',
-                        borderWidth: 1
+                        backgroundColor: 'hsl(263, 70%, 50.4%)',
+                        borderRadius: 6,
+                        borderSkipped: false
                     }}]
                 }},
                 options: {{
@@ -571,26 +546,38 @@ def generate_html(city: str, days: int, weather_data, places_data, itinerary):
                         y: {{
                             beginAtZero: true,
                             max: 100,
-                            ticks: {{ color: '#a0a0b0' }},
-                            grid: {{ color: '#2a2a3e' }}
+                            ticks: {{ color: 'hsl(240, 5%, 64.9%)', font: {{ size: 12 }}, callback: function(value) {{ return value + '%'; }} }},
+                            grid: {{ color: 'hsl(240, 3.7%, 15.9%)', drawBorder: false }},
+                            border: {{ display: false }}
                         }},
                         x: {{
-                            ticks: {{ color: '#a0a0b0' }},
-                            grid: {{ color: '#2a2a3e' }}
+                            ticks: {{ color: 'hsl(240, 5%, 64.9%)', font: {{ size: 12 }} }},
+                            grid: {{ display: false }},
+                            border: {{ display: false }}
                         }}
                     }},
                     plugins: {{
                         legend: {{
-                            labels: {{ color: '#e0e0e0', font: {{ size: 12 }} }}
+                            labels: {{ color: 'hsl(0, 0%, 98%)', font: {{ size: 13, weight: '500' }}, padding: 15 }},
+                            position: 'top',
+                            align: 'end'
+                        }},
+                        tooltip: {{
+                            backgroundColor: 'hsl(240, 10%, 3.9%)',
+                            titleColor: 'hsl(0, 0%, 98%)',
+                            bodyColor: 'hsl(240, 5%, 64.9%)',
+                            borderColor: 'hsl(240, 3.7%, 15.9%)',
+                            borderWidth: 1,
+                            padding: 12,
+                            callbacks: {{
+                                label: function(context) {{
+                                    return context.dataset.label + ': ' + context.parsed.y + '%';
+                                }}
+                            }}
                         }}
                     }}
                 }}
             }});
-        }} else {{
-            document.getElementById('tempChart').parentElement.innerHTML =
-                '<div style="color: #a0a0b0; text-align: center; padding: 40px;">Weather forecast data unavailable</div>';
-            document.getElementById('precipChart').parentElement.innerHTML =
-                '<div style="color: #a0a0b0; text-align: center; padding: 40px;">Precipitation data unavailable</div>';
         }}
 
         // Initialize Leaflet map
@@ -635,15 +622,12 @@ def generate_html(city: str, days: int, weather_data, places_data, itinerary):
             if (bounds.length > 1) {{
                 map.fitBounds(bounds, {{ padding: [50, 50] }});
             }}
-        }} else {{
-            // Show message if no attractions
-            document.getElementById('map').innerHTML =
-                '<div style="color: #a0a0b0; text-align: center; padding: 100px 20px; font-size: 16px;">No attractions data available</div>';
         }}
     </script>
 </body>
 </html>'''
 
+    return html_content
 
 async def main():
     parser = argparse.ArgumentParser(description="Generate city trip plan with weather and attractions")

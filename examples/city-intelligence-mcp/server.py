@@ -29,7 +29,7 @@ WEATHER_CODES = {
 async def get_weather_direct(city: str, days: int = 3):
     """Get weather forecast directly from Open-Meteo API"""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             # Geocode
             geo_resp = await client.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -69,7 +69,9 @@ async def get_weather_direct(city: str, days: int = 3):
 
             return {"city": city, "forecast": forecast}
     except Exception as e:
+        import traceback
         print(f"Weather error: {e}")
+        traceback.print_exc()
         return None
 
 
@@ -211,175 +213,293 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
     places_json = json.dumps(places if places else {"attractions": []})
     total_activities = sum(len(day["schedule"]) for day in itinerary)
 
-    # Generate itinerary HTML with embedded styles
+    # Generate itinerary HTML with Tailwind classes
     itinerary_content = ""
     for day in itinerary:
-        itinerary_content += f'<div class="day"><div class="day-header">📅 Day {day["day"]} - {day["date"]}</div>'
-        for activity in day["schedule"]:
-            itinerary_content += f'''<div class="activity">
-                <div class="time">{activity["time"]}</div>
-                <div class="activity-details">
-                    <div class="activity-name">{activity["activity"]}</div>
-                    <div class="duration">⏱️ {activity["duration_minutes"]} min'''
-            if activity["travel_to_next_minutes"] > 0:
-                itinerary_content += f' • 🚗 {activity["travel_to_next_minutes"]} min to next'
-            itinerary_content += '</div></div></div>'
-        itinerary_content += '</div>'
+        itinerary_content += f'''<div class="rounded-lg border bg-card p-6 shadow-sm">
+            <div class="flex items-center gap-3 border-b pb-4 mb-4">
+                <div class="w-1 h-6 bg-primary rounded-full"></div>
+                <h3 class="text-xl font-semibold text-foreground">Day {day["day"]}</h3>
+                <span class="text-muted-foreground">· {day["date"]}</span>
+            </div>
+            <div class="space-y-3">'''
 
-    # Wrap itinerary with complete HTML including styles for iframe
+        for activity in day["schedule"]:
+            travel_text = f' <span class="text-muted-foreground">• {activity["travel_to_next_minutes"]} min travel</span>' if activity["travel_to_next_minutes"] > 0 else ''
+            itinerary_content += f'''
+                <div class="group flex gap-4 p-4 rounded-lg border bg-muted/30 hover:bg-muted/50 hover:border-primary/50 transition-all">
+                    <div class="flex-shrink-0">
+                        <span class="inline-flex items-center justify-center w-20 h-12 rounded-lg bg-primary/20 text-primary font-semibold text-sm">
+                            {activity["time"]}
+                        </span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h4 class="font-medium text-foreground mb-1">{activity["activity"]}</h4>
+                        <p class="text-sm text-muted-foreground">
+                            <span class="inline-flex items-center gap-1">
+                                {activity["duration_minutes"]} min{travel_text}
+                            </span>
+                        </p>
+                    </div>
+                </div>'''
+
+        itinerary_content += '</div></div>'
+
+    # Wrap itinerary with complete HTML including modern Tailwind styles for iframe
     itinerary_html = f'''<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {{
+            theme: {{
+                extend: {{
+                    colors: {{
+                        border: "hsl(220 13% 18%)",
+                        background: "hsl(222 47% 11%)",
+                        foreground: "hsl(210 40% 98%)",
+                        primary: {{
+                            DEFAULT: "hsl(210 100% 60%)",
+                            foreground: "hsl(222 47% 11%)"
+                        }},
+                        muted: {{
+                            DEFAULT: "hsl(217 33% 17%)",
+                            foreground: "hsl(215 20% 65%)"
+                        }},
+                        card: {{
+                            DEFAULT: "hsl(217 33% 17%)",
+                            foreground: "hsl(210 40% 98%)"
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    </script>
     <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: #16162a;
-            color: #e0e0e0;
-            padding: 20px;
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {{ font-family: 'Inter', sans-serif; }}
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {{
+            width: 10px;
         }}
-        .day {{
-            background: #1a1a2e;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 24px;
-            border: 1px solid #2a2a3e;
+        ::-webkit-scrollbar-track {{
+            background: hsl(222 47% 11%);
+            border-radius: 5px;
         }}
-        .day-header {{
-            font-size: 20px;
-            color: #8b5cf6;
-            font-weight: 600;
-            margin-bottom: 20px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid #2a2a3e;
+        ::-webkit-scrollbar-thumb {{
+            background: hsl(217 33% 17%);
+            border-radius: 5px;
+            border: 2px solid hsl(222 47% 11%);
         }}
-        .activity {{
-            display: flex;
-            gap: 20px;
-            padding: 16px;
-            margin-bottom: 12px;
-            background: #2a2a3e;
-            border-radius: 8px;
-            border-left: 4px solid #8b5cf6;
-            transition: all 0.2s ease;
+        ::-webkit-scrollbar-thumb:hover {{
+            background: hsl(210 100% 60%);
         }}
-        .activity:hover {{
-            background: #323248;
-            border-left-color: #a78bfa;
-        }}
-        .time {{
-            color: #8b5cf6;
-            font-weight: bold;
-            font-size: 14px;
-            min-width: 60px;
-        }}
-        .activity-details {{
-            flex: 1;
-        }}
-        .activity-name {{
-            font-size: 16px;
-            color: #e0e0e0;
-            margin-bottom: 6px;
-        }}
-        .duration {{
-            font-size: 13px;
-            color: #a0a0b0;
+        * {{
+            scrollbar-width: thin;
+            scrollbar-color: hsl(217 33% 17%) hsl(222 47% 11%);
         }}
     </style>
 </head>
-<body>
-    {itinerary_content}
+<body class="bg-background text-foreground antialiased p-4">
+    <div class="space-y-6">
+        {itinerary_content}
+    </div>
 </body>
 </html>'''
 
     itinerary_html_escaped = html_module.escape(itinerary_html).replace('"', '&quot;')
 
-    # Generate full HTML
+    # Generate full HTML with Tailwind CSS (shadcn-inspired design)
     html_content = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{city_name} Trip Plan</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        tailwind.config = {{
+            theme: {{
+                extend: {{
+                    colors: {{
+                        border: "hsl(220 13% 18%)",
+                        input: "hsl(220 13% 18%)",
+                        ring: "hsl(210 100% 60%)",
+                        background: "hsl(222 47% 11%)",
+                        foreground: "hsl(210 40% 98%)",
+                        primary: {{
+                            DEFAULT: "hsl(210 100% 60%)",
+                            foreground: "hsl(222 47% 11%)"
+                        }},
+                        secondary: {{
+                            DEFAULT: "hsl(217 33% 17%)",
+                            foreground: "hsl(210 40% 98%)"
+                        }},
+                        muted: {{
+                            DEFAULT: "hsl(217 33% 17%)",
+                            foreground: "hsl(215 20% 65%)"
+                        }},
+                        accent: {{
+                            DEFAULT: "hsl(210 100% 60%)",
+                            foreground: "hsl(222 47% 11%)"
+                        }},
+                        card: {{
+                            DEFAULT: "hsl(217 33% 17%)",
+                            foreground: "hsl(210 40% 98%)"
+                        }}
+                    }},
+                    borderRadius: {{
+                        lg: "0.5rem",
+                        md: "0.375rem",
+                        sm: "0.25rem"
+                    }}
+                }}
+            }}
+        }}
+    </script>
     <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f1e; color: #e0e0e0; padding: 20px; }}
-        .container {{ max-width: 1400px; margin: 0 auto; background: #1a1a2e; border-radius: 12px; padding: 30px; border: 1px solid #2a2a3e; }}
-        .header {{ border-bottom: 2px solid #2a2a3e; padding-bottom: 20px; margin-bottom: 30px; }}
-        h1 {{ font-size: 32px; color: #e0e0e0; }}
-        .city-name {{ color: #8b5cf6; }}
-        .subtitle {{ color: #a0a0b0; font-size: 14px; margin-top: 8px; }}
-        .city-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 40px; }}
-        .card {{ background: #2a2a3e; border-radius: 12px; padding: 24px; border: 1px solid #3a3a4e; transition: all 0.3s; }}
-        .card:hover {{ transform: translateY(-5px); border-color: #8b5cf6; }}
-        .card-title {{ font-size: 12px; color: #a0a0b0; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1.5px; }}
-        .card-value {{ font-size: 36px; color: #8b5cf6; font-weight: bold; }}
-        .card-subtitle {{ color: #a0a0b0; font-size: 14px; margin-top: 8px; }}
-        .chart-section {{ margin: 40px 0; }}
-        .chart-section h2 {{ font-size: 24px; margin-bottom: 20px; }}
-        .chart-container {{ background: #16162a; border-radius: 12px; padding: 24px; margin-bottom: 20px; height: 320px; border: 1px solid #2a2a3e; }}
-        .itinerary-section {{ margin-top: 40px; }}
-        .itinerary-section h2 {{ font-size: 24px; margin-bottom: 20px; }}
-        .itinerary-frame {{ width: 100%; height: 600px; border: none; border-radius: 12px; background: #16162a; }}
-        body {{ font-family: -apple-system, sans-serif; background: #16162a; color: #e0e0e0; padding: 20px; margin: 0; }}
-        .day {{ background: #1a1a2e; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #2a2a3e; }}
-        .day-header {{ font-size: 20px; color: #8b5cf6; margin-bottom: 15px; border-bottom: 1px solid #2a2a3e; padding-bottom: 10px; }}
-        .activity {{ display: flex; gap: 15px; padding: 15px; margin-bottom: 10px; background: #2a2a3e; border-radius: 6px; border-left: 3px solid #8b5cf6; }}
-        .time {{ color: #8b5cf6; font-weight: bold; min-width: 60px; }}
-        .activity-details {{ flex: 1; }}
-        .activity-name {{ font-size: 16px; margin-bottom: 5px; }}
-        .duration {{ font-size: 12px; color: #a0a0b0; }}
-        .map-section {{ margin: 40px 0; }}
-        .map-section h2 {{ font-size: 24px; margin-bottom: 20px; }}
-        #map {{ height: 500px; width: 100%; border-radius: 12px; border: 1px solid #2a2a3e; }}
-        .leaflet-popup-content-wrapper {{ background: #1a1a2e; color: #e0e0e0; }}
-        .leaflet-popup-tip {{ background: #1a1a2e; }}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {{
+            width: 12px;
+            height: 12px;
+        }}
+        ::-webkit-scrollbar-track {{
+            background: hsl(222 47% 11%);
+            border-radius: 6px;
+        }}
+        ::-webkit-scrollbar-thumb {{
+            background: hsl(217 33% 17%);
+            border-radius: 6px;
+            border: 2px solid hsl(222 47% 11%);
+        }}
+        ::-webkit-scrollbar-thumb:hover {{
+            background: hsl(210 100% 60%);
+        }}
+
+        /* Firefox Scrollbar */
+        * {{
+            scrollbar-width: thin;
+            scrollbar-color: hsl(217 33% 17%) hsl(222 47% 11%);
+        }}
+
+        .chart-canvas {{ height: 300px !important; }}
+        #map {{ height: 500px; width: 100%; border-radius: 0.75rem; }}
+        .leaflet-popup-content-wrapper {{ background: hsl(217 33% 17%); color: hsl(210 40% 98%); border: 1px solid hsl(220 13% 18%); }}
+        .leaflet-popup-tip {{ background: hsl(217 33% 17%); }}
+        .leaflet-container {{ border-radius: 0.75rem; }}
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🏙️ <span class="city-name">{city_name}</span> - {duration_days}-Day Trip</h1>
-            <div class="subtitle">Your personalized itinerary with live weather and local attractions</div>
+<body class="bg-background text-foreground antialiased">
+    <!-- Gradient Background -->
+    <div class="fixed inset-0 -z-10 bg-gradient-to-br from-background via-background to-blue-950/30"></div>
+
+    <div class="container mx-auto max-w-7xl p-4 md:p-8">
+        <!-- Header Section -->
+        <div class="mb-8 border-b border-border pb-6">
+            <h1 class="text-4xl font-bold tracking-tight mb-2">
+                <span class="text-primary">{city_name}</span>
+                <span class="text-muted-foreground"> · {duration_days}-Day Trip</span>
+            </h1>
+            <p class="text-muted-foreground">Your personalized itinerary with live weather and local attractions</p>
         </div>
-        <div class="city-cards">
-            <div class="card">
-                <div class="card-title">☀️ Weather</div>
-                <div class="card-value">{avg_temp}°C</div>
-                <div class="card-subtitle">{weather_summary}</div>
+
+        <!-- Stats Cards -->
+        <div class="grid gap-4 md:grid-cols-3 mb-8">
+            <div class="group relative overflow-hidden rounded-lg border bg-card p-6 shadow-sm transition-all hover:shadow-md hover:border-primary/50">
+                <div class="flex items-start justify-between">
+                    <div class="space-y-2 flex-1">
+                        <div class="flex items-center gap-2">
+                            <div class="w-2 h-2 rounded-full bg-amber-400"></div>
+                            <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Weather</p>
+                        </div>
+                        <p class="text-4xl font-bold text-foreground">{avg_temp}°C</p>
+                        <p class="text-sm text-muted-foreground">{weather_summary}</p>
+                    </div>
+                </div>
             </div>
-            <div class="card">
-                <div class="card-title">🎯 Attractions</div>
-                <div class="card-value">{num_attractions}</div>
-                <div class="card-subtitle">Places to visit</div>
+
+            <div class="group relative overflow-hidden rounded-lg border bg-card p-6 shadow-sm transition-all hover:shadow-md hover:border-primary/50">
+                <div class="flex items-start justify-between">
+                    <div class="space-y-2 flex-1">
+                        <div class="flex items-center gap-2">
+                            <div class="w-2 h-2 rounded-full bg-emerald-400"></div>
+                            <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Attractions</p>
+                        </div>
+                        <p class="text-4xl font-bold text-foreground">{num_attractions}</p>
+                        <p class="text-sm text-muted-foreground">Places to visit</p>
+                    </div>
+                </div>
             </div>
-            <div class="card">
-                <div class="card-title">📅 Activities</div>
-                <div class="card-value">{total_activities}</div>
-                <div class="card-subtitle">Planned over {duration_days} days</div>
+
+            <div class="group relative overflow-hidden rounded-lg border bg-card p-6 shadow-sm transition-all hover:shadow-md hover:border-primary/50">
+                <div class="flex items-start justify-between">
+                    <div class="space-y-2 flex-1">
+                        <div class="flex items-center gap-2">
+                            <div class="w-2 h-2 rounded-full bg-primary"></div>
+                            <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Activities</p>
+                        </div>
+                        <p class="text-4xl font-bold text-foreground">{total_activities}</p>
+                        <p class="text-sm text-muted-foreground">Over {duration_days} days</p>
+                    </div>
+                </div>
             </div>
         </div>
-        <div class="map-section">
-            <h2>🗺️ Attractions Map</h2>
-            <div id="map"></div>
+
+        <!-- Map Section -->
+        <div class="mb-8 rounded-lg border bg-card p-6 shadow-sm">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-1 h-6 bg-primary rounded-full"></div>
+                <h2 class="text-2xl font-semibold">Attractions Map</h2>
+            </div>
+            <div id="map" class="rounded-lg border overflow-hidden"></div>
         </div>
-        <div class="chart-section">
-            <h2>📊 Weather Forecast</h2>
-            <div class="chart-container"><canvas id="tempChart"></canvas></div>
-            <div class="chart-container"><canvas id="precipChart"></canvas></div>
+
+        <!-- Weather Charts -->
+        <div class="mb-8 space-y-4">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-1 h-6 bg-primary rounded-full"></div>
+                <h2 class="text-2xl font-semibold">Weather Forecast</h2>
+            </div>
+            <div class="grid gap-4 md:grid-cols-2">
+                <div class="rounded-lg border bg-card p-6 shadow-sm">
+                    <h3 class="text-sm font-medium text-muted-foreground mb-4 uppercase tracking-wider">Temperature</h3>
+                    <div class="chart-canvas">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                </div>
+                <div class="rounded-lg border bg-card p-6 shadow-sm">
+                    <h3 class="text-sm font-medium text-muted-foreground mb-4 uppercase tracking-wider">Precipitation</h3>
+                    <div class="chart-canvas">
+                        <canvas id="precipChart"></canvas>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="itinerary-section">
-            <h2>🗓️ Day-by-Day Itinerary</h2>
-            <iframe class="itinerary-frame" srcdoc='{itinerary_html_escaped}'></iframe>
+
+        <!-- Itinerary Section -->
+        <div class="rounded-lg border bg-card p-6 shadow-sm">
+            <div class="flex items-center gap-3 mb-6">
+                <div class="w-1 h-6 bg-primary rounded-full"></div>
+                <h2 class="text-2xl font-semibold">Day-by-Day Itinerary</h2>
+            </div>
+            <iframe class="w-full h-[600px] rounded-lg border-0 bg-background" srcdoc='{itinerary_html_escaped}'></iframe>
         </div>
     </div>
     <script>
         const weatherData = {weather_json};
         const placesData = {places_json};
+
+        // Debug log
+        console.log('Weather Data:', weatherData);
+        console.log('Places Data:', placesData);
+
         if (weatherData.forecast && weatherData.forecast.length > 0) {{
             const tempCtx = document.getElementById('tempChart').getContext('2d');
             new Chart(tempCtx, {{
@@ -387,29 +507,65 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
                 data: {{
                     labels: weatherData.forecast.map(d => d.date),
                     datasets: [{{
-                        label: 'High Temperature (°C)',
+                        label: 'High',
                         data: weatherData.forecast.map(d => d.temp_high),
-                        borderColor: '#f59e0b',
-                        backgroundColor: 'rgba(245,158,11,0.2)',
+                        borderColor: 'hsl(210, 100%, 60%)',
+                        backgroundColor: 'hsla(210, 100%, 60%, 0.1)',
+                        borderWidth: 3,
                         tension: 0.4,
-                        fill: true
+                        fill: true,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: 'hsl(210, 100%, 60%)',
+                        pointBorderColor: 'hsl(222, 47%, 11%)',
+                        pointBorderWidth: 2
                     }}, {{
-                        label: 'Low Temperature (°C)',
+                        label: 'Low',
                         data: weatherData.forecast.map(d => d.temp_low),
-                        borderColor: '#3b82f6',
-                        backgroundColor: 'rgba(59,130,246,0.2)',
+                        borderColor: 'hsl(190, 85%, 55%)',
+                        backgroundColor: 'hsla(190, 85%, 55%, 0.1)',
+                        borderWidth: 3,
                         tension: 0.4,
-                        fill: true
+                        fill: true,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        pointBackgroundColor: 'hsl(190, 85%, 55%)',
+                        pointBorderColor: 'hsl(222, 47%, 11%)',
+                        pointBorderWidth: 2
                     }}]
                 }},
                 options: {{
                     responsive: true,
                     maintainAspectRatio: false,
+                    interaction: {{ mode: 'index', intersect: false }},
                     scales: {{
-                        y: {{ ticks: {{ color: '#a0a0b0' }}, grid: {{ color: '#2a2a3e' }} }},
-                        x: {{ ticks: {{ color: '#a0a0b0' }}, grid: {{ color: '#2a2a3e' }} }}
+                        y: {{
+                            ticks: {{ color: 'hsl(215, 20%, 65%)', font: {{ size: 12 }} }},
+                            grid: {{ color: 'hsl(220, 13%, 18%)', drawBorder: false }},
+                            border: {{ display: false }}
+                        }},
+                        x: {{
+                            ticks: {{ color: 'hsl(215, 20%, 65%)', font: {{ size: 12 }} }},
+                            grid: {{ display: false }},
+                            border: {{ display: false }}
+                        }}
                     }},
-                    plugins: {{ legend: {{ labels: {{ color: '#e0e0e0' }} }} }}
+                    plugins: {{
+                        legend: {{
+                            labels: {{ color: 'hsl(210, 40%, 98%)', font: {{ size: 13, weight: '500' }}, padding: 15 }},
+                            position: 'top',
+                            align: 'end'
+                        }},
+                        tooltip: {{
+                            backgroundColor: 'hsl(217, 33%, 17%)',
+                            titleColor: 'hsl(210, 40%, 98%)',
+                            bodyColor: 'hsl(215, 20%, 65%)',
+                            borderColor: 'hsl(220, 13%, 18%)',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: true
+                        }}
+                    }}
                 }}
             }});
             const precipCtx = document.getElementById('precipChart').getContext('2d');
@@ -418,21 +574,66 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
                 data: {{
                     labels: weatherData.forecast.map(d => d.date),
                     datasets: [{{
-                        label: 'Precipitation (%)',
+                        label: 'Precipitation Chance',
                         data: weatherData.forecast.map(d => d.precipitation_chance),
-                        backgroundColor: '#8b5cf6'
+                        backgroundColor: 'hsl(210, 100%, 60%)',
+                        borderRadius: 6,
+                        borderSkipped: false
                     }}]
                 }},
                 options: {{
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {{
-                        y: {{ beginAtZero: true, max: 100, ticks: {{ color: '#a0a0b0' }}, grid: {{ color: '#2a2a3e' }} }},
-                        x: {{ ticks: {{ color: '#a0a0b0' }}, grid: {{ color: '#2a2a3e' }} }}
+                        y: {{
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {{ color: 'hsl(215, 20%, 65%)', font: {{ size: 12 }}, callback: function(value) {{ return value + '%'; }} }},
+                            grid: {{ color: 'hsl(220, 13%, 18%)', drawBorder: false }},
+                            border: {{ display: false }}
+                        }},
+                        x: {{
+                            ticks: {{ color: 'hsl(215, 20%, 65%)', font: {{ size: 12 }} }},
+                            grid: {{ display: false }},
+                            border: {{ display: false }}
+                        }}
                     }},
-                    plugins: {{ legend: {{ labels: {{ color: '#e0e0e0' }} }} }}
+                    plugins: {{
+                        legend: {{
+                            labels: {{ color: 'hsl(210, 40%, 98%)', font: {{ size: 13, weight: '500' }}, padding: 15 }},
+                            position: 'top',
+                            align: 'end'
+                        }},
+                        tooltip: {{
+                            backgroundColor: 'hsl(217, 33%, 17%)',
+                            titleColor: 'hsl(210, 40%, 98%)',
+                            bodyColor: 'hsl(215, 20%, 65%)',
+                            borderColor: 'hsl(220, 13%, 18%)',
+                            borderWidth: 1,
+                            padding: 12,
+                            callbacks: {{
+                                label: function(context) {{
+                                    return context.dataset.label + ': ' + context.parsed.y + '%';
+                                }}
+                            }}
+                        }}
+                    }}
                 }}
             }});
+        }} else {{
+            // Display message when weather data is unavailable
+            const tempCanvas = document.getElementById('tempChart');
+            const precipCanvas = document.getElementById('precipChart');
+
+            if (tempCanvas) {{
+                const parent = tempCanvas.parentElement;
+                parent.innerHTML = '<div class="flex items-center justify-center h-full text-muted-foreground"><p>Weather data unavailable</p></div>';
+            }}
+
+            if (precipCanvas) {{
+                const parent = precipCanvas.parentElement;
+                parent.innerHTML = '<div class="flex items-center justify-center h-full text-muted-foreground"><p>Weather data unavailable</p></div>';
+            }}
         }}
 
         // Initialize Leaflet map
@@ -529,6 +730,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         places_task = get_attractions_direct(city_name, limit=10)
 
         weather, places = await asyncio.gather(weather_task, places_task, return_exceptions=True)
+
+        # Handle exceptions from gather
+        if isinstance(weather, Exception):
+            print(f"Weather API exception: {weather}")
+            weather = None
+        if isinstance(places, Exception):
+            print(f"Places API exception: {places}")
+            places = None
 
         # Create itinerary
         attractions = places.get("attractions", []) if places and isinstance(places, dict) else []
