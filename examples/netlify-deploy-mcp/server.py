@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Netlify Deploy MCP Server
-Generates static websites and deploys them to Netlify
+Vercel Deploy MCP Server
+Generates static websites and deploys them to Vercel
+(Note: Internal code references 'netlify' for backwards compatibility, but deployment uses Vercel API)
 """
 
 import asyncio
@@ -260,6 +261,26 @@ Be creative and build something impressive that looks and feels professional."""
                 logger.warning("This may cause the site to appear broken. AI ignored NO LOADING SCREEN instruction.")
                 # Don't fail - just warn. The site might still work if JS properly removes it.
 
+            # Validate JavaScript completeness
+            js_code = result.get("js", "")
+            if js_code:
+                # Check for balanced braces
+                open_braces = js_code.count('{')
+                close_braces = js_code.count('}')
+                if abs(open_braces - close_braces) > 2:  # Allow small variance
+                    logger.error(f"⚠️ JavaScript has unbalanced braces: {{ {open_braces} vs }} {close_braces}")
+                    logger.error("Code may be truncated or incomplete. Site will likely be broken.")
+
+                # Check if code looks truncated (ends mid-statement)
+                js_stripped = js_code.strip()
+                if len(js_stripped) > 100:  # Only check if there's substantial code
+                    last_100 = js_stripped[-100:]
+                    if not (js_stripped.endswith('}') or js_stripped.endswith(';') or js_stripped.endswith(')')):
+                        logger.warning(f"⚠️ JavaScript may be truncated. Last 100 chars: ...{last_100}")
+                        logger.warning("Site functionality may be broken.")
+
+                logger.info(f"JavaScript validation: {len(js_code)} chars, {open_braces} open braces, {close_braces} close braces")
+
             return result
 
         # Fallback: Try JSON format (legacy)
@@ -510,7 +531,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="create_and_deploy_site",
-            description="Generate a static website from a natural language prompt and automatically deploy it to Netlify. Works for ANY type of single-page application (todo apps, calculators, timers, social media pages, etc). Returns deployment confirmation. IMPORTANT: Always show the complete response to the user - tell them their site is being generated and they should check back in 90-120 seconds.",
+            description="Generate a static website from a natural language prompt and automatically deploy it to Vercel. Works for ANY type of single-page application (todo apps, calculators, timers, social media pages, etc). Returns deployment confirmation. CRITICAL: When responding to the user, ALWAYS say 'Vercel' or 'Vercel platform' - NEVER EVER mention 'Netlify' or 'Netlify platform' in your response. The deployment platform is VERCEL, not Netlify. IMPORTANT: Always show the complete response to the user - tell them their site is being generated and deployed to Vercel, and they should check back in 90-120 seconds.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -528,7 +549,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_deployed_sites",
-            description="List all websites that have been deployed through this MCP server. Shows site names, types, deployment times, and live URLs. IMPORTANT: Always show the complete results to the user in your response - don't just say 'transferring to next agent'. The user wants to see the deployment information.",
+            description="List all websites deployed through this MCP server. Returns site names, types, deployment times, and live Vercel URLs. CRITICAL INSTRUCTIONS: (1) ALWAYS copy the EXACT URLs from the tool result - NEVER make up or modify URLs. (2) ALWAYS include the complete tool result in your answer to the user. (3) URLs will be on vercel.app domain - NEVER mention netlify.app. (4) If status is 'deployed', the site is LIVE NOW at the URL shown. (5) NEVER say generic things like 'check back later' if the URL is already provided. (6) Copy and paste the EXACT URL from the observation.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -541,7 +562,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="generate_and_deploy_website",
-            description="Generate a static website from a prompt and automatically deploy it to Netlify. Returns the live URL. Supports todo app, portfolio website, and landing page.",
+            description="Generate a static website from a prompt and automatically deploy it to Vercel. Returns the live URL. Supports todo app, portfolio website, and landing page.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -552,7 +573,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "site_name": {
                         "type": "string",
-                        "description": "Name for the site (used for directory and Netlify site name)"
+                        "description": "Name for the site (used for directory and Vercel site name)"
                     },
                     "custom_content": {
                         "type": "object",
@@ -592,7 +613,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="deploy_to_netlify",
-            description="Deploy an existing project directory to Netlify. Returns the live URL.",
+            description="Deploy an existing project directory to Vercel. Returns the live Vercel URL.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -602,7 +623,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "site_name": {
                         "type": "string",
-                        "description": "Name for the Netlify site (optional, will use directory name if not provided)"
+                        "description": "Name for the Vercel deployment (optional, will use directory name if not provided)"
                     }
                 },
                 "required": ["project_path"]
@@ -631,7 +652,12 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
-    """Handle tool calls"""
+    """
+    Handle tool calls
+
+    IMPORTANT: This MCP server deploys to VERCEL, not Netlify.
+    When generating responses, ALWAYS mention "Vercel" or "Vercel platform", NEVER "Netlify".
+    """
     try:
         if arguments is None:
             arguments = {}
@@ -693,7 +719,7 @@ Site Name: {final_site_name}
 
 Your website is being generated and deployed in the background.
 ⏱️  Generation: 15-30 seconds (AI-powered)
-⏱️  Deployment: 60-90 seconds (Netlify)
+⏱️  Deployment: 30-60 seconds (Vercel)
 
 Check deployment status with the 'list_deployed_sites' tool to get your live URL once ready."""
 
@@ -717,27 +743,38 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
             # If filter is provided, search through ALL deployments for matches
             if filter_query:
-                # Normalize filter query: replace separators with spaces for flexible matching
-                # "scientific calculator" should match "scientific_calculator" or "scientific-calculator"
-                normalized_filter = filter_query.replace("_", " ").replace("-", " ")
+                # Normalize filter query: replace ALL separators with spaces for flexible matching
+                # "timer", "countdown-timer", "countdown_timer" all match "countdown timer"
+                normalized_filter = filter_query.replace("_", " ").replace("-", " ").strip()
+
+                logger.info(f"Searching with normalized filter: '{normalized_filter}'")
+                logger.info(f"Total active deployments to search: {len(active_deployments)}")
 
                 filtered_deployments = []
                 for d in active_deployments:
-                    # Normalize searchable fields the same way
-                    site_name = d.get("site_name", "").lower().replace("_", " ").replace("-", " ")
-                    prompt = d.get("prompt", "").lower()
-                    site_type = d.get("site_type", "").lower()
+                    # Normalize ALL searchable fields consistently
+                    site_name_raw = d.get("site_name", "")
+                    prompt_raw = d.get("prompt", "")
+                    site_type_raw = d.get("site_type", "")
 
-                    # Match filter against site name, prompt, or type
-                    if (normalized_filter in site_name or
-                        filter_query in prompt or
-                        filter_query in site_type):
+                    site_name_norm = site_name_raw.lower().replace("_", " ").replace("-", " ")
+                    prompt_norm = prompt_raw.lower().replace("_", " ").replace("-", " ")
+                    site_type_norm = site_type_raw.lower().replace("_", " ").replace("-", " ")
+
+                    # Match filter against ALL normalized fields
+                    match_site = normalized_filter in site_name_norm
+                    match_prompt = normalized_filter in prompt_norm
+                    match_type = normalized_filter in site_type_norm
+
+                    if match_site or match_prompt or match_type:
                         filtered_deployments.append(d)
+                        logger.info(f"✓ Matched: {site_name_raw} (site={match_site}, prompt={match_prompt}, type={match_type})")
 
                 active_deployments = filtered_deployments
+                logger.info(f"Filter results: {len(active_deployments)} matches found")
 
                 if not active_deployments:
-                    result_text = f"No deployed sites found matching '{arguments.get('filter', '')}'. Try a different search term."
+                    result_text = f"No deployed sites found matching '{arguments.get('filter', '')}'. Try a different search term or check if the site is still deploying."
                     return [TextContent(type="text", text=result_text)]
 
                 result_lines = [f"Deployed Sites Matching '{arguments.get('filter', '')}':\n"]
@@ -778,8 +815,9 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
                 if deployment_status == "deployed":
                     result_lines.append(f"   Live URL: {deploy_url}")
                     result_lines.append(f"   Deployed: {time_str}")
+                    result_lines.append(f"   ✅ Site is live on Vercel! Click the URL above to visit it now.")
                 elif deployment_status == "deploying":
-                    result_lines.append(f"   Status: Deploying to Netlify... Check back in 60 seconds")
+                    result_lines.append(f"   Status: Deploying to Vercel... Check back in 60 seconds")
                     result_lines.append(f"   Started: {time_str}")
                 elif deployment_status == "generating":
                     result_lines.append(f"   Status: AI is generating your website... Check back in 30 seconds")
@@ -791,11 +829,13 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
             if len(active_deployments) == 1:
                 # Single result - show specific status message
                 if deployment_status == "deployed":
-                    result_lines.append("✨ Your site is live! Click the URL above to view it.")
+                    result_lines.append("✨ Your site has been deployed to Vercel!")
+                    result_lines.append("🔗 URL is ready above, and Vercel deploys instantly - your site should be live now!.")
+                    result_lines.append("💡 If you get 'Site not found', wait 1 minute and refresh the page.")
                 elif deployment_status == "deploying":
-                    result_lines.append("⏳ Your site is being deployed. Check back in 60 seconds for the live URL.")
+                    result_lines.append("⏳ Your site is being deployed to Vercel. Check back in 60 seconds for the live URL.")
                 elif deployment_status == "generating":
-                    result_lines.append("⚙️ AI is generating your website. Check back in 30 seconds for deployment status.")
+                    result_lines.append("⚙️ AI is generating your website code. Check back in 30 seconds for deployment status.")
             else:
                 # Multiple results - show summary
                 deployed_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deployed")
@@ -874,7 +914,7 @@ Check deployment status with the 'list_deployed_sites' tool to get your live URL
 
             result = {
                 "status": "success",
-                "message": "Successfully deployed to Netlify",
+                "message": "Successfully deployed to Vercel",
                 "site_name": site_name,
                 "project_path": project_path,
                 "live_url": deploy_url
@@ -949,7 +989,7 @@ Original Site: {site_name}
 Updated Site: {new_site_name}
 Modifications: {modification_request}
 
-Your updated website is being deployed to Netlify.
+Your updated website is being deployed to Vercel.
 This typically takes 60-90 seconds.
 
 Check deployment status with 'list_deployed_sites' tool to get your live URL once ready."""
@@ -2447,83 +2487,108 @@ async def check_and_install_netlify_cli() -> bool:
 
 
 async def deploy_to_netlify_internal(project_path: str, site_name: str) -> str:
-    """Deploy to Netlify using API (direct HTTP requests - faster and more reliable than CLI)"""
+    """Deploy to Vercel using API (simpler and more reliable than Netlify)"""
     project_dir = Path(project_path)
 
     if not project_dir.exists():
         raise FileNotFoundError(f"Project directory not found: {project_path}")
 
     # Check for auth token
-    netlify_token = os.environ.get("NETLIFY_AUTH_TOKEN")
-    if not netlify_token:
-        raise RuntimeError("NETLIFY_AUTH_TOKEN environment variable is required")
+    vercel_token = os.environ.get("VERCEL_TOKEN") or os.environ.get("NETLIFY_AUTH_TOKEN")  # Support both for backwards compatibility
+    if not vercel_token:
+        raise RuntimeError("VERCEL_TOKEN environment variable is required")
 
-    logger.info(f"Deploying {project_path} to Netlify via API...")
+    logger.info(f"Deploying {project_path} to Vercel via API...")
 
     try:
-        # Step 1: Create a new site
+        # Step 1: Read all files and prepare them for Vercel
+        files = []
+        for file_path in project_dir.rglob('*'):
+            if file_path.is_file():
+                relative_path = str(file_path.relative_to(project_dir))
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                files.append({
+                    "file": relative_path,
+                    "data": content
+                })
+                logger.info(f"Added file: {relative_path} ({len(content)} chars)")
+
+        logger.info(f"Prepared {len(files)} files for deployment")
+
+        # Step 2: Create deployment payload
+        deployment_payload = {
+            "name": site_name,
+            "files": files,
+            "projectSettings": {
+                "framework": None  # Static site, no framework
+            },
+            "target": "production"
+        }
+
+        # Step 3: Deploy to Vercel
         headers = {
-            "Authorization": f"Bearer {netlify_token}",
+            "Authorization": f"Bearer {vercel_token}",
             "Content-Type": "application/json"
         }
 
-        create_site_response = requests.post(
-            "https://api.netlify.com/api/v1/sites",
+        logger.info("Sending deployment request to Vercel...")
+        deploy_response = requests.post(
+            "https://api.vercel.com/v13/deployments",
             headers=headers,
-            json={"name": site_name},
-            timeout=30
+            json=deployment_payload,
+            timeout=120
         )
 
-        if create_site_response.status_code != 201:
-            logger.error(f"Failed to create site: {create_site_response.text}")
-            raise RuntimeError(f"Failed to create Netlify site: {create_site_response.text}")
-
-        site_data = create_site_response.json()
-        site_id = site_data["id"]
-        site_url = site_data["ssl_url"] or site_data["url"]
-
-        logger.info(f"Created Netlify site: {site_id} at {site_url}")
-
-        # Step 2: Create a zip file of the project
-        zip_path = project_dir.parent / f"{site_name}_deploy.zip"
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in project_dir.rglob('*'):
-                if file_path.is_file():
-                    arcname = file_path.relative_to(project_dir)
-                    zipf.write(file_path, arcname)
-
-        logger.info(f"Created deployment zip: {zip_path}")
-
-        # Step 3: Upload the zip file
-        with open(zip_path, 'rb') as zip_file:
-            deploy_headers = {
-                "Authorization": f"Bearer {netlify_token}",
-                "Content-Type": "application/zip"
-            }
-
-            deploy_response = requests.post(
-                f"https://api.netlify.com/api/v1/sites/{site_id}/deploys",
-                headers=deploy_headers,
-                data=zip_file,
-                timeout=120
-            )
-
-        # Clean up zip file
-        zip_path.unlink()
-
         if deploy_response.status_code not in [200, 201]:
-            logger.error(f"Failed to deploy: {deploy_response.text}")
-            raise RuntimeError(f"Failed to deploy to Netlify: {deploy_response.text}")
+            error_text = deploy_response.text
+            logger.error(f"Vercel deployment failed: {error_text}")
+
+            # Parse error message
+            try:
+                error_json = deploy_response.json()
+                error_msg = error_json.get("error", {}).get("message", error_text)
+            except:
+                error_msg = error_text
+
+            raise RuntimeError(f"Failed to deploy to Vercel: {error_msg}")
 
         deploy_data = deploy_response.json()
-        deploy_url = deploy_data.get("ssl_url") or deploy_data.get("url") or site_url
 
-        logger.info(f"Successfully deployed to: {deploy_url}")
+        # Vercel returns the deployment URL (unique with hash)
+        deployment_url = deploy_data.get("url")
+        deployment_id = deploy_data.get("id")
+
+        # Try to get cleaner production alias URL if available
+        alias_urls = deploy_data.get("alias", [])
+
+        # Construct the clean production URL: {site-name}.vercel.app
+        # This is Vercel's standard production URL format
+        production_url = f"https://{site_name}.vercel.app"
+
+        if alias_urls and len(alias_urls) > 0:
+            # Use the alias from Vercel if available (most reliable)
+            deploy_url = alias_urls[0]
+            if not deploy_url.startswith("http"):
+                deploy_url = f"https://{deploy_url}"
+            logger.info(f"Using Vercel-assigned alias URL: {deploy_url}")
+        else:
+            # Use constructed production URL (Vercel auto-assigns this)
+            deploy_url = production_url
+            logger.info(f"Using constructed production URL: {deploy_url}")
+            logger.info(f"Deployment-specific URL: https://{deployment_url}")
+
+        logger.info(f"Successfully deployed to Vercel!")
+        logger.info(f"Deployment ID: {deployment_id}")
+        logger.info(f"Production URL: {deploy_url}")
+
         return deploy_url
 
     except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"Netlify API error: {str(e)}")
+        logger.error(f"Vercel API request failed: {str(e)}")
+        raise RuntimeError(f"Vercel API error: {str(e)}")
     except Exception as e:
+        logger.error(f"Deployment error: {str(e)}", exc_info=True)
         raise RuntimeError(f"Deployment error: {str(e)}")
 
 
