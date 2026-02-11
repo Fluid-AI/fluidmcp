@@ -496,10 +496,6 @@ def generate_html(city_name: str, duration_days: int, weather: dict, places: dic
         const weatherData = {weather_json};
         const placesData = {places_json};
 
-        // Debug log
-        console.log('Weather Data:', weatherData);
-        console.log('Places Data:', placesData);
-
         if (weatherData.forecast && weatherData.forecast.length > 0) {{
             const tempCtx = document.getElementById('tempChart').getContext('2d');
             new Chart(tempCtx, {{
