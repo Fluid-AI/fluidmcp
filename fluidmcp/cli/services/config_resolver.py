@@ -37,10 +37,19 @@ region = os.environ.get("S3_REGION")
 
 @dataclass
 class ServerConfig:
-    """Unified configuration for running MCP servers and LLM models."""
+    """Unified configuration for running MCP servers and LLM models.
+
+    LLM models support multiple types via the 'type' field:
+    - type: "vllm" - Local vLLM subprocess
+    - type: "replicate" - Replicate cloud inference
+    - type: "sglang" - SGLang inference (future)
+    - type: "ollama" - Ollama inference (future)
+    - type: "modal" - Modal cloud inference (future)
+    - type: "nims" - NVIDIA NIM inference (future)
+    """
 
     servers: Dict[str, dict] = field(default_factory=dict)  # mcpServers config
-    llm_models: Dict[str, dict] = field(default_factory=dict)  # llmModels config
+    llm_models: Dict[str, dict] = field(default_factory=dict)  # llmModels config (all types)
     needs_install: bool = False  # Whether to install packages first
     sync_to_s3: bool = False  # Whether to sync metadata to S3
     source_type: str = "package"  # For logging: package, installed, file, s3_url, s3_master
@@ -176,7 +185,14 @@ def resolve_from_file(file_path: str) -> ServerConfig:
 
     servers = config.get("mcpServers", {})
     llm_models = config.get("llmModels", {})  # Extract LLM models section
+    replicate_models = config.get("replicateModels", {})  # Backward compatibility: old format
     needs_install = False
+
+    # Merge replicateModels into llmModels with type: "replicate" (backward compatibility)
+    if replicate_models:
+        logger.info(f"Found {len(replicate_models)} model(s) in deprecated 'replicateModels' section")
+        logger.info("Merging into 'llmModels' with type='replicate' (consider updating config format)")
+        llm_models = _merge_replicate_into_llm_models(llm_models, replicate_models)
 
     # Get default GitHub token from config or environment
     default_github_token = (
@@ -224,7 +240,7 @@ def resolve_from_file(file_path: str) -> ServerConfig:
 
     return ServerConfig(
         servers=servers,
-        llm_models=llm_models,  # Include LLM models in config
+        llm_models=llm_models,  # Include all LLM models (vllm, replicate, etc.)
         needs_install=needs_install,
         sync_to_s3=False,
         source_type="file",
@@ -264,9 +280,18 @@ def resolve_from_s3_url(presigned_url: str) -> ServerConfig:
         raise ValueError("Invalid configuration from S3")
 
     servers = config.get("mcpServers", {})
+    llm_models = config.get("llmModels", {})
+    replicate_models = config.get("replicateModels", {})  # Backward compatibility
+
+    # Merge replicateModels into llmModels with type: "replicate" (backward compatibility)
+    if replicate_models:
+        logger.info(f"Found {len(replicate_models)} model(s) in deprecated 'replicateModels' section")
+        logger.info("Merging into 'llmModels' with type='replicate' (consider updating config format)")
+        llm_models = _merge_replicate_into_llm_models(llm_models, replicate_models)
 
     return ServerConfig(
         servers=servers,
+        llm_models=llm_models,  # Include all LLM models (vllm, replicate, etc.)
         needs_install=True,
         sync_to_s3=False,
         source_type="s3_url",
@@ -324,9 +349,18 @@ def resolve_from_s3_master() -> ServerConfig:
         raise ValueError("Failed to load s3_metadata_all.json")
 
     servers = s3_metadata.get("mcpServers", {})
+    llm_models = s3_metadata.get("llmModels", {})
+    replicate_models = s3_metadata.get("replicateModels", {})  # Backward compatibility
+
+    # Merge replicateModels into llmModels with type: "replicate" (backward compatibility)
+    if replicate_models:
+        logger.info(f"Found {len(replicate_models)} model(s) in deprecated 'replicateModels' section")
+        logger.info("Merging into 'llmModels' with type='replicate' (consider updating config format)")
+        llm_models = _merge_replicate_into_llm_models(llm_models, replicate_models)
 
     return ServerConfig(
         servers=servers,
+        llm_models=llm_models,  # Include all LLM models (vllm, replicate, etc.)
         needs_install=True,
         sync_to_s3=True,
         source_type="s3_master",
@@ -337,6 +371,46 @@ def resolve_from_s3_master() -> ServerConfig:
 # ============================================================================
 # Helper functions
 # ============================================================================
+
+def _merge_replicate_into_llm_models(llm_models: Dict[str, dict], replicate_models: Dict[str, dict]) -> Dict[str, dict]:
+    """
+    Merge replicateModels into llmModels with type: "replicate".
+
+    This supports backward compatibility with old config format while moving to unified llmModels.
+
+    Args:
+        llm_models: Existing llmModels dict (may contain vllm, etc.)
+        replicate_models: replicateModels dict from old config format
+
+    Returns:
+        Merged dict with all models in llmModels format
+
+    Example:
+        Input:
+            llm_models = {"local-llama": {"type": "vllm", "command": "vllm", ...}}
+            replicate_models = {"cloud-llama": {"model": "meta/llama-2-70b", "api_key": "..."}}
+
+        Output:
+            {"local-llama": {"type": "vllm", ...},
+             "cloud-llama": {"type": "replicate", "model": "meta/llama-2-70b", ...}}
+    """
+    merged = dict(llm_models)  # Start with copy of llm_models
+
+    # Add type: "replicate" to each replicate model and merge
+    for model_id, model_config in replicate_models.items():
+        if model_id in merged:
+            logger.warning(
+                f"Model ID '{model_id}' exists in both llmModels and replicateModels. "
+                f"replicateModels entry will be ignored."
+            )
+            continue
+
+        # Add type field, ensuring any incoming 'type' in model_config cannot override it
+        merged[model_id] = {**model_config, "type": "replicate"}
+        logger.debug(f"Merged Replicate model '{model_id}' into llmModels with type='replicate'")
+
+    return merged
+
 
 def _resolve_package_dest_dir(package_str: str, install_dir: Path) -> Path:
     """
