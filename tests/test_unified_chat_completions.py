@@ -101,9 +101,9 @@ class TestUnifiedChatCompletionsRouting:
 
     def test_unsupported_provider_returns_501(self, client):
         """Test that unsupported provider types return 501."""
-        with patch('fluidmcp.cli.api.management.get_model_type', return_value='ollama'):
+        with patch('fluidmcp.cli.api.management.get_model_type', return_value='unsupported_provider'):
             response = client.post(
-                "/api/llm/ollama-model/v1/chat/completions",
+                "/api/llm/fake-model/v1/chat/completions",
                 json={"messages": [{"role": "user", "content": "Test"}]}
             )
 

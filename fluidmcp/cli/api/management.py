@@ -1552,8 +1552,9 @@ async def unified_chat_completions(
             logger.exception(f"Unexpected error in chat completions for model '{model_id}': {e}")
             raise HTTPException(500, f"Internal server error while processing request for model '{model_id}'")
 
-    elif provider_type == "vllm":
-        # Proxy to vLLM's native OpenAI-compatible endpoint
+    elif provider_type in ("vllm", "ollama", "lmstudio"):
+        # Proxy to OpenAI-compatible endpoint (vLLM, Ollama, LM Studio all use same format)
+        # Validate config first (before metrics tracking)
         model_config = get_model_config(model_id)
         if not model_config:
             raise HTTPException(500, f"Model '{model_id}' config not found")
@@ -1561,9 +1562,9 @@ async def unified_chat_completions(
         base_url = model_config.get("endpoints", {}).get("base_url")
 
         if not base_url:
-            raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
 
-        # Record request start after config validation
+        # Record request start (after config validation, before any processing)
         start_time = collector.record_request_start(model_id, provider_type)
 
         # Check if streaming is requested
@@ -1603,7 +1604,7 @@ async def unified_chat_completions(
                     except Exception:
                         error_text = str(e)
 
-                    logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+                    logger.error(f"{provider_type} streaming error {e.response.status_code}: {error_text}")
 
                     # Record failed streaming request
                     collector.record_request_failure(
@@ -1613,10 +1614,10 @@ async def unified_chat_completions(
                     )
 
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
+                    error_payload = json.dumps({"error": f"{provider_type} error: {error_text}", "status": e.response.status_code})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
-                    logger.error(f"vLLM streaming connection error: {e}")
+                    logger.error(f"{provider_type} streaming connection error: {e}")
 
                     # Record connection error
                     collector.record_request_failure(
@@ -1626,7 +1627,7 @@ async def unified_chat_completions(
                     )
 
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
+                    error_payload = json.dumps({"error": f"Failed to connect to {provider_type} server: {str(e)}"})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
 
             return StreamingResponse(
@@ -1664,7 +1665,7 @@ async def unified_chat_completions(
             except Exception:
                 error_text = str(e)
 
-            logger.error(f"vLLM returned error {e.response.status_code}: {error_text}")
+            logger.error(f"{provider_type} returned error {e.response.status_code}: {error_text}")
 
             # Record failed request
             collector.record_request_failure(
@@ -1673,9 +1674,9 @@ async def unified_chat_completions(
                 status_code=e.response.status_code
             )
 
-            raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
+            raise HTTPException(e.response.status_code, f"{provider_type} error: {error_text}")
         except httpx.RequestError as e:
-            logger.error(f"Failed to connect to vLLM: {e}")
+            logger.error(f"Failed to connect to {provider_type}: {e}")
 
             # Record connection error
             collector.record_request_failure(
@@ -1684,7 +1685,7 @@ async def unified_chat_completions(
                 status_code=502
             )
 
-            raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
+            raise HTTPException(502, f"Failed to connect to {provider_type} server: {str(e)}")
 
     else:
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
@@ -1713,8 +1714,8 @@ async def unified_completions(
     # Initialize metrics collector (record start after config validation)
     collector = get_metrics_collector()
 
-    if provider_type == "vllm":
-        # Proxy to vLLM's native completions endpoint
+    if provider_type in ("vllm", "ollama", "lmstudio"):
+        # Proxy to OpenAI-compatible completions endpoint (vLLM, Ollama, LM Studio)
         model_config = get_model_config(model_id)
         if not model_config:
             raise HTTPException(500, f"Model '{model_id}' config not found")
@@ -1722,7 +1723,7 @@ async def unified_completions(
         base_url = model_config.get("endpoints", {}).get("base_url")
 
         if not base_url:
-            raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
 
         # Record request start after config validation
         start_time = collector.record_request_start(model_id, provider_type)
@@ -1764,7 +1765,7 @@ async def unified_completions(
                     except Exception:
                         error_text = str(e)
 
-                    logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+                    logger.error(f"{provider_type} streaming error {e.response.status_code}: {error_text}")
 
                     # Record failed streaming request
                     collector.record_request_failure(
@@ -1774,10 +1775,10 @@ async def unified_completions(
                     )
 
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
+                    error_payload = json.dumps({"error": f"{provider_type} error: {error_text}", "status": e.response.status_code})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
-                    logger.error(f"vLLM streaming connection error: {e}")
+                    logger.error(f"{provider_type} streaming connection error: {e}")
 
                     # Record connection error
                     collector.record_request_failure(
@@ -1787,7 +1788,7 @@ async def unified_completions(
                     )
 
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
+                    error_payload = json.dumps({"error": f"Failed to connect to {provider_type} server: {str(e)}"})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
 
             return StreamingResponse(
@@ -1832,7 +1833,7 @@ async def unified_completions(
                 status_code=e.response.status_code
             )
 
-            raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
+            raise HTTPException(e.response.status_code, f"{provider_type} error: {error_text}")
         except httpx.RequestError as e:
             # Record connection error
             collector.record_request_failure(
@@ -1841,7 +1842,7 @@ async def unified_completions(
                 status_code=502
             )
 
-            raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
+            raise HTTPException(502, f"Failed to connect to {provider_type}: {str(e)}")
 
     else:
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")
@@ -1881,6 +1882,164 @@ async def unified_list_models(
             "parent": None
         }]
     }
+
+
+# ============================================================================
+# Deprecated Replicate Endpoints (v1 → v2 Migration)
+# These endpoints are deprecated and will be removed in v2.0.0
+# Use the unified /api/llm/{model_id}/v1/* endpoints instead
+# ============================================================================
+
+@router.post("/replicate/models/{model_id}/predict")
+async def deprecated_replicate_predict(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predict is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Forward to new unified endpoint
+    return await unified_chat_completions(model_id, request_body, token)
+
+
+@router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
+async def deprecated_replicate_get_prediction(
+    model_id: str,
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Replicate-specific prediction tracking is no longer supported.
+
+    This endpoint will be removed in v2.0.0.
+    Use the unified /api/llm/{model_id}/v1/chat/completions endpoint instead.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id} is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions for synchronous inference. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Use /api/llm/{model_id}/v1/chat/completions instead. "
+        "Polling-based predictions are no longer supported in the unified API."
+    )
+
+
+@router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
+async def deprecated_replicate_cancel_prediction(
+    model_id: str,
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Replicate-specific prediction cancellation is no longer supported.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id}/cancel is deprecated. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated and cancellation is no longer supported in the unified API."
+    )
+
+
+@router.post("/replicate/models/{model_id}/stream")
+async def deprecated_replicate_stream(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions with "stream": true instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/stream is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions with 'stream': true instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Add stream parameter and forward
+    request_body["stream"] = True
+    return await unified_chat_completions(model_id, request_body, token)
+
+
+@router.get("/replicate/models/{model_id}/info")
+async def deprecated_replicate_model_info(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/info is deprecated. "
+        f"Use /api/llm/{model_id}/v1/models instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Forward to new unified endpoint
+    return await unified_list_models(model_id, token)
+
+
+@router.get("/replicate/models/{model_id}/health")
+async def deprecated_replicate_health(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/health is deprecated. "
+        f"Use /api/llm/{model_id}/v1/models for model availability checks. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Return simple health response
+    return {"status": "deprecated", "message": "Use /api/llm/{model_id}/v1/models instead"}
+
+
+@router.get("/replicate/models")
+async def deprecated_replicate_list_models(
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Model listing is no longer supported at the API level.
+
+    This endpoint will be removed in v2.0.0.
+    Models are managed through the configuration file.
+    """
+    logger.warning(
+        "DEPRECATED API CALL: /replicate/models is deprecated. "
+        "Models are now managed through configuration only. "
+        "This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Models are managed through configuration only."
+    )
 
 
 # ============================================================================

@@ -8,6 +8,7 @@ on a per-model basis.
 import asyncio
 import time
 from typing import Dict, Optional, Any
+from collections import OrderedDict
 from loguru import logger
 
 
@@ -100,17 +101,16 @@ class TokenBucketRateLimiter:
             return min(self.capacity, self.tokens + elapsed * self.rate)
 
 
-# Global registry of rate limiters per model
-# Note: This registry grows monotonically and limiters are NEVER automatically evicted.
-# In long-running processes with many distinct model_id values, this can cause
-# unbounded memory growth.
+# Global registry of rate limiters per model (LRU-based with max capacity)
+# This registry uses OrderedDict for LRU eviction when MAX_RATE_LIMITERS is exceeded.
+# This prevents unbounded memory growth in multi-tenant or dynamic model scenarios.
 #
 # Manual cleanup options:
 # 1. API endpoint: POST /metrics/rate-limiters/clear (see management.py)
 # 2. Direct call: await clear_rate_limiters() (below)
-# 3. Future enhancement: Add remove_rate_limiter(model_id) for selective cleanup
-#    or implement periodic pruning of inactive limiters
-_rate_limiters: Dict[str, TokenBucketRateLimiter] = {}
+# 3. Automatic: LRU eviction when MAX_RATE_LIMITERS is reached
+MAX_RATE_LIMITERS = 100  # Maximum number of concurrent rate limiters
+_rate_limiters: OrderedDict[str, TokenBucketRateLimiter] = OrderedDict()
 _limiter_lock: Optional[asyncio.Lock] = None
 
 
@@ -149,9 +149,19 @@ async def get_rate_limiter(
         capacity = 20  # Allow bursts up to 20
 
     async with _get_limiter_lock():
-        if model_id not in _rate_limiters:
+        if model_id in _rate_limiters:
+            # Move to end (most recently used) for LRU tracking
+            _rate_limiters.move_to_end(model_id)
+        else:
+            # Create new rate limiter
             _rate_limiters[model_id] = TokenBucketRateLimiter(rate, capacity)
             logger.info(f"Created rate limiter for '{model_id}': {rate} req/s, capacity {capacity}")
+
+            # Evict least recently used if over capacity
+            while len(_rate_limiters) > MAX_RATE_LIMITERS:
+                evicted_id = next(iter(_rate_limiters))
+                del _rate_limiters[evicted_id]
+                logger.warning(f"Rate limiter evicted (LRU): '{evicted_id}' (registry size: {len(_rate_limiters)})")
 
         return _rate_limiters[model_id]
 
