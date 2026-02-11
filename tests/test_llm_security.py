@@ -97,6 +97,8 @@ class TestCommandSanitization:
             "--tokenizer=/path/to/tokenizer",  # "token" is part of "tokenizer"
             "--monkey=123",                     # "key" is part of "monkey"
             "--keyboard-layout=us",             # "key" is part of "keyboard"
+            "--api-key-rotation", "daily",      # "api-key" is not the trailing pair
+            "--api-key-config=/path/config",    # "api-key" is not the trailing pair
             "--port", "8001"                    # Safe value
         ]
         result = sanitize_command_for_logging(command)
@@ -105,6 +107,9 @@ class TestCommandSanitization:
         assert "--tokenizer=/path/to/tokenizer" in result
         assert "--monkey=123" in result
         assert "--keyboard-layout=us" in result
+        assert "--api-key-rotation" in result
+        assert "daily" in result  # Value after --api-key-rotation NOT redacted
+        assert "--api-key-config=/path/config" in result
         assert "8001" in result
         assert "***REDACTED***" not in result
 
@@ -115,7 +120,11 @@ class TestCommandSanitization:
             "--api-key", "secret1",           # Should redact
             "--auth-token=secret2",           # Should redact
             "--access_key", "secret3",        # Should redact
-            "--my-api-key", "secret4",        # Should redact (api-key is a segment)
+            "--my-api-key", "secret4",        # Should redact (trailing pair is api-key)
+            "--prod-api-key", "secret5",      # Should redact (trailing pair is api-key)
+            "--admin-access-token=secret6",   # Should redact (trailing pair is access-token)
+            "--access-key-id", "secret7",     # Should redact (3-word: access-key-id)
+            "--aws-access-key-id=secret8",    # Should redact (3-word: access-key-id)
         ]
         result = sanitize_command_for_logging(command)
 
@@ -124,7 +133,11 @@ class TestCommandSanitization:
         assert "secret2" not in result
         assert "secret3" not in result
         assert "secret4" not in result
-        assert result.count("***REDACTED***") == 4
+        assert "secret5" not in result
+        assert "secret6" not in result
+        assert "secret7" not in result
+        assert "secret8" not in result
+        assert result.count("***REDACTED***") == 8
 
 
 class TestEnvVarFiltering:
@@ -259,3 +272,74 @@ class TestEnvVarFiltering:
 
         # Non-allowlisted should still be filtered
         assert "SECRET_KEY" not in result
+
+
+class TestEnhancedAPIKeyDetection:
+    """Test enhanced API key detection patterns."""
+
+    def test_prod_api_key_redacted(self):
+        """Test that --prod-api-key is redacted."""
+        command = ["server", "--prod-api-key", "secret123"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "secret123" not in result
+
+    def test_staging_access_token_redacted(self):
+        """Test that --staging-access-token is redacted."""
+        command = ["server", "--staging-access-token", "token456"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "token456" not in result
+
+    def test_aws_access_key_redacted(self):
+        """Test that --aws-access-key is redacted."""
+        command = ["server", "--aws-access-key", "AKIAIOSFODNN7EXAMPLE"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+
+    def test_access_key_id_redacted(self):
+        """Test that --access-key-id is redacted."""
+        command = ["server", "--access-key-id", "AKIAIOSFODNN7EXAMPLE"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+
+    def test_private_key_redacted(self):
+        """Test that --private-key is redacted."""
+        command = ["server", "--private-key", "/path/to/key"]
+        result = sanitize_command_for_logging(command)
+        assert "***REDACTED***" in result
+        assert "/path/to/key" not in result
+
+    def test_api_key_rotation_not_redacted(self):
+        """Test that --api-key-rotation is NOT redacted (false positive prevention)."""
+        command = ["server", "--api-key-rotation", "enabled"]
+        result = sanitize_command_for_logging(command)
+        # "enabled" should NOT be redacted because it's not a sensitive value
+        assert "enabled" in result
+        assert "***REDACTED***" not in result
+
+    def test_api_key_config_not_redacted(self):
+        """Test that --api-key-config is NOT redacted (false positive prevention)."""
+        command = ["server", "--api-key-config", "/path/to/config"]
+        result = sanitize_command_for_logging(command)
+        assert "/path/to/config" in result
+        assert "***REDACTED***" not in result
+
+
+class TestLogRotation:
+    """
+    Log rotation behavior is covered in launcher/integration tests.
+
+    This security-focused test module avoids duplicating log rotation
+    behavior tests, which are owned by:
+      - tests/test_llm_launcher.py::TestLogRotation
+      - tests/test_llm_integration.py::TestLogRotation
+
+    NOTE: If you need to add security-related tests for logging (e.g.,
+    ensuring no sensitive data is written to rotated logs), prefer to add
+    them alongside other sanitization tests in this module rather than
+    re-testing the mechanics of log rotation itself.
+    """
+    pass

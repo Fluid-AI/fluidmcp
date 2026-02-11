@@ -21,6 +21,7 @@ import json
 
 from ..services.llm_provider_registry import get_model_type, get_model_config
 from ..services.replicate_openai_adapter import replicate_chat_completion
+from ..services.llm_metrics import get_metrics_collector
 
 from ..utils.env_utils import is_placeholder
 
@@ -1509,15 +1510,51 @@ async def unified_chat_completions(
 
     logger.info(f"Chat completion request for model '{model_id}' (type: {provider_type})")
 
+    # Initialize metrics collector (record start after config validation)
+    collector = get_metrics_collector()
+
     # Route to appropriate provider handler
     if provider_type == "replicate":
         # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
         # The adapter already converts httpx errors to HTTPException, no need to catch them here
-        timeout = request_body.get("timeout", 300)
-        return await replicate_chat_completion(model_id, request_body, timeout)
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
 
-    elif provider_type == "vllm":
-        # Proxy to vLLM's native OpenAI-compatible endpoint
+        try:
+            timeout = request_body.get("timeout", 300)
+            response = await replicate_chat_completion(model_id, request_body, timeout)
+
+            # Record successful request with token usage
+            usage = response.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response
+        except HTTPException as e:
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.status_code
+            )
+            raise
+        except Exception as e:
+            # Record unexpected error and log details
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=500
+            )
+            logger.exception(f"Unexpected error in chat completions for model '{model_id}': {e}")
+            raise HTTPException(500, f"Internal server error while processing request for model '{model_id}'")
+
+    elif provider_type in ("vllm", "ollama", "lmstudio"):
+        # Proxy to OpenAI-compatible endpoint (vLLM, Ollama, LM Studio all use same format)
+        # Validate config first (before metrics tracking)
         model_config = get_model_config(model_id)
         if not model_config:
             raise HTTPException(500, f"Model '{model_id}' config not found")
@@ -1525,7 +1562,10 @@ async def unified_chat_completions(
         base_url = model_config.get("endpoints", {}).get("base_url")
 
         if not base_url:
-            raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
+
+        # Record request start (after config validation, before any processing)
+        start_time = collector.record_request_start(model_id, provider_type)
 
         # Check if streaming is requested
         is_streaming = request_body.get("stream", False)
@@ -1541,8 +1581,18 @@ async def unified_chat_completions(
                         json=request_body
                     ) as response:
                         response.raise_for_status()
+
                         async for chunk in response.aiter_bytes():
                             yield chunk
+
+                        # Record successful streaming request after stream completes
+                        # Note: Token usage not available for streaming responses
+                        collector.record_request_success(
+                            model_id=model_id,
+                            start_time=start_time,
+                            prompt_tokens=0,
+                            completion_tokens=0
+                        )
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
@@ -1554,14 +1604,30 @@ async def unified_chat_completions(
                     except Exception:
                         error_text = str(e)
 
-                    logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+                    logger.error(f"{provider_type} streaming error {e.response.status_code}: {error_text}")
+
+                    # Record failed streaming request
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=e.response.status_code
+                    )
+
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
+                    error_payload = json.dumps({"error": f"{provider_type} error: {error_text}", "status": e.response.status_code})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
-                    logger.error(f"vLLM streaming connection error: {e}")
+                    logger.error(f"{provider_type} streaming connection error: {e}")
+
+                    # Record connection error
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=502
+                    )
+
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
+                    error_payload = json.dumps({"error": f"Failed to connect to {provider_type} server: {str(e)}"})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
 
             return StreamingResponse(
@@ -1577,7 +1643,18 @@ async def unified_chat_completions(
                 json=request_body
             )
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+
+            # Record successful request with token usage
+            usage = response_json.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response_json
         except httpx.HTTPStatusError as e:
             # Read error body with size limit to avoid buffering entire response
             try:
@@ -1588,11 +1665,27 @@ async def unified_chat_completions(
             except Exception:
                 error_text = str(e)
 
-            logger.error(f"vLLM returned error {e.response.status_code}: {error_text}")
-            raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
+            logger.error(f"{provider_type} returned error {e.response.status_code}: {error_text}")
+
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.response.status_code
+            )
+
+            raise HTTPException(e.response.status_code, f"{provider_type} error: {error_text}")
         except httpx.RequestError as e:
-            logger.error(f"Failed to connect to vLLM: {e}")
-            raise HTTPException(502, f"Failed to connect to vLLM server: {str(e)}")
+            logger.error(f"Failed to connect to {provider_type}: {e}")
+
+            # Record connection error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=502
+            )
+
+            raise HTTPException(502, f"Failed to connect to {provider_type} server: {str(e)}")
 
     else:
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
@@ -1618,8 +1711,11 @@ async def unified_completions(
     if not provider_type:
         raise HTTPException(404, f"Model '{model_id}' not found in configuration")
 
-    if provider_type == "vllm":
-        # Proxy to vLLM's native completions endpoint
+    # Initialize metrics collector (record start after config validation)
+    collector = get_metrics_collector()
+
+    if provider_type in ("vllm", "ollama", "lmstudio"):
+        # Proxy to OpenAI-compatible completions endpoint (vLLM, Ollama, LM Studio)
         model_config = get_model_config(model_id)
         if not model_config:
             raise HTTPException(500, f"Model '{model_id}' config not found")
@@ -1627,7 +1723,10 @@ async def unified_completions(
         base_url = model_config.get("endpoints", {}).get("base_url")
 
         if not base_url:
-            raise HTTPException(500, f"vLLM model '{model_id}' missing base_url in config")
+            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
+
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
 
         # Check if streaming is requested
         is_streaming = request_body.get("stream", False)
@@ -1643,8 +1742,18 @@ async def unified_completions(
                         json=request_body
                     ) as response:
                         response.raise_for_status()
+
                         async for chunk in response.aiter_bytes():
                             yield chunk
+
+                        # Record successful streaming request after stream completes
+                        # Note: Token usage not available for streaming responses
+                        collector.record_request_success(
+                            model_id=model_id,
+                            start_time=start_time,
+                            prompt_tokens=0,
+                            completion_tokens=0
+                        )
                 except httpx.HTTPStatusError as e:
                     # Read error body with size limit to avoid buffering entire response
                     try:
@@ -1656,14 +1765,30 @@ async def unified_completions(
                     except Exception:
                         error_text = str(e)
 
-                    logger.error(f"vLLM streaming error {e.response.status_code}: {error_text}")
+                    logger.error(f"{provider_type} streaming error {e.response.status_code}: {error_text}")
+
+                    # Record failed streaming request
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=e.response.status_code
+                    )
+
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"vLLM error: {error_text}", "status": e.response.status_code})
+                    error_payload = json.dumps({"error": f"{provider_type} error: {error_text}", "status": e.response.status_code})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
                 except httpx.RequestError as e:
-                    logger.error(f"vLLM streaming connection error: {e}")
+                    logger.error(f"{provider_type} streaming connection error: {e}")
+
+                    # Record connection error
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=502
+                    )
+
                     # Emit SSE error event with proper JSON escaping
-                    error_payload = json.dumps({"error": f"Failed to connect to vLLM server: {str(e)}"})
+                    error_payload = json.dumps({"error": f"Failed to connect to {provider_type} server: {str(e)}"})
                     yield f"event: error\ndata: {error_payload}\n\n".encode()
 
             return StreamingResponse(
@@ -1679,7 +1804,18 @@ async def unified_completions(
                 json=request_body
             )
             response.raise_for_status()
-            return response.json()
+            response_json = response.json()
+
+            # Record successful request with token usage
+            usage = response_json.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response_json
         except httpx.HTTPStatusError as e:
             # Read error body with size limit to avoid buffering entire response
             try:
@@ -1690,9 +1826,23 @@ async def unified_completions(
             except Exception:
                 error_text = str(e)
 
-            raise HTTPException(e.response.status_code, f"vLLM error: {error_text}")
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.response.status_code
+            )
+
+            raise HTTPException(e.response.status_code, f"{provider_type} error: {error_text}")
         except httpx.RequestError as e:
-            raise HTTPException(502, f"Failed to connect to vLLM: {str(e)}")
+            # Record connection error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=502
+            )
+
+            raise HTTPException(502, f"Failed to connect to {provider_type}: {str(e)}")
 
     else:
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")
@@ -1735,333 +1885,239 @@ async def unified_list_models(
 
 
 # ============================================================================
-# Replicate Model Inference Endpoints (DEPRECATED - Use /llm/{model_id}/v1/... instead)
+# Deprecated Replicate Endpoints (v1 → v2 Migration)
+# These endpoints are deprecated and will be removed in v2.0.0
+# Use the unified /api/llm/{model_id}/v1/* endpoints instead
 # ============================================================================
 
-@router.get("/replicate/models")
-async def list_replicate_models(
-    token: str = Depends(get_token)
-):
-    """
-    List all active Replicate models.
-
-    Returns:
-        List of model IDs
-    """
-    from ..services.replicate_client import list_replicate_models as get_models
-
-    models = get_models()
-    return {
-        "models": models,
-        "count": len(models)
-    }
-
-
 @router.post("/replicate/models/{model_id}/predict")
-async def create_prediction(
+async def deprecated_replicate_predict(
     model_id: str,
-    response: Response,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
-    Create a prediction on a Replicate model.
+    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions instead.
 
-    **DEPRECATED**: This endpoint is deprecated. Use the unified OpenAI-compatible endpoint instead:
-    POST /api/llm/{model_id}/v1/chat/completions
-
-    Args:
-        model_id: Model identifier
-        request_body: Request body with 'input', optional 'version', and 'webhook'
-
-    Returns:
-        Prediction response with ID and status
-
-    Example request body:
-        {
-            "input": {"prompt": "Hello world"},
-            "version": "optional-version-string",
-            "webhook": "optional-webhook-url"
-        }
+    This endpoint will be removed in v2.0.0.
     """
-    from ..services.replicate_client import get_replicate_client
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predict is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
 
-    # Add deprecation warning headers
-    response.headers["X-Deprecated"] = "true"
-    response.headers["X-Deprecated-Message"] = "Use POST /api/llm/{model_id}/v1/chat/completions instead"
-
-    logger.warning(f"Deprecated endpoint /replicate/models/{model_id}/predict called")
-
-    client = get_replicate_client(model_id)
-    if not client:
-        raise HTTPException(404, f"Replicate model '{model_id}' not found")
-
-    try:
-        input_data = request_body.get("input", {})
-        version = request_body.get("version")
-        webhook = request_body.get("webhook")
-
-        result = await client.predict(
-            input_data=input_data,
-            version=version,
-            webhook=webhook
-        )
-        logger.info(f"Created prediction {result.get('id')} for model '{model_id}'")
-        return result
-    except httpx.HTTPStatusError as e:
-        # Preserve upstream Replicate API status codes
-        status_code = e.response.status_code
-        request_id = e.response.headers.get("X-Request-ID", "unknown")
-
-        # Log full upstream response details server-side for debugging
-        response_text = e.response.text if e.response else ""
-        logger.error(
-            f"Replicate API error {status_code} for model '{model_id}' "
-            f"(request_id={request_id}): {response_text}"
-        )
-
-        # Return sanitized error message to client (avoid leaking upstream details)
-        raise HTTPException(
-            status_code,
-            f"Replicate API returned an error while creating prediction. Reference ID: {request_id}"
-        )
-    except (httpx.RequestError, httpx.TimeoutException) as e:
-        # Network/timeout errors = 502 Bad Gateway
-        logger.error(f"Network error creating prediction for '{model_id}': {e}")
-        raise HTTPException(502, "Failed to connect to Replicate API")
-    except Exception as e:
-        logger.error(f"Unexpected error creating prediction for '{model_id}': {e}")
-        raise HTTPException(500, "Internal server error")
+    # Forward to new unified endpoint
+    return await unified_chat_completions(model_id, request_body, token)
 
 
 @router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
-async def get_prediction_status(
+async def deprecated_replicate_get_prediction(
     model_id: str,
     prediction_id: str,
     token: str = Depends(get_token)
 ):
     """
-    Get the status and output of a prediction.
+    DEPRECATED: Replicate-specific prediction tracking is no longer supported.
 
-    Args:
-        model_id: Model identifier that created the prediction
-        prediction_id: ID of the prediction
-
-    Returns:
-        Prediction status and output
+    This endpoint will be removed in v2.0.0.
+    Use the unified /api/llm/{model_id}/v1/chat/completions endpoint instead.
     """
-    from ..services.replicate_client import get_replicate_client
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id} is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions for synchronous inference. "
+        f"This endpoint will be removed in v2.0.0."
+    )
 
-    client = get_replicate_client(model_id)
-    if not client:
-        raise HTTPException(404, f"Replicate model '{model_id}' not found")
-
-    try:
-        result = await client.get_prediction(prediction_id)
-        return result
-    except httpx.HTTPStatusError as e:
-        status_code = e.response.status_code
-        request_id = e.response.headers.get("X-Request-ID", "unknown")
-        response_text = e.response.text if e.response else ""
-        logger.error(
-            f"Replicate API error {status_code} getting prediction '{prediction_id}' "
-            f"(request_id={request_id}): {response_text}"
-        )
-        raise HTTPException(
-            status_code,
-            f"Replicate API returned an error while getting prediction. Reference ID: {request_id}"
-        )
-    except (httpx.RequestError, httpx.TimeoutException) as e:
-        logger.error(f"Network error getting prediction '{prediction_id}': {e}")
-        raise HTTPException(502, "Failed to connect to Replicate API")
-    except Exception as e:
-        logger.error(f"Unexpected error getting prediction '{prediction_id}': {e}")
-        raise HTTPException(500, "Internal server error")
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Use /api/llm/{model_id}/v1/chat/completions instead. "
+        "Polling-based predictions are no longer supported in the unified API."
+    )
 
 
 @router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
-async def cancel_prediction(
+async def deprecated_replicate_cancel_prediction(
     model_id: str,
     prediction_id: str,
     token: str = Depends(get_token)
 ):
     """
-    Cancel a running prediction.
+    DEPRECATED: Replicate-specific prediction cancellation is no longer supported.
 
-    Args:
-        model_id: Model identifier that created the prediction
-        prediction_id: ID of the prediction to cancel
-
-    Returns:
-        Cancellation response
+    This endpoint will be removed in v2.0.0.
     """
-    from ..services.replicate_client import get_replicate_client
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id}/cancel is deprecated. "
+        f"This endpoint will be removed in v2.0.0."
+    )
 
-    client = get_replicate_client(model_id)
-    if not client:
-        raise HTTPException(404, f"Replicate model '{model_id}' not found")
-
-    try:
-        result = await client.cancel_prediction(prediction_id)
-        logger.info(f"Cancelled prediction '{prediction_id}' for model '{model_id}'")
-        return result
-    except httpx.HTTPStatusError as e:
-        status_code = e.response.status_code
-        request_id = e.response.headers.get("X-Request-ID", "unknown")
-        response_text = e.response.text if e.response else ""
-        logger.error(
-            f"Replicate API error {status_code} cancelling prediction '{prediction_id}' "
-            f"(request_id={request_id}): {response_text}"
-        )
-        raise HTTPException(
-            status_code,
-            f"Replicate API returned an error while cancelling prediction. Reference ID: {request_id}"
-        )
-    except (httpx.RequestError, httpx.TimeoutException) as e:
-        logger.error(f"Network error cancelling prediction '{prediction_id}': {e}")
-        raise HTTPException(502, "Failed to connect to Replicate API")
-    except Exception as e:
-        logger.error(f"Unexpected error cancelling prediction '{prediction_id}': {e}")
-        raise HTTPException(500, "Internal server error")
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated and cancellation is no longer supported in the unified API."
+    )
 
 
 @router.post("/replicate/models/{model_id}/stream")
-async def stream_prediction(
+async def deprecated_replicate_stream(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
-    Stream prediction output as it's generated.
+    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions with "stream": true instead.
 
-    Args:
-        model_id: Model identifier
-        request_body: Request body with 'input' and optional 'version'
-
-    Returns:
-        Server-sent events stream of output chunks
-
-    Example request body:
-        {
-            "input": {"prompt": "Count to 5"},
-            "version": "optional-version-string"
-        }
+    This endpoint will be removed in v2.0.0.
     """
-    from ..services.replicate_client import get_replicate_client
-
-    client = get_replicate_client(model_id)
-    if not client:
-        raise HTTPException(404, f"Replicate model '{model_id}' not found")
-
-    input_data = request_body.get("input", {})
-    version = request_body.get("version")
-
-    async def generate():
-        """Generate server-sent events for streaming."""
-        import json
-        try:
-            async for chunk in client.stream_prediction(input_data, version):
-                # JSON-encode the chunk to handle newlines and special characters
-                encoded_chunk = json.dumps({"chunk": chunk})
-                yield f"data: {encoded_chunk}\n\n"
-        except Exception:
-            # Log full exception details server-side for debugging
-            logger.exception(f"Error streaming prediction for '{model_id}'")
-            # Send generic error to client (avoid leaking internal details)
-            error_payload = json.dumps({
-                "error": "An internal error occurred while streaming prediction.",
-                "event_type": "error"
-            })
-            yield f"event: error\ndata: {error_payload}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream"
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/stream is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions with 'stream': true instead. "
+        f"This endpoint will be removed in v2.0.0."
     )
+
+    # Add stream parameter and forward
+    request_body["stream"] = True
+    return await unified_chat_completions(model_id, request_body, token)
 
 
 @router.get("/replicate/models/{model_id}/info")
-async def get_model_info(
+async def deprecated_replicate_model_info(
     model_id: str,
     token: str = Depends(get_token)
 ):
     """
-    Get information about a Replicate model.
+    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
 
-    Args:
-        model_id: Model identifier
-
-    Returns:
-        Model metadata including versions, schema, and description
+    This endpoint will be removed in v2.0.0.
     """
-    from ..services.replicate_client import get_replicate_client
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/info is deprecated. "
+        f"Use /api/llm/{model_id}/v1/models instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
 
-    client = get_replicate_client(model_id)
-    if not client:
-        raise HTTPException(404, f"Replicate model '{model_id}' not found")
-
-    try:
-        result = await client.get_model_info()
-        return result
-    except httpx.HTTPStatusError as e:
-        status_code = e.response.status_code
-        request_id = e.response.headers.get("X-Request-ID", "unknown")
-        response_text = e.response.text if e.response else ""
-        logger.error(
-            f"Replicate API error {status_code} getting model info for '{model_id}' "
-            f"(request_id={request_id}): {response_text}"
-        )
-        raise HTTPException(
-            status_code,
-            f"Replicate API returned an error while getting model info. Reference ID: {request_id}"
-        )
-    except (httpx.RequestError, httpx.TimeoutException) as e:
-        logger.error(f"Network error getting model info for '{model_id}': {e}")
-        raise HTTPException(502, "Failed to connect to Replicate API")
-    except Exception as e:
-        logger.error(f"Unexpected error getting model info for '{model_id}': {e}")
-        raise HTTPException(500, "Internal server error")
+    # Forward to new unified endpoint
+    return await unified_list_models(model_id, token)
 
 
 @router.get("/replicate/models/{model_id}/health")
-async def check_model_health(
+async def deprecated_replicate_health(
     model_id: str,
     token: str = Depends(get_token)
 ):
     """
-    Check if a Replicate model is available and healthy.
+    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/health is deprecated. "
+        f"Use /api/llm/{model_id}/v1/models for model availability checks. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Return simple health response
+    return {"status": "deprecated", "message": "Use /api/llm/{model_id}/v1/models instead"}
+
+
+@router.get("/replicate/models")
+async def deprecated_replicate_list_models(
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Model listing is no longer supported at the API level.
+
+    This endpoint will be removed in v2.0.0.
+    Models are managed through the configuration file.
+    """
+    logger.warning(
+        "DEPRECATED API CALL: /replicate/models is deprecated. "
+        "Models are now managed through configuration only. "
+        "This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Models are managed through configuration only."
+    )
+
+
+# ============================================================================
+# Metrics Endpoints (Observability)
+# ============================================================================
+
+@router.get("/metrics")
+async def get_metrics_prometheus(
+    token: str = Depends(get_token)
+):
+    """
+    Get Prometheus-formatted metrics for all LLM models.
+
+    Returns metrics including:
+    - Request counts (total, successful, failed)
+    - Latency statistics (avg, min, max)
+    - Token usage (prompt, completion, total)
+    - Error counts by status code
+    - Uptime
+
+    Example:
+        curl http://localhost:8099/api/metrics
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    return Response(
+        content=collector.export_prometheus(),
+        media_type="text/plain; version=0.0.4"
+    )
+
+
+@router.get("/metrics/json")
+async def get_metrics_json(
+    token: str = Depends(get_token)
+):
+    """
+    Get JSON-formatted metrics for all LLM models.
+
+    Returns structured metrics data suitable for dashboards and monitoring tools.
+
+    Example:
+        curl http://localhost:8099/api/metrics/json
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    return collector.export_json()
+
+
+@router.post("/metrics/reset")
+async def reset_metrics(
+    model_id: str = Query(None, description="Model ID to reset, or omit to reset all"),
+    token: str = Depends(get_token)
+):
+    """
+    Reset LLM metrics for a specific model or all models.
 
     Args:
-        model_id: Model identifier
+        model_id: Optional model ID. If not provided, resets all metrics.
 
-    Returns:
-        Health check result
+    Example:
+        # Reset all metrics
+        curl -X POST http://localhost:8099/api/metrics/reset
+
+        # Reset specific model
+        curl -X POST http://localhost:8099/api/metrics/reset?model_id=llama-2-70b
     """
-    from ..services.replicate_client import get_replicate_client
+    from ..services.llm_metrics import get_metrics_collector
 
-    client = get_replicate_client(model_id)
-    if not client:
-        raise HTTPException(404, f"Replicate model '{model_id}' not found")
+    collector = get_metrics_collector()
+    collector.reset_metrics(model_id)
 
-    try:
-        is_healthy = await client.health_check()
-        return {
-            "model_id": model_id,
-            "healthy": is_healthy,
-            "model_name": client.model_name
-        }
-    except Exception as e:
-        logger.error(f"Error checking health for '{model_id}': {e}")
-        return {
-            "model_id": model_id,
-            "healthy": False,
-            "error": str(e)
-        }
+    target = "all models" if not model_id else f"model '{model_id}'"
+    return {
+        "message": f"Metrics reset successfully for {target}"
+    }
 
-
-# ============================================================================
-# Observability & Metrics Endpoints (Cache, Rate Limiting)
-# ============================================================================
 
 @router.get("/metrics/cache/stats")
 async def get_cache_stats(token: str = Depends(get_token)):
@@ -2117,10 +2173,7 @@ async def clear_cache(token: str = Depends(get_token)):
 
     count = await clear_response_cache()
     logger.info(f"Cache cleared via API: {count} entries removed")
-    return {
-        "message": f"Cache cleared successfully",
-        "entries_cleared": count
-    }
+    return {"message": "Cache cleared successfully", "entries_cleared": count}
 
 
 @router.get("/metrics/rate-limiters")
@@ -2129,10 +2182,11 @@ async def get_rate_limiter_stats(token: str = Depends(get_token)):
     Get rate limiter statistics for all models.
 
     Returns available token counts for each model's rate limiter.
+
     Also updates the unified metrics registry for Prometheus scraping.
 
     Returns:
-        Dict mapping model_id to available tokens
+        Dict with rate_limiters (dict of model_id -> stats) and total_models count
     """
     from ..services.rate_limiter import get_all_rate_limiter_stats
     from ..services.replicate_metrics import update_rate_limiter_metrics
@@ -2156,26 +2210,23 @@ async def get_model_rate_limiter_stats(
     """
     Get rate limiter statistics for a specific model.
 
-    Also updates the unified metrics registry for Prometheus scraping.
-
     Args:
         model_id: Model identifier
 
     Returns:
-        Rate limiter stats including available tokens and configuration
+        Rate limiter stats including available tokens, capacity, and utilization
+
+    Raises:
+        HTTPException(404): If no rate limiter exists for the model
     """
     from ..services.rate_limiter import get_all_rate_limiter_stats
-    from ..services.replicate_metrics import update_rate_limiter_metrics
 
-    # Use thread-safe snapshot helper to avoid race conditions
+    # Use get_all to avoid creating limiters as side effect
     stats = await get_all_rate_limiter_stats()
     model_stats = stats.get(model_id)
 
     if model_stats is None:
         raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
-
-    # Update unified metrics registry
-    await update_rate_limiter_metrics()
 
     return {
         "model_id": model_id,
@@ -2186,18 +2237,63 @@ async def get_model_rate_limiter_stats(
 @router.post("/metrics/rate-limiters/clear")
 async def clear_rate_limiters(token: str = Depends(get_token)):
     """
-    Clear all rate limiters.
+    Clear all rate limiters (removes all registered limiters).
 
-    Removes all rate limiter instances. New limiters will be created
-    on next API call with default configuration.
+    Useful for testing or freeing memory in long-running processes.
 
     Returns:
-        Success message
+        Number of limiters cleared
     """
-    from ..services.rate_limiter import clear_rate_limiters as _clear
+    from ..services.rate_limiter import clear_rate_limiters as clear_limiters_func
 
-    await _clear()
-    logger.info("All rate limiters cleared via API")
+    count = await clear_limiters_func()
+    return {"message": "Rate limiters cleared successfully", "limiters_cleared": count}
+
+
+@router.get("/metrics/models/{model_id}")
+async def get_model_metrics(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get detailed LLM metrics for a specific model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Detailed metrics including request counts, latency, tokens, and errors
+
+    Example:
+        curl http://localhost:8099/api/metrics/models/llama-2-70b
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    metrics = collector.get_model_metrics(model_id)
+
+    if not metrics:
+        raise HTTPException(404, f"No metrics found for model '{model_id}'")
+
     return {
-        "message": "All rate limiters cleared successfully"
+        "model_id": model_id,
+        "provider_type": metrics.provider_type,
+        "requests": {
+            "total": metrics.total_requests,
+            "successful": metrics.successful_requests,
+            "failed": metrics.failed_requests,
+            "success_rate_percent": round(metrics.success_rate(), 2),
+            "error_rate_percent": round(metrics.error_rate(), 2),
+        },
+        "latency": {
+            "avg_seconds": round(metrics.avg_latency(), 3),
+            "min_seconds": round(metrics.min_latency, 3) if metrics.min_latency != float('inf') else None,
+            "max_seconds": round(metrics.max_latency, 3),
+        },
+        "tokens": {
+            "prompt": metrics.total_prompt_tokens,
+            "completion": metrics.total_completion_tokens,
+            "total": metrics.total_tokens,
+        },
+        "errors_by_status": dict(metrics.errors_by_status),
     }

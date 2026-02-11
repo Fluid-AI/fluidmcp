@@ -355,6 +355,16 @@ async def get_response_cache(
         if _response_cache is None:
             _response_cache = ResponseCache(ttl=ttl, max_size=max_size)
             logger.info(f"Initialized response cache: TTL={ttl}s, max_size={max_size}")
+        else:
+            # Cache already exists - warn if different settings requested
+            existing_ttl = _response_cache.ttl
+            existing_max_size = _response_cache.max_size
+            if ttl != existing_ttl or max_size != existing_max_size:
+                logger.warning(
+                    f"Response cache already initialized with TTL={existing_ttl}s, max_size={existing_max_size}. "
+                    f"Ignoring requested settings: TTL={ttl}s, max_size={max_size}. "
+                    f"Global cache settings are shared across all models."
+                )
 
         return _response_cache
 

@@ -11,7 +11,7 @@ else:
 
 setup(
     name="fluidmcp",
-    version="0.1.0",
+    version="1.0.0",
     author="Fluid AI",
     author_email="info@fluid.ai",
     description="A CLI tool for installing and managing Model Context Protocol (MCP) servers",

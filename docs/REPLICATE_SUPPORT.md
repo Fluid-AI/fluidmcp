@@ -84,9 +84,7 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 
 **Streaming Support**: Replicate models do not currently support streaming (`"stream": true`) due to Replicate's polling-based API architecture. Streaming requests will return a 501 error. For real-time output requirements, consider using vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
-
 **Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/{model_id}/v1/...` routes shown above.
-
 ## Configuration Format
 
 ### Complete Example
@@ -359,8 +357,6 @@ POST /api/llm/{model_id}/v1/chat/completions
 ### Streaming Not Supported
 
 Replicate-backed models do not support **OpenAI-compatible streaming** via `"stream": true` on the `/api/llm/...` endpoints. Such requests will return HTTP 501 (Not Implemented) because Replicate's API is fundamentally polling-based.
-
-FluidMCP also exposes a legacy, Replicate-specific SSE endpoint at `/api/replicate/models/{model_id}/stream` that streams the results of polling Replicate; this endpoint is **deprecated** and is not a replacement for OpenAI-style token-by-token streaming.
 
 For real-time streaming requirements, use vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
@@ -922,6 +918,107 @@ Unlike vLLM which provides instant responses, Replicate uses a prediction-pollin
 4. Implement caching:
    - Cache frequent queries
    - Deduplicate requests
+
+## Production Considerations
+
+### Known Limitations
+
+#### Rate Limiter Registry Memory Growth
+
+**Issue**: The rate limiter registry grows monotonically in long-running processes with dynamic model IDs (e.g., user-specific models).
+
+**Technical Details**:
+- Each unique `model_id` creates a new rate limiter entry
+- Entries are NEVER automatically evicted
+- Each limiter uses ~1KB memory (negligible for <1000 models)
+- Problematic only with thousands of unique model IDs
+
+**Impact Assessment**:
+- ✅ **Low risk** for typical deployments (10-100 models)
+- ⚠️ **Medium risk** for multi-tenant systems with per-user models (1000+ models)
+- ❌ **High risk** for systems generating random/temporary model IDs
+
+**Mitigation Options**:
+
+1. **Manual cleanup via API** (recommended for scheduled maintenance):
+   ```bash
+   # Clear all rate limiters (doesn't affect running requests)
+   curl -X POST http://localhost:8099/api/metrics/rate-limiters/clear
+   ```
+
+2. **Manual cleanup in code**:
+   ```python
+   from fluidmcp.cli.services.rate_limiter import clear_rate_limiters
+   await clear_rate_limiters()
+   ```
+
+3. **Monitor registry size**:
+   ```bash
+   # Check number of registered limiters
+   curl http://localhost:8099/api/metrics/rate-limiters | jq '.total_models'
+   ```
+
+4. **Use stable model IDs** (best practice):
+   - ✅ Good: `"user-123-llama"` (consistent per user)
+   - ❌ Bad: `f"temp-{uuid.uuid4()}"` (new ID every time)
+
+**Future Enhancement**: Automatic pruning of inactive limiters (tracked as enhancement request).
+
+#### Global Cache Configuration
+
+**Issue**: Only the first model's cache configuration is used; subsequent models with different settings are ignored.
+
+**Technical Details**:
+- Cache is a global singleton (shared across all models)
+- First model to initialize cache sets TTL and max_size
+- Later models cannot override these settings
+
+**Current Behavior**:
+```python
+# Model A initializes cache with TTL=300
+model_a = {"cache": {"enabled": true, "ttl": 300, "max_size": 1000}}
+
+# Model B requests TTL=600, but gets TTL=300 (with warning log)
+model_b = {"cache": {"enabled": true, "ttl": 600, "max_size": 500}}
+```
+
+**Warning Logged**:
+```
+WARNING: Response cache already initialized with TTL=300s, max_size=1000.
+Ignoring requested settings: TTL=600s, max_size=500.
+Global cache settings are shared across all models.
+```
+
+**Workaround**: Use consistent cache settings across all models in configuration.
+
+**Future Enhancement**: Per-model caches (tracked as enhancement request).
+
+### Production Deployment Checklist
+
+Before deploying to production:
+
+- [ ] Set appropriate rate limits (`rate`, `burst_capacity`) based on Replicate tier
+- [ ] Configure cache settings (`ttl`, `max_size`) based on workload patterns
+- [ ] Set up monitoring for cache hit rates (target >70%)
+- [ ] Set up alerts for rate limiter utilization (alert if >80%)
+- [ ] Use stable model IDs (avoid dynamic/random IDs)
+- [ ] Schedule periodic rate limiter cleanup (if using dynamic model IDs)
+- [ ] Configure appropriate timeouts for long-running models (video generation: 600s+)
+- [ ] Set up Prometheus scraping for metrics (optional)
+- [ ] Review Replicate billing limits and quotas
+- [ ] Test error handling and retry logic under load
+
+### Scaling Considerations
+
+**Horizontal Scaling** (multiple FluidMCP instances):
+- ✅ Rate limiting works per-instance (no coordination needed)
+- ✅ Caching works per-instance (may cause duplicate API calls)
+- ⚠️ Consider shared Redis cache for multi-instance deployments (future enhancement)
+
+**Vertical Scaling** (single instance, high throughput):
+- Rate limiter may cause head-of-line blocking at >1000 req/s (acceptable for most workloads)
+- Cache size limited by available memory (1000 entries ≈ 10MB)
+- Consider increasing `max_size` for high-cache-hit workloads
 
 ## Examples
 
