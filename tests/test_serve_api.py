@@ -132,7 +132,7 @@ class TestConfigurationManagement:
         response = await client.post("/api/servers", json=invalid_config)
         assert response.status_code == 400
         detail = response.json()["detail"].lower()
-        assert "injection" in detail or "invalid" in detail
+        assert "injection" in detail or "invalid" in detail or "operator-style keys" in detail
 
 
 # ============================================================================
