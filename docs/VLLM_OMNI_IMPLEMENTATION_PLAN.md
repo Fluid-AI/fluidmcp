@@ -244,12 +244,15 @@ See [docs/VLLM_VISION_MODELS.md](docs/VLLM_VISION_MODELS.md) for details.
 
 #### Phase 4: API Endpoints (Extend Existing)
 
-**File**: `fluidmcp/cli/api/management.py` (add new routes)
+**File**: `fluidmcp/cli/api/management.py` (extend existing routes)
 
-**New Endpoints** (~100 lines):
+**Design Decision**: Extend `/api/llm/*` namespace instead of creating separate `/api/omni/*` namespace to avoid API fragmentation.
+
+**New Endpoints** (~80 lines):
 
 ```python
-@router.post("/omni/{model_id}/generate/image")
+# Extend existing /llm/* routes - no separate /omni namespace
+@router.post("/llm/{model_id}/generate/image")
 async def generate_image(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
@@ -259,10 +262,12 @@ async def generate_image(
     Generate image from text prompt (text-to-image).
 
     Works with Replicate image generation models.
+    Validates model supports 'text-to-image' capability.
     """
-    # Route to replicate_client for prediction
+    from ..services.omni_adapter import generate_image as omni_generate_image
+    return await omni_generate_image(model_id, request_body)
 
-@router.post("/omni/{model_id}/generate/video")
+@router.post("/llm/{model_id}/generate/video")
 async def generate_video(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
@@ -272,10 +277,12 @@ async def generate_video(
     Generate video from text prompt (text-to-video).
 
     Supports: CogVideoX, Hunyuan Video, etc.
+    Validates model supports 'text-to-video' capability.
     """
-    # Route to replicate_client for prediction
+    from ..services.omni_adapter import generate_video as omni_generate_video
+    return await omni_generate_video(model_id, request_body)
 
-@router.post("/omni/{model_id}/animate")
+@router.post("/llm/{model_id}/animate")
 async def animate_image(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
@@ -285,15 +292,38 @@ async def animate_image(
     Animate image into video (image-to-video).
 
     Supports: Stable Video Diffusion, etc.
+    Validates model supports 'image-to-video' capability.
     """
-    # Route to replicate_client for prediction
+    from ..services.omni_adapter import animate_image as omni_animate_image
+    return await omni_animate_image(model_id, request_body)
+
+@router.get("/llm/predictions/{prediction_id}")
+async def get_generation_status(
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Check status of async generation (image/video).
+
+    Returns status and output URLs when complete.
+    """
+    from ..services.omni_adapter import get_generation_status
+    return await get_generation_status(prediction_id)
 ```
 
 **Implementation Strategy**:
-- Reuse existing `replicate_client.py` prediction methods
-- Add thin wrapper functions for omni-specific endpoints
+- **Extend existing `/api/llm/*` namespace** - no separate `/omni` routes
+- Delegate to thin `omni_adapter.py` for validation + execution
+- Validate capabilities before execution (fail fast)
+- Reuse existing `replicate_client.py` for actual API calls
 - Polling-based (Replicate's async prediction API)
 - Return job ID + status URL
+
+**Why This Design**:
+- Single API namespace reduces cognitive load
+- Consistent with existing LLM endpoints
+- No duplicate routing logic
+- Stays "basic" - just extends existing patterns
 
 #### Phase 5: Examples
 
@@ -353,7 +383,7 @@ curl -X POST http://localhost:8099/api/llm/llava/v1/chat/completions \
   }'
 
 # 2. Image Generation: Text-to-image (Replicate)
-curl -X POST http://localhost:8099/api/omni/flux-image/generate/image \
+curl -X POST http://localhost:8099/api/llm/flux-image/generate/image \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "A serene Japanese garden with cherry blossoms",
@@ -362,7 +392,7 @@ curl -X POST http://localhost:8099/api/omni/flux-image/generate/image \
 # Returns: {"prediction_id": "abc123", "status": "processing"}
 
 # 3. Video Generation: Text-to-video (Replicate)
-curl -X POST http://localhost:8099/api/omni/hunyuan-video/generate/video \
+curl -X POST http://localhost:8099/api/llm/hunyuan-video/generate/video \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
@@ -371,7 +401,7 @@ curl -X POST http://localhost:8099/api/omni/hunyuan-video/generate/video \
 # Returns: {"prediction_id": "xyz789", "status": "starting"}
 
 # 4. Image-to-Video: Animate image (Replicate)
-curl -X POST http://localhost:8099/api/omni/stable-video/animate \
+curl -X POST http://localhost:8099/api/llm/stable-video/animate \
   -H "Content-Type: application/json" \
   -d '{
     "image_url": "https://example.com/photo.jpg",
@@ -379,7 +409,7 @@ curl -X POST http://localhost:8099/api/omni/stable-video/animate \
   }'
 
 # 5. Check Status (for async gen)
-curl http://localhost:8099/api/omni/status/xyz789
+curl http://localhost:8099/api/llm/predictions/xyz789
 # Returns: {"status": "succeeded", "output": ["https://cdn.url/video.mp4"]}
 ```
 
@@ -433,10 +463,10 @@ class TestVLLMVisionSupport:
 4. `examples/vllm-omni-complete.json` - All capabilities combined
 5. `examples/omni-api-examples.sh` - API usage demonstrations
 6. `tests/test_vllm_omni.py` - Tests for omni endpoints (~150 lines)
-7. `fluidmcp/cli/services/omni_adapter.py` - Helper for omni endpoints (~200 lines)
+7. `fluidmcp/cli/services/omni_adapter.py` - Ultra-thin adapter (~50-80 lines)
 
 ### Files to Modify (2 existing files):
-1. `fluidmcp/cli/api/management.py` - Add omni endpoints (~100 lines)
+1. `fluidmcp/cli/api/management.py` - Extend LLM routes (~80 lines)
 2. `CLAUDE.md` - Add vLLM Omni section (~100 lines)
 
 ### Files to Reference (patterns to reuse):
@@ -478,6 +508,86 @@ class TestVLLMVisionSupport:
 - `"type": "replicate"` → image/video generation
 
 A dedicated `vllm-omni` type can be added later if needed for UI or routing logic, but is unnecessary for basic support.
+
+### 5. Extend `/llm/*` Routes (No Separate `/omni/*` Namespace)
+**Decision**: Add generation endpoints under existing `/api/llm/{model_id}/...` namespace.
+**Rationale**:
+- Avoids API surface fragmentation
+- No duplicate routing logic
+- Consistent with existing LLM endpoints
+- Reduces cognitive load for users
+- Single unified API namespace
+
+**Routes**:
+- `/api/llm/{model_id}/generate/image` (not `/api/omni/...`)
+- `/api/llm/{model_id}/generate/video`
+- `/api/llm/{model_id}/animate`
+
+This keeps the API "basic" by extending existing patterns rather than creating parallel systems.
+
+### 6. Capability Validation (Enforced)
+**Decision**: Validate `capabilities` field before executing requests.
+**Rationale**:
+- Fail fast with clear error messages
+- Prevents confusing runtime errors
+- Simple validation helper (~10 lines)
+- Not complex - just dict lookup + raise
+
+**Implementation**:
+```python
+def assert_capability(model_id: str, required: str):
+    config = get_model_config(model_id)
+    caps = config.get("capabilities", [])
+    if required not in caps:
+        raise HTTPException(400, f"Model doesn't support '{required}'")
+```
+
+### 7. Ultra-Thin omni_adapter.py (50-80 Lines)
+**Decision**: Keep adapter extremely minimal - validation + delegation only.
+**Rationale**:
+- No complex orchestration logic
+- Just validates capabilities and calls replicate_client
+- 4 functions total: 3 generators + 1 status check
+- Actual work done by existing replicate_client.py
+
+**Structure**:
+```python
+# fluidmcp/cli/services/omni_adapter.py (~50-80 lines)
+
+async def generate_image(model_id, payload):
+    assert_capability(model_id, "text-to-image")
+    return await replicate_client.predict(model_id, payload)
+
+async def generate_video(model_id, payload):
+    assert_capability(model_id, "text-to-video")
+    return await replicate_client.predict(model_id, payload)
+
+async def animate_image(model_id, payload):
+    assert_capability(model_id, "image-to-video")
+    return await replicate_client.predict(model_id, payload)
+
+async def get_generation_status(prediction_id):
+    return await replicate_client.get_prediction(prediction_id)
+```
+
+This is NOT a new architecture layer - just a thin routing adapter.
+
+### 8. Standardize Shared Config Fields
+**Decision**: Document shared vs. provider-specific configuration fields.
+**Rationale**:
+- Reduce config schema drift
+- Clear naming conventions
+- Easy to understand what applies to all models vs. specific providers
+
+**Shared Fields** (all models):
+- `type` - Model provider (vllm, replicate)
+- `capabilities` - Feature list (optional but recommended)
+- `timeout` - Request timeout in seconds
+- `endpoints` - API endpoints dict
+
+**Provider-Specific Fields**:
+- vLLM only: `command`, `args`, `env`
+- Replicate only: `model`, `api_key`, `default_params`
 
 ## Output Quality Considerations
 
@@ -616,22 +726,36 @@ This timeline assumes PR #302 has been merged, providing the foundation of Repli
 
 ## Implementation Strategy Summary
 
-**Leverage Existing Code** (~80% reuse):
+**Leverage Existing Code** (~85% reuse):
 - Vision: vLLM already supports this, just document
-- Image/Video: Replicate already integrated, just add wrapper endpoints
+- Image/Video: Replicate already integrated, just add thin routing layer
+- API structure: Extend existing `/api/llm/*` routes (no new namespace)
 - Configuration: Reuse existing `"type": "replicate"` pattern
+- Polling/async: Already implemented in replicate_client.py
 
-**New Code** (~20% new):
-- `omni_adapter.py`: Helper functions for omni endpoints
-- New API routes in `management.py`
-- Documentation and examples
+**New Code** (~15% new):
+- `omni_adapter.py`: Ultra-thin validation + delegation (~50-80 lines)
+- New API routes in `management.py`: 4 endpoints (~80 lines)
+- Capability validation: Simple helper (~10 lines)
+- Documentation and examples (~500 lines)
+
+**Total New Code**: ~640-670 lines (reduced from ~1,040 lines)
+
+**Architectural Principles**:
+- ✅ No separate API namespace (extends `/llm/*`)
+- ✅ No new model types (uses existing `vllm` and `replicate`)
+- ✅ No complex orchestration (just validation + delegation)
+- ✅ Capability enforcement (simple validation helper)
+- ✅ Config standardization (shared fields documented)
 
 **Why This Works**:
 - ✅ Client gets video generation (requested feature)
 - ✅ Stays "basic" (no heavy infrastructure)
 - ✅ Supports Chinese models (CogVideoX, Hunyuan)
-- ✅ Practical timeline (9-14 hours vs 14-21 hours)
+- ✅ Practical timeline (1-2 engineering days)
 - ✅ Minimal risk (reuses proven patterns)
+- ✅ No API fragmentation (single unified namespace)
+- ✅ Simple mental model (extend, don't create parallel system)
 
 ## Out of Scope (Not "Basic Support")
 
