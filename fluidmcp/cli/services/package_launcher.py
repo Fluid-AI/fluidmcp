@@ -335,7 +335,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                 # Only inject headers if this is a tools/call request
                 if request.get("method") == "tools/call" and all_headers:
                     params = request.get("params", {})
-                    if "arguments" not in params:
+                    # Ensure arguments is a dict, not None or missing
+                    if "arguments" not in params or params["arguments"] is None:
                         params["arguments"] = {}
 
                     logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
@@ -383,7 +384,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         # Only inject headers if this is a tools/call request
         if request.get("method") == "tools/call" and all_headers:
             params = request.get("params", {})
-            if "arguments" not in params:
+            # Ensure arguments is a dict, not None or missing
+            if "arguments" not in params or params["arguments"] is None:
                 params["arguments"] = {}
             params["arguments"]["headers"] = all_headers
             request["params"] = params
@@ -505,7 +507,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
                 # Only inject if headers actually exist
                 if all_headers:
-                    if "arguments" not in params:
+                    # Ensure arguments is a dict, not None or missing
+                    if "arguments" not in params or params["arguments"] is None:
                         params["arguments"] = {}
                     params["arguments"]["headers"] = all_headers
 
