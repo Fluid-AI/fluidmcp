@@ -859,12 +859,27 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
             # Return specific model details
             return await _proxy_llm_request(model, "models", "GET")
         else:
-            # Return all models
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=501,
-                detail="Listing all models not yet implemented for legacy vLLM proxy. Use /api/llm/v1/models instead."
-            )
+            # Return all configured models in OpenAI format
+            import time
+            with _llm_registry_lock:
+                endpoints_snapshot = dict(_llm_endpoints)
+
+            all_models = []
+            for model_id in endpoints_snapshot.keys():
+                all_models.append({
+                    "id": model_id,
+                    "object": "model",
+                    "created": int(time.time()),
+                    "owned_by": "fluidmcp",
+                    "permission": [],
+                    "root": model_id,
+                    "parent": None
+                })
+
+            return {
+                "object": "list",
+                "data": all_models
+            }
 
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():

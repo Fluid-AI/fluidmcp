@@ -1917,6 +1917,46 @@ async def unified_list_models(
         }
 
 
+@router.get("/llm/v1/models/{model_id}")
+async def unified_get_model(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible retrieve model endpoint.
+
+    Returns details for a specific model by ID.
+
+    Args:
+        model_id: The model ID to retrieve
+
+    Returns:
+        OpenAI-format model details
+
+    Example:
+        GET /api/llm/v1/models/llama-2-70b
+        {
+            "id": "llama-2-70b",
+            "object": "model",
+            "created": 1677649963,
+            "owned_by": "fluidmcp"
+        }
+    """
+    config = get_model_config(model_id)
+    if not config:
+        raise HTTPException(404, f"Model '{model_id}' not found")
+
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": "fluidmcp",
+        "permission": [],
+        "root": model_id,
+        "parent": None
+    }
+
+
 # ============================================================================
 # ============================================================================
 # Metrics Endpoints (Observability)

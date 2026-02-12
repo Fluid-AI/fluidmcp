@@ -241,7 +241,7 @@ class TestStreamingValidation:
 
                         response = client.post(
                             "/llm/v1/chat/completions",
-                            json={"stream": True, "messages": []}
+                            json={"model": "vllm", "stream": True, "messages": []}
                         )
 
                         assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
@@ -253,7 +253,7 @@ class TestStreamingValidation:
 
                         response = client.post(
                             "/llm/v1/chat/completions",
-                            json={"stream": False, "messages": []}
+                            json={"model": "vllm", "stream": False, "messages": []}
                         )
 
                         assert response.status_code == 200

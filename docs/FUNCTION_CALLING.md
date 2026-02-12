@@ -65,16 +65,32 @@ This follows the standard OpenAI function calling pattern where **the client is 
 ```json
 POST /llm/v1/chat/completions
 {
+  "model": "hermes-3-llama-3.1-8b",
   "messages": [...],
   "tools": [...]  // ← Passed through to vLLM
 }
 ```
 
-FluidMCP proxy code ([run_servers.py:685-701](../fluidmcp/cli/services/run_servers.py#L685-L701)):
+FluidMCP proxy code ([run_servers.py:809-830](../fluidmcp/cli/services/run_servers.py#L809-L830)):
 ```python
 @app.post("/llm/v1/chat/completions", tags=["llm"])
-async def proxy_chat_completions(model_id: str, request: Request):
+async def proxy_chat_completions(request: Request):
     body = await request.json()
+
+    # Extract model_id from request body (OpenAI-style)
+    model_id = body.get("model")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
+
+    # Check if streaming is requested
+    if body.get("stream", False):
+        _validate_streaming_request(model_id, "chat")
+        return StreamingResponse(
+            _proxy_llm_request_streaming(model_id, "chat", body),
+            media_type="text/event-stream"
+        )
+
+    # Non-streaming request
     return await _proxy_llm_request(model_id, "chat", "POST", body)
 ```
 
@@ -490,7 +506,7 @@ async def chat_with_tools(user_message: str):
             # Step 4: Send tool results back to model
             response = await client.post(
                 f"{FLUIDMCP_URL}/llm/v1/chat/completions",
-                json={"messages": messages}
+                json={"model": model_id, "messages": messages}
             )
             data = response.json()
             final_message = data["choices"][0]["message"]["content"]

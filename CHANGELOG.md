@@ -51,7 +51,6 @@ All LLM providers (Replicate, vLLM, Ollama, LM Studio) were unified under a sing
 - `/api/replicate/models/{model_id}/health`
 - `/api/llm/{model_id}/v1/chat/completions` (replaced with `/api/llm/v1/chat/completions`)
 - `/api/llm/{model_id}/v1/completions` (replaced with `/api/llm/v1/completions`)
-- `/api/llm/{model_id}/v1/embeddings` (replaced with `/api/llm/v1/embeddings`)
 
 ### Added
 

@@ -550,7 +550,7 @@ Client Request (OpenAI format)
     ↓
 FluidMCP Gateway (port 8099)
     ↓
-POST /llm/vllm/v1/chat/completions
+POST /llm/v1/chat/completions (with model="vllm" in body)
     ↓
 HTTP Proxy (httpx)
     ↓

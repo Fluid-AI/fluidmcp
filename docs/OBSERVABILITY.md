@@ -392,8 +392,9 @@ MODEL_ID=llama-2-70b locust -f examples/load_test_locust.py \
 **Verify metrics are being collected:**
 ```bash
 # Make a request
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \ -d '{
-    "model": "test-model","messages": [{"role": "user", "content": "test"}]}'
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "test-model", "messages": [{"role": "user", "content": "test"}]}'
 
 # Check metrics
 curl http://localhost:8099/api/metrics/models/test-model
