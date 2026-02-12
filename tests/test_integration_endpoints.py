@@ -74,7 +74,7 @@ class TestReplicateEndpoints:
         with patch('fluidmcp.cli.api.management.get_model_type', return_value=None):
             response = client.post(
                 "/api/llm/v1/chat/completions",
-                json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
+                json={"model": "nonexistent-model", "messages": [{"role": "user", "content": "Test"}]}
             )
 
             assert response.status_code == 404

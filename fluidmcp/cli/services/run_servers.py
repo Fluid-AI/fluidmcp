@@ -860,16 +860,16 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
             return await _proxy_llm_request(model, "models", "GET")
         else:
             # Return all configured models in OpenAI format
-            import time
             with _llm_registry_lock:
                 endpoints_snapshot = dict(_llm_endpoints)
 
+            created_timestamp = int(time.time())
             all_models = []
             for model_id in endpoints_snapshot.keys():
                 all_models.append({
                     "id": model_id,
                     "object": "model",
-                    "created": int(time.time()),
+                    "created": created_timestamp,
                     "owned_by": "fluidmcp",
                     "permission": [],
                     "root": model_id,

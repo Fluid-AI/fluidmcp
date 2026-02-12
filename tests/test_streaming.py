@@ -169,10 +169,8 @@ class TestStreamingValidation:
                     )
 
                     # Should return 503 BEFORE trying to stream if model not running
-                    # OR 404 if model not found in registry
-                    assert response.status_code in [404, 503]
-                    if response.status_code == 503:
-                        assert "not running" in response.json()["detail"]
+                    assert response.status_code == 503
+                    assert "not running" in response.json()["detail"]
 
     def test_malformed_json_returns_error(self):
         """Test that malformed JSON in request body is handled gracefully"""

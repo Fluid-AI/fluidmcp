@@ -1898,16 +1898,19 @@ async def unified_list_models(
         }
     else:
         # Return all models
-        from ..services.config_resolver import llm_model_registry
+        from ..services.llm_provider_registry import list_all_models
+        models = list_all_models()
+
+        created_timestamp = int(time.time())
         all_models = []
-        for model_id in llm_model_registry.keys():
+        for model_info in models:
             all_models.append({
-                "id": model_id,
+                "id": model_info["id"],
                 "object": "model",
-                "created": int(time.time()),
+                "created": created_timestamp,
                 "owned_by": "fluidmcp",
                 "permission": [],
-                "root": model_id,
+                "root": model_info["id"],
                 "parent": None
             })
 
