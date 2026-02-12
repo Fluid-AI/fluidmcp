@@ -40,18 +40,64 @@ Running tests:
 """
 
 import asyncio
-import os
-import uuid
+import time
 
-import httpx
 import pytest
 
-# Import utility functions from conftest.py
-# Note: Fixtures are automatically available from conftest.py
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
-from conftest import wait_for_server_status, wait_for_condition
+
+# ============================================================================
+# Test Utility Functions
+# ============================================================================
+
+async def wait_for_server_status(client, server_id: str, expected_status: str, timeout: float = 10.0) -> bool:
+    """
+    Poll server status until it reaches expected state or timeout.
+
+    Args:
+        client: httpx.AsyncClient instance
+        server_id: The server ID to check
+        expected_status: The status to wait for (e.g., "running", "stopped")
+        timeout: Maximum time to wait in seconds
+
+    Returns:
+        True if server reached expected status, False if timeout
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            response = await client.get(f"/api/servers/{server_id}/status")
+            if response.status_code == 200:
+                data = response.json()
+                status = data.get("state") or data.get("status")
+                if status == expected_status:
+                    return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return False
+
+
+async def wait_for_condition(condition_func, timeout: float = 10.0, poll_interval: float = 0.5) -> bool:
+    """
+    Generic polling utility for waiting on async conditions.
+
+    Args:
+        condition_func: Async function that returns True when condition is met
+        timeout: Maximum time to wait in seconds
+        poll_interval: Time between checks in seconds
+
+    Returns:
+        True if condition met, False if timeout
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            if await condition_func():
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(poll_interval)
+    return False
 
 
 # ============================================================================
@@ -135,7 +181,7 @@ class TestServerOperations:
         ⚠️  SLOW: Starts actual MCP server processes.
         """
         client = api_client
-        app, db_manager, server_manager = serve_test_app
+        _app, _db_manager, _server_manager = serve_test_app
 
         # Create server config
         server_config = {
@@ -167,7 +213,6 @@ class TestServerOperations:
         assert "pid" in data and data["pid"] is not None
 
         # Restart server
-        old_pid = data["pid"]
         response = await client.post("/api/servers/lifecycle-test-server/restart")
         assert response.status_code == 200
 
@@ -188,17 +233,14 @@ class TestServerOperations:
         response = await client.post("/api/servers/lifecycle-test-server/stop")
         assert response.status_code == 200
 
-        # Wait for server to stop (check for either stopped status or 404)
+        # Wait for server to stop (require 200 response with explicit stopped state)
         async def check_stopped():
             response = await client.get("/api/servers/lifecycle-test-server/status")
-            if response.status_code == 404:
-                return True
-            if response.status_code == 200:
-                data = response.json()
-                status_field = data.get("state") or data.get("status")
-                if status_field and status_field in ["stopped", "not_found", "not found"]:
-                    return True
-            return False
+            if response.status_code != 200:
+                return False
+            data = response.json()
+            status_field = data.get("state") or data.get("status")
+            return status_field == "stopped"
 
         success = await wait_for_condition(check_stopped, timeout=10.0)
         assert success, "Server failed to stop within 10 seconds"
@@ -286,7 +328,7 @@ class TestConcurrentOperations:
         ⚠️  SLOW: Attempts to start servers concurrently.
         """
         client = api_client
-        app, db_manager, server_manager = serve_test_app
+        _app, _db_manager, _server_manager = serve_test_app
 
         # Create server
         server_config = {
@@ -338,7 +380,7 @@ class TestErrorHandling:
         Test that graceful shutdown stops all running MCP servers.
         ⚠️  SLOW: Starts 3 actual MCP servers.
         """
-        app, db_manager, server_manager = serve_test_app
+        _app, _db_manager, server_manager = serve_test_app
         client = api_client
 
         # Create and start 3 servers
@@ -425,7 +467,15 @@ class TestToolManagement:
             pytest.skip("Tools endpoint not available or tools not discovered")
 
         assert response.status_code == 200
-        tools = response.json()
+        data = response.json()
+        # The tools endpoint may return either:
+        #   - an object: {"server_id": ..., "tools": [...], "count": ...}
+        #   - or a raw list of tools (legacy behavior)
+        if isinstance(data, dict):
+            tools = data.get("tools", [])
+        else:
+            tools = data
+        assert isinstance(tools, list)
         assert len(tools) > 0
         tool_names = [tool["name"] for tool in tools]
         assert any("memory" in name.lower() for name in tool_names)
@@ -470,7 +520,10 @@ class TestToolManagement:
             pytest.skip("Tools endpoint not available or tools not discovered")
 
         assert response.status_code == 200
-        tools = response.json()
+        data = response.json()
+        # /api/servers/{id}/tools returns a dict with a "tools" field; fall back to
+        # treating the whole payload as the list for backward compatibility.
+        tools = data.get("tools", data) if isinstance(data, dict) else data
 
         # Find a tool to execute
         tool_to_execute = None
