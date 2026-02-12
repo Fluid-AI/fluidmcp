@@ -1879,22 +1879,19 @@ async def unified_list_models(
         OpenAI-format model list or single model details
     """
     if model:
-        # Return specific model details
+        # Return specific model details (single model object, not list)
         config = get_model_config(model)
         if not config:
             raise HTTPException(404, f"Model '{model}' not found")
 
         return {
-            "object": "list",
-            "data": [{
-                "id": model,
-                "object": "model",
-                "created": int(time.time()),
-                "owned_by": "fluidmcp",
-                "permission": [],
-                "root": model,
-                "parent": None
-            }]
+            "id": model,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "fluidmcp",
+            "permission": [],
+            "root": model,
+            "parent": None
         }
     else:
         # Return all models
