@@ -1,53 +1,35 @@
-import React, { Component } from 'react';
-import type { ReactNode } from 'react';
+import React, { Component, ReactNode } from 'react';
 
-interface ErrorBoundaryProps {
+interface Props {
   children: ReactNode;
   fallback?: ReactNode;
 }
 
-interface ErrorBoundaryState {
+interface State {
   hasError: boolean;
   error?: Error;
 }
 
-export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
+export class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
     super(props);
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Only log errors in development to prevent leaking sensitive information
-    if (import.meta.env.DEV) {
-      console.error('ErrorBoundary caught error:', error, errorInfo);
-    }
-    // In production, you should send errors to a logging service
-    // Example: logErrorToService(error, errorInfo);
+    console.error('ErrorBoundary caught an error:', error, errorInfo);
   }
 
   render() {
     if (this.state.hasError) {
-      if (this.props.fallback) {
-        return this.props.fallback;
-      }
-
-      return (
-        <div className="result-error">
-          <h3>Error Rendering Content</h3>
-          <p>Failed to render result content. The content may be malformed.</p>
-          {this.state.error && (
-            <details style={{ marginTop: '1rem' }}>
-              <summary style={{ cursor: 'pointer' }}>Error Details</summary>
-              <pre style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
-                {this.state.error.message}
-              </pre>
-            </details>
-          )}
+      return this.props.fallback || (
+        <div style={{ padding: '2rem', color: '#ef4444' }}>
+          <h2>Something went wrong</h2>
+          <p>{this.state.error?.message}</p>
         </div>
       );
     }
