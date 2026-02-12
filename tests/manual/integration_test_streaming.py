@@ -25,7 +25,6 @@ import os
 FLUIDMCP_BASE_URL = os.getenv("FLUIDMCP_BASE_URL", "http://localhost:8099")
 VLLM_MODEL_ID = os.getenv("VLLM_MODEL_ID", "vllm")
 BASE_URL = f"{FLUIDMCP_BASE_URL}/llm/v1"
-TEST_MODEL = os.getenv("TEST_MODEL_NAME", "facebook/opt-125m")  # Model name used in test requests
 
 def test_non_streaming():
     """Test non-streaming chat completion"""

@@ -855,10 +855,25 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
 
     @app.get("/llm/v1/models", tags=["llm"])
     async def proxy_models(model: str = None):
-        """Proxy models list endpoint to LLM backend."""
+        """List models or get specific model details (OpenAI-compatible)."""
         if model:
-            # Return specific model details
-            return await _proxy_llm_request(model, "models", "GET")
+            # Return specific model details in OpenAI format
+            # Check if model exists in registry
+            with _llm_registry_lock:
+                if model not in _llm_endpoints:
+                    raise HTTPException(404, f"Model '{model}' not found")
+
+            # Return single model object (same format as /llm/v1/models/{model_id})
+            created_timestamp = int(time.time())
+            return {
+                "id": model,
+                "object": "model",
+                "created": created_timestamp,
+                "owned_by": "fluidmcp",
+                "permission": [],
+                "root": model,
+                "parent": None
+            }
         else:
             # Return all configured models in OpenAI format
             with _llm_registry_lock:

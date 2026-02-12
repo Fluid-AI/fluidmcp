@@ -71,7 +71,7 @@ POST /api/llm/v1/chat/completions
 }
 ```
 
-FluidMCP proxy code ([run_servers.py:809-830](../fluidmcp/cli/services/run_servers.py#L809-L830)):
+FluidMCP management API routes to vLLM proxy ([run_servers.py:809-830](../fluidmcp/cli/services/run_servers.py#L809-L830)):
 ```python
 @app.post("/llm/v1/chat/completions", tags=["llm"])
 async def proxy_chat_completions(request: Request):
