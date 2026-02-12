@@ -10,9 +10,12 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import zipfile
 import requests
+import fcntl
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -48,62 +51,129 @@ app = Server("vercel-deploy")
 SITES_DIR = Path.home() / ".vercel-mcp" / "sites"
 SITES_DIR.mkdir(parents=True, exist_ok=True)
 
+# Global deployment tracking and synchronization
+_active_deployment_lock = threading.Lock()
+_active_deployment = None  # Stores the current active deployment thread and site_name
+_deployment_cancelled = threading.Event()  # Event to signal cancellation
+
 # Deployment history file
 DEPLOYMENT_HISTORY = SITES_DIR / "deployment_history.json"
 
 
 def load_deployment_history():
-    """Load deployment history from file"""
+    """Load deployment history from file with file locking and aggressive cache clearing"""
     if DEPLOYMENT_HISTORY.exists():
         try:
-            # Clear any OS-level file caching by opening with direct I/O intent
             import os
-            # First, get fresh file stats to ensure no stale metadata
-            os.stat(DEPLOYMENT_HISTORY)
+            import time
 
+            logger.info(f"[LOAD] Starting to load deployment history at {datetime.now().isoformat()}")
+            print(f"\n{'='*80}", file=sys.stderr, flush=True)
+            print(f"[LOAD] Starting to load deployment history at {datetime.now().isoformat()}", file=sys.stderr, flush=True)
+
+            # NUCLEAR cache clearing
+            # 1. Sync filesystem FIRST
+            try:
+                os.sync()
+                logger.info("[LOAD] Called os.sync()")
+            except (AttributeError, OSError) as e:
+                logger.info(f"[LOAD] os.sync() not available: {e}")
+
+            # 2. Small delay to ensure writes complete
+            time.sleep(0.1)
+            logger.info("[LOAD] Waited 100ms for filesystem")
+
+            # 3. Clear stat cache
+            file_size = os.stat(DEPLOYMENT_HISTORY).st_size
+            file_mtime = os.stat(DEPLOYMENT_HISTORY).st_mtime
+            logger.info(f"[LOAD] File size: {file_size} bytes, modified: {datetime.fromtimestamp(file_mtime).isoformat()}")
+
+            # 4. Read file TWICE to force cache invalidation
+            logger.info("[LOAD] Reading file...")
             with open(DEPLOYMENT_HISTORY, 'r') as f:
-                data = json.load(f)
-                logger.debug(f"Loaded deployment history: {len(data)} entries")
-                return data
+                # Acquire shared lock for reading
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                except (OSError, AttributeError):
+                    pass
+
+                try:
+                    data = json.load(f)
+                    logger.info(f"[LOAD] Successfully loaded {len(data)} entries")
+
+                    # Log the last 3 entries with FULL details
+                    if data:
+                        logger.info("[LOAD] Last 3 entries:")
+                        print(f"[LOAD] Last 3 entries:", file=sys.stderr, flush=True)
+                        for d in data[-3:]:
+                            logger.info(f"[LOAD]   - {d.get('site_name')}: {d.get('deployment_status')} @ {d.get('deployed_at', d.get('created_at', 'no time'))[:19]}")
+                            logger.info(f"[LOAD]     URL: {d.get('deploy_url', 'no url')[:100]}")
+                            print(f"[LOAD]   - {d.get('site_name')}: {d.get('deployment_status')} @ {d.get('deployed_at', d.get('created_at', 'no time'))[:19]}", file=sys.stderr, flush=True)
+                            print(f"[LOAD]     URL: {d.get('deploy_url', 'no url')[:100]}", file=sys.stderr, flush=True)
+
+                    return data
+                finally:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except (OSError, AttributeError):
+                        pass
         except Exception as e:
-            logger.error(f"Error loading deployment history: {e}")
+            logger.error(f"[LOAD] Error loading deployment history: {e}")
             return []
+    else:
+        logger.warning(f"[LOAD] Deployment history file does not exist: {DEPLOYMENT_HISTORY}")
     return []
 
 
 def save_deployment_history(deployments):
-    """Save deployment history to file"""
+    """Save deployment history to file with file locking"""
     import os
     try:
         with open(DEPLOYMENT_HISTORY, 'w') as f:
-            json.dump(deployments, f, indent=2)
-            f.flush()  # Flush Python's buffer
-            os.fsync(f.fileno())  # Force OS to write to disk immediately
+            # Acquire exclusive lock for writing
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except (OSError, AttributeError):
+                pass  # File locking not available on all platforms
+
+            try:
+                json.dump(deployments, f, indent=2)
+                f.flush()  # Flush Python's buffer
+                os.fsync(f.fileno())  # Force OS to write to disk immediately
+            finally:
+                # Release lock
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                except (OSError, AttributeError):
+                    pass
     except Exception as e:
         logger.error(f"Error saving deployment history: {e}")
 
 
 def clean_display_url(url: str) -> str:
     """
-    Clean Vercel URL for display by removing team name suffixes.
+    Clean Vercel URL for display by removing team name suffixes ONLY.
+
+    This is a fallback - the real production URL should come from Vercel's API.
+    This function ONLY removes the team name, it does NOT modify timestamps.
 
     Converts:
     https://simple-calculator-20260211074502-shivam-swamis-projects.vercel.app/
     To:
     https://simple-calculator-20260211074502.vercel.app/
-
-    Preserves the actual URL in history for tracking purposes.
+    (keeping the full timestamp as-is)
     """
     if not url or not isinstance(url, str):
         return url
 
-    # Pattern: Match timestamp (14 digits), capture it, then remove team name suffix
-    # Vercel URLs format: {site-name}-{timestamp}-{team-name}-projects.vercel.app
-    # We want to keep: {site-name}-{timestamp}.vercel.app
     import re
-    cleaned_url = re.sub(r'(-\d{14})-[a-z0-9-]+-projects\.vercel\.app', r'\1.vercel.app', url)
 
-    # If pattern didn't match (e.g., URL without timestamp), return original URL
+    # ONLY remove the "-{team-name}-projects" suffix, don't modify anything else
+    # Pattern: Find timestamp digits, capture everything up to that point, then remove team name + "-projects"
+    # URL format: {site-name}-{timestamp}-{team-name}-projects.vercel.app
+    # Result: {site-name}-{timestamp}.vercel.app (with original timestamp unchanged)
+    cleaned_url = re.sub(r'(-\d+)-[a-z0-9-]+-projects\.vercel\.app', r'\1.vercel.app', url)
+
     return cleaned_url
 
 
@@ -482,10 +552,57 @@ Be creative and build something impressive that looks and feels professional.
             model='gemini-2.5-flash',
             contents=user_prompt
         )
-        response_text = response.text
-        logger.info("Received Gemini AI response, extracting code blocks...")
 
-        # Extract code blocks (same logic as Anthropic)
+        # Get response text with proper error handling
+        response_text = None
+        if hasattr(response, 'text') and response.text:
+            response_text = response.text
+        elif hasattr(response, 'candidates') and response.candidates:
+            # Try to get text from candidates
+            if response.candidates[0].content.parts:
+                response_text = response.candidates[0].content.parts[0].text
+
+        if not response_text:
+            logger.error(f"Gemini returned empty response. Response object: {response}")
+            raise RuntimeError("Gemini API returned empty response. The response object had no text content.")
+
+        logger.info("Received Gemini AI response, extracting code blocks...")
+        logger.debug(f"Response length: {len(response_text)} characters")
+    except Exception as e:
+        error_msg = str(e)
+
+        # Check for specific error types
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg or "quota" in error_msg.lower():
+            logger.error("=" * 80)
+            logger.error("GEMINI API QUOTA EXCEEDED!")
+            logger.error("=" * 80)
+            logger.error("You have exceeded the Gemini free tier quota (20 requests/day).")
+            logger.error("Solutions:")
+            logger.error("  1. Wait 24 hours for quota to reset")
+            logger.error("  2. Use a different Gemini API key")
+            logger.error("  3. Upgrade to paid Gemini plan")
+            logger.error("=" * 80)
+            raise RuntimeError(
+                "❌ GEMINI API QUOTA EXCEEDED\n\n"
+                "You've used all 20 free Gemini API requests for today.\n\n"
+                "Solutions:\n"
+                "  1. Wait 24 hours for quota to reset\n"
+                "  2. Get a new Gemini API key from https://aistudio.google.com/app/apikey\n"
+                "  3. Upgrade to paid plan\n\n"
+                f"Original error: {error_msg}"
+            )
+        elif "rate" in error_msg.lower() or "limit" in error_msg.lower():
+            raise RuntimeError(
+                f"❌ GEMINI API RATE LIMIT\n\n"
+                f"The Gemini API is rate limiting requests. Please wait a few seconds and try again.\n\n"
+                f"Original error: {error_msg}"
+            )
+        else:
+            # Re-raise original exception for other errors
+            raise
+
+    # Extract code blocks (same logic as Anthropic)
+    try:
         result = {}
 
         # Extract HTML
@@ -701,6 +818,18 @@ def generate_and_deploy_in_background(site_type: str, site_name: str, custom_con
         log_to_file(f"[Thread] Prompt: {prompt[:100]}...")
         log_to_file("=" * 80)
 
+        # Check if cancelled before starting
+        if _deployment_cancelled.is_set():
+            log_to_file(f"[CANCELLED] Deployment cancelled before generation started")
+            deployments = load_deployment_history()
+            for dep in reversed(deployments):
+                if dep.get("site_name") == site_name:
+                    dep["deployment_status"] = "cancelled"
+                    dep["cancelled_at"] = datetime.now().isoformat()
+                    break
+            save_deployment_history(deployments)
+            return
+
         # Update status to "generating"
         log_to_file("[Step 1] Loading deployment history...")
         deployments = load_deployment_history()
@@ -731,6 +860,19 @@ def generate_and_deploy_in_background(site_type: str, site_name: str, custom_con
         project_path = loop.run_until_complete(generate_website(site_type, site_name, custom_content, prompt))
         log_to_file(f"[Step 2] Website generated at: {project_path}")
 
+        # Check if cancelled after generation
+        if _deployment_cancelled.is_set():
+            log_to_file(f"[CANCELLED] Deployment cancelled after generation")
+            loop.close()
+            deployments = load_deployment_history()
+            for dep in reversed(deployments):
+                if dep.get("site_name") == site_name:
+                    dep["deployment_status"] = "cancelled"
+                    dep["cancelled_at"] = datetime.now().isoformat()
+                    break
+            save_deployment_history(deployments)
+            return
+
         # Update status to "deploying"
         log_to_file("[Step 3] Updating status to 'deploying'...")
         deployments = load_deployment_history()
@@ -746,7 +888,7 @@ def generate_and_deploy_in_background(site_type: str, site_name: str, custom_con
 
         # Deploy to Vercel
         log_to_file("[Step 4] Deploying to Vercel...")
-        deploy_url = loop.run_until_complete(deploy_to_vercel_internal(str(project_path), site_name))
+        deploy_url = loop.run_until_complete(deploy_to_vercel_internal(str(project_path), site_name, thread_log_file))
         loop.close()
         log_to_file(f"[Step 4] Background deployment successful: {deploy_url}")
 
@@ -812,7 +954,8 @@ def deploy_in_background_sync(project_path: str, site_name: str, site_type: str,
         # Run async deployment in a new event loop (thread-safe)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        deploy_url = loop.run_until_complete(deploy_to_vercel_internal(project_path, site_name))
+        # Note: Can't pass thread_log_file here as it's not available in this scope
+        deploy_url = loop.run_until_complete(deploy_to_vercel_internal(project_path, site_name, None))
         loop.close()
 
         logger.info(f"[Thread] Background deployment successful: {deploy_url}")
@@ -866,8 +1009,21 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="get_deployment_url",
+            description="Get the deployed URL for a website. Use this when user asks: 'show me URL', 'what's the URL', 'give me the link', 'deployed URL', 'show my site', 'where is my site'. ALWAYS call this tool - NEVER make up URLs. Returns the actual production URL from Vercel.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "site_name_or_description": {
+                        "type": "string",
+                        "description": "Optional: Name or description of the site to find (e.g., 'timer', 'landing page', 'tata motors'). If not provided, shows all recent deployments."
+                    }
+                }
+            }
+        ),
+        Tool(
             name="list_deployed_sites",
-            description="List all websites deployed through this MCP server. Returns site names, types, deployment times, and live Vercel URLs. CRITICAL INSTRUCTIONS: (1) ALWAYS copy the EXACT URLs from the tool result - NEVER make up or modify URLs. (2) ALWAYS include the complete tool result in your answer to the user. (3) URLs will be on vercel.app domain - NEVER mention netlify.app. (4) If status is 'deployed', the site is LIVE NOW at the URL shown. (5) NEVER say generic things like 'check back later' if the URL is already provided. (6) Copy and paste the EXACT URL from the observation.",
+            description="List all deployed websites with their URLs and status. Use when user asks: 'show my sites', 'list deployments', 'what have I deployed'. ALWAYS call this - NEVER answer from memory.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -911,7 +1067,17 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     - NEVER mention "Netlify" or "Netlify platform"
     - NEVER use "netlify.app" URLs - only "vercel.app"
     - This is a Vercel deployment server, not a Netlify deployment server
+
+    AGENT BEHAVIOR FOR DEPLOYMENTS:
+    When create_and_deploy_site is called:
+    1. Tell user: "I'll check the status for you automatically in 2 minutes"
+    2. WAIT 120 seconds (do not respond during this time)
+    3. AUTOMATICALLY call list_deployed_sites with the site name as filter
+    4. Show the deployed URL to the user WITHOUT them having to ask
+    5. If status is "generating", wait 60 more seconds and check again
+    6. Do NOT make the user ask "show me deployed url" multiple times
     """
+    import sys  # Ensure sys is available in function scope
     try:
         if arguments is None:
             arguments = {}
@@ -940,7 +1106,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             # ALWAYS append timestamp to ensure uniqueness on Vercel
             if site_name:
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                final_site_name = f"{site_name}-{timestamp}"
+                # Convert to lowercase for Vercel compatibility
+                final_site_name = f"{site_name.lower()}-{timestamp}"
             else:
                 final_site_name = auto_site_name
 
@@ -967,15 +1134,37 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             save_deployment_history(deployments)
             logger.info(f"[TOOL CALL] Saved deployment history (now has {len(deployments)} entries)")
 
+            # CRITICAL: Cancel any existing deployment before starting new one
+            global _active_deployment, _deployment_cancelled
+            with _active_deployment_lock:
+                if _active_deployment is not None:
+                    old_thread, old_site_name = _active_deployment
+                    if old_thread.is_alive():
+                        logger.info(f"[TOOL CALL] Cancelling previous deployment: {old_site_name}")
+                        _deployment_cancelled.set()  # Signal cancellation
+
+                        # Wait for thread to finish (with timeout)
+                        old_thread.join(timeout=2.0)
+                        if old_thread.is_alive():
+                            logger.warning(f"[TOOL CALL] Previous deployment didn't stop in time, continuing anyway")
+
+                # Reset cancellation flag for new deployment
+                _deployment_cancelled.clear()
+
             # Start generation AND deployment in background thread
             # This ensures we return immediately (no timeout)
-            logger.info(f"[TOOL CALL] Creating background thread...")
+            logger.info(f"[TOOL CALL] Creating background thread for {final_site_name}...")
             thread = threading.Thread(
                 target=generate_and_deploy_in_background,
                 args=(site_type, final_site_name, {}, prompt),
                 daemon=True
             )
             thread.start()
+
+            # Track the new active deployment
+            with _active_deployment_lock:
+                _active_deployment = (thread, final_site_name)
+
             logger.info(f"[TOOL CALL] Thread started! Thread ID: {thread.ident}, Is Alive: {thread.is_alive()}")
             logger.info(f"[TOOL CALL] Returning response to agent...")
 
@@ -986,165 +1175,325 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 "landing": "Landing Page"
             }.get(site_type, "AI-Generated Website")
 
+            # Check if we cancelled a previous deployment
+            cancelled_msg = ""
+            if _deployment_cancelled.is_set() or (_active_deployment and _active_deployment[1] != final_site_name):
+                cancelled_msg = "\n⚠️  Previous deployment was cancelled to start this new one.\n"
+
             result_text = f"""Website Creation Started!
 
 Site Type: {site_type_name}
 Site Name: {final_site_name}
-
+{cancelled_msg}
 Your website is being generated and deployed in the background.
-⏱️  Generation: 15-30 seconds (AI-powered)
+⏱️  Generation: 90-120 seconds (AI-powered)
 ⏱️  Deployment: 30-60 seconds (Vercel)
+⏱️  Total Time: ~2-3 minutes
 
-Check deployment status with the 'list_deployed_sites' tool to get your live URL once ready."""
+AGENT INSTRUCTIONS:
+1. Tell the user: "I'll automatically check the deployment status for you in 2 minutes."
+2. WAIT for 2 minutes (120 seconds) - do NOT respond to the user during this time
+3. After 2 minutes, AUTOMATICALLY call 'list_deployed_sites' with filter='{final_site_name}'
+4. Show the user the deployed URL immediately - do NOT make them ask for it
+5. If status is still "generating", wait another 60 seconds and check again
+6. CRITICAL: If user asks about URL/deployments at ANY time, call 'list_deployed_sites' immediately"""
 
             return [TextContent(type="text", text=result_text)]
 
-        elif name == "list_deployed_sites":
-            filter_query = arguments.get("filter", "").strip().lower()
-            logger.info(f"[LIST TOOL] Listing deployed sites (filter: '{filter_query}') at {datetime.now().isoformat()}")
+        elif name == "get_deployment_url":
+            # This tool is a simpler, more focused version specifically for getting URLs
+            # It just calls list_deployed_sites with the provided filter
+            try:
+                current_time = datetime.now()
+                filter_query = arguments.get("site_name_or_description", "").strip().lower()
 
-            deployments = load_deployment_history()
-            logger.info(f"[LIST TOOL] Loaded {len(deployments)} total deployments from history")
+                logger.info(f"[GET_URL TOOL] Getting deployment URL (filter: '{filter_query}') at {current_time.isoformat()}")
 
-            # Log the last 3 entries for debugging
-            if deployments:
-                logger.info(f"[LIST TOOL] Last 3 entries:")
-                for d in deployments[-3:]:
-                    logger.info(f"[LIST TOOL]   - {d.get('site_name')}: {d.get('deployment_status')} @ {d.get('deployed_at', d.get('created_at', 'no time'))[:19]}")
+                # Use the same logic as list_deployed_sites
+                deployments = load_deployment_history()
 
-            # Filter to show:
-            # - All "generating" and "deploying" sites (new Vercel sites)
-            # - Only "deployed" sites with vercel.app URLs (exclude old Netlify sites)
-            active_deployments = [
-                d for d in deployments
-                if d.get("deployment_status") in ["generating", "deploying"]
-                or (d.get("deployment_status") == "deployed" and "vercel.app" in d.get("deploy_url", ""))
-            ]
-
-            logger.info(f"[LIST TOOL] Filtered to {len(active_deployments)} active Vercel deployments")
-
-            if not active_deployments:
-                result_text = "No sites have been successfully deployed yet. Use create_and_deploy_site to deploy your first website!"
-                return [TextContent(type="text", text=result_text)]
-
-            # If filter is provided, search through ALL deployments for matches
-            if filter_query:
-                # Normalize filter query: replace ALL separators with spaces for flexible matching
-                # "timer", "countdown-timer", "countdown_timer" all match "countdown timer"
-                normalized_filter = filter_query.replace("_", " ").replace("-", " ").strip()
-
-                logger.info(f"Searching with normalized filter: '{normalized_filter}'")
-                logger.info(f"Total active deployments to search: {len(active_deployments)}")
-
-                filtered_deployments = []
-                for d in active_deployments:
-                    # Normalize ALL searchable fields consistently
-                    site_name_raw = d.get("site_name", "")
-                    prompt_raw = d.get("prompt", "")
-                    site_type_raw = d.get("site_type", "")
-
-                    site_name_norm = site_name_raw.lower().replace("_", " ").replace("-", " ")
-                    prompt_norm = prompt_raw.lower().replace("_", " ").replace("-", " ")
-                    site_type_norm = site_type_raw.lower().replace("_", " ").replace("-", " ")
-
-                    # Match filter against ALL normalized fields
-                    match_site = normalized_filter in site_name_norm
-                    match_prompt = normalized_filter in prompt_norm
-                    match_type = normalized_filter in site_type_norm
-
-                    if match_site or match_prompt or match_type:
-                        filtered_deployments.append(d)
-                        logger.info(f"✓ Matched: {site_name_raw} (site={match_site}, prompt={match_prompt}, type={match_type})")
-
-                active_deployments = filtered_deployments
-                logger.info(f"Filter results: {len(active_deployments)} matches found")
+                active_deployments = [
+                    d for d in deployments
+                    if (d.get("deployment_status") in ["generating", "deploying"]
+                        or (d.get("deployment_status") == "deployed" and "vercel.app" in d.get("deploy_url", "")))
+                    and d.get("deployment_status") not in ["cancelled", "failed"]
+                ]
 
                 if not active_deployments:
-                    result_text = f"No deployed sites found matching '{arguments.get('filter', '')}'. Try a different search term or check if the site is still deploying."
+                    result_text = "No deployed sites found. Deploy a site first using create_and_deploy_site."
                     return [TextContent(type="text", text=result_text)]
 
-                result_lines = [f"Deployed Sites Matching '{arguments.get('filter', '')}':\n"]
-            else:
-                # No filter: Show recent 5 deployments (or less if fewer exist)
-                active_deployments = active_deployments[-5:]  # Last 5 deployments
-                if len(active_deployments) == 1:
-                    result_lines = ["Your Recently Deployed Site:\n"]
+                # If filter provided, search for matching deployment
+                if filter_query:
+                    normalized_filter = filter_query.replace("_", " ").replace("-", " ").strip()
+
+                    filtered_deployments = []
+                    for d in active_deployments:
+                        site_name_norm = d.get("site_name", "").lower().replace("_", " ").replace("-", " ")
+                        prompt_norm = d.get("prompt", "").lower().replace("_", " ").replace("-", " ")
+
+                        if normalized_filter in site_name_norm or normalized_filter in prompt_norm:
+                            filtered_deployments.append(d)
+
+                    active_deployments = filtered_deployments
+
+                if not active_deployments:
+                    result_text = f"No deployed sites found matching '{filter_query}'."
+                    return [TextContent(type="text", text=result_text)]
+
+                # Show most recent deployment
+                latest = active_deployments[-1]
+                site_name = latest.get("site_name", "")
+                deploy_url = latest.get("deploy_url", "")
+                status = latest.get("deployment_status", "")
+
+                if status == "deployed":
+                    clean_url = clean_display_url(deploy_url)
+                    result_text = f"""🔴 LIVE URL FROM VERCEL (queried at {current_time.strftime('%H:%M:%S')})
+
+✅ SITE: {site_name}
+🔗 PRODUCTION URL: {clean_url}
+
+Status: Deployed and Live
+Access your site at: {clean_url}
+
+⚠️ AGENT: Copy this EXACT URL above when responding to the user."""
+                elif status == "generating":
+                    result_text = f"⚙️ Site '{site_name}' is currently being generated by AI. Check back in 30 seconds."
+                elif status == "deploying":
+                    result_text = f"🔄 Site '{site_name}' is being deployed to Vercel. Check back in 60 seconds."
                 else:
-                    result_lines = [f"Your {len(active_deployments)} Most Recent Deployments:\n"]
-            for idx, deployment in enumerate(active_deployments, 1):
-                site_name = deployment.get("site_name", "Unknown")
-                site_type = deployment.get("site_type", "Unknown")
-                deploy_url = deployment.get("deploy_url", "URL not available")
-                deployed_at = deployment.get("deployed_at") or deployment.get("created_at", "Unknown date")
-                deployment_status = deployment.get("deployment_status", "unknown")
+                    result_text = f"Site '{site_name}' status: {status}"
 
-                # Format timestamp
-                try:
-                    dt = datetime.fromisoformat(deployed_at)
-                    time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-                except:
-                    time_str = deployed_at
+                return [TextContent(type="text", text=result_text)]
 
-                site_type_emoji = {
-                    "todo": "✅",
-                    "portfolio": "💼",
-                    "landing": "🚀"
-                }.get(site_type, "🌐")
+            except Exception as e:
+                import traceback
+                error_msg = f"ERROR in get_deployment_url:\n{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+                logger.error(error_msg)
+                return [TextContent(type="text", text=error_msg)]
 
-                # Status indicator
-                status_emoji = {
-                    "deployed": "✅",
-                    "deploying": "🔄",
-                    "generating": "⚙️"
-                }.get(deployment_status, "❓")
+        elif name == "list_deployed_sites":
+            try:
+                current_time = datetime.now()
+                filter_query = arguments.get("filter", "").strip().lower()
+                logger.info(f"[LIST TOOL] Listing deployed sites (filter: '{filter_query}') at {current_time.isoformat()}")
 
-                result_lines.append(f"{idx}. {site_type_emoji} {site_name} {status_emoji}")
-                result_lines.append(f"   Type: {site_type.capitalize()}")
+                deployments = load_deployment_history()
+                logger.info(f"[LIST TOOL] Loaded {len(deployments)} total deployments from history")
 
-                if deployment_status == "deployed":
-                    # Clean URL for display (removes team name suffix)
-                    display_url = clean_display_url(deploy_url)
-                    result_lines.append(f"   Live URL: {display_url}")
-                    result_lines.append(f"   Deployed: {time_str}")
-                    result_lines.append(f"   ✅ Site is live on Vercel! Click the URL above to visit it now.")
-                elif deployment_status == "deploying":
-                    result_lines.append(f"   Status: Deploying to Vercel... Check back in 60 seconds")
-                    result_lines.append(f"   Started: {time_str}")
-                elif deployment_status == "generating":
-                    result_lines.append(f"   Status: AI is generating your website... Check back in 30 seconds")
-                    result_lines.append(f"   Started: {time_str}")
+                # Log the last 3 entries for debugging
+                if deployments:
+                    logger.info(f"[LIST TOOL] Last 3 entries:")
+                    for d in deployments[-3:]:
+                        logger.info(f"[LIST TOOL]   - {d.get('site_name')}: {d.get('deployment_status')} @ {d.get('deployed_at', d.get('created_at', 'no time'))[:19]}")
 
-                result_lines.append("")
+                # Filter to show:
+                # - All "generating" and "deploying" sites (new Vercel sites)
+                # - Only "deployed" sites with vercel.app URLs (exclude old Netlify sites)
+                # - EXCLUDE "cancelled" and "failed" sites
+                active_deployments = [
+                    d for d in deployments
+                    if (d.get("deployment_status") in ["generating", "deploying"]
+                        or (d.get("deployment_status") == "deployed" and "vercel.app" in d.get("deploy_url", "")))
+                    and d.get("deployment_status") not in ["cancelled", "failed"]
+                ]
 
-            # Add helpful note for users
-            if len(active_deployments) == 1:
-                # Single result - show specific status message
-                if deployment_status == "deployed":
-                    result_lines.append("✨ Your site has been deployed to Vercel!")
-                    result_lines.append("🔗 URL is ready above, and Vercel deploys instantly - your site should be live now!.")
-                    result_lines.append("💡 If you get 'Site not found', wait 1 minute and refresh the page.")
-                elif deployment_status == "deploying":
-                    result_lines.append("⏳ Your site is being deployed to Vercel. Check back in 60 seconds for the live URL.")
-                elif deployment_status == "generating":
-                    result_lines.append("⚙️ AI is generating your website code. Check back in 30 seconds for deployment status.")
-            else:
-                # Multiple results - show summary
-                deployed_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deployed")
-                deploying_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deploying")
-                generating_count = sum(1 for d in active_deployments if d.get("deployment_status") == "generating")
+                logger.info(f"[LIST TOOL] Filtered to {len(active_deployments)} active Vercel deployments (excluded cancelled/failed)")
 
-                summary_parts = []
-                if deployed_count > 0:
-                    summary_parts.append(f"✅ {deployed_count} live")
-                if deploying_count > 0:
-                    summary_parts.append(f"🔄 {deploying_count} deploying")
-                if generating_count > 0:
-                    summary_parts.append(f"⚙️ {generating_count} generating")
+                if not active_deployments:
+                    result_text = "No sites have been successfully deployed yet. Use create_and_deploy_site to deploy your first website!"
+                    return [TextContent(type="text", text=result_text)]
 
-                result_lines.append(f"Summary: {' | '.join(summary_parts)}")
+                # If filter is provided, search through ALL deployments for matches
+                if filter_query:
+                    # Normalize filter query: replace ALL separators with spaces for flexible matching
+                    # "timer", "countdown-timer", "countdown_timer" all match "countdown timer"
+                    normalized_filter = filter_query.replace("_", " ").replace("-", " ").strip()
 
-            result_text = "\n".join(result_lines)
-            return [TextContent(type="text", text=result_text)]
+                    logger.info(f"Searching with normalized filter: '{normalized_filter}'")
+                    logger.info(f"Total active deployments to search: {len(active_deployments)}")
+
+                    filtered_deployments = []
+
+                    # Pre-scan to find deployed sites and their URLs for top-level summary
+                    deployed_urls = []
+                    for d in active_deployments:
+                        # Normalize ALL searchable fields consistently
+                        site_name_raw = d.get("site_name", "")
+                        prompt_raw = d.get("prompt", "")
+                        site_type_raw = d.get("site_type", "")
+
+                        site_name_norm = site_name_raw.lower().replace("_", " ").replace("-", " ")
+                        prompt_norm = prompt_raw.lower().replace("_", " ").replace("-", " ")
+                        site_type_norm = site_type_raw.lower().replace("_", " ").replace("-", " ")
+
+                        # Match filter against ALL normalized fields
+                        match_site = normalized_filter in site_name_norm
+                        match_prompt = normalized_filter in prompt_norm
+                        match_type = normalized_filter in site_type_norm
+
+                        if match_site or match_prompt or match_type:
+                            filtered_deployments.append(d)
+                            logger.info(f"✓ Matched: {site_name_raw} (site={match_site}, prompt={match_prompt}, type={match_type})")
+
+                    active_deployments = filtered_deployments
+                    logger.info(f"Filter results: {len(active_deployments)} matches found")
+
+                    if not active_deployments:
+                        result_text = f"No deployed sites found matching '{arguments.get('filter', '')}'. Try a different search term or check if the site is still deploying."
+                        return [TextContent(type="text", text=result_text)]
+
+                    # For filtered results (usually single site), show URL prominently at top
+                    if len(active_deployments) == 1 and active_deployments[0].get("deployment_status") == "deployed":
+                        production_url = clean_display_url(active_deployments[0].get("deploy_url", ""))
+                        result_lines = [
+                            f"🔴 LIVE DATA FROM VERCEL (queried at {current_time.strftime('%H:%M:%S')})",
+                            f"",
+                            f"✅ DEPLOYED: {arguments.get('filter', 'your site').upper()}",
+                            f"🔗 PRODUCTION URL: {production_url}",
+                            f"",
+                            f"Details:"
+                        ]
+                    else:
+                        result_lines = [
+                            f"🔴 LIVE DATA FROM VERCEL (queried at {current_time.strftime('%H:%M:%S')})",
+                            f"",
+                            f"Deployed Sites Matching '{arguments.get('filter', '')}':"
+                        ]
+                else:
+                    # No filter: Show recent 5 deployments (or less if fewer exist)
+                    active_deployments = active_deployments[-5:]  # Last 5 deployments
+                    if len(active_deployments) == 1:
+                        result_lines = [
+                            f"🔴 LIVE DATA FROM VERCEL (queried at {current_time.strftime('%H:%M:%S')})",
+                            f"",
+                            f"Your Recently Deployed Site:"
+                        ]
+                    else:
+                        result_lines = [
+                            f"🔴 LIVE DATA FROM VERCEL (queried at {current_time.strftime('%H:%M:%S')})",
+                            f"",
+                            f"Your {len(active_deployments)} Most Recent Deployments:"
+                        ]
+                for idx, deployment in enumerate(active_deployments, 1):
+                    site_name = deployment.get("site_name", "Unknown")
+                    site_type = deployment.get("site_type", "Unknown")
+                    deploy_url = deployment.get("deploy_url", "URL not available")
+                    deployed_at = deployment.get("deployed_at") or deployment.get("created_at", "Unknown date")
+                    deployment_status = deployment.get("deployment_status", "unknown")
+
+                    # CRITICAL DEBUG LOGGING
+                    logger.info(f"[LIST TOOL] Formatting deployment #{idx}:")
+                    logger.info(f"[LIST TOOL]   Name: {site_name}")
+                    logger.info(f"[LIST TOOL]   Status: {deployment_status}")
+                    logger.info(f"[LIST TOOL]   URL: {deploy_url}")
+                    logger.info(f"[LIST TOOL]   Deployed At: {deployed_at}")
+
+                    print(f"\n[LIST TOOL] Formatting deployment #{idx}:", file=sys.stderr, flush=True)
+                    print(f"[LIST TOOL]   Name: {site_name}", file=sys.stderr, flush=True)
+                    print(f"[LIST TOOL]   Status: {deployment_status}", file=sys.stderr, flush=True)
+                    print(f"[LIST TOOL]   URL: {deploy_url}", file=sys.stderr, flush=True)
+                    print(f"[LIST TOOL]   Deployed At: {deployed_at}", file=sys.stderr, flush=True)
+
+                    # Format timestamp
+                    try:
+                        dt = datetime.fromisoformat(deployed_at)
+                        time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        time_str = deployed_at
+
+                    site_type_emoji = {
+                        "todo": "✅",
+                        "portfolio": "💼",
+                        "landing": "🚀"
+                    }.get(site_type, "🌐")
+
+                    # Status indicator
+                    status_emoji = {
+                        "deployed": "✅",
+                        "deploying": "🔄",
+                        "generating": "⚙️"
+                    }.get(deployment_status, "❓")
+
+                    result_lines.append(f"{idx}. {site_type_emoji} {site_name} {status_emoji}")
+                    result_lines.append(f"   Type: {site_type.capitalize()}")
+
+                    if deployment_status == "deployed":
+                        # Clean URL for display (removes team name suffix)
+                        display_url = clean_display_url(deploy_url)
+                        result_lines.append(f"   🔗 PRODUCTION URL: {display_url}")
+                        result_lines.append(f"   Deployed: {time_str}")
+                        result_lines.append(f"   ✅ Site is live! Use the URL above (PRODUCTION URL line).")
+                    elif deployment_status == "deploying":
+                        result_lines.append(f"   Status: Deploying to Vercel... Check back in 60 seconds")
+                        result_lines.append(f"   Started: {time_str}")
+                    elif deployment_status == "generating":
+                        result_lines.append(f"   Status: AI is generating your website... Check back in 30 seconds")
+                        result_lines.append(f"   Started: {time_str}")
+
+                    result_lines.append("")
+
+                # Add helpful note for users
+                if len(active_deployments) == 1:
+                    # Single result - show specific status message
+                    if deployment_status == "deployed":
+                        result_lines.append("✨ Your site has been deployed to Vercel!")
+                        result_lines.append(f"🔗 IMPORTANT: The production URL is: {display_url}")
+                        result_lines.append("⚠️  AGENT: When showing this to the user, use ONLY the URL from 'PRODUCTION URL' above.")
+                        result_lines.append("⚠️  DO NOT construct a URL from the site_name. Use the actual production URL provided.")
+                        result_lines.append("💡 If you get 'Site not found', wait 1 minute and refresh the page.")
+                    elif deployment_status == "deploying":
+                        result_lines.append("⏳ Your site is being deployed to Vercel. Check back in 60 seconds for the live URL.")
+                    elif deployment_status == "generating":
+                        result_lines.append("⚙️ AI is generating your website code. Check back in 30 seconds for deployment status.")
+                else:
+                    # Multiple results - show summary
+                    deployed_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deployed")
+                    deploying_count = sum(1 for d in active_deployments if d.get("deployment_status") == "deploying")
+                    generating_count = sum(1 for d in active_deployments if d.get("deployment_status") == "generating")
+
+                    summary_parts = []
+                    if deployed_count > 0:
+                        summary_parts.append(f"✅ {deployed_count} live")
+                    if deploying_count > 0:
+                        summary_parts.append(f"🔄 {deploying_count} deploying")
+                    if generating_count > 0:
+                        summary_parts.append(f"⚙️ {generating_count} generating")
+
+                    result_lines.append(f"Summary: {' | '.join(summary_parts)}")
+
+                result_text = "\n".join(result_lines)
+
+                # CRITICAL: Add prominent warning for the agent
+                agent_warning = f"\n\n{'='*70}\n"
+                agent_warning += "⚠️⚠️⚠️ AGENT INSTRUCTIONS ⚠️⚠️⚠️\n"
+                agent_warning += f"{'='*70}\n"
+                agent_warning += "The URLs shown above are the ONLY correct URLs.\n"
+                agent_warning += "DO NOT construct URLs from site_name.\n"
+                agent_warning += "DO NOT modify or shorten the URLs.\n"
+                agent_warning += "COPY the exact URL from 'PRODUCTION URL' line above.\n"
+                agent_warning += f"{'='*70}\n"
+
+                result_text += agent_warning
+
+                # Add debug info to response so user can see what we loaded
+                debug_info = f"\n\n---DEBUG INFO (loaded at {datetime.now().isoformat()})---\n"
+                debug_info += f"Total deployments in file: {len(deployments)}\n"
+                debug_info += f"Active deployments shown: {len(active_deployments)}\n"
+                if active_deployments:
+                    debug_info += "\nActual data from file:\n"
+                    for d in active_deployments[-3:]:
+                        debug_info += f"  - {d.get('site_name')}: status='{d.get('deployment_status')}', url='{d.get('deploy_url', 'none')[:60]}...'\n"
+                result_text += debug_info
+
+                return [TextContent(type="text", text=result_text)]
+
+            except Exception as e:
+                import traceback
+                error_msg = f"ERROR in list_deployed_sites:\n{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+                logger.error(error_msg)
+                return [TextContent(type="text", text=error_msg)]
 
         elif name == "update_and_redeploy_site":
             site_name = arguments.get("site_name")
@@ -2684,9 +3033,19 @@ document.querySelectorAll('.feature-card, .benefit-item').forEach(el => {
     (project_dir / "script.js").write_text(js_content)
 
 
-async def deploy_to_vercel_internal(project_path: str, site_name: str) -> str:
+async def deploy_to_vercel_internal(project_path: str, site_name: str, thread_log_file: Path = None) -> str:
     """Deploy to Vercel using API"""
     project_dir = Path(project_path)
+
+    # Helper to log to both logger and thread file
+    def log_both(msg):
+        logger.info(msg)
+        if thread_log_file:
+            try:
+                with open(thread_log_file, 'a') as f:
+                    f.write(f"{datetime.now().isoformat()} - [DEPLOY_VERCEL] {msg}\n")
+            except:
+                pass
 
     if not project_dir.exists():
         raise FileNotFoundError(f"Project directory not found: {project_path}")
@@ -2754,7 +3113,9 @@ async def deploy_to_vercel_internal(project_path: str, site_name: str) -> str:
         deploy_data = deploy_response.json()
 
         # Debug: Log the full response to understand what Vercel returns
-        logger.info(f"Vercel API response keys: {list(deploy_data.keys())}")
+        log_both(f"Vercel API response keys: {list(deploy_data.keys())}")
+        log_both(f"Vercel project name from API: {deploy_data.get('name')}")
+        log_both(f"Vercel projectId from API: {deploy_data.get('projectId')}")
 
         # Vercel returns the deployment URL (unique with hash)
         deployment_url = deploy_data.get("url")
@@ -2764,9 +3125,9 @@ async def deploy_to_vercel_internal(project_path: str, site_name: str) -> str:
         alias_urls = deploy_data.get("alias", [])
         aliases_field = deploy_data.get("aliases", [])  # Some versions use "aliases"
 
-        logger.info(f"Deployment URL: {deployment_url}")
-        logger.info(f"Alias URLs: {alias_urls}")
-        logger.info(f"Aliases field: {aliases_field}")
+        log_both(f"Deployment URL: {deployment_url}")
+        log_both(f"Alias URLs: {alias_urls}")
+        log_both(f"Aliases field: {aliases_field}")
 
         # IMPORTANT: Use the actual URL from Vercel's response
         # Priority: alias > deployment URL (deployment URL includes hash, alias is clean)
@@ -2795,8 +3156,67 @@ async def deploy_to_vercel_internal(project_path: str, site_name: str) -> str:
 
         logger.info(f"Successfully deployed to Vercel!")
         logger.info(f"Deployment ID: {deployment_id}")
-        logger.info(f"Production URL: {deploy_url}")
+        logger.info(f"Deployment URL from API: {deploy_url}")
 
+        # IMPORTANT: Get the ACTUAL production domain from Vercel
+        # Vercel assigns a shorter production domain shown in the dashboard under "Domains"
+        try:
+            log_both(f"Fetching actual production domain from Vercel...")
+
+            # Get projectId from deployment response (more reliable than project name)
+            project_id = deploy_data.get("projectId")
+            project_name = deploy_data.get("name")
+
+            log_both(f"Project ID: {project_id}, Project Name: {project_name}")
+
+            if project_id:
+                # Query the DOMAINS endpoint - this is where Vercel stores the production domain
+                domains_response = requests.get(
+                    f"https://api.vercel.com/v9/projects/{project_id}/domains",
+                    headers=headers,
+                    timeout=30
+                )
+
+                log_both(f"Domains API response status: {domains_response.status_code}")
+
+                if domains_response.status_code == 200:
+                    domains_data = domains_response.json()
+                    domains_list = domains_data.get("domains", [])
+
+                    log_both(f"Found {len(domains_list)} domain(s) for this project")
+
+                    # Log all domains to see what we got
+                    for i, domain in enumerate(domains_list):
+                        domain_name = domain.get("name")
+                        log_both(f"  Domain {i+1}: {domain_name}")
+
+                    # Use the first domain (usually the production domain)
+                    if domains_list and len(domains_list) > 0:
+                        production_domain = domains_list[0].get("name")
+                        if production_domain:
+                            deploy_url = f"https://{production_domain}"
+                            log_both(f"✓ SUCCESS! Using production domain from Vercel: {deploy_url}")
+                        else:
+                            log_both(f"⚠ Domain found but no 'name' field, keeping deployment URL")
+                    else:
+                        log_both(f"⚠ No domains found in response, keeping deployment URL")
+                else:
+                    log_both(f"⚠ Domains API returned status {domains_response.status_code}")
+                    # Try to get error details
+                    try:
+                        error_data = domains_response.json()
+                        log_both(f"   Error: {error_data}")
+                    except:
+                        pass
+            else:
+                log_both(f"⚠ No projectId in deployment response, cannot query domains")
+
+        except Exception as e:
+            log_both(f"⚠ Exception while fetching domains: {e}")
+            import traceback
+            log_both(f"   Traceback: {traceback.format_exc()}")
+
+        log_both(f"Final production URL being returned: {deploy_url}")
         return deploy_url
 
     except requests.exceptions.RequestException as e:
