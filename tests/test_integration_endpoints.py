@@ -214,7 +214,7 @@ class TestMultiModelScenarios:
 
                     response2 = client.post(
                         "/api/llm/v1/chat/completions",
-                        json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test 2"}],
+                        json={"model": "vllm-model", "messages": [{"role": "user", "content": "Test 2"}],
                             "stream": False
                         }
                     )
@@ -244,7 +244,7 @@ class TestMultiModelScenarios:
 
                 response2 = client.post(
                     "/api/llm/v1/chat/completions",
-                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
+                    json={"model": "llama-2-13b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response2.status_code == 200

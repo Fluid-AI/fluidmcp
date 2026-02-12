@@ -1701,7 +1701,7 @@ async def unified_completions(
     token: str = Depends(get_token)
 ):
     """
-    OpenAI-compatible text completions endpoint (works for ALL provider types).
+    OpenAI-compatible text completions endpoint (currently supports provider types: vllm, ollama, lmstudio).
 
     Args:
         request_body: OpenAI-format completion request with model and prompt

@@ -63,7 +63,7 @@ This follows the standard OpenAI function calling pattern where **the client is 
 ### Request Flow
 
 ```json
-POST /llm/v1/chat/completions
+POST /api/llm/v1/chat/completions
 {
   "model": "hermes-3-llama-3.1-8b",
   "messages": [...],
@@ -472,6 +472,7 @@ async def chat_with_tools(user_message: str):
         response = await client.post(
             f"{FLUIDMCP_URL}/llm/v1/chat/completions",
             json={
+                "model": MODEL_ID,
                 "messages": messages,
                 "tools": tools,
                 "tool_choice": "auto"
@@ -508,7 +509,7 @@ async def chat_with_tools(user_message: str):
             # Step 4: Send tool results back to model
             response = await client.post(
                 f"{FLUIDMCP_URL}/llm/v1/chat/completions",
-                json={"model": model_id, "messages": messages}
+                json={"model": MODEL_ID, "messages": messages}
             )
             data = response.json()
             final_message = data["choices"][0]["message"]["content"]
@@ -930,7 +931,7 @@ For now, use the manual execution pattern documented above.
 ### Endpoint
 
 ```
-POST /llm/v1/chat/completions
+POST /api/llm/v1/chat/completions
 ```
 
 ### Request Body
