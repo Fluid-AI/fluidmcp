@@ -63,15 +63,16 @@ class LLMInferenceUser(HttpUser):
     def chat_completion(self):
         """Make a chat completion request (weighted 3x)."""
         response = self.client.post(
-            f"/api/llm/{self.model_id}/v1/chat/completions",
+            "/api/llm/v1/chat/completions",
             json={
+                "model": self.model_id,
                 "messages": [
                     {"role": "user", "content": "What is 2+2?"}
                 ],
                 "max_tokens": 50,
                 "temperature": 0.7
             },
-            name="/api/llm/{model_id}/v1/chat/completions"
+            name="/api/llm/v1/chat/completions"
         )
 
         if response.status_code == 200:
@@ -83,13 +84,14 @@ class LLMInferenceUser(HttpUser):
     def text_completion(self):
         """Make a text completion request (weighted 2x)."""
         response = self.client.post(
-            f"/api/llm/{self.model_id}/v1/completions",
+            "/api/llm/v1/completions",
             json={
+                "model": self.model_id,
                 "prompt": "The capital of France is",
                 "max_tokens": 20,
                 "temperature": 0.5
             },
-            name="/api/llm/{model_id}/v1/completions"
+            name="/api/llm/v1/completions"
         )
 
         if response.status_code == 200:
@@ -115,8 +117,8 @@ class LLMInferenceUser(HttpUser):
     def check_model_info(self):
         """Check model info endpoint (weighted 1x)."""
         response = self.client.get(
-            f"/api/llm/{self.model_id}/v1/models",
-            name="/api/llm/{model_id}/v1/models"
+            f"/api/llm/v1/models?model={self.model_id}",
+            name="/api/llm/v1/models"
         )
 
         if response.status_code == 200:
@@ -147,12 +149,13 @@ class StressTestUser(HttpUser):
     def rapid_requests(self):
         """Make rapid small requests."""
         self.client.post(
-            f"/api/llm/{self.model_id}/v1/chat/completions",
+            "/api/llm/v1/chat/completions",
             json={
+                "model": self.model_id,
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_tokens": 5
             },
-            name="/api/llm/{model_id}/v1/chat/completions [stress]"
+            name="/api/llm/v1/chat/completions [stress]"
         )
 
 

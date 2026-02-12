@@ -63,7 +63,7 @@ This follows the standard OpenAI function calling pattern where **the client is 
 ### Request Flow
 
 ```json
-POST /llm/{model_id}/v1/chat/completions
+POST /llm/v1/chat/completions
 {
   "messages": [...],
   "tools": [...]  // ← Passed through to vLLM
@@ -72,7 +72,7 @@ POST /llm/{model_id}/v1/chat/completions
 
 FluidMCP proxy code ([run_servers.py:685-701](../fluidmcp/cli/services/run_servers.py#L685-L701)):
 ```python
-@app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
+@app.post("/llm/v1/chat/completions", tags=["llm"])
 async def proxy_chat_completions(model_id: str, request: Request):
     body = await request.json()
     return await _proxy_llm_request(model_id, "chat", "POST", body)
@@ -452,7 +452,7 @@ async def chat_with_tools(user_message: str):
     async with httpx.AsyncClient() as client:
         # Step 1: Send initial request with tools
         response = await client.post(
-            f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+            f"{FLUIDMCP_URL}/llm/v1/chat/completions",
             json={
                 "messages": messages,
                 "tools": tools,
@@ -489,7 +489,7 @@ async def chat_with_tools(user_message: str):
 
             # Step 4: Send tool results back to model
             response = await client.post(
-                f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+                f"{FLUIDMCP_URL}/llm/v1/chat/completions",
                 json={"messages": messages}
             )
             data = response.json()
@@ -604,7 +604,7 @@ async def chat_with_streaming(user_message: str):
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST",
-            f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+            f"{FLUIDMCP_URL}/llm/v1/chat/completions",
             json={
                 "messages": [{"role": "user", "content": user_message}],
                 "tools": tools,
@@ -912,7 +912,7 @@ For now, use the manual execution pattern documented above.
 ### Endpoint
 
 ```
-POST /llm/{model_id}/v1/chat/completions
+POST /llm/v1/chat/completions
 ```
 
 ### Request Body

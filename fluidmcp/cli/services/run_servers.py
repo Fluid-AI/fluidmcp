@@ -799,17 +799,22 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     Add OpenAI-compatible proxy routes for LLM models.
 
     Creates endpoints with /llm prefix to avoid conflicts with MCP server names:
-    - POST /llm/{model_id}/v1/chat/completions
-    - POST /llm/{model_id}/v1/completions
-    - GET /llm/{model_id}/v1/models
+    - POST /llm/v1/chat/completions
+    - POST /llm/v1/completions
+    - GET /llm/v1/models
 
     Args:
         app: FastAPI application instance
     """
-    @app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
-    async def proxy_chat_completions(model_id: str, request: Request):
+    @app.post("/llm/v1/chat/completions", tags=["llm"])
+    async def proxy_chat_completions(request: Request):
         """Proxy OpenAI chat completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Extract model_id from request body (OpenAI-style)
+        model_id = body.get("model")
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
 
         # Check if streaming is requested
         if body.get("stream", False):
@@ -824,10 +829,15 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Non-streaming request
         return await _proxy_llm_request(model_id, "chat", "POST", body)
 
-    @app.post("/llm/{model_id}/v1/completions", tags=["llm"])
-    async def proxy_completions(model_id: str, request: Request):
+    @app.post("/llm/v1/completions", tags=["llm"])
+    async def proxy_completions(request: Request):
         """Proxy OpenAI completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Extract model_id from request body (OpenAI-style)
+        model_id = body.get("model")
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
 
         # Check if streaming is requested
         if body.get("stream", False):
@@ -842,10 +852,19 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Non-streaming request
         return await _proxy_llm_request(model_id, "completions", "POST", body)
 
-    @app.get("/llm/{model_id}/v1/models", tags=["llm"])
-    async def proxy_models(model_id: str):
+    @app.get("/llm/v1/models", tags=["llm"])
+    async def proxy_models(model: str = None):
         """Proxy models list endpoint to LLM backend."""
-        return await _proxy_llm_request(model_id, "models", "GET")
+        if model:
+            # Return specific model details
+            return await _proxy_llm_request(model, "models", "GET")
+        else:
+            # Return all models
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=501,
+                detail="Listing all models not yet implemented for legacy vLLM proxy. Use /api/llm/v1/models instead."
+            )
 
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():

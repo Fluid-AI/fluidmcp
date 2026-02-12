@@ -84,7 +84,7 @@ curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
 
 **Streaming Support**: Replicate models do not currently support streaming (`"stream": true`) due to Replicate's polling-based API architecture. Streaming requests will return a 501 error. For real-time output requirements, consider using vLLM or other providers that support native streaming. See [Limitations](#limitations) for details.
 
-**Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/{model_id}/v1/...` routes shown above.
+**Note**: Legacy Replicate-specific endpoints (`/api/replicate/models/...`) are deprecated and should not be used for new integrations. Use the unified `/api/llm/v1/...` routes shown above.
 ## Configuration Format
 
 ### Complete Example
@@ -305,7 +305,7 @@ Replicate models are exposed through **FluidMCP's unified OpenAI-compatible API*
 
 ### Chat Completions (Primary Endpoint)
 ```
-POST /api/llm/{model_id}/v1/chat/completions
+POST /api/llm/v1/chat/completions
 ```
 
 **OpenAI-compatible request format:**
@@ -740,7 +740,7 @@ from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
 
-@app.post("/api/llm/{model_id}/v1/chat/completions")
+@app.post("/api/llm/v1/chat/completions")
 @limiter.limit("10/minute")
 async def unified_chat_completions(...):
     ...

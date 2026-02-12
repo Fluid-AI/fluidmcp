@@ -1477,9 +1477,8 @@ async def trigger_health_check(
 # Unified LLM Inference Endpoints (Provider-Agnostic OpenAI-Compatible)
 # ============================================================================
 
-@router.post("/llm/{model_id}/v1/chat/completions")
+@router.post("/llm/v1/chat/completions")
 async def unified_chat_completions(
-    model_id: str,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
@@ -1490,19 +1489,24 @@ async def unified_chat_completions(
     Provider type is determined from config, not from the route.
 
     Args:
-        model_id: Model identifier from config
-        request_body: OpenAI-format chat request with messages, temperature, etc.
+        request_body: OpenAI-format chat request with model, messages, temperature, etc.
 
     Returns:
         OpenAI-format chat completion response
 
     Example request:
         {
+          "model": "llama-2-70b",
           "messages": [{"role": "user", "content": "Hello"}],
           "temperature": 0.7,
           "max_tokens": 100
         }
     """
+    # Extract model_id from request body (OpenAI-style)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing required field 'model' in request body")
+
     # Get provider type from registry
     provider_type = get_model_type(model_id)
     if not provider_type:
@@ -1691,9 +1695,8 @@ async def unified_chat_completions(
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
 
 
-@router.post("/llm/{model_id}/v1/completions")
+@router.post("/llm/v1/completions")
 async def unified_completions(
-    model_id: str,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
@@ -1701,12 +1704,23 @@ async def unified_completions(
     OpenAI-compatible text completions endpoint (works for ALL provider types).
 
     Args:
-        model_id: Model identifier from config
-        request_body: OpenAI-format completion request
+        request_body: OpenAI-format completion request with model and prompt
 
     Returns:
         OpenAI-format completion response
+
+    Example request:
+        {
+          "model": "llama-2-70b",
+          "prompt": "Once upon a time",
+          "max_tokens": 100
+        }
     """
+    # Extract model_id from request body (OpenAI-style)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing required field 'model' in request body")
+
     provider_type = get_model_type(model_id)
     if not provider_type:
         raise HTTPException(404, f"Model '{model_id}' not found in configuration")
@@ -1848,200 +1862,62 @@ async def unified_completions(
         raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")
 
 
-@router.get("/llm/{model_id}/v1/models")
+@router.get("/llm/v1/models")
 async def unified_list_models(
-    model_id: str,
-    token: str = Depends(get_token)
+    token: str = Depends(get_token),
+    model: str = None
 ):
     """
-    OpenAI-compatible model metadata endpoint.
+    OpenAI-compatible models list endpoint.
 
-    Returns metadata for the specified model in OpenAI /v1/models format.
-    This is a per-model endpoint, not a global models list.
+    Lists all available models or returns details for a specific model.
 
     Args:
-        model_id: The model identifier
+        model: Optional model ID to get details for specific model
 
     Returns:
-        OpenAI-format model metadata with single entry
+        OpenAI-format model list or single model details
     """
-    config = get_model_config(model_id)
-    if not config:
-        raise HTTPException(404, f"Model '{model_id}' not found")
+    if model:
+        # Return specific model details
+        config = get_model_config(model)
+        if not config:
+            raise HTTPException(404, f"Model '{model}' not found")
 
-    # Return OpenAI-format response
-    return {
-        "object": "list",
-        "data": [{
-            "id": model_id,
-            "object": "model",
-            "created": int(time.time()),
-            "owned_by": "fluidmcp",
-            "permission": [],
-            "root": model_id,
-            "parent": None
-        }]
-    }
+        return {
+            "object": "list",
+            "data": [{
+                "id": model,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "fluidmcp",
+                "permission": [],
+                "root": model,
+                "parent": None
+            }]
+        }
+    else:
+        # Return all models
+        from ..services.config_resolver import llm_model_registry
+        all_models = []
+        for model_id in llm_model_registry.keys():
+            all_models.append({
+                "id": model_id,
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "fluidmcp",
+                "permission": [],
+                "root": model_id,
+                "parent": None
+            })
+
+        return {
+            "object": "list",
+            "data": all_models
+        }
 
 
 # ============================================================================
-# Deprecated Replicate Endpoints (v1 → v2 Migration)
-# These endpoints are deprecated and will be removed in v2.0.0
-# Use the unified /api/llm/{model_id}/v1/* endpoints instead
-# ============================================================================
-
-@router.post("/replicate/models/{model_id}/predict")
-async def deprecated_replicate_predict(
-    model_id: str,
-    request_body: Dict[str, Any] = Body(...),
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/predict is deprecated. "
-        f"Use /api/llm/{model_id}/v1/chat/completions instead. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Forward to new unified endpoint
-    return await unified_chat_completions(model_id, request_body, token)
-
-
-@router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
-async def deprecated_replicate_get_prediction(
-    model_id: str,
-    prediction_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Replicate-specific prediction tracking is no longer supported.
-
-    This endpoint will be removed in v2.0.0.
-    Use the unified /api/llm/{model_id}/v1/chat/completions endpoint instead.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id} is deprecated. "
-        f"Use /api/llm/{model_id}/v1/chat/completions for synchronous inference. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    raise HTTPException(
-        410,
-        "This endpoint is deprecated. Use /api/llm/{model_id}/v1/chat/completions instead. "
-        "Polling-based predictions are no longer supported in the unified API."
-    )
-
-
-@router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
-async def deprecated_replicate_cancel_prediction(
-    model_id: str,
-    prediction_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Replicate-specific prediction cancellation is no longer supported.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id}/cancel is deprecated. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    raise HTTPException(
-        410,
-        "This endpoint is deprecated and cancellation is no longer supported in the unified API."
-    )
-
-
-@router.post("/replicate/models/{model_id}/stream")
-async def deprecated_replicate_stream(
-    model_id: str,
-    request_body: Dict[str, Any] = Body(...),
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions with "stream": true instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/stream is deprecated. "
-        f"Use /api/llm/{model_id}/v1/chat/completions with 'stream': true instead. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Add stream parameter and forward
-    request_body["stream"] = True
-    return await unified_chat_completions(model_id, request_body, token)
-
-
-@router.get("/replicate/models/{model_id}/info")
-async def deprecated_replicate_model_info(
-    model_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/info is deprecated. "
-        f"Use /api/llm/{model_id}/v1/models instead. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Forward to new unified endpoint
-    return await unified_list_models(model_id, token)
-
-
-@router.get("/replicate/models/{model_id}/health")
-async def deprecated_replicate_health(
-    model_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/health is deprecated. "
-        f"Use /api/llm/{model_id}/v1/models for model availability checks. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Return simple health response
-    return {"status": "deprecated", "message": "Use /api/llm/{model_id}/v1/models instead"}
-
-
-@router.get("/replicate/models")
-async def deprecated_replicate_list_models(
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Model listing is no longer supported at the API level.
-
-    This endpoint will be removed in v2.0.0.
-    Models are managed through the configuration file.
-    """
-    logger.warning(
-        "DEPRECATED API CALL: /replicate/models is deprecated. "
-        "Models are now managed through configuration only. "
-        "This endpoint will be removed in v2.0.0."
-    )
-
-    raise HTTPException(
-        410,
-        "This endpoint is deprecated. Models are managed through configuration only."
-    )
-
-
 # ============================================================================
 # Metrics Endpoints (Observability)
 # ============================================================================

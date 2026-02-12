@@ -9,10 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ BREAKING CHANGES
 
-#### Unified LLM API Structure
-All LLM providers (Replicate, vLLM, Ollama, LM Studio) are now unified under a single API namespace.
+#### OpenAI-Compatible API Format (Latest)
+**FluidMCP now follows OpenAI API format exactly** - model specified in request body, not URL path.
 
-**Old Endpoints (Deprecated)**:
+**Removed Endpoints**:
+- **ALL** deprecated Replicate endpoints (`/api/replicate/*`) have been permanently removed
+- Old unified endpoints with model_id in path (`/api/llm/{model_id}/v1/*`) have been removed
+
+**New OpenAI-Compatible Endpoints**:
+- `POST /api/llm/v1/chat/completions` - Chat completions (all providers)
+- `POST /api/llm/v1/completions` - Text completions (all providers)
+- `GET /api/llm/v1/models` - List all models or get specific model with `?model=<id>`
+
+**Migration Guide**:
+```bash
+# Old format (REMOVED)
+curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
+  -d '{"messages": [{"role": "user", "content": "Hello"}]}'
+
+# New format (OpenAI-compatible)
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+  -d '{"model": "llama-2-70b", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+**Key Changes**:
+1. Model ID moved from URL path to request body `"model"` field
+2. All deprecated Replicate endpoints permanently removed
+3. Single unified endpoint handles all models across all providers
+4. Drop-in replacement for OpenAI API - just change the base URL
+
+#### Legacy Unified LLM API Structure (v0.x)
+All LLM providers (Replicate, vLLM, Ollama, LM Studio) were unified under a single API namespace.
+
+**Deprecated Endpoints (REMOVED in v1.0.0)**:
 - `/api/replicate/models`
 - `/api/replicate/models/{model_id}/predict`
 - `/api/replicate/models/{model_id}/predictions/{prediction_id}`
@@ -20,17 +49,9 @@ All LLM providers (Replicate, vLLM, Ollama, LM Studio) are now unified under a s
 - `/api/replicate/models/{model_id}/stream`
 - `/api/replicate/models/{model_id}/info`
 - `/api/replicate/models/{model_id}/health`
-
-**New Unified Endpoints**:
-- `/api/llm/{model_id}/v1/chat/completions` - Unified chat completions (all providers)
-- `/api/llm/{model_id}/v1/completions` - Unified text completions (all providers)
-- `/api/llm/{model_id}/v1/embeddings` - Unified embeddings (all providers)
-
-**Migration Guide**:
-1. Replace all `/api/replicate/models/{model_id}/*` calls with `/api/llm/{model_id}/v1/*`
-2. Use OpenAI-compatible request format for all providers
-3. Provider type is auto-detected from model configuration
-4. Old endpoints still work with deprecation warnings (will be removed in v2.0.0)
+- `/api/llm/{model_id}/v1/chat/completions` (replaced with `/api/llm/v1/chat/completions`)
+- `/api/llm/{model_id}/v1/completions` (replaced with `/api/llm/v1/completions`)
+- `/api/llm/{model_id}/v1/embeddings` (replaced with `/api/llm/v1/embeddings`)
 
 ### Added
 
@@ -72,9 +93,10 @@ All LLM providers (Replicate, vLLM, Ollama, LM Studio) are now unified under a s
 ### Changed
 
 #### API Structure
-- All LLM endpoints unified under `/api/llm/{model_id}/v1/*` namespace
-- Provider-specific endpoints deprecated (still functional with warnings)
-- Consistent OpenAI-compatible API across all providers
+- All LLM endpoints unified under `/api/llm/v1/*` namespace (OpenAI-compatible)
+- Model specified in request body, not URL path
+- Provider-specific endpoints permanently removed
+- True drop-in replacement for OpenAI API
 
 #### Internal Improvements
 - Metrics use `time.monotonic()` instead of `time.time()` for accuracy

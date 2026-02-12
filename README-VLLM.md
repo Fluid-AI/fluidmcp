@@ -387,7 +387,7 @@ The old raw args format continues to work without changes:
 
 FluidMCP proxies requests to vLLM's native OpenAI server:
 
-#### `POST /llm/{model_id}/v1/chat/completions`
+#### `POST /llm/v1/chat/completions`
 
 **Request**:
 ```json
@@ -428,7 +428,7 @@ FluidMCP proxies requests to vLLM's native OpenAI server:
 }
 ```
 
-#### `POST /llm/{model_id}/v1/completions`
+#### `POST /llm/v1/completions`
 
 **Request**:
 ```json
@@ -440,9 +440,9 @@ FluidMCP proxies requests to vLLM's native OpenAI server:
 }
 ```
 
-#### `GET /llm/{model_id}/v1/models`
+#### `GET /llm/v1/models`
 
-List available models from vLLM server.
+List all available models or get details for a specific model using `?model={model_id}` query parameter.
 
 ---
 

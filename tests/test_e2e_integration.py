@@ -262,8 +262,9 @@ class TestFluidMCPE2E:
 
             # Test unified endpoint
             response = await client.post(
-                f"{fluidmcp_url}/api/llm/{model_id}/v1/chat/completions",
+                f"{fluidmcp_url}/api/llm/v1/chat/completions",
                 json={
+                    "model": model_id,
                     "messages": [{"role": "user", "content": "Say hello"}],
                     "max_tokens": 10
                 }
