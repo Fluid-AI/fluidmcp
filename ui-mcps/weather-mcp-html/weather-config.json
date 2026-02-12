@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "weather": {
+      "command": "python",
+      "args": [
+        "/workspaces/fluidmcp/ui-mcps/weather-mcp-html/server.py"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "name": "weather-mcp",
+  "version": "0.1.0",
+  "description": "Weather MCP Server with embedded HTML UI - provides current weather information with visual dashboard",
+  "author": "FluidAI",
+  "homepage": "https://github.com/Fluid-AI/fluidmcp",
+  "mcpServers": {
+    "weather": {
+      "command": "python",
+      "args": [
+        "-m",
+        "server"
+      ],
+      "env": {},
+      "description": "Weather information server with embedded HTML visualization"
+    }
+  },
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather for a city with embedded visual UI. Returns complete HTML with weather data.",
+      "parameters": {
+        "city": {
+          "type": "string",
+          "description": "City name (e.g., 'Bangalore', 'Mumbai', 'Delhi')",
+          "required": true
+        },
+        "units": {
+          "type": "string",
+          "description": "Temperature units - 'metric' (Celsius) or 'imperial' (Fahrenheit)",
+          "default": "metric",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "get_weather_json",
+      "description": "Get current weather data as JSON (without UI). Use when you need just the data, not visualization.",
+      "parameters": {
+        "city": {
+          "type": "string",
+          "description": "City name",
+          "required": true
+        },
+        "units": {
+          "type": "string",
+          "description": "Temperature units",
+          "default": "metric",
+          "required": false
+        }
+      }
+    },
+    {
+      "name": "search_city",
+      "description": "Search for cities by name. Returns list of cities matching the query.",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "description": "City name or partial name to search",
+          "required": true
+        }
+      }
+    },
+    {
+      "name": "get_forecast",
+      "description": "Get weather forecast for multiple days [Phase 2: Full implementation pending]",
+      "parameters": {
+        "city": {
+          "type": "string",
+          "description": "City name",
+          "required": true
+        },
+        "days": {
+          "type": "integer",
+          "description": "Number of forecast days (1-10)",
+          "default": 5,
+          "required": false
+        },
+        "units": {
+          "type": "string",
+          "description": "Temperature units",
+          "default": "metric",
+          "required": false
+        }
+      }
+    }
+  ]
+}

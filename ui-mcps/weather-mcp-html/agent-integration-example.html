@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Integration Example - Weather MCP</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .example {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        h2 { color: #667eea; }
+        pre {
+            background: #1f2937;
+            color: #10b981;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .iframe-container {
+            width: 100%;
+            margin-top: 20px;
+        }
+        iframe {
+            width: 100%;
+            height: 700px;
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        .method {
+            background: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🤖 Agent Integration Guide - Weather MCP</h1>
+
+    <div class="example">
+        <h2>Problem</h2>
+        <p>Your agent receives HTML as text but doesn't render it in an iframe automatically.</p>
+    </div>
+
+    <div class="example">
+        <h2>Solution: Use the new <code>get_weather_ui</code> tool</h2>
+        <p>This tool returns a structured JSON response with rendering instructions and a data URL.</p>
+
+        <h3>Step 1: Call the Tool</h3>
+        <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "get_weather_ui",
+    "arguments": {
+      "city": "Bangalore",
+      "units": "metric"
+    }
+  }
+}</pre>
+
+        <h3>Step 2: Response Format</h3>
+        <pre>{
+  "type": "html_ui",
+  "city": "Bangalore",
+  "rendering": {
+    "method": "iframe",
+    "data_url": "data:text/html;base64,PCFETy...",
+    "instructions": "Use data_url as iframe src..."
+  },
+  "html": "&lt;!DOCTYPE html&gt;&lt;html&gt;..."
+}</pre>
+    </div>
+
+    <div class="example">
+        <h2>Implementation for Your Agent</h2>
+
+        <div class="method">
+            <h3>Method 1: Using Data URL (Easiest) ⭐</h3>
+            <pre>// Parse the MCP response
+const response = await callMCPTool('get_weather_ui', { city: 'Bangalore' });
+const data = JSON.parse(response.result.content[0].text);
+
+// Check if it's a UI response
+if (data.type === 'html_ui') {
+  // Create iframe and use data URL as src
+  const iframe = document.createElement('iframe');
+  iframe.src = data.rendering.data_url;
+  iframe.style.width = '100%';
+  iframe.style.height = '700px';
+  iframe.style.border = 'none';
+
+  // Append to your response container
+  document.getElementById('response-container').appendChild(iframe);
+}</pre>
+        </div>
+
+        <div class="method">
+            <h3>Method 2: Using contentWindow.document.write()</h3>
+            <pre>// Parse the MCP response
+const response = await callMCPTool('get_weather_ui', { city: 'Bangalore' });
+const data = JSON.parse(response.result.content[0].text);
+
+// Check if it's a UI response
+if (data.type === 'html_ui') {
+  // Create iframe
+  const iframe = document.createElement('iframe');
+  iframe.style.width = '100%';
+  iframe.style.height = '700px';
+  iframe.style.border = 'none';
+
+  // Append to container first
+  document.getElementById('response-container').appendChild(iframe);
+
+  // Write HTML to iframe
+  iframe.contentWindow.document.open();
+  iframe.contentWindow.document.write(data.html);
+  iframe.contentWindow.document.close();
+}</pre>
+        </div>
+
+        <div class="method">
+            <h3>Method 3: Auto-detect and Handle</h3>
+            <pre>function handleMCPResponse(response) {
+  const content = response.result.content[0].text;
+
+  try {
+    // Try to parse as JSON
+    const data = JSON.parse(content);
+
+    // Check if it's a UI response
+    if (data.type === 'html_ui') {
+      renderUIResponse(data);
+    } else {
+      displayAsJSON(data);
+    }
+  } catch (e) {
+    // Not JSON, display as text
+    displayAsText(content);
+  }
+}
+
+function renderUIResponse(data) {
+  // Use Method 1 (data URL) - simplest
+  const iframe = document.createElement('iframe');
+  iframe.src = data.rendering.data_url;
+  iframe.style.width = '100%';
+  iframe.style.height = '700px';
+  iframe.style.border = 'none';
+  document.getElementById('response-container').appendChild(iframe);
+}</pre>
+        </div>
+    </div>
+
+    <div class="example">
+        <h2>Live Demo</h2>
+        <button onclick="testMethod1()">Test Method 1 (Data URL)</button>
+        <button onclick="testMethod2()">Test Method 2 (document.write)</button>
+        <div id="demo-container" class="iframe-container"></div>
+    </div>
+
+    <script>
+        const MCP_ENDPOINT = 'https://crispy-yodel-5gj9969v77w4h4jr9-8100.app.github.dev/weather/mcp';
+
+        async function callMCPTool(toolName, args) {
+            const response = await fetch(MCP_ENDPOINT, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: Date.now(),
+                    method: "tools/call",
+                    params: { name: toolName, arguments: args }
+                })
+            });
+            return await response.json();
+        }
+
+        async function testMethod1() {
+            console.log('Testing Method 1: Data URL');
+            const container = document.getElementById('demo-container');
+            container.innerHTML = '<p>Loading...</p>';
+
+            try {
+                const response = await callMCPTool('get_weather_ui', { city: 'Bangalore' });
+                const data = JSON.parse(response.result.content[0].text);
+
+                if (data.type === 'html_ui') {
+                    container.innerHTML = '';
+                    const iframe = document.createElement('iframe');
+                    iframe.src = data.rendering.data_url;
+                    iframe.style.width = '100%';
+                    iframe.style.height = '700px';
+                    iframe.style.border = 'none';
+                    container.appendChild(iframe);
+                    console.log('✅ Method 1 successful!');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                container.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+
+        async function testMethod2() {
+            console.log('Testing Method 2: document.write');
+            const container = document.getElementById('demo-container');
+            container.innerHTML = '<p>Loading...</p>';
+
+            try {
+                const response = await callMCPTool('get_weather_ui', { city: 'Mumbai' });
+                const data = JSON.parse(response.result.content[0].text);
+
+                if (data.type === 'html_ui') {
+                    container.innerHTML = '';
+                    const iframe = document.createElement('iframe');
+                    iframe.style.width = '100%';
+                    iframe.style.height = '700px';
+                    iframe.style.border = 'none';
+                    container.appendChild(iframe);
+
+                    iframe.contentWindow.document.open();
+                    iframe.contentWindow.document.write(data.html);
+                    iframe.contentWindow.document.close();
+                    console.log('✅ Method 2 successful!');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                container.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather Dashboard</title>
+    <link rel="stylesheet" href="weather.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🌤️ Weather Dashboard</h1>
+        </header>
+
+        <main class="main-content">
+            <!-- Current Weather Card -->
+            <div class="weather-card">
+                <div class="city-name" id="cityName">Loading...</div>
+
+                <div class="weather-icon" id="weatherIcon">🌤️</div>
+
+                <div class="temperature" id="temperature">--°</div>
+
+                <div class="condition" id="condition">--</div>
+
+                <div class="description" id="description">Waiting for weather data...</div>
+
+                <div class="details-grid">
+                    <div class="detail-item">
+                        <span class="detail-label">Humidity</span>
+                        <span class="detail-value" id="humidity">--%</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Wind Speed</span>
+                        <span class="detail-value" id="windSpeed">-- km/h</span>
+                    </div>
+                </div>
+
+                <div class="timestamp" id="timestamp">--</div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="quick-actions">
+                <button class="action-btn" onclick="toggleUnits()" title="Switch temperature units">
+                    Switch to <span id="unitToggle">°F</span>
+                </button>
+                <button class="action-btn" onclick="refreshWeather()" title="Refresh weather data">
+                    🔄 Refresh
+                </button>
+            </div>
+
+            <!-- Info Box -->
+            <div class="info-box">
+                <p><strong>MCP Weather App</strong> - Data provided via MCP protocol</p>
+                <p>This UI receives data through postMessage (not HTTP fetch)</p>
+            </div>
+        </main>
+    </div>
+
+    <script src="weather.js"></script>
+</body>
+</html>

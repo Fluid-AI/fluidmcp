@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather MCP - Frontend Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 30px;
+        }
+
+        .control-section {
+            margin-bottom: 25px;
+        }
+
+        .control-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+
+        .options {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .option-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .option-group label {
+            font-weight: 600;
+            color: #333;
+        }
+
+        select {
+            padding: 8px 12px;
+            border: 2px solid #667eea;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            background: white;
+        }
+
+        .action-btn {
+            padding: 10px 25px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .action-btn:hover {
+            background: #059669;
+            transform: translateY(-1px);
+        }
+
+        .search-section {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+            align-items: center;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #764ba2;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .status {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .status.loading {
+            color: #f59e0b;
+        }
+
+        .status.success {
+            color: #10b981;
+        }
+
+        .status.error {
+            color: #ef4444;
+        }
+
+        .output-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .output-tabs {
+            display: flex;
+            background: #f3f4f6;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            font-weight: 600;
+            color: #6b7280;
+            transition: all 0.3s ease;
+            border: none;
+            background: transparent;
+        }
+
+        .tab.active {
+            background: white;
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+        }
+
+        .tab:hover:not(.active) {
+            background: #e5e7eb;
+        }
+
+        .output-content {
+            padding: 20px;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        #weather-iframe {
+            width: 100%;
+            height: 700px;
+            border: none;
+            border-radius: 10px;
+        }
+
+        #json-output {
+            background: #1f2937;
+            color: #10b981;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .info-box {
+            background: #eff6ff;
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+
+        .info-box h4 {
+            color: #1e40af;
+            margin-bottom: 5px;
+        }
+
+        .info-box p {
+            color: #1e3a8a;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .options {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .search-section {
+                flex-direction: column;
+            }
+
+            .action-btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🌤️ Weather MCP - Frontend Demo</h1>
+            <p>Interactive weather dashboard powered by FluidMCP</p>
+        </div>
+
+        <!-- Info Box -->
+        <div class="info-box">
+            <h4>📡 Server Configuration</h4>
+            <p><strong>Current Endpoint:</strong> <span id="current-endpoint" style="color: #059669;"></span></p>
+            <p style="margin-top: 10px;">
+                <label for="endpoint-input" style="font-weight: 600;">Custom Endpoint:</label><br>
+                <input type="text" id="endpoint-input" style="width: 80%; padding: 8px; margin-top: 5px; border: 2px solid #667eea; border-radius: 5px;">
+                <button onclick="updateEndpoint()" style="padding: 8px 15px; background: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer; margin-left: 5px;">Update</button>
+            </p>
+            <p style="margin-top: 10px; font-size: 13px; color: #666;">
+                <strong>For Codespaces:</strong> Use <code>https://YOUR-CODESPACE-8100.app.github.dev/weather/mcp</code><br>
+                <strong>For Local:</strong> Use <code>http://localhost:8100/weather/mcp</code>
+            </p>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <div class="control-section">
+                <h3>🌍 Enter City Name</h3>
+                <div class="search-section">
+                    <input type="text" id="city-input" class="search-input" placeholder="Enter any city name (e.g., Bangalore, Mumbai, Delhi)" onkeypress="if(event.key==='Enter') getWeather()">
+                    <button class="action-btn" onclick="getWeather()" style="padding: 12px 30px; font-size: 16px;">Get Weather</button>
+                </div>
+            </div>
+
+            <div class="control-section">
+                <h3>⚙️ Options</h3>
+                <div class="options">
+                    <div class="option-group">
+                        <label for="units">Temperature Units:</label>
+                        <select id="units">
+                            <option value="metric">Celsius (°C)</option>
+                            <option value="imperial">Fahrenheit (°F)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status -->
+        <div id="status" class="status" style="display: none;"></div>
+
+        <!-- Output -->
+        <div class="output-container">
+            <div class="output-tabs">
+                <button class="tab active" onclick="switchTab('html')">Weather Dashboard (HTML)</button>
+                <button class="tab" onclick="switchTab('json')">JSON Response</button>
+            </div>
+            <div class="output-content">
+                <div id="html-panel" class="tab-panel active">
+                    <iframe id="weather-iframe"></iframe>
+                </div>
+                <div id="json-panel" class="tab-panel">
+                    <div id="json-output">// JSON response will appear here</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Auto-detect Codespaces environment and use correct endpoint
+        function getMCPEndpoint() {
+            // Check if running in GitHub Codespaces
+            const hostname = window.location.hostname;
+            if (hostname.includes('.app.github.dev') || hostname.includes('.preview.app.github.dev')) {
+                // Extract codespace name from hostname
+                const match = hostname.match(/([^.]+)/);
+                if (match) {
+                    const codespace = match[1];
+                    return `https://${codespace}-8100.app.github.dev/weather/mcp`;
+                }
+            }
+            // Default to localhost
+            return 'http://localhost:8100/weather/mcp';
+        }
+
+        let MCP_ENDPOINT = getMCPEndpoint();
+        let lastResponse = null;
+
+        // Update endpoint
+        function updateEndpoint() {
+            const input = document.getElementById('endpoint-input');
+            if (input.value.trim()) {
+                MCP_ENDPOINT = input.value.trim();
+                document.getElementById('current-endpoint').textContent = MCP_ENDPOINT;
+                showStatus('✅ Endpoint updated! Try clicking a city button.', 'success');
+                setTimeout(hideStatus, 3000);
+            }
+        }
+
+        // Initialize endpoint display
+        window.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('current-endpoint').textContent = MCP_ENDPOINT;
+            document.getElementById('endpoint-input').value = MCP_ENDPOINT;
+        });
+
+        // Switch between tabs
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update tab panels
+            document.querySelectorAll('.tab-panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+            document.getElementById(tabName + '-panel').classList.add('active');
+        }
+
+        // Show status message
+        function showStatus(message, type = 'loading') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+            statusEl.style.display = 'block';
+        }
+
+        // Hide status
+        function hideStatus() {
+            document.getElementById('status').style.display = 'none';
+        }
+
+        // Call MCP tool
+        async function callMCPTool(toolName, args) {
+            try {
+                showStatus(`🔄 Calling ${toolName}...`, 'loading');
+
+                const response = await fetch(MCP_ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        jsonrpc: "2.0",
+                        id: Date.now(),
+                        method: "tools/call",
+                        params: {
+                            name: toolName,
+                            arguments: args
+                        }
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                lastResponse = data;
+
+                if (data.error) {
+                    throw new Error(data.error.message || 'MCP tool call failed');
+                }
+
+                return data;
+
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+                console.error('MCP call failed:', error);
+                throw error;
+            }
+        }
+
+        // Get weather with HTML UI
+        async function getWeather() {
+            try {
+                const city = document.getElementById('city-input').value.trim();
+                if (!city) {
+                    showStatus('⚠️ Please enter a city name', 'error');
+                    setTimeout(hideStatus, 2000);
+                    return;
+                }
+
+                const units = document.getElementById('units').value;
+                const data = await callMCPTool('get_weather', { city, units });
+
+                const html = data.result.content[0].text;
+
+                // Render HTML in iframe
+                const iframe = document.getElementById('weather-iframe');
+                iframe.contentWindow.document.open();
+                iframe.contentWindow.document.write(html);
+                iframe.contentWindow.document.close();
+
+                // Update JSON panel
+                document.getElementById('json-output').textContent = JSON.stringify(data, null, 2);
+
+                // Switch to HTML tab
+                document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+                document.querySelector('.tab:first-child').classList.add('active');
+                document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
+                document.getElementById('html-panel').classList.add('active');
+
+                showStatus(`✅ Weather loaded for ${city}!`, 'success');
+                setTimeout(hideStatus, 3000);
+
+            } catch (error) {
+                console.error('Failed to get weather:', error);
+            }
+        }
+
+        // Load default city on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('Weather MCP Frontend loaded');
+            console.log('Server endpoint:', MCP_ENDPOINT);
+
+            // Focus on city input
+            document.getElementById('city-input').focus();
+        });
+    </script>
+</body>
+</html>
