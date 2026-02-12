@@ -67,7 +67,7 @@ Replicate-backed models are exposed through FluidMCP's **unified, OpenAI-compati
 
 ```bash
 # Create a chat completion using the unified LLM endpoint
-curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-2-70b",
@@ -180,7 +180,7 @@ Find models at: https://replicate.com/explore
 
 Usage:
 ```bash
-curl -X POST http://localhost:8099/api/llm/llama-chat/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-chat",
@@ -214,7 +214,7 @@ curl -X POST http://localhost:8099/api/llm/llama-chat/v1/chat/completions \
 
 Usage:
 ```bash
-curl -X POST http://localhost:8099/api/llm/codellama/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "codellama",
@@ -1035,7 +1035,7 @@ fluidmcp run examples/replicate-inference.json --file --start-server
 
 # Server runs on http://localhost:8099
 # Test with:
-curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-2-70b",

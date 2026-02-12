@@ -127,9 +127,10 @@ fluidmcp run config.json --file --start-server
 ### 2. Send Request with Tools
 
 ```bash
-curl -X POST http://localhost:8099/llm/llama-3-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "llama-3-70b",
     "messages": [
       {"role": "user", "content": "What is the weather in San Francisco?"}
     ],
@@ -199,9 +200,10 @@ if function_name == "get_weather":
 ### 5. Send Tool Result Back
 
 ```bash
-curl -X POST http://localhost:8099/llm/llama-3-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "llama-3-70b",
     "messages": [
       {"role": "user", "content": "What is the weather in San Francisco?"},
       {
