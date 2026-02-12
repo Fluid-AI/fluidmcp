@@ -408,8 +408,18 @@ class ReplicateClient:
             Prediction status and output
 
         Raises:
+            ValueError: If prediction_id is invalid
             httpx.HTTPError: If API request fails
         """
+        # Validate prediction_id is non-empty and well-formed
+        if not prediction_id or not prediction_id.strip():
+            raise ValueError(
+                f"Invalid prediction_id for model '{self.model_id}': {prediction_id!r}. "
+                f"Expected a non-empty string."
+            )
+
+        prediction_id = prediction_id.strip()
+
         # Apply rate limiting using the configured rate and capacity for this model
         rate_limiter = await get_rate_limiter(
             self.model_id,
@@ -433,8 +443,18 @@ class ReplicateClient:
             Cancellation response
 
         Raises:
+            ValueError: If prediction_id is invalid
             httpx.HTTPError: If API request fails
         """
+        # Validate prediction_id is non-empty and well-formed
+        if not prediction_id or not prediction_id.strip():
+            raise ValueError(
+                f"Invalid prediction_id for model '{self.model_id}': {prediction_id!r}. "
+                f"Expected a non-empty string."
+            )
+
+        prediction_id = prediction_id.strip()
+
         # Apply rate limiting (cancellation counts against API rate limits)
         rate_limiter = await get_rate_limiter(
             self.model_id,

@@ -27,6 +27,10 @@ HEALTH_CHECK_INTERVAL = 30  # Default interval between health checks (seconds)
 HEALTH_CHECK_FAILURES_THRESHOLD = 2  # Number of consecutive health check failures before restart
 CUDA_OOM_CACHE_TTL = 60.0  # Cache TTL for CUDA OOM detection (seconds)
 
+# Log rotation settings
+LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB per log file
+LOG_BACKUP_COUNT = 5  # Keep 5 backup files (50MB of backups) + active log (10MB) = 60MB total per model
+
 # Environment variable allowlist for subprocess (uppercase for case-insensitive matching)
 ENV_VAR_ALLOWLIST = {
     'PATH', 'HOME', 'USER', 'TMPDIR', 'LANG', 'LC_ALL',
@@ -54,33 +58,99 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         >>> sanitize_command_for_logging(["vllm", "--api-key", "secret123"])
         'vllm --api-key ***REDACTED***'
     """
-    # Specific credential-related patterns to avoid false positives
-    # These patterns match complete segments after hyphens/underscores
-    sensitive_patterns = [
-        'api-key', 'apikey', 'api_key',           # API keys
-        'access-key', 'accesskey', 'access_key',  # Access keys
-        'secret-key', 'secretkey', 'secret_key',  # Secret keys
-        'auth-key', 'authkey', 'auth_key',        # Auth keys
-        'token', 'auth-token', 'access-token',    # Tokens
-        'secret',                                  # Secrets
-        'password', 'passwd', 'pwd',              # Passwords
-        'auth', 'authentication',                 # Authentication
-        'credential', 'credentials',              # Credentials
-    ]
+    # Exact flag names that should trigger redaction
+    # Using exact matching to avoid false positives like --api-key-rotation
+    # Note: Single-word entries like 'token', 'secret', 'password' are handled
+    # by sensitive_segments below to avoid duplication
+    sensitive_flags = {
+        # API keys (exact and with prefixes)
+        'api-key', 'apikey', 'api_key',
+        'my-api-key', 'your-api-key',  # Common prefixed variants
+        # Access keys
+        'access-key', 'accesskey', 'access_key',
+        # Secret keys
+        'secret-key', 'secretkey', 'secret_key',
+        # Auth keys
+        'auth-key', 'authkey', 'auth_key', 'authentication',
+        # Tokens
+        'auth-token', 'access-token', 'bearer-token',
+        # Passwords - 'pass' is too generic for exact match
+        # Credentials
+        'credential', 'credentials',
+    }
 
     def matches_sensitive_pattern(text: str) -> bool:
-        """Check if text matches any sensitive pattern using segment-based matching."""
-        text_lower = text.lower()
-        # Split on hyphens and underscores to get segments
-        segments = re.split(r'[-_]', text_lower)
+        """
+        Check if text is a sensitive flag that should trigger redaction.
 
-        for pattern in sensitive_patterns:
-            # Check if pattern matches any segment exactly
-            pattern_segments = re.split(r'[-_]', pattern)
-            # Check if all pattern segments are present consecutively
-            for i in range(len(segments) - len(pattern_segments) + 1):
-                if segments[i:i+len(pattern_segments)] == pattern_segments:
-                    return True
+        Uses exact matching for known sensitive flags, plus suffix matching
+        to catch variants like --my-api-key, --prod-api-key, etc.
+        """
+        # Strip leading hyphens for comparison
+        flag_name = text.lstrip('-').lower()
+
+        # Exact match check
+        if flag_name in sensitive_flags:
+            return True
+
+        # Check if flag contains known sensitive segments (segment-based matching)
+        # This catches variants like --my-api-key, --prod-access-token, etc.,
+        # while avoiding false positives such as --tokenizer.
+        segments = re.split(r'[-_]+', flag_name)
+
+        # Single-word sensitive indicators
+        # These catch flags like --token, --secret, --auth, etc.
+        # Note: "pass" is intentionally excluded to avoid false positives
+        # with legitimate flags like --pass-through, --bypass, etc.
+        sensitive_segments = {
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "pwd",
+            "auth",
+            "authentication",
+            "credential",
+            "credentials",
+        }
+        if any(seg in sensitive_segments for seg in segments):
+            return True
+
+        # Two-word combinations like "api-key", "access-token", "bearer-token"
+        # Only treat flags as sensitive when they *end* with a sensitive pair.
+        # This still catches variants like --prod-api-key or --my-access-token,
+        # but avoids false positives such as --api-key-rotation.
+        sensitive_segment_pairs = {
+            ("api", "key"),
+            ("access", "key"),
+            ("secret", "key"),
+            ("private", "key"),
+            ("access", "token"),
+            ("auth", "token"),
+            ("bearer", "token"),
+            ("api", "token"),
+            ("prod", "key"),        # --prod-key
+            ("staging", "key"),     # --staging-key
+            ("prod", "token"),      # --prod-token
+            ("staging", "token"),   # --staging-token
+            ("prod", "secret"),     # --prod-secret
+            ("staging", "secret"),  # --staging-secret
+        }
+        if len(segments) >= 2 and (segments[-2], segments[-1]) in sensitive_segment_pairs:
+            return True
+
+        # Three-word combinations like "access-key-id", "api-key-id", "aws-access-key"
+        # Treat a flag as sensitive when it ends with a known sensitive pair
+        # followed by a credential-like suffix such as "id", while still
+        # ignoring benign variants like "--access-key-rotation" or "--access-key-config"
+        sensitive_suffixes_for_pairs = {"id", "secret"}
+        if len(segments) >= 3:
+            if (segments[-3], segments[-2]) in sensitive_segment_pairs and segments[-1] in sensitive_suffixes_for_pairs:
+                return True
+            # Also catch patterns like "aws-access-key"
+            if segments[-2] in ("access", "secret", "api") and segments[-1] in ("key", "token"):
+                return True
+
         return False
 
     safe_command = []
@@ -260,6 +330,47 @@ class LLMProcess:
         # CUDA OOM detection cache: (result, timestamp, file_mtime)
         self._cuda_oom_cache: Optional[Tuple[bool, float, Optional[float]]] = None
 
+    def _rotate_log_files(self, log_path: str) -> None:
+        """
+        Rotate log files when they exceed maximum size.
+
+        Rotates log_path to log_path.1, log_path.1 to log_path.2, etc.
+        Removes the oldest backup if we reach LOG_BACKUP_COUNT.
+
+        Args:
+            log_path: Path to the log file to rotate
+        """
+
+        # First, remove the oldest backup (.5) if it exists
+        oldest_backup = f"{log_path}.{LOG_BACKUP_COUNT}"
+        if os.path.exists(oldest_backup):
+            try:
+                os.remove(oldest_backup)
+                logger.debug(f"Removed oldest log backup: {oldest_backup}")
+            except Exception as e:
+                logger.warning(f"Failed to remove old backup {oldest_backup}: {e}")
+
+        # Rotate existing backups (move .4 -> .5, .3 -> .4, .2 -> .3, .1 -> .2)
+        # Use os.replace for atomic cross-platform rotation
+        for i in range(LOG_BACKUP_COUNT - 1, 0, -1):  # [4, 3, 2, 1] when LOG_BACKUP_COUNT=5
+            old_backup = f"{log_path}.{i}"
+            new_backup = f"{log_path}.{i + 1}"
+
+            if os.path.exists(old_backup):
+                try:
+                    os.replace(old_backup, new_backup)
+                    logger.debug(f"Rotated log backup: {old_backup} -> {new_backup}")
+                except Exception as e:
+                    logger.warning(f"Failed to rotate log {old_backup} -> {new_backup}: {e}")
+
+        # Move current log to .1
+        if os.path.exists(log_path):
+            try:
+                os.replace(log_path, f"{log_path}.1")
+                logger.info(f"Rotated log file: {log_path} -> {log_path}.1")
+            except Exception as e:
+                logger.warning(f"Failed to rotate log {log_path}: {e}")
+
     def start(self) -> subprocess.Popen:
         """
         Start the LLM server as a subprocess.
@@ -293,8 +404,20 @@ class LLMProcess:
         # Fix Issue #4: Properly handle file handle leak if Popen fails
         stderr_log = None
         try:
+            # Check if log file needs rotation (if over max size)
+            try:
+                if os.path.exists(stderr_log_path):
+                    file_size = os.path.getsize(stderr_log_path)
+                    if file_size > LOG_MAX_BYTES:
+                        # Rotate old log files
+                        self._rotate_log_files(stderr_log_path)
+            except (OSError, IOError) as e:
+                # File may have been deleted or permissions changed - not critical
+                logger.debug(f"Could not check log file size for rotation: {e}")
+
             # Open stderr log file for capturing process errors
-            stderr_log = open(stderr_log_path, "a")
+            stderr_log = open(stderr_log_path, "a", encoding='utf-8')
+
             # Security: Set restrictive permissions (owner read/write only)
             os.chmod(stderr_log_path, 0o600)
 

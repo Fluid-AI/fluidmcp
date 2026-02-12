@@ -219,6 +219,10 @@ class TestResponseCache:
         cache = await get_response_cache(enabled=False)
         assert cache is None
 
+
+class TestResponseCacheValidation:
+    """Test suite for ResponseCache validation (synchronous tests)."""
+
     def test_invalid_ttl_raises_error(self):
         """Test that invalid TTL raises ValueError."""
         with pytest.raises(ValueError, match="ttl must be positive"):
@@ -234,3 +238,53 @@ class TestResponseCache:
 
         with pytest.raises(ValueError, match="max_size must be positive"):
             ResponseCache(ttl=300, max_size=-10)
+
+
+@pytest.mark.asyncio
+class TestGlobalCacheConfiguration:
+    """Test suite for global cache singleton behavior."""
+
+    async def test_cache_warns_on_different_config(self):
+        """Test that cache returns same instance when different settings requested."""
+        from fluidmcp.cli.services import response_cache as cache_module
+
+        # Clear any existing global cache
+        cache_module._response_cache = None
+
+        # First initialization with specific settings
+        cache1 = await get_response_cache(ttl=300, max_size=1000, enabled=True)
+        assert cache1 is not None
+        assert cache1.ttl == 300
+        assert cache1.max_size == 1000
+
+        # Second call with different settings should return same cache
+        cache2 = await get_response_cache(ttl=600, max_size=500, enabled=True)
+
+        # Should return same cache instance with original settings
+        assert cache2 is cache1
+        assert cache2.ttl == 300  # Original settings preserved
+        assert cache2.max_size == 1000  # Original settings preserved
+
+        # Cleanup
+        cache_module._response_cache = None
+
+    async def test_cache_no_warn_on_same_config(self):
+        """Test that cache returns same instance when same settings requested."""
+        from fluidmcp.cli.services import response_cache as cache_module
+
+        # Clear any existing global cache
+        cache_module._response_cache = None
+
+        # First initialization
+        cache1 = await get_response_cache(ttl=300, max_size=1000, enabled=True)
+
+        # Second call with same settings
+        cache2 = await get_response_cache(ttl=300, max_size=1000, enabled=True)
+
+        # Should return same cache instance
+        assert cache2 is cache1
+        assert cache2.ttl == 300
+        assert cache2.max_size == 1000
+
+        # Cleanup
+        cache_module._response_cache = None
