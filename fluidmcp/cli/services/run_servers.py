@@ -802,6 +802,7 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     - POST /llm/v1/chat/completions
     - POST /llm/v1/completions
     - GET /llm/v1/models
+    - GET /llm/v1/models/{model_id}
 
     Args:
         app: FastAPI application instance
@@ -883,8 +884,23 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
 
     @app.get("/llm/v1/models/{model_id}", tags=["llm"])
     async def proxy_get_model(model_id: str):
-        """Proxy get model endpoint to LLM backend (OpenAI-compatible)."""
-        return await _proxy_llm_request(model_id, "models", "GET")
+        """Get specific model details (OpenAI-compatible)."""
+        # Check if model exists in registry
+        with _llm_registry_lock:
+            if model_id not in _llm_endpoints:
+                raise HTTPException(404, f"Model '{model_id}' not found")
+
+        # Return single model object in OpenAI format
+        created_timestamp = int(time.time())
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": created_timestamp,
+            "owned_by": "fluidmcp",
+            "permission": [],
+            "root": model_id,
+            "parent": None
+        }
 
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():

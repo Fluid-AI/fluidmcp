@@ -68,9 +68,9 @@ def test_model_1_inference():
 
     try:
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_1_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_1,
+                "model": VLLM_MODEL_1_ID,
                 "messages": [
                     {"role": "user", "content": "Say 'Hello from OPT' in one sentence"}
                 ],
@@ -105,9 +105,9 @@ def test_model_2_inference():
 
     try:
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_2_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_2,
+                "model": VLLM_MODEL_2_ID,
                 "messages": [
                     {"role": "user", "content": "Say 'Hello from GPT-2' in one sentence"}
                 ],
@@ -144,9 +144,9 @@ def test_concurrent_inference():
 
     def query_model_1():
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_1_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_1,
+                "model": VLLM_MODEL_1_ID,
                 "messages": [{"role": "user", "content": "Count to 3"}],
                 "max_tokens": 15,
                 "stream": False
@@ -157,9 +157,9 @@ def test_concurrent_inference():
 
     def query_model_2():
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_2_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_2,
+                "model": VLLM_MODEL_2_ID,
                 "messages": [{"role": "user", "content": "Count to 3"}],
                 "max_tokens": 15,
                 "stream": False
@@ -203,9 +203,9 @@ def test_streaming_model_1():
 
     try:
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_1_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_1,
+                "model": VLLM_MODEL_1_ID,
                 "messages": [
                     {"role": "user", "content": "Count from 1 to 3"}
                 ],

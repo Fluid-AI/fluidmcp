@@ -134,7 +134,7 @@ class TestUnifiedEndpoints:
 
                     response = client.post(
                         "/api/llm/v1/chat/completions",
-                        json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}],
+                        json={"model": "vllm-model", "messages": [{"role": "user", "content": "Test"}],
                             "stream": False
                         }
                     )

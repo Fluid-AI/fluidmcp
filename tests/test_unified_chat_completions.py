@@ -1,7 +1,7 @@
 """
 Unit tests for unified chat completions endpoint in management API.
 
-Tests the provider-agnostic /llm/{model_id}/v1/chat/completions endpoint
+Tests the provider-agnostic /llm/v1/chat/completions endpoint
 that routes to different providers (Replicate, vLLM) based on model configuration.
 """
 

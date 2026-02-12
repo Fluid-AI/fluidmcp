@@ -367,7 +367,7 @@ from openai import OpenAI
 
 # Point OpenAI client to FluidMCP gateway
 client = OpenAI(
-    base_url="http://localhost:8099/api/llm/llama-2-70b/v1",
+    base_url="http://localhost:8099/api/llm/v1",
     api_key="not-needed"  # FluidMCP uses REPLICATE_API_TOKEN from config
 )
 
