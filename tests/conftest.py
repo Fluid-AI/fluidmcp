@@ -56,7 +56,16 @@ async def mongodb_test_connection(mongodb_uri, test_db_name):
     """
     # Create database manager
     manager = DatabaseManager(mongodb_uri, test_db_name)
-    await manager.connect()
+    connected = await manager.connect()
+
+    # Fail fast with clear error message if MongoDB is unavailable
+    if not connected:
+        pytest.skip(
+            f"MongoDB connection failed at {mongodb_uri}. "
+            "Please ensure MongoDB is running:\n"
+            "  - Docker: docker run -d -p 27017:27017 mongo:latest\n"
+            "  - Or set FMCP_TEST_MONGODB_URI environment variable"
+        )
 
     yield manager
 

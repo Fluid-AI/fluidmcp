@@ -22,24 +22,18 @@ Prerequisites:
         export FMCP_TEST_MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net/"
 
 Running tests:
-    # Run fast API tests (completes in ~5 seconds)
+    # Run fast API tests (completes in ~30 seconds due to MongoDB timeout test)
     pytest tests/test_serve_api.py -v
 
     # With custom MongoDB URI
     FMCP_TEST_MONGODB_URI=mongodb://localhost:27017 pytest tests/test_serve_api.py -v
 """
 
-import asyncio
-import os
 import time
-import uuid
 
-import httpx
 import pytest
 
-from fluidmcp.cli.server import create_app
 from fluidmcp.cli.repositories.database import DatabaseManager
-from fluidmcp.cli.services.server_manager import ServerManager
 
 # Shared fixtures are now in conftest.py
 

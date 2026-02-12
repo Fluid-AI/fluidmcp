@@ -22,8 +22,8 @@ pytest tests/test_serve_api.py -v
 # Slow E2E tests only (5-10 minutes)
 pytest -m slow -v
 
-# Run ALL tests (fast + slow)
-pytest -m "" -v
+# Run ALL tests (fast + slow) - override default filter
+pytest --override-ini="addopts=" -v
 ```
 
 ## Test Organization

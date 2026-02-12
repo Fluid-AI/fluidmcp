@@ -46,10 +46,6 @@ import uuid
 import httpx
 import pytest
 
-from fluidmcp.cli.server import create_app
-from fluidmcp.cli.repositories.database import DatabaseManager
-from fluidmcp.cli.services.server_manager import ServerManager
-
 # Import utility functions from conftest.py
 # Note: Fixtures are automatically available from conftest.py
 import sys
@@ -103,16 +99,21 @@ class TestConfigurationManagement:
         data = response.json()
         assert data["name"] == "Test Memory Server"
 
-        # Update server config
+        # Update server config - must include all required fields
         updated_config = {
             "name": "Updated Memory Server",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-memory"],
+            "env": {"TEST_VAR": "updated_value"},
             "description": "Updated description"
         }
         response = await client.put("/api/servers/test-memory-server", json=updated_config)
         assert response.status_code == 200
         data = response.json()
-        assert data["name"] == "Updated Memory Server"
-        assert data["description"] == "Updated description"
+        # Response structure is {message, config}, so check config field
+        assert "config" in data, f"Expected 'config' in response, got: {data.keys()}"
+        assert data["config"]["name"] == "Updated Memory Server"
+        assert data["config"]["description"] == "Updated description"
 
         # Delete server config
         response = await client.delete("/api/servers/test-memory-server")
@@ -484,6 +485,7 @@ class TestToolManagement:
 
         if tool_to_execute:
             # Execute the tool
+            # API expects arguments directly, not nested under "arguments" key
             tool_params = {
                 "key": "test_key",
                 "value": "test_value"
@@ -491,14 +493,8 @@ class TestToolManagement:
 
             response = await client.post(
                 f"/api/servers/tool-execution-test/tools/{tool_to_execute['name']}/run",
-                json={"arguments": tool_params}
+                json=tool_params
             )
-
-            if response.status_code == 404:
-                response = await client.post(
-                    f"/api/tool-execution-test/tools/{tool_to_execute['name']}/execute",
-                    json={"arguments": tool_params}
-                )
 
             # Tool execution should succeed (200) or fail with validation error (400)
             # 404 is acceptable only if endpoint/tool not found
