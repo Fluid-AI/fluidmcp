@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from mcp.server import Server
-from mcp.types import Tool, TextContent
+from mcp.types import Tool, TextContent, Prompt, GetPromptResult, PromptMessage
 import mcp.server.stdio
 
 # Try to import Anthropic for dynamic website generation
@@ -39,6 +39,14 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
     logging.warning("Google Genai SDK not installed. Install with: pip install google-genai")
+
+# Try to import OpenAI for dynamic website generation (paid, high quality)
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logging.warning("OpenAI SDK not installed. Install with: pip install openai")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -223,31 +231,55 @@ def detect_site_type_from_prompt(prompt: str) -> tuple[str, str]:
 
 async def generate_custom_website_with_ai(prompt: str, site_name: str) -> Dict[str, str]:
     """
-    Use AI API (Anthropic Claude or Google Gemini) to generate a custom single-page application based on the prompt.
+    Use AI API (OpenAI, Anthropic Claude, or Google Gemini) to generate a custom single-page application based on the prompt.
     Returns a dict with 'html', 'css', and 'js' keys.
 
     Priority:
-    1. Try Anthropic Claude if ANTHROPIC_API_KEY is available
-    2. Fall back to Google Gemini if GEMINI_API_KEY is available (FREE)
+    1. Try OpenAI GPT-4 if OPENAI_API_KEY is available (BEST QUALITY)
+    2. Try Anthropic Claude if ANTHROPIC_API_KEY is available (HIGH QUALITY)
+    3. Fall back to Google Gemini if GEMINI_API_KEY is available (FREE)
     """
     # Check which APIs are available
+    openai_key = os.environ.get("OPENAI_API_KEY")
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     gemini_key = os.environ.get("GEMINI_API_KEY")
 
+    use_openai = OPENAI_AVAILABLE and openai_key
     use_anthropic = ANTHROPIC_AVAILABLE and anthropic_key
     use_gemini = GEMINI_AVAILABLE and gemini_key
 
-    if not use_anthropic and not use_gemini:
+    if not use_openai and not use_anthropic and not use_gemini:
         raise RuntimeError(
             "No AI API configured. Please set one of:\n"
-            "  - ANTHROPIC_API_KEY (requires credits)\n"
+            "  - OPENAI_API_KEY (ChatGPT, best quality)\n"
+            "  - ANTHROPIC_API_KEY (Claude, high quality)\n"
             "  - GEMINI_API_KEY (free at https://aistudio.google.com/apikey)\n"
-            "\nInstall SDKs with: pip install anthropic google-generativeai"
+            "\nInstall SDKs with: pip install openai anthropic google-generativeai"
         )
 
     logger.info(f"Generating custom website with AI for prompt: {prompt}")
 
-    # Try Anthropic first (if available)
+    # Try OpenAI first (if available) - BEST QUALITY
+    if use_openai:
+        try:
+            logger.info("🚀 Using OpenAI GPT-4 API (highest quality)...")
+            return await _generate_with_openai(prompt, site_name, openai_key)
+        except Exception as e:
+            error_msg = str(e).lower()
+            # If it's a quota/billing error, try fallbacks
+            if "quota" in error_msg or "billing" in error_msg or "insufficient" in error_msg:
+                logger.warning(f"OpenAI API failed (quota/billing issue): {e}")
+                if use_anthropic:
+                    logger.info("Falling back to Anthropic Claude...")
+                    return await _generate_with_anthropic(prompt, site_name, anthropic_key)
+                elif use_gemini:
+                    logger.info("Falling back to Google Gemini (free API)...")
+                    return await _generate_with_gemini(prompt, site_name, gemini_key)
+            else:
+                # Other errors - re-raise
+                raise
+
+    # Try Anthropic second (if available)
     if use_anthropic:
         try:
             logger.info("Using Anthropic Claude API...")
@@ -508,6 +540,141 @@ Be creative and build something impressive that looks and feels professional."""
     except Exception as e:
         logger.error(f"AI generation failed: {e}", exc_info=True)
         raise RuntimeError(f"Failed to generate custom website: {e}")
+
+
+async def _generate_with_openai(prompt: str, site_name: str, api_key: str) -> Dict[str, str]:
+    """Generate website using OpenAI GPT-4 API (BEST QUALITY)"""
+    client = OpenAI(api_key=api_key)
+
+    system_prompt = """You are an expert web developer who creates beautiful, professional single-page applications.
+
+When given a prompt, create a COMPLETE, production-ready single-page application with:
+- Modern, professional UI design with beautiful colors and spacing
+- Fully functional interactivity (all features must work)
+- Responsive design that works on mobile and desktop
+- Smooth animations and transitions
+- Clean, well-organized code
+- NO loading screens or placeholders - site must work immediately
+
+CRITICAL: Return THREE separate code blocks in this EXACT format:
+
+```html
+<!DOCTYPE html>
+... complete HTML code here ...
+```
+
+```css
+/* complete CSS code here */
+```
+
+```javascript
+// complete JavaScript code here
+```
+
+DO NOT use inline CSS or inline JavaScript. Always use separate blocks.
+DO NOT wrap in JSON - use markdown code blocks as shown above."""
+
+    user_prompt = f"""Create a dynamic single-page application: {prompt}
+
+Requirements:
+- Single HTML file with external CSS and JS (separate code blocks)
+- Make it modern, beautiful, and fully functional
+- Include ALL necessary functionality
+- NO loading screens or "coming soon" placeholders
+- The site must work immediately when opened
+- Add thoughtful interactions and animations
+- Make it professional and impressive
+
+Remember: Return THREE separate markdown code blocks (html, css, js) - NOT JSON format."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",  # GPT-4 Turbo - best quality
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=16000
+        )
+
+        response_text = response.choices[0].message.content
+        logger.info("Received OpenAI response, extracting code blocks...")
+
+        # Extract code blocks (same logic as other generators)
+        result = {}
+
+        # Extract HTML
+        if "```html" in response_text:
+            html_start = response_text.find("```html") + 7
+            html_end = response_text.find("```", html_start)
+            result["html"] = response_text[html_start:html_end].strip()
+            logger.info(f"Extracted HTML ({len(result['html'])} chars)")
+
+        # Extract CSS
+        if "```css" in response_text:
+            css_start = response_text.find("```css") + 6
+            css_end = response_text.find("```", css_start)
+            result["css"] = response_text[css_start:css_end].strip()
+            logger.info(f"Extracted CSS ({len(result['css'])} chars)")
+
+        # Extract JavaScript
+        if "```javascript" in response_text:
+            js_start = response_text.find("```javascript") + 13
+            js_end = response_text.find("```", js_start)
+            result["js"] = response_text[js_start:js_end].strip()
+            logger.info(f"Extracted JS ({len(result['js'])} chars)")
+        elif "```js" in response_text:
+            js_start = response_text.find("```js") + 5
+            js_end = response_text.find("```", js_start)
+            result["js"] = response_text[js_start:js_end].strip()
+            logger.info(f"Extracted JS ({len(result['js'])} chars)")
+
+        # Check if extraction succeeded
+        if all(key in result for key in ["html", "css", "js"]):
+            logger.info("✓ Successfully extracted all code blocks from OpenAI response")
+            return result
+
+        # FALLBACK: Extract inline CSS/JS from HTML block
+        logger.info("Trying to extract inline CSS/JS from HTML block...")
+        if "html" in result and result["html"]:
+            import re
+
+            html_content = result["html"]
+
+            # Extract inline CSS from <style> tags
+            if "css" not in result or not result["css"]:
+                style_match = re.search(r'<style[^>]*>(.*?)</style>', html_content, re.DOTALL | re.IGNORECASE)
+                if style_match:
+                    result["css"] = style_match.group(1).strip()
+                    logger.info(f"✓ Extracted inline CSS from HTML ({len(result['css'])} chars)")
+                    result["html"] = re.sub(r'<style[^>]*>.*?</style>', '<link rel="stylesheet" href="style.css">', html_content, flags=re.DOTALL | re.IGNORECASE)
+                else:
+                    result["css"] = "/* No CSS provided by AI */"
+
+            # Extract inline JS from <script> tags
+            if "js" not in result or not result["js"]:
+                script_matches = re.findall(r'<script(?![^>]*src=)[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
+                if script_matches:
+                    result["js"] = "\n\n".join([s.strip() for s in script_matches if s.strip()])
+                    logger.info(f"✓ Extracted inline JavaScript from HTML ({len(result['js'])} chars)")
+                    result["html"] = re.sub(r'<script(?![^>]*src=)[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+                    if '</body>' in result["html"]:
+                        result["html"] = result["html"].replace('</body>', '<script src="script.js"></script>\n</body>')
+                else:
+                    result["js"] = "// No JavaScript provided by AI"
+
+            if all(key in result for key in ["html", "css", "js"]):
+                logger.info("✓ Successfully extracted inline CSS/JS from HTML!")
+                return result
+
+        # If extraction failed
+        missing_keys = [k for k in ["html", "css", "js"] if k not in result]
+        raise RuntimeError(f"Failed to extract required code blocks. Missing: {missing_keys}. Response preview: {response_text[:500]}")
+
+    except Exception as e:
+        logger.error(f"OpenAI generation failed: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to generate custom website with OpenAI: {e}")
 
 
 async def _generate_with_gemini(prompt: str, site_name: str, api_key: str) -> Dict[str, str]:
@@ -1170,6 +1337,104 @@ async def list_tools() -> list[Tool]:
             }
         )
     ]
+
+
+@app.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """List available prompts"""
+    return [
+        Prompt(
+            name="vercel_deployment_agent",
+            description="System instructions for Vercel Deployment Agent - MUST be applied to EVERY conversation"
+        )
+    ]
+
+
+@app.get_prompt()
+async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> GetPromptResult:
+    """Get a specific prompt"""
+    if name == "vercel_deployment_agent":
+        return GetPromptResult(
+            description="Critical system instructions for Vercel Deployment Agent behavior",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text="""🤖 VERCEL DEPLOYMENT AGENT - MANDATORY BEHAVIOR RULES
+
+You are an AI assistant helping users deploy websites to Vercel.
+
+═══════════════════════════════════════════════════════════════════
+⚠️  CRITICAL: TOOL CALLING POLICY - READ EVERY TIME
+═══════════════════════════════════════════════════════════════════
+
+RULE 1: ALWAYS CALL TOOLS - NO EXCEPTIONS
+When a user asks about deployments, URLs, or site status:
+✅ ALWAYS call get_deployment_url or list_deployed_sites
+✅ Call these tools EVERY SINGLE TIME user asks, even if:
+   - You just called it 1 second ago
+   - It's the 2nd, 3rd, 10th, or 50th time in this conversation
+   - You think you remember the answer
+   - You have the information in your context
+❌ NEVER answer from memory or context
+❌ NEVER skip tool calls because you "already know"
+❌ NEVER assume information is still current
+
+RULE 2: WHEN TO CALL EACH TOOL
+📍 User asks "show me URL" / "what's my URL" / "deployed link"
+   → Call get_deployment_url immediately
+
+📍 User asks "show my sites" / "list deployments" / "what have I deployed"
+   → Call list_deployed_sites immediately
+
+📍 User asks the SAME question multiple times
+   → Call the tool AGAIN each time - data may have changed
+
+📍 After creating a deployment and user asks for status
+   → Call list_deployed_sites to check current status
+
+RULE 3: NEVER CONSTRUCT URLs MANUALLY
+❌ NEVER create URLs like "https://{site-name}.vercel.app"
+❌ NEVER guess or estimate what the URL might be
+✅ ONLY show URLs that come directly from tool results
+✅ Copy exact URL from tool response
+
+RULE 4: ALWAYS USE FRESH DATA
+- Deployment status changes (generating → deploying → deployed)
+- URLs may update after initial deployment
+- Always fetch current state with tools
+- Never trust cached or remembered information
+
+═══════════════════════════════════════════════════════════════════
+📋 EXAMPLE CONVERSATION FLOW
+═══════════════════════════════════════════════════════════════════
+
+User: "Show me my deployed sites"
+You: *calls list_deployed_sites* → Shows results
+
+User: "Show me my deployed sites again"
+You: *calls list_deployed_sites AGAIN* → Shows updated results
+
+User: "What's the URL for my timer app?"
+You: *calls get_deployment_url with filter="timer"* → Shows URL
+
+User: "Can you show me that URL again?"
+You: *calls get_deployment_url AGAIN* → Shows URL (even if just called)
+
+═══════════════════════════════════════════════════════════════════
+🎯 REMEMBER: Call tools EVERY TIME, no exceptions!
+═══════════════════════════════════════════════════════════════════
+
+Platform: This server deploys to VERCEL only (never Netlify)
+All URLs end in .vercel.app (never .netlify.app)
+"""
+                    )
+                )
+            ]
+        )
+
+    raise ValueError(f"Unknown prompt: {name}")
 
 
 @app.call_tool()
