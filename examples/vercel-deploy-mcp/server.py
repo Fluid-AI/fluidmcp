@@ -458,6 +458,47 @@ Be creative and build something impressive that looks and feels professional."""
         except json.JSONDecodeError as je:
             logger.warning(f"JSON parsing also failed: {je}")
 
+        # FALLBACK: Extract inline CSS/JS from HTML block (for complex games like snake)
+        logger.info("Trying to extract inline CSS/JS from HTML block...")
+        if "html" in result and result["html"]:
+            import re
+
+            html_content = result["html"]
+
+            # Extract inline CSS from <style> tags
+            if "css" not in result or not result["css"]:
+                style_match = re.search(r'<style[^>]*>(.*?)</style>', html_content, re.DOTALL | re.IGNORECASE)
+                if style_match:
+                    result["css"] = style_match.group(1).strip()
+                    logger.info(f"✓ Extracted inline CSS from HTML ({len(result['css'])} chars)")
+                    # Remove inline style from HTML
+                    result["html"] = re.sub(r'<style[^>]*>.*?</style>', '<link rel="stylesheet" href="style.css">', html_content, flags=re.DOTALL | re.IGNORECASE)
+                else:
+                    result["css"] = ""
+                    logger.warning("No CSS found - using empty CSS")
+
+            # Extract inline JS from <script> tags (excluding external scripts)
+            if "js" not in result or not result["js"]:
+                # Find script tags that have actual code (not external src)
+                script_matches = re.findall(r'<script(?![^>]*src=)[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
+                if script_matches:
+                    # Combine all inline scripts
+                    result["js"] = "\n\n".join([s.strip() for s in script_matches if s.strip()])
+                    logger.info(f"✓ Extracted inline JavaScript from HTML ({len(result['js'])} chars)")
+                    # Remove inline scripts from HTML and add external script tag
+                    result["html"] = re.sub(r'<script(?![^>]*src=)[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+                    # Add script tag before </body>
+                    if '</body>' in result["html"]:
+                        result["html"] = result["html"].replace('</body>', '<script src="script.js"></script>\n</body>')
+                else:
+                    result["js"] = ""
+                    logger.warning("No JavaScript found - using empty JS")
+
+            # Check if we now have all required parts
+            if all(key in result for key in ["html", "css", "js"]):
+                logger.info("✓ Successfully extracted inline CSS/JS from HTML!")
+                return result
+
         # If we got here, extraction failed
         missing_keys = [k for k in ["html", "css", "js"] if k not in result]
         raise RuntimeError(f"Failed to extract required code blocks. Missing: {missing_keys}. Response preview: {response_text[:500]}")
@@ -661,7 +702,49 @@ Be creative and build something impressive that looks and feels professional.
             logger.info("✓ HTML validation complete - CSS and JS links verified")
             return result
 
-        # If extraction failed
+        # FALLBACK: Extract inline CSS/JS from HTML block (for complex games like snake)
+        logger.info("Trying to extract inline CSS/JS from HTML block...")
+        if "html" in result and result["html"]:
+            import re
+
+            html_content = result["html"]
+
+            # Extract inline CSS from <style> tags
+            if "css" not in result or not result["css"]:
+                style_match = re.search(r'<style[^>]*>(.*?)</style>', html_content, re.DOTALL | re.IGNORECASE)
+                if style_match:
+                    result["css"] = style_match.group(1).strip()
+                    logger.info(f"✓ Extracted inline CSS from HTML ({len(result['css'])} chars)")
+                    # Remove inline style from HTML and add link tag
+                    result["html"] = re.sub(r'<style[^>]*>.*?</style>', '<link rel="stylesheet" href="style.css">', html_content, flags=re.DOTALL | re.IGNORECASE)
+                else:
+                    result["css"] = "/* No CSS provided by AI */"
+                    logger.warning("No CSS found - using empty CSS")
+
+            # Extract inline JS from <script> tags (excluding external scripts)
+            if "js" not in result or not result["js"]:
+                # Find script tags that have actual code (not external src)
+                script_matches = re.findall(r'<script(?![^>]*src=)[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
+                if script_matches:
+                    # Combine all inline scripts
+                    result["js"] = "\n\n".join([s.strip() for s in script_matches if s.strip()])
+                    logger.info(f"✓ Extracted inline JavaScript from HTML ({len(result['js'])} chars)")
+                    # Remove inline scripts from HTML and add external script tag
+                    result["html"] = re.sub(r'<script(?![^>]*src=)[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+                    # Add script tag before </body>
+                    if '</body>' in result["html"]:
+                        result["html"] = result["html"].replace('</body>', '<script src="script.js"></script>\n</body>')
+                    logger.info("✓ Added external script.js reference to HTML")
+                else:
+                    result["js"] = "// No JavaScript provided by AI"
+                    logger.warning("No JavaScript found - using empty JS")
+
+            # Check if we now have all required parts
+            if all(key in result for key in ["html", "css", "js"]):
+                logger.info("✓ Successfully extracted inline CSS/JS from HTML!")
+                return result
+
+        # If extraction still failed
         missing_keys = [k for k in ["html", "css", "js"] if k not in result]
         raise RuntimeError(f"Failed to extract required code blocks. Missing: {missing_keys}. Response preview: {response_text[:500]}")
 
@@ -766,7 +849,41 @@ Keep everything else the same. Make sure all features still work perfectly."""
             logger.info("Successfully extracted code from markdown blocks")
             return result
 
-        # If we got here, extraction failed
+        # FALLBACK: Extract inline CSS/JS from HTML block
+        logger.info("Trying to extract inline CSS/JS from HTML block...")
+        if "html" in result and result["html"]:
+            import re
+
+            html_content = result["html"]
+
+            # Extract inline CSS from <style> tags
+            if "css" not in result or not result["css"]:
+                style_match = re.search(r'<style[^>]*>(.*?)</style>', html_content, re.DOTALL | re.IGNORECASE)
+                if style_match:
+                    result["css"] = style_match.group(1).strip()
+                    logger.info(f"✓ Extracted inline CSS from HTML ({len(result['css'])} chars)")
+                    result["html"] = re.sub(r'<style[^>]*>.*?</style>', '<link rel="stylesheet" href="style.css">', html_content, flags=re.DOTALL | re.IGNORECASE)
+                else:
+                    result["css"] = "/* No CSS changes */"
+
+            # Extract inline JS from <script> tags
+            if "js" not in result or not result["js"]:
+                script_matches = re.findall(r'<script(?![^>]*src=)[^>]*>(.*?)</script>', html_content, re.DOTALL | re.IGNORECASE)
+                if script_matches:
+                    result["js"] = "\n\n".join([s.strip() for s in script_matches if s.strip()])
+                    logger.info(f"✓ Extracted inline JavaScript from HTML ({len(result['js'])} chars)")
+                    result["html"] = re.sub(r'<script(?![^>]*src=)[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+                    if '</body>' in result["html"]:
+                        result["html"] = result["html"].replace('</body>', '<script src="script.js"></script>\n</body>')
+                else:
+                    result["js"] = "// No JavaScript changes"
+
+            # Check if we now have all required parts
+            if all(key in result for key in ["html", "css", "js"]):
+                logger.info("✓ Successfully extracted inline CSS/JS from HTML!")
+                return result
+
+        # If extraction still failed
         missing_keys = [k for k in ["html", "css", "js"] if k not in result]
         raise RuntimeError(f"Failed to extract required code blocks. Missing: {missing_keys}. Response preview: {response_text[:500]}")
 
