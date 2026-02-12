@@ -881,6 +881,11 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
                 "data": all_models
             }
 
+    @app.get("/llm/v1/models/{model_id}", tags=["llm"])
+    async def proxy_get_model(model_id: str):
+        """Proxy get model endpoint to LLM backend (OpenAI-compatible)."""
+        return await _proxy_llm_request(model_id, "models", "GET")
+
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():
         """Get status of all configured LLM models."""

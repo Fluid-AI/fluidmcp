@@ -48,7 +48,7 @@ fluidmcp run examples/vllm-config.json --file --start-server
 
 **OpenAI-compatible endpoint**:
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -451,7 +451,7 @@ List all available models or get details for a specific model using `?model={mod
 ### Basic Chat Completion
 
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -462,7 +462,7 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 ### With System Prompt
 
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -480,7 +480,7 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 **NEW**: Real-time token streaming using Server-Sent Events (SSE):
 
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -510,7 +510,7 @@ from openai import OpenAI
 
 # Point to FluidMCP gateway
 client = OpenAI(
-    base_url="http://localhost:8099/llm/vllm/v1",
+    base_url="http://localhost:8099/llm/v1",
     api_key="dummy"  # Not used, but required by SDK
 )
 
