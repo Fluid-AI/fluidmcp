@@ -799,17 +799,23 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     Add OpenAI-compatible proxy routes for LLM models.
 
     Creates endpoints with /llm prefix to avoid conflicts with MCP server names:
-    - POST /llm/{model_id}/v1/chat/completions
-    - POST /llm/{model_id}/v1/completions
-    - GET /llm/{model_id}/v1/models
+    - POST /llm/v1/chat/completions
+    - POST /llm/v1/completions
+    - GET /llm/v1/models
+    - GET /llm/v1/models/{model_id}
 
     Args:
         app: FastAPI application instance
     """
-    @app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
-    async def proxy_chat_completions(model_id: str, request: Request):
+    @app.post("/llm/v1/chat/completions", tags=["llm"])
+    async def proxy_chat_completions(request: Request):
         """Proxy OpenAI chat completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Extract model_id from request body (OpenAI-style)
+        model_id = body.get("model")
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
 
         # Check if streaming is requested
         if body.get("stream", False):
@@ -824,10 +830,15 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Non-streaming request
         return await _proxy_llm_request(model_id, "chat", "POST", body)
 
-    @app.post("/llm/{model_id}/v1/completions", tags=["llm"])
-    async def proxy_completions(model_id: str, request: Request):
+    @app.post("/llm/v1/completions", tags=["llm"])
+    async def proxy_completions(request: Request):
         """Proxy OpenAI completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Extract model_id from request body (OpenAI-style)
+        model_id = body.get("model")
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
 
         # Check if streaming is requested
         if body.get("stream", False):
@@ -842,10 +853,69 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Non-streaming request
         return await _proxy_llm_request(model_id, "completions", "POST", body)
 
-    @app.get("/llm/{model_id}/v1/models", tags=["llm"])
-    async def proxy_models(model_id: str):
-        """Proxy models list endpoint to LLM backend."""
-        return await _proxy_llm_request(model_id, "models", "GET")
+    @app.get("/llm/v1/models", tags=["llm"])
+    async def proxy_models(model: str = None):
+        """List models or get specific model details (OpenAI-compatible)."""
+        if model:
+            # Return specific model details in OpenAI format
+            # Check if model exists in registry
+            with _llm_registry_lock:
+                if model not in _llm_endpoints:
+                    raise HTTPException(404, f"Model '{model}' not found")
+
+            # Return single model object (same format as /llm/v1/models/{model_id})
+            created_timestamp = int(time.time())
+            return {
+                "id": model,
+                "object": "model",
+                "created": created_timestamp,
+                "owned_by": "fluidmcp",
+                "permission": [],
+                "root": model,
+                "parent": None
+            }
+        else:
+            # Return all configured models in OpenAI format
+            with _llm_registry_lock:
+                endpoints_snapshot = dict(_llm_endpoints)
+
+            created_timestamp = int(time.time())
+            all_models = []
+            for model_id in endpoints_snapshot.keys():
+                all_models.append({
+                    "id": model_id,
+                    "object": "model",
+                    "created": created_timestamp,
+                    "owned_by": "fluidmcp",
+                    "permission": [],
+                    "root": model_id,
+                    "parent": None
+                })
+
+            return {
+                "object": "list",
+                "data": all_models
+            }
+
+    @app.get("/llm/v1/models/{model_id}", tags=["llm"])
+    async def proxy_get_model(model_id: str):
+        """Get specific model details (OpenAI-compatible)."""
+        # Check if model exists in registry
+        with _llm_registry_lock:
+            if model_id not in _llm_endpoints:
+                raise HTTPException(404, f"Model '{model_id}' not found")
+
+        # Return single model object in OpenAI format
+        created_timestamp = int(time.time())
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": created_timestamp,
+            "owned_by": "fluidmcp",
+            "permission": [],
+            "root": model_id,
+            "parent": None
+        }
 
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():

@@ -25,8 +25,6 @@ import os
 FLUIDMCP_BASE_URL = os.getenv("FLUIDMCP_BASE_URL", "http://localhost:8099")
 VLLM_MODEL_1_ID = os.getenv("VLLM_MODEL_1_ID", "vllm-opt")
 VLLM_MODEL_2_ID = os.getenv("VLLM_MODEL_2_ID", "vllm-gpt2")
-TEST_MODEL_1 = os.getenv("TEST_MODEL_1_NAME", "facebook/opt-125m")  # Model name for first vLLM instance
-TEST_MODEL_2 = os.getenv("TEST_MODEL_2_NAME", "gpt2")  # Model name for second vLLM instance
 
 
 def test_status_endpoint():
@@ -68,9 +66,9 @@ def test_model_1_inference():
 
     try:
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_1_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_1,
+                "model": VLLM_MODEL_1_ID,
                 "messages": [
                     {"role": "user", "content": "Say 'Hello from OPT' in one sentence"}
                 ],
@@ -105,9 +103,9 @@ def test_model_2_inference():
 
     try:
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_2_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_2,
+                "model": VLLM_MODEL_2_ID,
                 "messages": [
                     {"role": "user", "content": "Say 'Hello from GPT-2' in one sentence"}
                 ],
@@ -144,9 +142,9 @@ def test_concurrent_inference():
 
     def query_model_1():
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_1_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_1,
+                "model": VLLM_MODEL_1_ID,
                 "messages": [{"role": "user", "content": "Count to 3"}],
                 "max_tokens": 15,
                 "stream": False
@@ -157,9 +155,9 @@ def test_concurrent_inference():
 
     def query_model_2():
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_2_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_2,
+                "model": VLLM_MODEL_2_ID,
                 "messages": [{"role": "user", "content": "Count to 3"}],
                 "max_tokens": 15,
                 "stream": False
@@ -203,9 +201,9 @@ def test_streaming_model_1():
 
     try:
         response = requests.post(
-            f"{FLUIDMCP_BASE_URL}/llm/{VLLM_MODEL_1_ID}/v1/chat/completions",
+            f"{FLUIDMCP_BASE_URL}/llm/v1/chat/completions",
             json={
-                "model": TEST_MODEL_1,
+                "model": VLLM_MODEL_1_ID,
                 "messages": [
                     {"role": "user", "content": "Count from 1 to 3"}
                 ],

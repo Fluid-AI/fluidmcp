@@ -249,7 +249,7 @@ EOF
 fluidmcp run replicate-config.json --file --start-server
 
 # Test the model via the unified OpenAI-compatible chat completions endpoint
-curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-2-70b",

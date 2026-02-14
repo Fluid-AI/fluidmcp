@@ -63,18 +63,34 @@ This follows the standard OpenAI function calling pattern where **the client is 
 ### Request Flow
 
 ```json
-POST /llm/{model_id}/v1/chat/completions
+POST /api/llm/v1/chat/completions
 {
+  "model": "hermes-3-llama-3.1-8b",
   "messages": [...],
   "tools": [...]  // ← Passed through to vLLM
 }
 ```
 
-FluidMCP proxy code ([run_servers.py:685-701](../fluidmcp/cli/services/run_servers.py#L685-L701)):
+FluidMCP management API routes to vLLM proxy ([run_servers.py:809-830](../fluidmcp/cli/services/run_servers.py#L809-L830)):
 ```python
-@app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
-async def proxy_chat_completions(model_id: str, request: Request):
+@app.post("/llm/v1/chat/completions", tags=["llm"])
+async def proxy_chat_completions(request: Request):
     body = await request.json()
+
+    # Extract model_id from request body (OpenAI-style)
+    model_id = body.get("model")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
+
+    # Check if streaming is requested
+    if body.get("stream", False):
+        _validate_streaming_request(model_id, "chat")
+        return StreamingResponse(
+            _proxy_llm_request_streaming(model_id, "chat", body),
+            media_type="text/event-stream"
+        )
+
+    # Non-streaming request
     return await _proxy_llm_request(model_id, "chat", "POST", body)
 ```
 
@@ -111,9 +127,10 @@ fluidmcp run config.json --file --start-server
 ### 2. Send Request with Tools
 
 ```bash
-curl -X POST http://localhost:8099/llm/llama-3-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "llama-3-70b",
     "messages": [
       {"role": "user", "content": "What is the weather in San Francisco?"}
     ],
@@ -183,9 +200,10 @@ if function_name == "get_weather":
 ### 5. Send Tool Result Back
 
 ```bash
-curl -X POST http://localhost:8099/llm/llama-3-70b/v1/chat/completions \
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "llama-3-70b",
     "messages": [
       {"role": "user", "content": "What is the weather in San Francisco?"},
       {
@@ -452,8 +470,9 @@ async def chat_with_tools(user_message: str):
     async with httpx.AsyncClient() as client:
         # Step 1: Send initial request with tools
         response = await client.post(
-            f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+            f"{FLUIDMCP_URL}/llm/v1/chat/completions",
             json={
+                "model": MODEL_ID,
                 "messages": messages,
                 "tools": tools,
                 "tool_choice": "auto"
@@ -489,8 +508,8 @@ async def chat_with_tools(user_message: str):
 
             # Step 4: Send tool results back to model
             response = await client.post(
-                f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
-                json={"messages": messages}
+                f"{FLUIDMCP_URL}/llm/v1/chat/completions",
+                json={"model": MODEL_ID, "messages": messages}
             )
             data = response.json()
             final_message = data["choices"][0]["message"]["content"]
@@ -604,7 +623,7 @@ async def chat_with_streaming(user_message: str):
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST",
-            f"{FLUIDMCP_URL}/llm/{MODEL_ID}/v1/chat/completions",
+            f"{FLUIDMCP_URL}/llm/v1/chat/completions",
             json={
                 "messages": [{"role": "user", "content": user_message}],
                 "tools": tools,
@@ -912,7 +931,7 @@ For now, use the manual execution pattern documented above.
 ### Endpoint
 
 ```
-POST /llm/{model_id}/v1/chat/completions
+POST /api/llm/v1/chat/completions
 ```
 
 ### Request Body

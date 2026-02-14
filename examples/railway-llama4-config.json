@@ -1,0 +1,29 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llama-4-maverick": {
+      "type": "replicate",
+      "model": "meta/llama-4-maverick",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 4096,
+        "top_p": 0.9
+      },
+      "timeout": 300,
+      "max_retries": 3
+    },
+    "llama-4-scout": {
+      "type": "replicate",
+      "model": "meta/llama-4-scout",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 4096,
+        "top_p": 0.9
+      },
+      "timeout": 300,
+      "max_retries": 3
+    }
+  }
+}

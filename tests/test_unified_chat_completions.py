@@ -1,7 +1,7 @@
 """
 Unit tests for unified chat completions endpoint in management API.
 
-Tests the provider-agnostic /llm/{model_id}/v1/chat/completions endpoint
+Tests the provider-agnostic /llm/v1/chat/completions endpoint
 that routes to different providers (Replicate, vLLM) based on model configuration.
 """
 
@@ -43,8 +43,9 @@ class TestUnifiedChatCompletionsRouting:
                 }
 
                 response = client.post(
-                    "/api/llm/test-model/v1/chat/completions",
+                    "/api/llm/v1/chat/completions",
                     json={
+                        "model": "test-model",
                         "messages": [{"role": "user", "content": "Test"}],
                         "temperature": 0.7
                     }
@@ -78,8 +79,9 @@ class TestUnifiedChatCompletionsRouting:
                     mock_get_client.return_value = mock_http_client
 
                     response = client.post(
-                        "/api/llm/vllm-model/v1/chat/completions",
+                        "/api/llm/v1/chat/completions",
                         json={
+                            "model": "vllm-model",
                             "messages": [{"role": "user", "content": "Test"}],
                             "stream": False
                         }
@@ -92,8 +94,8 @@ class TestUnifiedChatCompletionsRouting:
         """Test that unknown model IDs return 404."""
         with patch('fluidmcp.cli.api.management.get_model_type', return_value=None):
             response = client.post(
-                "/api/llm/unknown-model/v1/chat/completions",
-                json={"messages": [{"role": "user", "content": "Test"}]}
+                "/api/llm/v1/chat/completions",
+                json={"model": "unknown-model", "messages": [{"role": "user", "content": "Test"}]}
             )
 
             assert response.status_code == 404
@@ -103,8 +105,8 @@ class TestUnifiedChatCompletionsRouting:
         """Test that unsupported provider types return 501."""
         with patch('fluidmcp.cli.api.management.get_model_type', return_value='unsupported_provider'):
             response = client.post(
-                "/api/llm/fake-model/v1/chat/completions",
-                json={"messages": [{"role": "user", "content": "Test"}]}
+                "/api/llm/v1/chat/completions",
+                json={"model": "fake-model", "messages": [{"role": "user", "content": "Test"}]}
             )
 
             assert response.status_code == 501
@@ -125,8 +127,9 @@ class TestReplicateErrorHandling:
                 )
 
                 response = client.post(
-                    "/api/llm/replicate-model/v1/chat/completions",
+                    "/api/llm/v1/chat/completions",
                     json={
+                        "model": "replicate-model",
                         "messages": [{"role": "user", "content": "Test"}],
                         "stream": True
                     }
@@ -143,8 +146,8 @@ class TestReplicateErrorHandling:
                 mock_replicate.side_effect = HTTPException(429, "Rate limit exceeded")
 
                 response = client.post(
-                    "/api/llm/replicate-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "replicate-model", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response.status_code == 429
@@ -161,8 +164,8 @@ class TestVLLMErrorHandling:
                 "endpoints": {}  # Missing base_url
             }):
                 response = client.post(
-                    "/api/llm/vllm-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "vllm-model", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response.status_code == 500
@@ -182,8 +185,8 @@ class TestVLLMErrorHandling:
                     mock_get_client.return_value = mock_http_client
 
                     response = client.post(
-                        "/api/llm/vllm-model/v1/chat/completions",
-                        json={"messages": [{"role": "user", "content": "Test"}]}
+                        "/api/llm/v1/chat/completions",
+                        json={"model": "vllm-model", "messages": [{"role": "user", "content": "Test"}]}
                     )
 
                     assert response.status_code == 502

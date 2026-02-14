@@ -57,9 +57,8 @@ class TestReplicateEndpoints:
                 }
 
                 response = client.post(
-                    "/api/llm/llama-2-70b/v1/chat/completions",
-                    json={
-                        "messages": [{"role": "user", "content": "Hello"}],
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Hello"}],
                         "temperature": 0.7
                     }
                 )
@@ -74,8 +73,8 @@ class TestReplicateEndpoints:
         """Test 404 when Replicate model doesn't exist."""
         with patch('fluidmcp.cli.api.management.get_model_type', return_value=None):
             response = client.post(
-                "/api/llm/nonexistent-model/v1/chat/completions",
-                json={"messages": [{"role": "user", "content": "Test"}]}
+                "/api/llm/v1/chat/completions",
+                json={"model": "nonexistent-model", "messages": [{"role": "user", "content": "Test"}]}
             )
 
             assert response.status_code == 404
@@ -89,8 +88,8 @@ class TestReplicateEndpoints:
                 mock_complete.side_effect = HTTPException(504, "Request timeout")
 
                 response = client.post(
-                    "/api/llm/slow-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response.status_code == 504
@@ -107,8 +106,8 @@ class TestUnifiedEndpoints:
                 mock.return_value = {"id": "test", "object": "chat.completion"}
 
                 response = client.post(
-                    "/api/llm/llama/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Hi"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Hi"}]}
                 )
 
                 assert response.status_code == 200
@@ -134,9 +133,8 @@ class TestUnifiedEndpoints:
                     mock_get_client.return_value = mock_http_client
 
                     response = client.post(
-                        "/api/llm/vllm-model/v1/chat/completions",
-                        json={
-                            "messages": [{"role": "user", "content": "Test"}],
+                        "/api/llm/v1/chat/completions",
+                        json={"model": "vllm-model", "messages": [{"role": "user", "content": "Test"}],
                             "stream": False
                         }
                     )
@@ -168,8 +166,8 @@ class TestUnifiedEndpoints:
                     mock_get_client.return_value = mock_http_client
 
                     response = client.post(
-                        "/api/llm/vllm-model/v1/completions",
-                        json={"prompt": "Once upon a time", "max_tokens": 50}
+                        "/api/llm/v1/completions",
+                        json={"model": "vllm-model", "prompt": "Once upon a time", "max_tokens": 50}
                     )
 
                     assert response.status_code == 200
@@ -189,8 +187,8 @@ class TestMultiModelScenarios:
                 mock.return_value = {"id": "replicate-1", "object": "chat.completion"}
 
                 response1 = client.post(
-                    "/api/llm/llama/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test 1"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test 1"}]}
                 )
 
                 assert response1.status_code == 200
@@ -215,9 +213,8 @@ class TestMultiModelScenarios:
                     mock_get_client.return_value = mock_http_client
 
                     response2 = client.post(
-                        "/api/llm/vllm-model/v1/chat/completions",
-                        json={
-                            "messages": [{"role": "user", "content": "Test 2"}],
+                        "/api/llm/v1/chat/completions",
+                        json={"model": "vllm-model", "messages": [{"role": "user", "content": "Test 2"}],
                             "stream": False
                         }
                     )
@@ -234,8 +231,8 @@ class TestMultiModelScenarios:
                 mock.side_effect = HTTPException(503, "Model unavailable")
 
                 response1 = client.post(
-                    "/api/llm/primary-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response1.status_code == 503
@@ -246,8 +243,8 @@ class TestMultiModelScenarios:
                 mock.return_value = {"id": "fallback-success", "object": "chat.completion"}
 
                 response2 = client.post(
-                    "/api/llm/fallback-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-13b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response2.status_code == 200
@@ -260,20 +257,22 @@ class TestErrorHandling:
     def test_invalid_request_body(self, client):
         """Test validation of malformed request body."""
         response = client.post(
-            "/api/llm/test-model/v1/chat/completions",
+            "/api/llm/v1/chat/completions",
             json={"invalid": "no messages field"}
         )
 
-        # Should fail validation (either 422 or 404 depending on route matching)
-        # 404 if model not found, 422 if model found but validation fails
-        assert response.status_code in [404, 422]
+        # Should fail validation
+        # 400 if missing required "model" field
+        # 404 if model not found
+        # 422 if model found but other validation fails
+        assert response.status_code in [400, 404, 422]
 
     def test_unsupported_provider_type(self, client):
         """Test error when provider type is not supported."""
         with patch('fluidmcp.cli.api.management.get_model_type', return_value='unsupported_type'):
             response = client.post(
-                "/api/llm/unknown-provider/v1/chat/completions",
-                json={"messages": [{"role": "user", "content": "Test"}]}
+                "/api/llm/v1/chat/completions",
+                json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
             )
 
             assert response.status_code == 501
@@ -296,9 +295,8 @@ class TestErrorHandling:
                     mock_get_client.return_value = mock_http_client
 
                     response = client.post(
-                        "/api/llm/vllm-model/v1/chat/completions",
-                        json={
-                            "messages": [{"role": "user", "content": "Test"}],
+                        "/api/llm/v1/chat/completions",
+                        json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}],
                             "stream": False
                         }
                     )
@@ -330,15 +328,15 @@ class TestMetricsIntegration:
                 }
 
                 response = client.post(
-                    "/api/llm/test-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response.status_code == 200
 
                 # Verify metrics were recorded
                 collector = get_metrics_collector()
-                metrics = collector.get_model_metrics("test-model")
+                metrics = collector.get_model_metrics("llama-2-70b")
                 assert metrics is not None
                 assert metrics.total_requests == 1
                 assert metrics.successful_requests == 1
@@ -359,15 +357,15 @@ class TestMetricsIntegration:
                 mock.side_effect = HTTPException(503, "Service unavailable")
 
                 response = client.post(
-                    "/api/llm/failing-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
                 assert response.status_code == 503
 
                 # Verify metrics were recorded
                 collector = get_metrics_collector()
-                metrics = collector.get_model_metrics("failing-model")
+                metrics = collector.get_model_metrics("llama-2-70b")
                 assert metrics is not None
                 assert metrics.total_requests == 1
                 assert metrics.successful_requests == 0
@@ -392,8 +390,8 @@ class TestMetricsIntegration:
                 }
 
                 client.post(
-                    "/api/llm/metrics-test-model/v1/chat/completions",
-                    json={"messages": [{"role": "user", "content": "Test"}]}
+                    "/api/llm/v1/chat/completions",
+                    json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}]}
                 )
 
         # Fetch metrics via API (use /metrics/json endpoint for JSON format)
@@ -402,10 +400,10 @@ class TestMetricsIntegration:
 
         metrics_data = metrics_response.json()
         assert "models" in metrics_data
-        assert "metrics-test-model" in metrics_data["models"]
-        assert metrics_data["models"]["metrics-test-model"]["requests"]["total"] == 1
-        assert metrics_data["models"]["metrics-test-model"]["tokens"]["prompt"] == 5
-        assert metrics_data["models"]["metrics-test-model"]["tokens"]["completion"] == 10
+        assert "llama-2-70b" in metrics_data["models"]
+        assert metrics_data["models"]["llama-2-70b"]["requests"]["total"] == 1
+        assert metrics_data["models"]["llama-2-70b"]["tokens"]["prompt"] == 5
+        assert metrics_data["models"]["llama-2-70b"]["tokens"]["completion"] == 10
 
     def test_metrics_prometheus_format(self, client):
         """Test that metrics are available in Prometheus format."""
@@ -436,8 +434,8 @@ class TestMetricsIntegration:
                     mock_get_client.return_value = mock_http_client
 
                     client.post(
-                        "/api/llm/prom-test-model/v1/chat/completions",
-                        json={"messages": [{"role": "user", "content": "Test"}], "stream": False}
+                        "/api/llm/v1/chat/completions",
+                        json={"model": "llama-2-70b", "messages": [{"role": "user", "content": "Test"}], "stream": False}
                     )
 
         # Fetch Prometheus metrics
@@ -447,5 +445,5 @@ class TestMetricsIntegration:
 
         # Verify Prometheus format
         assert "fluidmcp_llm_requests_total" in prom_text
-        assert 'model_id="prom-test-model"' in prom_text
+        assert 'model_id="llama-2-70b"' in prom_text
         assert 'provider="vllm"' in prom_text
