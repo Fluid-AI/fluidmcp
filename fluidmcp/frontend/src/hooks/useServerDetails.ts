@@ -119,7 +119,8 @@ export function useServerDetails(serverId: string) {
   const isRunning = serverDetails?.status.state === "running";
   const isStopped = !serverDetails?.status ||
                     serverDetails.status.state === "stopped" ||
-                    serverDetails.status.state === "failed";
+                    serverDetails.status.state === "failed" ||
+                    serverDetails.status.state === "not_found";
 
   return {
     serverDetails,
