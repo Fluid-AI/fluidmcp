@@ -79,7 +79,7 @@ When status is `"succeeded"`:
 curl -X POST http://localhost:8099/api/llm/v1/generate/video \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "cogvideox",
+    "model": "animatediff-video",
     "prompt": "A panda playing guitar in the rain",
     "duration": 5
   }'

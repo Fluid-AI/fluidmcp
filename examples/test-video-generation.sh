@@ -20,27 +20,27 @@ case $TYPE in
     read -p "Enter prompt: " PROMPT
     echo ""
     echo "Generating image..."
-    RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/flux-image/generate/image" \
+    RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/image" \
       -H "Content-Type: application/json" \
-      -d "{\"prompt\": \"${PROMPT}\"}")
+      -d "{\"model\": \"flux-image\", \"prompt\": \"${PROMPT}\"}")
     ;;
 
   video)
     read -p "Enter prompt: " PROMPT
     echo ""
     echo "Generating video (this takes 1-5 minutes)..."
-    RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/animatediff-video/generate/video" \
+    RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/video" \
       -H "Content-Type: application/json" \
-      -d "{\"prompt\": \"${PROMPT}\"}")
+      -d "{\"model\": \"animatediff-video\", \"prompt\": \"${PROMPT}\"}")
     ;;
 
   animate)
     read -p "Enter image URL: " IMAGE_URL
     echo ""
     echo "Animating image..."
-    RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/stable-video/animate" \
+    RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/animate" \
       -H "Content-Type: application/json" \
-      -d "{\"image_url\": \"${IMAGE_URL}\"}")
+      -d "{\"model\": \"stable-video\", \"image_url\": \"${IMAGE_URL}\"}")
     ;;
 
   *)
