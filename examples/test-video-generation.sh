@@ -1,6 +1,13 @@
 #!/bin/bash
 # Quick test script for video generation with automatic result display
 #
+
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed."
+    echo "Install with: sudo apt-get install jq (or brew install jq on Mac)"
+    exit 1
+fi
 # Usage: bash examples/test-video-generation.sh
 
 set -e

@@ -10,6 +10,13 @@
 
 set -e
 
+# Check for jq
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed."
+    echo "Install with: sudo apt-get install jq (or brew install jq on Mac)"
+    exit 1
+fi
+
 BASE_URL="${FLUIDMCP_URL:-http://localhost:8099}"
 
 echo "==================================================================="

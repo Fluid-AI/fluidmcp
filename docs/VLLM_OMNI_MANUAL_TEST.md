@@ -12,6 +12,9 @@ This guide shows you how to manually test the vLLM Omni image and video generati
 
 ## Quick Test - Image Generation
 
+
+**Note**: These examples assume secure mode is disabled for testing. If `FMCP_SECURE_MODE` is enabled,
+add the authentication header: `-H "Authorization: Bearer $FMCP_BEARER_TOKEN"` to all curl commands.
 ### Step 1: Start FluidMCP Server
 
 ```bash
