@@ -2213,3 +2213,607 @@ async def get_model_metrics(
         },
         "errors_by_status": dict(metrics.errors_by_status),
     }
+# ============================================================================
+# vLLM Omni Multimodal Generation Endpoints
+# Image and video generation via Replicate integration
+# ============================================================================
+
+@router.post("/llm/{model_id}/generate/image")
+async def generate_image(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Generate image from text prompt (text-to-image).
+
+    Works with Replicate image generation models (FLUX, Stable Diffusion, etc.).
+    Validates that model supports 'text-to-image' capability.
+
+    Args:
+        model_id: Model identifier from config
+        request_body: Generation parameters (prompt, aspect_ratio, etc.)
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "prompt": "A serene Japanese garden with cherry blossoms",
+          "aspect_ratio": "16:9"
+        }
+    """
+    from ..services import omni_adapter
+    from ..services.replicate_client import ReplicateClient
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Image generation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Create Replicate client and delegate to adapter
+    client = ReplicateClient(model_id, model_config)
+    return await omni_adapter.generate_image(model_id, model_config, request_body, client)
+
+
+@router.post("/llm/{model_id}/generate/video")
+async def generate_video(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Generate video from text prompt (text-to-video).
+
+    Supports video generation models like AnimateDiff Lightning, CogVideoX, etc.
+    Validates that model supports 'text-to-video' capability.
+
+    Args:
+        model_id: Model identifier from config
+        request_body: Generation parameters (prompt, duration, fps, etc.)
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
+          "duration": 5,
+          "fps": 24
+        }
+    """
+    from ..services import omni_adapter
+    from ..services.replicate_client import ReplicateClient
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Video generation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Create Replicate client and delegate to adapter
+    client = ReplicateClient(model_id, model_config)
+    return await omni_adapter.generate_video(model_id, model_config, request_body, client)
+
+
+@router.post("/llm/{model_id}/animate")
+async def animate_image(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Animate image into video (image-to-video).
+
+    Supports models like Stable Video Diffusion.
+    Validates that model supports 'image-to-video' capability.
+
+    Args:
+        model_id: Model identifier from config
+        request_body: Animation parameters (image_url, motion settings, etc.)
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "image_url": "https://example.com/photo.jpg",
+          "motion_bucket_id": 127,
+          "fps": 24
+        }
+    """
+    from ..services import omni_adapter
+    from ..services.replicate_client import ReplicateClient
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Image animation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Create Replicate client and delegate to adapter
+    client = ReplicateClient(model_id, model_config)
+    return await omni_adapter.animate_image(model_id, model_config, request_body, client)
+
+
+@router.get("/llm/predictions/{prediction_id}")
+async def get_generation_status(
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Check status of async generation (image/video).
+
+    Returns prediction status and output URLs when complete.
+    Works for any Replicate prediction (image, video, animation).
+
+    Args:
+        prediction_id: Replicate prediction ID
+
+    Returns:
+        Prediction status with output URLs
+
+    Example response:
+        {
+          "id": "abc123",
+          "status": "succeeded",
+          "output": ["https://replicate.delivery/image.png"]
+        }
+    """
+    from ..services import omni_adapter
+    from ..services.replicate_client import ReplicateClient
+    import os
+
+    # For status checks, we need a Replicate API token from environment
+    api_token = os.getenv("REPLICATE_API_TOKEN")
+
+    if not api_token:
+        raise HTTPException(
+            500,
+            "No Replicate API token found. Set REPLICATE_API_TOKEN environment variable."
+        )
+
+    # Create a minimal client just for fetching prediction status
+    # The prediction_id contains all necessary information for Replicate
+    client = ReplicateClient("status-check", {"model": "status", "api_key": api_token})
+    return await omni_adapter.get_generation_status(prediction_id, client)
+
+
+# ============================================================================
+# Deprecated Replicate Endpoints (v1 → v2 Migration)
+# These endpoints are deprecated and will be removed in v2.0.0
+# Use the unified /api/llm/{model_id}/v1/* endpoints instead
+# ============================================================================
+
+@router.post("/replicate/models/{model_id}/predict")
+async def deprecated_replicate_predict(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predict is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Forward to new unified endpoint
+    return await unified_chat_completions(model_id, request_body, token)
+
+
+@router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
+async def deprecated_replicate_get_prediction(
+    model_id: str,
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Replicate-specific prediction tracking is no longer supported.
+
+    This endpoint will be removed in v2.0.0.
+    Use the unified /api/llm/{model_id}/v1/chat/completions endpoint instead.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id} is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions for synchronous inference. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Use /api/llm/{model_id}/v1/chat/completions instead. "
+        "Polling-based predictions are no longer supported in the unified API."
+    )
+
+
+@router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
+async def deprecated_replicate_cancel_prediction(
+    model_id: str,
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Replicate-specific prediction cancellation is no longer supported.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id}/cancel is deprecated. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated and cancellation is no longer supported in the unified API."
+    )
+
+
+@router.post("/replicate/models/{model_id}/stream")
+async def deprecated_replicate_stream(
+    model_id: str,
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions with "stream": true instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/stream is deprecated. "
+        f"Use /api/llm/{model_id}/v1/chat/completions with 'stream': true instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Add stream parameter and forward
+    request_body["stream"] = True
+    return await unified_chat_completions(model_id, request_body, token)
+
+
+@router.get("/replicate/models/{model_id}/info")
+async def deprecated_replicate_model_info(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/info is deprecated. "
+        f"Use /api/llm/{model_id}/v1/models instead. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Forward to new unified endpoint
+    return await unified_list_models(model_id, token)
+
+
+@router.get("/replicate/models/{model_id}/health")
+async def deprecated_replicate_health(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
+
+    This endpoint will be removed in v2.0.0.
+    """
+    logger.warning(
+        f"DEPRECATED API CALL: /replicate/models/{model_id}/health is deprecated. "
+        f"Use /api/llm/{model_id}/v1/models for model availability checks. "
+        f"This endpoint will be removed in v2.0.0."
+    )
+
+    # Return simple health response
+    return {"status": "deprecated", "message": "Use /api/llm/{model_id}/v1/models instead"}
+
+
+@router.get("/replicate/models")
+async def deprecated_replicate_list_models(
+    token: str = Depends(get_token)
+):
+    """
+    DEPRECATED: Model listing is no longer supported at the API level.
+
+    This endpoint will be removed in v2.0.0.
+    Models are managed through the configuration file.
+    """
+    logger.warning(
+        "DEPRECATED API CALL: /replicate/models is deprecated. "
+        "Models are now managed through configuration only. "
+        "This endpoint will be removed in v2.0.0."
+    )
+
+    raise HTTPException(
+        410,
+        "This endpoint is deprecated. Models are managed through configuration only."
+    )
+
+
+# ============================================================================
+# Metrics Endpoints (Observability)
+# ============================================================================
+
+@router.get("/metrics")
+async def get_metrics_prometheus(
+    token: str = Depends(get_token)
+):
+    """
+    Get Prometheus-formatted metrics for all LLM models.
+
+    Returns metrics including:
+    - Request counts (total, successful, failed)
+    - Latency statistics (avg, min, max)
+    - Token usage (prompt, completion, total)
+    - Error counts by status code
+    - Uptime
+
+    Example:
+        curl http://localhost:8099/api/metrics
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    return Response(
+        content=collector.export_prometheus(),
+        media_type="text/plain; version=0.0.4"
+    )
+
+
+@router.get("/metrics/json")
+async def get_metrics_json(
+    token: str = Depends(get_token)
+):
+    """
+    Get JSON-formatted metrics for all LLM models.
+
+    Returns structured metrics data suitable for dashboards and monitoring tools.
+
+    Example:
+        curl http://localhost:8099/api/metrics/json
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    return collector.export_json()
+
+
+@router.post("/metrics/reset")
+async def reset_metrics(
+    model_id: str = Query(None, description="Model ID to reset, or omit to reset all"),
+    token: str = Depends(get_token)
+):
+    """
+    Reset LLM metrics for a specific model or all models.
+
+    Args:
+        model_id: Optional model ID. If not provided, resets all metrics.
+
+    Example:
+        # Reset all metrics
+        curl -X POST http://localhost:8099/api/metrics/reset
+
+        # Reset specific model
+        curl -X POST http://localhost:8099/api/metrics/reset?model_id=llama-2-70b
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    collector.reset_metrics(model_id)
+
+    target = "all models" if not model_id else f"model '{model_id}'"
+    return {
+        "message": f"Metrics reset successfully for {target}"
+    }
+
+
+@router.get("/metrics/cache/stats")
+async def get_cache_stats(token: str = Depends(get_token)):
+    """
+    Get response cache statistics.
+
+    Returns cache performance metrics including:
+    - Hit/miss counts
+    - Hit rate percentage
+    - Current cache size
+    - TTL configuration
+
+    Also updates the unified metrics registry for Prometheus scraping.
+
+    Returns:
+        Cache statistics dict
+    """
+    from ..services.response_cache import peek_response_cache
+    from ..services.replicate_metrics import update_cache_metrics
+
+    # Peek at existing cache without creating it
+    cache = await peek_response_cache()
+    if cache is None:
+        # Update metrics (will set all to 0)
+        await update_cache_metrics()
+        return {
+            "enabled": False,
+            "message": "Cache is not initialized (no models with caching enabled have been used)"
+        }
+
+    stats = await cache.get_stats()
+
+    # Update unified metrics registry
+    await update_cache_metrics()
+
+    return {
+        "enabled": True,
+        **stats
+    }
+
+
+@router.post("/metrics/cache/clear")
+async def clear_cache(token: str = Depends(get_token)):
+    """
+    Clear all cached responses.
+
+    Useful for testing or forcing fresh API calls.
+
+    Returns:
+        Number of entries cleared
+    """
+    from ..services.response_cache import clear_response_cache
+
+    count = await clear_response_cache()
+    logger.info(f"Cache cleared via API: {count} entries removed")
+    return {"message": "Cache cleared successfully", "entries_cleared": count}
+
+
+@router.get("/metrics/rate-limiters")
+async def get_rate_limiter_stats(token: str = Depends(get_token)):
+    """
+    Get rate limiter statistics for all models.
+
+    Returns available token counts for each model's rate limiter.
+
+    Also updates the unified metrics registry for Prometheus scraping.
+
+    Returns:
+        Dict with rate_limiters (dict of model_id -> stats) and total_models count
+    """
+    from ..services.rate_limiter import get_all_rate_limiter_stats
+    from ..services.replicate_metrics import update_rate_limiter_metrics
+
+    stats = await get_all_rate_limiter_stats()
+
+    # Update unified metrics registry
+    await update_rate_limiter_metrics()
+
+    return {
+        "rate_limiters": stats,
+        "total_models": len(stats)
+    }
+
+
+@router.get("/metrics/rate-limiters/{model_id}")
+async def get_model_rate_limiter_stats(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get rate limiter statistics for a specific model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Rate limiter stats including available tokens, capacity, and utilization
+
+    Raises:
+        HTTPException(404): If no rate limiter exists for the model
+    """
+    from ..services.rate_limiter import get_all_rate_limiter_stats
+
+    # Use get_all to avoid creating limiters as side effect
+    stats = await get_all_rate_limiter_stats()
+    model_stats = stats.get(model_id)
+
+    if model_stats is None:
+        raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
+
+    return {
+        "model_id": model_id,
+        **model_stats
+    }
+
+
+@router.post("/metrics/rate-limiters/clear")
+async def clear_rate_limiters(token: str = Depends(get_token)):
+    """
+    Clear all rate limiters (removes all registered limiters).
+
+    Useful for testing or freeing memory in long-running processes.
+
+    Returns:
+        Number of limiters cleared
+    """
+    from ..services.rate_limiter import clear_rate_limiters as clear_limiters_func
+
+    count = await clear_limiters_func()
+    return {"message": "Rate limiters cleared successfully", "limiters_cleared": count}
+
+
+@router.get("/metrics/models/{model_id}")
+async def get_model_metrics(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get detailed LLM metrics for a specific model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Detailed metrics including request counts, latency, tokens, and errors
+
+    Example:
+        curl http://localhost:8099/api/metrics/models/llama-2-70b
+    """
+    from ..services.llm_metrics import get_metrics_collector
+
+    collector = get_metrics_collector()
+    metrics = collector.get_model_metrics(model_id)
+
+    if not metrics:
+        raise HTTPException(404, f"No metrics found for model '{model_id}'")
+
+    return {
+        "model_id": model_id,
+        "provider_type": metrics.provider_type,
+        "requests": {
+            "total": metrics.total_requests,
+            "successful": metrics.successful_requests,
+            "failed": metrics.failed_requests,
+            "success_rate_percent": round(metrics.success_rate(), 2),
+            "error_rate_percent": round(metrics.error_rate(), 2),
+        },
+        "latency": {
+            "avg_seconds": round(metrics.avg_latency(), 3),
+            "min_seconds": round(metrics.min_latency, 3) if metrics.min_latency != float('inf') else None,
+            "max_seconds": round(metrics.max_latency, 3),
+        },
+        "tokens": {
+            "prompt": metrics.total_prompt_tokens,
+            "completion": metrics.total_completion_tokens,
+            "total": metrics.total_tokens,
+        },
+        "errors_by_status": dict(metrics.errors_by_status),
+    }

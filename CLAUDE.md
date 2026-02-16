@@ -499,3 +499,52 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 - [tests/test_llm_security.py](tests/test_llm_security.py) - Security tests (18 tests, 100% passing)
 - [tests/test_llm_integration.py](tests/test_llm_integration.py) - Integration tests (10 tests, 100% passing)
 - [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.json) - Example config
+## vLLM Omni - Multimodal Generation Support
+
+FluidMCP supports multimodal model capabilities through "vLLM Omni", providing:
+- **Vision-language models** (vLLM native): Image understanding with LLaVA, Qwen-VL, etc.
+- **Image generation** (Replicate): Text-to-image with FLUX, Stable Diffusion
+- **Video generation** (Replicate): Text-to-video with AnimateDiff Lightning, CogVideoX
+- **Image animation** (Replicate): Image-to-video with Stable Video Diffusion
+
+### Quick Start
+
+```bash
+# 1. Create config with vision + generation models
+cat > omni-config.json << 'EOFJSON'
+{
+  "llmModels": {
+    "flux-image": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "capabilities": ["text-to-image"]
+    }
+  }
+}
+EOFJSON
+
+# 2. Start FluidMCP
+export REPLICATE_API_TOKEN="r8_..."
+fluidmcp run omni-config.json --file --start-server
+
+# 3. Generate an image
+curl -X POST http://localhost:8099/api/llm/flux-image/generate/image \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "A serene Japanese garden with cherry blossoms"}'
+```
+
+### API Endpoints
+
+- `POST /api/llm/{model_id}/generate/image` - Text-to-image generation
+- `POST /api/llm/{model_id}/generate/video` - Text-to-video generation
+- `POST /api/llm/{model_id}/animate` - Image-to-video animation
+- `GET /api/llm/predictions/{prediction_id}` - Check generation status
+
+### Examples
+
+- [examples/vllm-omni-complete.json](examples/vllm-omni-complete.json) - Complete multimodal setup
+- [examples/omni-api-examples.sh](examples/omni-api-examples.sh) - API usage demonstrations
+
+See [docs/VLLM_OMNI_IMPLEMENTATION_PLAN.md](docs/VLLM_OMNI_IMPLEMENTATION_PLAN.md) for complete implementation details.
+

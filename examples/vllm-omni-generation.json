@@ -1,0 +1,51 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "flux-image-gen": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "aspect_ratio": "1:1",
+        "output_format": "png"
+      },
+      "capabilities": ["text-to-image"],
+      "timeout": 120
+    },
+    "animatediff-video": {
+      "type": "replicate",
+      "model": "lucataco/animatediff-lightning-4step",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "width": 512,
+        "height": 512,
+        "num_frames": 16
+      },
+      "capabilities": ["text-to-video"],
+      "timeout": 300
+    },
+    "stable-video": {
+      "type": "replicate",
+      "model": "stability-ai/stable-video-diffusion",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "fps": 24,
+        "motion_bucket_id": 127
+      },
+      "capabilities": ["image-to-video"],
+      "timeout": 300
+    },
+    "stable-diffusion": {
+      "type": "replicate",
+      "model": "stability-ai/stable-diffusion",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "width": 1024,
+        "height": 1024,
+        "num_outputs": 1
+      },
+      "capabilities": ["text-to-image"],
+      "timeout": 120
+    }
+  }
+}

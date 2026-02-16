@@ -1,0 +1,53 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llava": {
+      "type": "vllm",
+      "command": "vllm",
+      "args": [
+        "serve",
+        "llava-hf/llava-1.5-7b-hf",
+        "--port", "8001",
+        "--dtype", "float16"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      },
+      "capabilities": ["text", "vision"],
+      "restart_policy": "on-failure"
+    },
+    "flux-image": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "aspect_ratio": "16:9",
+        "output_format": "png"
+      },
+      "capabilities": ["text-to-image"],
+      "timeout": 120
+    },
+    "animatediff-video": {
+      "type": "replicate",
+      "model": "lucataco/animatediff-lightning-4step",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "width": 512,
+        "height": 512,
+        "num_frames": 16
+      },
+      "capabilities": ["text-to-video"],
+      "timeout": 300
+    },
+    "stable-video": {
+      "type": "replicate",
+      "model": "stability-ai/stable-video-diffusion",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "capabilities": ["image-to-video"],
+      "timeout": 300
+    }
+  }
+}
