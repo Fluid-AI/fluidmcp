@@ -2494,10 +2494,10 @@ async def get_generation_status(
         first_model_id = replicate_models[0]
         first_model_config = get_model_config(first_model_id)
         if first_model_config:
-            token = first_model_config.get("api_key")
+            config_token = first_model_config.get("api_key")
             # Only use non-placeholder, non-empty tokens from config
-            if token and not is_placeholder(token):
-                api_token = token
+            if config_token and not is_placeholder(config_token):
+                api_token = config_token
 
     # Fallback to environment variable if no configured models or only placeholders
     if not api_token:
