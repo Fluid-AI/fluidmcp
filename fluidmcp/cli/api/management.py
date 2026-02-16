@@ -22,6 +22,7 @@ import json
 from ..services.llm_provider_registry import get_model_type, get_model_config
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.llm_metrics import get_metrics_collector
+from ..services import omni_adapter
 
 from ..utils.env_utils import is_placeholder
 
@@ -2242,7 +2243,6 @@ async def generate_image(
           "aspect_ratio": "16:9"
         }
     """
-    from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
 
     # Extract model from request body (OpenAI-compatible format)
@@ -2303,7 +2303,6 @@ async def generate_video(
           "fps": 24
         }
     """
-    from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
 
     # Extract model from request body (OpenAI-compatible format)
@@ -2363,7 +2362,6 @@ async def animate_image(
           "fps": 24
         }
     """
-    from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
 
     # Extract model from request body (OpenAI-compatible format)
@@ -2422,9 +2420,7 @@ async def get_generation_status(
           "output": ["https://replicate.delivery/image.png"]
         }
     """
-    from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
-    import os
 
     # For status checks, we need a Replicate API token from environment
     api_token = os.getenv("REPLICATE_API_TOKEN")

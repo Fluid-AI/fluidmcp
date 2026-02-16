@@ -18,10 +18,19 @@ if ! command -v jq &> /dev/null; then
 fi
 
 BASE_URL="${FLUIDMCP_URL:-http://localhost:8099}"
+AUTH_TOKEN="${FLUIDMCP_TOKEN:-}"
+
+# Build auth header if token is provided
+AUTH_HEADER=""
+if [ -n "$AUTH_TOKEN" ]; then
+  AUTH_HEADER="-H \"Authorization: Bearer ${AUTH_TOKEN}\""
+fi
 
 echo "==================================================================="
 echo "vLLM Omni API Examples"
 echo "==================================================================="
+echo ""
+echo "Note: If running in secure mode, set FLUIDMCP_TOKEN environment variable"
 echo ""
 
 # ============================================================================
@@ -31,6 +40,7 @@ echo "1. Vision: Image Understanding (vLLM)"
 echo "-------------------------------------------------------------------"
 curl -X POST "${BASE_URL}/api/llm/llava/v1/chat/completions" \
   -H "Content-Type: application/json" \
+  ${AUTH_HEADER} \
   -d '{
     "model": "llava",
     "messages": [{
@@ -52,6 +62,7 @@ echo "2. Image Generation: Text-to-Image (Replicate FLUX)"
 echo "-------------------------------------------------------------------"
 PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/image" \
   -H "Content-Type: application/json" \
+  ${AUTH_HEADER} \
   -d '{
     "model": "flux-image",
     "prompt": "A serene Japanese garden with cherry blossoms in full bloom, golden hour lighting",
@@ -71,6 +82,7 @@ echo "3. Video Generation: Text-to-Video (Replicate AnimateDiff)"
 echo "-------------------------------------------------------------------"
 PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/video" \
   -H "Content-Type: application/json" \
+  ${AUTH_HEADER} \
   -d '{
     "model": "animatediff-video",
     "prompt": "A cat walking in the rain",
@@ -91,6 +103,7 @@ echo "4. Image Animation: Image-to-Video (Replicate Stable Video)"
 echo "-------------------------------------------------------------------"
 PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/animate" \
   -H "Content-Type: application/json" \
+  ${AUTH_HEADER} \
   -d '{
     "model": "stable-video",
     "image_url": "https://picsum.photos/1024/576",
@@ -111,7 +124,7 @@ echo "-------------------------------------------------------------------"
 echo "Waiting for image generation to complete..."
 for i in {1..30}; do
   sleep 2
-  STATUS=$(curl -s "${BASE_URL}/api/llm/predictions/${IMAGE_PREDICTION_ID}")
+  STATUS=$(curl -s "${BASE_URL}/api/llm/predictions/${IMAGE_PREDICTION_ID}" ${AUTH_HEADER})
   CURRENT_STATUS=$(echo "$STATUS" | jq -r '.status')
   echo "  Attempt $i/30: Status = $CURRENT_STATUS"
 

@@ -529,6 +529,7 @@ export REPLICATE_API_TOKEN="r8_..."
 fluidmcp run omni-config.json --file --start-server
 
 # 3. Generate an image (OpenAI-compatible format)
+# Note: Add -H "Authorization: Bearer YOUR_TOKEN" if running in secure mode
 curl -X POST http://localhost:8099/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
   -d '{"model": "flux-image", "prompt": "A serene Japanese garden with cherry blossoms"}'

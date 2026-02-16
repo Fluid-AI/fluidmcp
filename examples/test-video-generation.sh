@@ -13,10 +13,19 @@ fi
 set -e
 
 BASE_URL="${FLUIDMCP_URL:-http://localhost:8099}"
+AUTH_TOKEN="${FLUIDMCP_TOKEN:-}"
+
+# Build auth header if token is provided
+AUTH_HEADER=""
+if [ -n "$AUTH_TOKEN" ]; then
+  AUTH_HEADER="-H \"Authorization: Bearer ${AUTH_TOKEN}\""
+fi
 
 echo "========================================"
 echo "Testing Video Generation"
 echo "========================================"
+echo ""
+echo "Note: If running in secure mode, set FLUIDMCP_TOKEN environment variable"
 echo ""
 
 # Test what you want to generate
@@ -29,6 +38,7 @@ case $TYPE in
     echo "Generating image..."
     RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/image" \
       -H "Content-Type: application/json" \
+      ${AUTH_HEADER} \
       -d "{\"model\": \"flux-image\", \"prompt\": \"${PROMPT}\"}")
     ;;
 
@@ -38,6 +48,7 @@ case $TYPE in
     echo "Generating video (this takes 1-5 minutes)..."
     RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/video" \
       -H "Content-Type: application/json" \
+      ${AUTH_HEADER} \
       -d "{\"model\": \"animatediff-video\", \"prompt\": \"${PROMPT}\"}")
     ;;
 
@@ -47,6 +58,7 @@ case $TYPE in
     echo "Animating image..."
     RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/animate" \
       -H "Content-Type: application/json" \
+      ${AUTH_HEADER} \
       -d "{\"model\": \"stable-video\", \"image_url\": \"${IMAGE_URL}\"}")
     ;;
 
@@ -65,7 +77,7 @@ echo ""
 echo "Polling for completion..."
 for i in {1..60}; do
   sleep 3
-  STATUS_RESPONSE=$(curl -s "${BASE_URL}/api/llm/predictions/${PREDICTION_ID}")
+  STATUS_RESPONSE=$(curl -s "${BASE_URL}/api/llm/predictions/${PREDICTION_ID}" ${AUTH_HEADER})
   STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status')
 
   echo "  Check $i/60: Status = $STATUS"
