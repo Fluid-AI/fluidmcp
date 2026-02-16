@@ -2264,9 +2264,12 @@ async def generate_image(
             f"Model '{model_id}' is type '{provider_type}'"
         )
 
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
     # Create Replicate client and delegate to adapter
     client = ReplicateClient(model_id, model_config)
-    return await omni_adapter.generate_image(model_id, model_config, request_body, client)
+    return await omni_adapter.generate_image(model_id, model_config, payload, client)
 
 
 @router.post("/llm/v1/generate/video")
@@ -2317,9 +2320,12 @@ async def generate_video(
             f"Model '{model_id}' is type '{provider_type}'"
         )
 
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
     # Create Replicate client and delegate to adapter
     client = ReplicateClient(model_id, model_config)
-    return await omni_adapter.generate_video(model_id, model_config, request_body, client)
+    return await omni_adapter.generate_video(model_id, model_config, payload, client)
 
 
 @router.post("/llm/v1/animate")
@@ -2369,9 +2375,12 @@ async def animate_image(
             f"Model '{model_id}' is type '{provider_type}'"
         )
 
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
     # Create Replicate client and delegate to adapter
     client = ReplicateClient(model_id, model_config)
-    return await omni_adapter.animate_image(model_id, model_config, request_body, client)
+    return await omni_adapter.animate_image(model_id, model_config, payload, client)
 
 
 @router.get("/llm/predictions/{prediction_id}")
