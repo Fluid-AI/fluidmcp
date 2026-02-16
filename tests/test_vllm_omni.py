@@ -175,7 +175,7 @@ class TestGenerationStatusEndpoint:
     def test_status_endpoint_requires_authentication(self, client):
         """Test that status endpoint requires token."""
         response = client.get("/api/llm/predictions/abc123")
-        assert response.status_code in [403, 500]  # Auth or internal error
+        assert response.status_code in [401, 403, 503]  # Auth or missing config
 
     def test_status_endpoint_returns_prediction_status(self, client):
         """Test that status endpoint returns prediction information."""

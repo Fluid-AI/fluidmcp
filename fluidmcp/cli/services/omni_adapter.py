@@ -9,9 +9,12 @@ This module provides capability validation and delegation for:
 All actual API calls are delegated to replicate_client.py.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, TYPE_CHECKING
 from fastapi import HTTPException
 from loguru import logger
+
+if TYPE_CHECKING:
+    from .replicate_client import ReplicateClient
 
 
 def assert_capability(model_config: Dict[str, Any], model_id: str, required: str) -> None:
@@ -42,7 +45,7 @@ async def generate_image(
     model_id: str,
     model_config: Dict[str, Any],
     payload: Dict[str, Any],
-    replicate_client
+    replicate_client: "ReplicateClient"
 ) -> Dict[str, Any]:
     """
     Generate image from text prompt (text-to-image).
@@ -68,7 +71,7 @@ async def generate_video(
     model_id: str,
     model_config: Dict[str, Any],
     payload: Dict[str, Any],
-    replicate_client
+    replicate_client: "ReplicateClient"
 ) -> Dict[str, Any]:
     """
     Generate video from text prompt (text-to-video).
@@ -94,7 +97,7 @@ async def animate_image(
     model_id: str,
     model_config: Dict[str, Any],
     payload: Dict[str, Any],
-    replicate_client
+    replicate_client: "ReplicateClient"
 ) -> Dict[str, Any]:
     """
     Animate image into video (image-to-video).
@@ -118,7 +121,7 @@ async def animate_image(
 
 async def get_generation_status(
     prediction_id: str,
-    replicate_client
+    replicate_client: "ReplicateClient"
 ) -> Dict[str, Any]:
     """
     Check status of async generation (image/video).

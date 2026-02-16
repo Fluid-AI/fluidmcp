@@ -2267,8 +2267,13 @@ async def generate_image(
     # Remove 'model' field from payload before sending to Replicate
     payload = {k: v for k, v in request_body.items() if k != "model"}
 
-    # Create Replicate client and delegate to adapter
-    client = ReplicateClient(model_id, model_config)
+    # Get or create Replicate client
+    from ..services.replicate_client import get_replicate_client
+    client = get_replicate_client(model_id)
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+
     return await omni_adapter.generate_image(model_id, model_config, payload, client)
 
 
@@ -2323,8 +2328,13 @@ async def generate_video(
     # Remove 'model' field from payload before sending to Replicate
     payload = {k: v for k, v in request_body.items() if k != "model"}
 
-    # Create Replicate client and delegate to adapter
-    client = ReplicateClient(model_id, model_config)
+    # Get or create Replicate client
+    from ..services.replicate_client import get_replicate_client
+    client = get_replicate_client(model_id)
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+
     return await omni_adapter.generate_video(model_id, model_config, payload, client)
 
 
@@ -2378,8 +2388,13 @@ async def animate_image(
     # Remove 'model' field from payload before sending to Replicate
     payload = {k: v for k, v in request_body.items() if k != "model"}
 
-    # Create Replicate client and delegate to adapter
-    client = ReplicateClient(model_id, model_config)
+    # Get or create Replicate client
+    from ..services.replicate_client import get_replicate_client
+    client = get_replicate_client(model_id)
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+
     return await omni_adapter.animate_image(model_id, model_config, payload, client)
 
 
@@ -2416,14 +2431,18 @@ async def get_generation_status(
 
     if not api_token:
         raise HTTPException(
-            500,
-            "No Replicate API token found. Set REPLICATE_API_TOKEN environment variable."
+            503,
+            "No Replicate API token configured. Set REPLICATE_API_TOKEN environment variable."
         )
 
     # Create a minimal client just for fetching prediction status
     # The prediction_id contains all necessary information for Replicate
-    client = ReplicateClient("status-check", {"model": "status", "api_key": api_token})
-    return await omni_adapter.get_generation_status(prediction_id, client)
+    client = ReplicateClient("status-check", {"model": "dummy", "api_key": api_token})
+    try:
+        return await omni_adapter.get_generation_status(prediction_id, client)
+    finally:
+        # Ensure the temporary client is closed to avoid resource leaks
+        await client.close()
 
 
 # ============================================================================
