@@ -2371,11 +2371,9 @@ async def generate_video(
         # Record success metrics
         collector.record_request_success(
             model_id,
-            provider_type,
             start_time,
             prompt_tokens=0,  # Video generation doesn't use tokens
-            completion_tokens=0,
-            cached_tokens=0
+            completion_tokens=0
         )
         return result
     except HTTPException as e:
@@ -2460,8 +2458,7 @@ async def animate_image(
             model_id,
             start_time,
             prompt_tokens=0,  # Image animation doesn't use tokens
-            completion_tokens=0,
-            cached_tokens=0
+            completion_tokens=0
         )
         return result
     except HTTPException as e:
@@ -2512,10 +2509,13 @@ async def get_generation_status(
         # Use the first configured Replicate model's token
         first_model_id = replicate_models[0]
         first_model_config = get_model_config(first_model_id)
-        if first_model_config and "api_key" in first_model_config:
-            api_token = first_model_config["api_key"]
+        if first_model_config:
+            token = first_model_config.get("api_key")
+            # Only use non-placeholder, non-empty tokens from config
+            if token and not is_placeholder(token):
+                api_token = token
 
-    # Fallback to environment variable if no configured models
+    # Fallback to environment variable if no configured models or only placeholders
     if not api_token:
         api_token = os.getenv("REPLICATE_API_TOKEN")
 
