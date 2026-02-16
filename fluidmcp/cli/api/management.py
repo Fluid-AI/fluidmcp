@@ -2445,12 +2445,13 @@ async def deprecated_replicate_predict(
     """
     logger.warning(
         f"DEPRECATED API CALL: /replicate/models/{model_id}/predict is deprecated. "
-        f"Use /api/llm/{model_id}/v1/chat/completions instead. "
+        f"Use /api/llm/v1/chat/completions instead. "
         f"This endpoint will be removed in v2.0.0."
     )
 
-    # Forward to new unified endpoint
-    return await unified_chat_completions(model_id, request_body, token)
+    # Add model to request body and forward to new unified endpoint
+    request_body["model"] = model_id
+    return await unified_chat_completions(request_body, token)
 
 
 @router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
@@ -2513,13 +2514,14 @@ async def deprecated_replicate_stream(
     """
     logger.warning(
         f"DEPRECATED API CALL: /replicate/models/{model_id}/stream is deprecated. "
-        f"Use /api/llm/{model_id}/v1/chat/completions with 'stream': true instead. "
+        f"Use /api/llm/v1/chat/completions with 'stream': true instead. "
         f"This endpoint will be removed in v2.0.0."
     )
 
-    # Add stream parameter and forward
+    # Add model and stream parameter, then forward
+    request_body["model"] = model_id
     request_body["stream"] = True
-    return await unified_chat_completions(model_id, request_body, token)
+    return await unified_chat_completions(request_body, token)
 
 
 @router.get("/replicate/models/{model_id}/info")
@@ -2534,12 +2536,12 @@ async def deprecated_replicate_model_info(
     """
     logger.warning(
         f"DEPRECATED API CALL: /replicate/models/{model_id}/info is deprecated. "
-        f"Use /api/llm/{model_id}/v1/models instead. "
+        f"Use /api/llm/v1/models instead. "
         f"This endpoint will be removed in v2.0.0."
     )
 
     # Forward to new unified endpoint
-    return await unified_list_models(model_id, token)
+    return await unified_list_models(token=token, model=model_id)
 
 
 @router.get("/replicate/models/{model_id}/health")
