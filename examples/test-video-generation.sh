@@ -39,7 +39,7 @@ case $TYPE in
     RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/image" \
       -H "Content-Type: application/json" \
       "${AUTH_HEADER[@]}" \
-      -d "{\"model\": \"flux-image-gen\", \"prompt\": \"${PROMPT}\"}")
+      -d "$(jq -n --arg prompt "$PROMPT" '{model: "flux-image-gen", prompt: $prompt}')")
     ;;
 
   video)
@@ -49,7 +49,7 @@ case $TYPE in
     RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/video" \
       -H "Content-Type: application/json" \
       "${AUTH_HEADER[@]}" \
-      -d "{\"model\": \"veo-video\", \"prompt\": \"${PROMPT}\"}")
+      -d "$(jq -n --arg prompt "$PROMPT" '{model: "veo-video", prompt: $prompt}')")
     ;;
 
   animate)
@@ -59,7 +59,7 @@ case $TYPE in
     RESPONSE=$(curl -s -X POST "${BASE_URL}/api/llm/v1/animate" \
       -H "Content-Type: application/json" \
       "${AUTH_HEADER[@]}" \
-      -d "{\"model\": \"kling-animate\", \"image_url\": \"${IMAGE_URL}\"}")
+      -d "$(jq -n --arg url "$IMAGE_URL" '{model: "kling-animate", image_url: $url}')")
     ;;
 
   *)

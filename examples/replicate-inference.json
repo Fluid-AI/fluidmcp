@@ -13,9 +13,9 @@
       "timeout": 120,
       "max_retries": 3
     },
-    "mistral-7b": {
+    "mixtral-8x7b": {
       "type": "replicate",
-      "model": "mistralai/mistral-7b-instruct-v0.2",
+      "model": "nateraw/mixtral-8x7b-32kseqlen",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
         "temperature": 0.5,

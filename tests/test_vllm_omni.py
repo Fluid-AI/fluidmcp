@@ -71,7 +71,7 @@ class TestImageGenerationEndpoint:
         # FastAPI may check auth token before or after model validation
         response = client.post(
             "/api/llm/v1/generate/image",
-            json={"model": "flux-image", "prompt": "test"}
+            json={"model": "flux-image-gen", "prompt": "test"}
         )
         assert response.status_code in [403, 404]  # Auth or model not found
 
