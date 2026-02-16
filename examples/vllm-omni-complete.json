@@ -30,23 +30,26 @@
       "capabilities": ["text-to-image"],
       "timeout": 120
     },
-    "animatediff-video": {
+    "veo-video": {
       "type": "replicate",
-      "model": "lucataco/animatediff-lightning-4step",
+      "model": "google/veo-3",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
-        "width": 512,
-        "height": 512,
-        "num_frames": 16
+        "duration": 5,
+        "aspect_ratio": "16:9"
       },
       "capabilities": ["text-to-video"],
       "timeout": 300
     },
-    "stable-video": {
+    "kling-animate": {
       "type": "replicate",
-      "model": "stability-ai/stable-video-diffusion",
+      "model": "kwaivgi/kling-v2.6",
       "api_key": "${REPLICATE_API_TOKEN}",
-      "capabilities": ["image-to-video"],
+      "default_params": {
+        "duration": 5,
+        "aspect_ratio": "16:9"
+      },
+      "capabilities": ["image-to-video", "text-to-video"],
       "timeout": 300
     }
   }

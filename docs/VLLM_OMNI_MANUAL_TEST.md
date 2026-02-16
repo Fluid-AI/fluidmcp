@@ -111,13 +111,12 @@ This automatically:
 ## Swagger UI (Interactive Testing)
 
 1. Open: **http://localhost:8099/docs**
-2. Find: `/api/llm/{model_id}/generate/image`
+2. Find: `/api/llm/v1/generate/image`
 3. Click: **"Try it out"**
-4. Set `model_id`: `flux-image-gen`
-5. Enter your prompt
-6. Click: **"Execute"**
-7. Copy the `prediction_id` from the response
-8. Use `/api/llm/predictions/{prediction_id}` to check status
+4. In the request body, set `"model": "flux-image-gen"` and enter your prompt
+5. Click: **"Execute"**
+6. Copy the `prediction_id` from the response
+7. Use `/api/llm/predictions/{prediction_id}` to check status
 
 ## Available Models
 

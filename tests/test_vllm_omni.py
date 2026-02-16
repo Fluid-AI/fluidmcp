@@ -109,12 +109,12 @@ class TestVideoGenerationEndpoint:
 
     def test_video_generation_requires_authentication(self, client):
         """Test that video generation endpoint requires token."""
-        # Without mocking config, returns 403/404 depending on FastAPI dependency execution order
+        # Returns 401 in secure mode, 403/404 depending on FastAPI dependency execution order
         response = client.post(
             "/api/llm/v1/generate/video",
             json={"model": "animatediff-video", "prompt": "test"}
         )
-        assert response.status_code in [403, 404]  # Auth or model not found
+        assert response.status_code in [401, 403, 404]  # Auth or model not found
 
     def test_video_generation_validates_model_exists(self, client):
         """Test that endpoint validates model exists."""
@@ -142,12 +142,12 @@ class TestImageAnimationEndpoint:
 
     def test_animation_requires_authentication(self, client):
         """Test that animation endpoint requires token."""
-        # Without mocking config, returns 403/404 depending on FastAPI dependency execution order
+        # Returns 401 in secure mode, 403/404 depending on FastAPI dependency execution order
         response = client.post(
             "/api/llm/v1/animate",
             json={"model": "stable-video", "image_url": "https://example.com/img.jpg"}
         )
-        assert response.status_code in [403, 404]  # Auth or model not found
+        assert response.status_code in [401, 403, 404]  # Auth or model not found
 
     def test_animation_validates_model_exists(self, client):
         """Test that endpoint validates model exists."""

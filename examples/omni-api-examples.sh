@@ -20,10 +20,10 @@ fi
 BASE_URL="${FLUIDMCP_URL:-http://localhost:8099}"
 AUTH_TOKEN="${FLUIDMCP_TOKEN:-}"
 
-# Build auth header if token is provided
-AUTH_HEADER=""
+# Build auth header array if token is provided
+AUTH_HEADER=()
 if [ -n "$AUTH_TOKEN" ]; then
-  AUTH_HEADER="-H \"Authorization: Bearer ${AUTH_TOKEN}\""
+  AUTH_HEADER=(-H "Authorization: Bearer ${AUTH_TOKEN}")
 fi
 
 echo "==================================================================="
@@ -40,7 +40,7 @@ echo "1. Vision: Image Understanding (vLLM)"
 echo "-------------------------------------------------------------------"
 curl -X POST "${BASE_URL}/api/llm/llava/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  ${AUTH_HEADER} \
+  "${AUTH_HEADER[@]}" \
   -d '{
     "model": "llava",
     "messages": [{
@@ -62,9 +62,9 @@ echo "2. Image Generation: Text-to-Image (Replicate FLUX)"
 echo "-------------------------------------------------------------------"
 PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/image" \
   -H "Content-Type: application/json" \
-  ${AUTH_HEADER} \
+  "${AUTH_HEADER[@]}" \
   -d '{
-    "model": "flux-image",
+    "model": "flux-image-gen",
     "prompt": "A serene Japanese garden with cherry blossoms in full bloom, golden hour lighting",
     "aspect_ratio": "16:9",
     "output_format": "png"
@@ -78,13 +78,13 @@ echo -e "\n"
 # 3. Video Generation: Text-to-Video (Replicate)
 # ============================================================================
 echo ""
-echo "3. Video Generation: Text-to-Video (Replicate AnimateDiff)"
+echo "3. Video Generation: Text-to-Video (Google Veo 3)"
 echo "-------------------------------------------------------------------"
 PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/video" \
   -H "Content-Type: application/json" \
-  ${AUTH_HEADER} \
+  "${AUTH_HEADER[@]}" \
   -d '{
-    "model": "animatediff-video",
+    "model": "veo-video",
     "prompt": "A cat walking in the rain",
     "width": 512,
     "height": 512,
@@ -99,16 +99,16 @@ echo -e "\n"
 # 4. Image Animation: Image-to-Video (Replicate)
 # ============================================================================
 echo ""
-echo "4. Image Animation: Image-to-Video (Replicate Stable Video)"
+echo "4. Image Animation: Image-to-Video (Kling v2.6)"
 echo "-------------------------------------------------------------------"
 PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/animate" \
   -H "Content-Type: application/json" \
-  ${AUTH_HEADER} \
+  "${AUTH_HEADER[@]}" \
   -d '{
-    "model": "stable-video",
+    "model": "kling-animate",
     "image_url": "https://picsum.photos/1024/576",
-    "motion_bucket_id": 127,
-    "fps": 24
+    "duration": 5,
+    "aspect_ratio": "16:9"
   }')
 echo "$PREDICTION"
 ANIMATION_PREDICTION_ID=$(echo "$PREDICTION" | jq -r '.id')
@@ -124,7 +124,7 @@ echo "-------------------------------------------------------------------"
 echo "Waiting for image generation to complete..."
 for i in {1..30}; do
   sleep 2
-  STATUS=$(curl -s "${BASE_URL}/api/llm/predictions/${IMAGE_PREDICTION_ID}" ${AUTH_HEADER})
+  STATUS=$(curl -s "${BASE_URL}/api/llm/predictions/${IMAGE_PREDICTION_ID}" "${AUTH_HEADER[@]}")
   CURRENT_STATUS=$(echo "$STATUS" | jq -r '.status')
   echo "  Attempt $i/30: Status = $CURRENT_STATUS"
 

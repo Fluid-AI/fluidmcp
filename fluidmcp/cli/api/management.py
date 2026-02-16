@@ -2270,11 +2270,18 @@ async def generate_image(
     # Get or create Replicate client
     from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
+    created_temp_client = False
     if not client:
         # Create temporary client for on-demand generation
         client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
 
-    return await omni_adapter.generate_image(model_id, model_config, payload, client)
+    try:
+        return await omni_adapter.generate_image(model_id, model_config, payload, client)
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
 
 
 @router.post("/llm/v1/generate/video")
@@ -2330,11 +2337,18 @@ async def generate_video(
     # Get or create Replicate client
     from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
+    created_temp_client = False
     if not client:
         # Create temporary client for on-demand generation
         client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
 
-    return await omni_adapter.generate_video(model_id, model_config, payload, client)
+    try:
+        return await omni_adapter.generate_video(model_id, model_config, payload, client)
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
 
 
 @router.post("/llm/v1/animate")
@@ -2389,11 +2403,18 @@ async def animate_image(
     # Get or create Replicate client
     from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
+    created_temp_client = False
     if not client:
         # Create temporary client for on-demand generation
         client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
 
-    return await omni_adapter.animate_image(model_id, model_config, payload, client)
+    try:
+        return await omni_adapter.animate_image(model_id, model_config, payload, client)
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
 
 
 @router.get("/llm/predictions/{prediction_id}")
@@ -2441,161 +2462,3 @@ async def get_generation_status(
         await client.close()
 
 
-# ============================================================================
-# Deprecated Replicate Endpoints (v1 → v2 Migration)
-# These endpoints are deprecated and will be removed in v2.0.0
-# Use the unified /api/llm/{model_id}/v1/* endpoints instead
-# ============================================================================
-
-@router.post("/replicate/models/{model_id}/predict")
-async def deprecated_replicate_predict(
-    model_id: str,
-    request_body: Dict[str, Any] = Body(...),
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/predict is deprecated. "
-        f"Use /api/llm/v1/chat/completions instead. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Add model to request body and forward to new unified endpoint
-    request_body["model"] = model_id
-    return await unified_chat_completions(request_body, token)
-
-
-@router.get("/replicate/models/{model_id}/predictions/{prediction_id}")
-async def deprecated_replicate_get_prediction(
-    model_id: str,
-    prediction_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Replicate-specific prediction tracking is no longer supported.
-
-    This endpoint will be removed in v2.0.0.
-    Use the unified /api/llm/{model_id}/v1/chat/completions endpoint instead.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id} is deprecated. "
-        f"Use /api/llm/{model_id}/v1/chat/completions for synchronous inference. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    raise HTTPException(
-        410,
-        "This endpoint is deprecated. Use /api/llm/{model_id}/v1/chat/completions instead. "
-        "Polling-based predictions are no longer supported in the unified API."
-    )
-
-
-@router.post("/replicate/models/{model_id}/predictions/{prediction_id}/cancel")
-async def deprecated_replicate_cancel_prediction(
-    model_id: str,
-    prediction_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Replicate-specific prediction cancellation is no longer supported.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/predictions/{prediction_id}/cancel is deprecated. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    raise HTTPException(
-        410,
-        "This endpoint is deprecated and cancellation is no longer supported in the unified API."
-    )
-
-
-@router.post("/replicate/models/{model_id}/stream")
-async def deprecated_replicate_stream(
-    model_id: str,
-    request_body: Dict[str, Any] = Body(...),
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/chat/completions with "stream": true instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/stream is deprecated. "
-        f"Use /api/llm/v1/chat/completions with 'stream': true instead. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Add model and stream parameter, then forward
-    request_body["model"] = model_id
-    request_body["stream"] = True
-    return await unified_chat_completions(request_body, token)
-
-
-@router.get("/replicate/models/{model_id}/info")
-async def deprecated_replicate_model_info(
-    model_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/info is deprecated. "
-        f"Use /api/llm/v1/models instead. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Forward to new unified endpoint
-    return await unified_list_models(token=token, model=model_id)
-
-
-@router.get("/replicate/models/{model_id}/health")
-async def deprecated_replicate_health(
-    model_id: str,
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Use /api/llm/{model_id}/v1/models instead.
-
-    This endpoint will be removed in v2.0.0.
-    """
-    logger.warning(
-        f"DEPRECATED API CALL: /replicate/models/{model_id}/health is deprecated. "
-        f"Use /api/llm/{model_id}/v1/models for model availability checks. "
-        f"This endpoint will be removed in v2.0.0."
-    )
-
-    # Return simple health response
-    return {"status": "deprecated", "message": "Use /api/llm/{model_id}/v1/models instead"}
-
-
-@router.get("/replicate/models")
-async def deprecated_replicate_list_models(
-    token: str = Depends(get_token)
-):
-    """
-    DEPRECATED: Model listing is no longer supported at the API level.
-
-    This endpoint will be removed in v2.0.0.
-    Models are managed through the configuration file.
-    """
-    logger.warning(
-        "DEPRECATED API CALL: /replicate/models is deprecated. "
-        "Models are now managed through configuration only. "
-        "This endpoint will be removed in v2.0.0."
-    )
-
-    raise HTTPException(
-        410,
-        "This endpoint is deprecated. Models are managed through configuration only."
-    )
