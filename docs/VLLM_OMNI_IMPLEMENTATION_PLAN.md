@@ -254,7 +254,7 @@ See [docs/VLLM_VISION_MODELS.md](docs/VLLM_VISION_MODELS.md) for details.
 
 ```python
 # Extend existing /llm/* routes - no separate /omni namespace
-@router.post("/llm/{model_id}/generate/image")
+@router.post("/llm/v1/generate/image")
 async def generate_image(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
@@ -269,7 +269,7 @@ async def generate_image(
     from ..services.omni_adapter import generate_image as omni_generate_image
     return await omni_generate_image(model_id, request_body)
 
-@router.post("/llm/{model_id}/generate/video")
+@router.post("/llm/v1/generate/video")
 async def generate_video(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
@@ -284,7 +284,7 @@ async def generate_video(
     from ..services.omni_adapter import generate_video as omni_generate_video
     return await omni_generate_video(model_id, request_body)
 
-@router.post("/llm/{model_id}/animate")
+@router.post("/llm/v1/animate")
 async def animate_image(
     model_id: str,
     request_body: Dict[str, Any] = Body(...),
@@ -385,27 +385,30 @@ curl -X POST http://localhost:8099/api/llm/llava/v1/chat/completions \
   }'
 
 # 2. Image Generation: Text-to-image (Replicate)
-curl -X POST http://localhost:8099/api/llm/flux-image/generate/image \
+curl -X POST http://localhost:8099/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "flux-image",
     "prompt": "A serene Japanese garden with cherry blossoms",
     "aspect_ratio": "16:9"
   }'
 # Returns: {"prediction_id": "abc123", "status": "processing"}
 
 # 3. Video Generation: Text-to-video (Replicate)
-curl -X POST http://localhost:8099/api/llm/hunyuan-video/generate/video \
+curl -X POST http://localhost:8099/api/llm/v1/generate/video \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "hunyuan-video",
     "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
     "duration": 5
   }'
 # Returns: {"prediction_id": "xyz789", "status": "starting"}
 
 # 4. Image-to-Video: Animate image (Replicate)
-curl -X POST http://localhost:8099/api/llm/stable-video/animate \
+curl -X POST http://localhost:8099/api/llm/v1/animate \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "stable-video",
     "image_url": "https://example.com/photo.jpg",
     "motion_bucket_id": 127
   }'
@@ -521,9 +524,9 @@ A dedicated `vllm-omni` type can be added later if needed for UI or routing logi
 - Single unified API namespace
 
 **Routes**:
-- `/api/llm/{model_id}/generate/image` (not `/api/omni/...`)
-- `/api/llm/{model_id}/generate/video`
-- `/api/llm/{model_id}/animate`
+- `/api/llm/v1/generate/image` (not `/api/omni/...`)
+- `/api/llm/v1/generate/video`
+- `/api/llm/v1/animate`
 
 This keeps the API "basic" by extending existing patterns rather than creating parallel systems.
 

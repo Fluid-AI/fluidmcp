@@ -43,9 +43,10 @@ echo -e "\n"
 echo ""
 echo "2. Image Generation: Text-to-Image (Replicate FLUX)"
 echo "-------------------------------------------------------------------"
-PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/flux-image/generate/image" \
+PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/image" \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "flux-image",
     "prompt": "A serene Japanese garden with cherry blossoms in full bloom, golden hour lighting",
     "aspect_ratio": "16:9",
     "output_format": "png"
@@ -61,9 +62,10 @@ echo -e "\n"
 echo ""
 echo "3. Video Generation: Text-to-Video (Replicate AnimateDiff)"
 echo "-------------------------------------------------------------------"
-PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/animatediff-video/generate/video" \
+PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/generate/video" \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "animatediff-video",
     "prompt": "A cat walking in the rain",
     "width": 512,
     "height": 512,
@@ -80,9 +82,10 @@ echo -e "\n"
 echo ""
 echo "4. Image Animation: Image-to-Video (Replicate Stable Video)"
 echo "-------------------------------------------------------------------"
-PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/stable-video/animate" \
+PREDICTION=$(curl -s -X POST "${BASE_URL}/api/llm/v1/animate" \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "stable-video",
     "image_url": "https://picsum.photos/1024/576",
     "motion_bucket_id": 127,
     "fps": 24

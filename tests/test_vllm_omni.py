@@ -70,8 +70,8 @@ class TestImageGenerationEndpoint:
         # Without mocking config, returns 404 (model not found)
         # This is expected behavior - model validation happens before auth
         response = client.post(
-            "/api/llm/flux-image/generate/image",
-            json={"prompt": "test"}
+            "/api/llm/v1/generate/image",
+            json={"model": "flux-image", "prompt": "test"}
         )
         assert response.status_code in [403, 404]  # Auth or model not found
 
@@ -79,8 +79,8 @@ class TestImageGenerationEndpoint:
         """Test that endpoint validates model exists."""
         with patch('fluidmcp.cli.api.management.get_model_config', return_value=None):
             response = client.post(
-                "/api/llm/unknown-model/generate/image",
-                json={"prompt": "test"}
+                "/api/llm/v1/generate/image",
+                json={"model": "unknown-model", "prompt": "test"}
             )
             assert response.status_code == 404
             assert "not found" in response.json()["detail"].lower()
@@ -90,8 +90,8 @@ class TestImageGenerationEndpoint:
         with patch('fluidmcp.cli.api.management.get_model_config', return_value={"type": "vllm"}):
             with patch('fluidmcp.cli.api.management.get_model_type', return_value="vllm"):
                 response = client.post(
-                    "/api/llm/vllm-model/generate/image",
-                    json={"prompt": "test"}
+                    "/api/llm/v1/generate/image",
+                    json={"model": "vllm-model", "prompt": "test"}
                 )
                 assert response.status_code == 400
                 assert "only supported for Replicate" in response.json()["detail"]
@@ -110,8 +110,8 @@ class TestVideoGenerationEndpoint:
         """Test that video generation endpoint requires token."""
         # Without mocking config, returns 404 (model not found)
         response = client.post(
-            "/api/llm/animatediff-video/generate/video",
-            json={"prompt": "test"}
+            "/api/llm/v1/generate/video",
+            json={"model": "animatediff-video", "prompt": "test"}
         )
         assert response.status_code in [403, 404]  # Auth or model not found
 
@@ -119,8 +119,8 @@ class TestVideoGenerationEndpoint:
         """Test that endpoint validates model exists."""
         with patch('fluidmcp.cli.api.management.get_model_config', return_value=None):
             response = client.post(
-                "/api/llm/unknown-model/generate/video",
-                json={"prompt": "test"}
+                "/api/llm/v1/generate/video",
+                json={"model": "unknown-model", "prompt": "test"}
             )
             assert response.status_code == 404
 
@@ -129,8 +129,8 @@ class TestVideoGenerationEndpoint:
         with patch('fluidmcp.cli.api.management.get_model_config', return_value={"type": "vllm"}):
             with patch('fluidmcp.cli.api.management.get_model_type', return_value="vllm"):
                 response = client.post(
-                    "/api/llm/vllm-model/generate/video",
-                    json={"prompt": "test"}
+                    "/api/llm/v1/generate/video",
+                    json={"model": "vllm-model", "prompt": "test"}
                 )
                 assert response.status_code == 400
                 assert "only supported for Replicate" in response.json()["detail"]
@@ -143,8 +143,8 @@ class TestImageAnimationEndpoint:
         """Test that animation endpoint requires token."""
         # Without mocking config, returns 404 (model not found)
         response = client.post(
-            "/api/llm/stable-video/animate",
-            json={"image_url": "https://example.com/img.jpg"}
+            "/api/llm/v1/animate",
+            json={"model": "stable-video", "image_url": "https://example.com/img.jpg"}
         )
         assert response.status_code in [403, 404]  # Auth or model not found
 
@@ -152,8 +152,8 @@ class TestImageAnimationEndpoint:
         """Test that endpoint validates model exists."""
         with patch('fluidmcp.cli.api.management.get_model_config', return_value=None):
             response = client.post(
-                "/api/llm/unknown-model/animate",
-                json={"image_url": "https://example.com/img.jpg"}
+                "/api/llm/v1/animate",
+                json={"model": "unknown-model", "image_url": "https://example.com/img.jpg"}
             )
             assert response.status_code == 404
 
@@ -162,8 +162,8 @@ class TestImageAnimationEndpoint:
         with patch('fluidmcp.cli.api.management.get_model_config', return_value={"type": "vllm"}):
             with patch('fluidmcp.cli.api.management.get_model_type', return_value="vllm"):
                 response = client.post(
-                    "/api/llm/vllm-model/animate",
-                    json={"image_url": "https://example.com/img.jpg"}
+                    "/api/llm/v1/animate",
+                    json={"model": "vllm-model", "image_url": "https://example.com/img.jpg"}
                 )
                 assert response.status_code == 400
                 assert "only supported for Replicate" in response.json()["detail"]

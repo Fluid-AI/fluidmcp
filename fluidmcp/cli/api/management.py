@@ -2218,33 +2218,37 @@ async def get_model_metrics(
 # Image and video generation via Replicate integration
 # ============================================================================
 
-@router.post("/llm/{model_id}/generate/image")
+@router.post("/llm/v1/generate/image")
 async def generate_image(
-    model_id: str,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
     Generate image from text prompt (text-to-image).
 
-    Works with Replicate image generation models (FLUX, Stable Diffusion, etc.).
-    Validates that model supports 'text-to-image' capability.
+    OpenAI-compatible endpoint. Works with Replicate image generation models
+    (FLUX, Stable Diffusion, etc.). Validates that model supports 'text-to-image' capability.
 
     Args:
-        model_id: Model identifier from config
-        request_body: Generation parameters (prompt, aspect_ratio, etc.)
+        request_body: Generation parameters including model and prompt
 
     Returns:
         Prediction response with prediction_id and status
 
     Example:
         {
+          "model": "flux-image",
           "prompt": "A serene Japanese garden with cherry blossoms",
           "aspect_ratio": "16:9"
         }
     """
     from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
+
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
 
     # Get model config and validate it exists
     model_config = get_model_config(model_id)
@@ -2265,27 +2269,27 @@ async def generate_image(
     return await omni_adapter.generate_image(model_id, model_config, request_body, client)
 
 
-@router.post("/llm/{model_id}/generate/video")
+@router.post("/llm/v1/generate/video")
 async def generate_video(
-    model_id: str,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
     Generate video from text prompt (text-to-video).
 
-    Supports video generation models like AnimateDiff Lightning, CogVideoX, etc.
-    Validates that model supports 'text-to-video' capability.
+    OpenAI-compatible endpoint. Supports video generation models like
+    AnimateDiff Lightning, CogVideoX, etc. Validates that model supports
+    'text-to-video' capability.
 
     Args:
-        model_id: Model identifier from config
-        request_body: Generation parameters (prompt, duration, fps, etc.)
+        request_body: Generation parameters including model and prompt
 
     Returns:
         Prediction response with prediction_id and status
 
     Example:
         {
+          "model": "animatediff-video",
           "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
           "duration": 5,
           "fps": 24
@@ -2293,6 +2297,11 @@ async def generate_video(
     """
     from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
+
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
 
     # Get model config and validate it exists
     model_config = get_model_config(model_id)
@@ -2313,27 +2322,26 @@ async def generate_video(
     return await omni_adapter.generate_video(model_id, model_config, request_body, client)
 
 
-@router.post("/llm/{model_id}/animate")
+@router.post("/llm/v1/animate")
 async def animate_image(
-    model_id: str,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
     """
     Animate image into video (image-to-video).
 
-    Supports models like Stable Video Diffusion.
+    OpenAI-compatible endpoint. Supports models like Stable Video Diffusion.
     Validates that model supports 'image-to-video' capability.
 
     Args:
-        model_id: Model identifier from config
-        request_body: Animation parameters (image_url, motion settings, etc.)
+        request_body: Animation parameters including model and image
 
     Returns:
         Prediction response with prediction_id and status
 
     Example:
         {
+          "model": "stable-video",
           "image_url": "https://example.com/photo.jpg",
           "motion_bucket_id": 127,
           "fps": 24
@@ -2341,6 +2349,11 @@ async def animate_image(
     """
     from ..services import omni_adapter
     from ..services.replicate_client import ReplicateClient
+
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
 
     # Get model config and validate it exists
     model_config = get_model_config(model_id)

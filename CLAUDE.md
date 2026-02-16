@@ -528,17 +528,19 @@ EOFJSON
 export REPLICATE_API_TOKEN="r8_..."
 fluidmcp run omni-config.json --file --start-server
 
-# 3. Generate an image
-curl -X POST http://localhost:8099/api/llm/flux-image/generate/image \
+# 3. Generate an image (OpenAI-compatible format)
+curl -X POST http://localhost:8099/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "A serene Japanese garden with cherry blossoms"}'
+  -d '{"model": "flux-image", "prompt": "A serene Japanese garden with cherry blossoms"}'
 ```
 
 ### API Endpoints
 
-- `POST /api/llm/{model_id}/generate/image` - Text-to-image generation
-- `POST /api/llm/{model_id}/generate/video` - Text-to-video generation
-- `POST /api/llm/{model_id}/animate` - Image-to-video animation
+OpenAI-compatible endpoints (model specified in request body):
+
+- `POST /api/llm/v1/generate/image` - Text-to-image generation
+- `POST /api/llm/v1/generate/video` - Text-to-video generation
+- `POST /api/llm/v1/animate` - Image-to-video animation
 - `GET /api/llm/predictions/{prediction_id}` - Check generation status
 
 ### Examples

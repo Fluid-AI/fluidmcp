@@ -26,9 +26,10 @@ Server starts on: **http://localhost:8099**
 Open a new terminal and run:
 
 ```bash
-curl -X POST http://localhost:8099/api/llm/flux-image-gen/generate/image \
+curl -X POST http://localhost:8099/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "flux-image-gen",
     "prompt": "A beautiful sunset over mountains with cherry blossoms",
     "aspect_ratio": "16:9"
   }'
@@ -75,9 +76,10 @@ When status is `"succeeded"`:
 
 ```bash
 # Generate video (takes 2-5 minutes)
-curl -X POST http://localhost:8099/api/llm/cogvideox/generate/video \
+curl -X POST http://localhost:8099/api/llm/v1/generate/video \
   -H "Content-Type: application/json" \
   -d '{
+    "model": "cogvideox",
     "prompt": "A panda playing guitar in the rain",
     "duration": 5
   }'
