@@ -173,13 +173,16 @@ class TestImageAnimationEndpoint:
 class TestGenerationStatusEndpoint:
     """Test generation status polling endpoint."""
 
-    def test_status_endpoint_requires_authentication(self, client):
+    def test_status_endpoint_requires_authentication(self, client, monkeypatch):
         """Test that status endpoint requires token or has valid config."""
-        # Returns 401/403 if auth fails, 503 if REPLICATE_API_TOKEN is not set
-        # Note: This may make a real API call if auth passes, which will fail with 401
-        # from Replicate (since 'abc123' is invalid). All these cases indicate proper security.
-        response = client.get("/api/llm/predictions/abc123")
-        assert response.status_code in [401, 403, 503]  # Auth or missing config
+        # Clear any Replicate token from environment to ensure we test auth properly
+        monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+
+        # Mock list_models_by_type to return empty list (no configured models)
+        with patch('fluidmcp.cli.api.management.list_models_by_type', return_value=[]):
+            response = client.get("/api/llm/predictions/abc123")
+            # Should return 503 (no token) or 401/403 (auth failure)
+            assert response.status_code in [401, 403, 503]  # Auth or missing config
 
     @pytest.mark.skip(reason="Requires full auth setup - covered by manual testing")
     def test_status_endpoint_returns_prediction_status(self, client):
