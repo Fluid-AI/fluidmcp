@@ -21,6 +21,7 @@ import json
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.replicate_openai_adapter import replicate_chat_completion
+from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
@@ -2238,12 +2239,11 @@ async def generate_image(
 
     Example:
         {
-          "model": "flux-image",
+          "model": "flux-image-gen",
           "prompt": "A serene Japanese garden with cherry blossoms",
           "aspect_ratio": "16:9"
         }
     """
-    from ..services.replicate_client import ReplicateClient
     from ..services.llm_metrics import get_metrics_collector
 
     # Extract model from request body (OpenAI-compatible format)
@@ -2273,7 +2273,6 @@ async def generate_image(
     start_time = collector.record_request_start(model_id, provider_type)
 
     # Get or create Replicate client
-    from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
     created_temp_client = False
     if not client:
@@ -2314,7 +2313,7 @@ async def generate_video(
     Generate video from text prompt (text-to-video).
 
     OpenAI-compatible endpoint. Supports video generation models like
-    AnimateDiff Lightning, CogVideoX, etc. Validates that model supports
+    Google Veo 3, Kling v2.6, etc. Validates that model supports
     'text-to-video' capability.
 
     Args:
@@ -2331,7 +2330,6 @@ async def generate_video(
           "fps": 24
         }
     """
-    from ..services.replicate_client import ReplicateClient
     from ..services.llm_metrics import get_metrics_collector
 
     # Extract model from request body (OpenAI-compatible format)
@@ -2361,7 +2359,6 @@ async def generate_video(
     start_time = collector.record_request_start(model_id, provider_type)
 
     # Get or create Replicate client
-    from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
     created_temp_client = False
     if not client:
@@ -2403,7 +2400,7 @@ async def animate_image(
     """
     Animate image into video (image-to-video).
 
-    OpenAI-compatible endpoint. Supports models like Stable Video Diffusion.
+    OpenAI-compatible endpoint. Supports models like Kling v2.6.
     Validates that model supports 'image-to-video' capability.
 
     Args:
@@ -2420,7 +2417,6 @@ async def animate_image(
           "fps": 24
         }
     """
-    from ..services.replicate_client import ReplicateClient
     from ..services.llm_metrics import get_metrics_collector
 
     # Extract model from request body (OpenAI-compatible format)
@@ -2450,7 +2446,6 @@ async def animate_image(
     start_time = collector.record_request_start(model_id, provider_type)
 
     # Get or create Replicate client
-    from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
     created_temp_client = False
     if not client:
@@ -2463,7 +2458,6 @@ async def animate_image(
         # Record success metrics
         collector.record_request_success(
             model_id,
-            provider_type,
             start_time,
             prompt_tokens=0,  # Image animation doesn't use tokens
             completion_tokens=0,
@@ -2508,7 +2502,6 @@ async def get_generation_status(
           "output": ["https://replicate.delivery/image.png"]
         }
     """
-    from ..services.replicate_client import ReplicateClient
     from ..services.llm_metrics import get_metrics_collector
 
     # Try to get Replicate API token from configured models first
