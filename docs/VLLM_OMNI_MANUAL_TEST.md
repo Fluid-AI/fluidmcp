@@ -82,7 +82,7 @@ When status is `"succeeded"`:
 curl -X POST http://localhost:8099/api/llm/v1/generate/video \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "animatediff-video",
+    "model": "veo-video",
     "prompt": "A panda playing guitar in the rain",
     "duration": 5
   }'
@@ -125,9 +125,11 @@ In `examples/vllm-omni-generation.json`:
 | Model ID | Type | Description |
 |----------|------|-------------|
 | `flux-image-gen` | text-to-image | FLUX Schnell (fast, high-quality) |
-| `stable-diffusion` | text-to-image | Stable Diffusion |
-| `animatediff-video` | text-to-video | AnimateDiff Lightning (fast, short clips) |
-| `stable-video` | image-to-video | Animate static images |
+| `nano-banana-pro` | text-to-image | Google Gemini 3 Pro Image |
+| `veo-video` | text-to-video | Google Veo 3 (video generation with audio) |
+| `kling-animate` | image-to-video, text-to-video | Kling v2.6 (image animation with audio) |
+
+For the complete and up-to-date list of models, refer directly to `examples/vllm-omni-generation.json`.
 
 ## Troubleshooting
 

@@ -19,7 +19,7 @@ import httpx
 import time
 import json
 
-from ..services.llm_provider_registry import get_model_type, get_model_config
+from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
@@ -2244,6 +2244,7 @@ async def generate_image(
         }
     """
     from ..services.replicate_client import ReplicateClient
+    from ..services.llm_metrics import get_metrics_collector
 
     # Extract model from request body (OpenAI-compatible format)
     model_id = request_body.get("model")
@@ -2267,6 +2268,10 @@ async def generate_image(
     # Remove 'model' field from payload before sending to Replicate
     payload = {k: v for k, v in request_body.items() if k != "model"}
 
+    # Record metrics for image generation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
     # Get or create Replicate client
     from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
@@ -2277,7 +2282,23 @@ async def generate_image(
         created_temp_client = True
 
     try:
-        return await omni_adapter.generate_image(model_id, model_config, payload, client)
+        result = await omni_adapter.generate_image(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Image generation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
     finally:
         # Ensure any temporary client is closed to avoid resource leaks
         if created_temp_client:
@@ -2304,13 +2325,14 @@ async def generate_video(
 
     Example:
         {
-          "model": "animatediff-video",
+          "model": "veo-video",
           "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
           "duration": 5,
           "fps": 24
         }
     """
     from ..services.replicate_client import ReplicateClient
+    from ..services.llm_metrics import get_metrics_collector
 
     # Extract model from request body (OpenAI-compatible format)
     model_id = request_body.get("model")
@@ -2334,6 +2356,10 @@ async def generate_video(
     # Remove 'model' field from payload before sending to Replicate
     payload = {k: v for k, v in request_body.items() if k != "model"}
 
+    # Record metrics for video generation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
     # Get or create Replicate client
     from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
@@ -2344,7 +2370,25 @@ async def generate_video(
         created_temp_client = True
 
     try:
-        return await omni_adapter.generate_video(model_id, model_config, payload, client)
+        result = await omni_adapter.generate_video(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            provider_type,
+            start_time,
+            prompt_tokens=0,  # Video generation doesn't use tokens
+            completion_tokens=0,
+            cached_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
     finally:
         # Ensure any temporary client is closed to avoid resource leaks
         if created_temp_client:
@@ -2370,13 +2414,14 @@ async def animate_image(
 
     Example:
         {
-          "model": "stable-video",
+          "model": "kling-animate",
           "image_url": "https://example.com/photo.jpg",
           "motion_bucket_id": 127,
           "fps": 24
         }
     """
     from ..services.replicate_client import ReplicateClient
+    from ..services.llm_metrics import get_metrics_collector
 
     # Extract model from request body (OpenAI-compatible format)
     model_id = request_body.get("model")
@@ -2400,6 +2445,10 @@ async def animate_image(
     # Remove 'model' field from payload before sending to Replicate
     payload = {k: v for k, v in request_body.items() if k != "model"}
 
+    # Record metrics for image animation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
     # Get or create Replicate client
     from ..services.replicate_client import get_replicate_client
     client = get_replicate_client(model_id)
@@ -2410,7 +2459,25 @@ async def animate_image(
         created_temp_client = True
 
     try:
-        return await omni_adapter.animate_image(model_id, model_config, payload, client)
+        result = await omni_adapter.animate_image(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            provider_type,
+            start_time,
+            prompt_tokens=0,  # Image animation doesn't use tokens
+            completion_tokens=0,
+            cached_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
     finally:
         # Ensure any temporary client is closed to avoid resource leaks
         if created_temp_client:
@@ -2442,21 +2509,55 @@ async def get_generation_status(
         }
     """
     from ..services.replicate_client import ReplicateClient
+    from ..services.llm_metrics import get_metrics_collector
 
-    # For status checks, we need a Replicate API token from environment
-    api_token = os.getenv("REPLICATE_API_TOKEN")
+    # Try to get Replicate API token from configured models first
+    api_token = None
+    replicate_models = list_models_by_type("replicate")
+
+    if replicate_models:
+        # Use the first configured Replicate model's token
+        first_model_id = replicate_models[0]
+        first_model_config = get_model_config(first_model_id)
+        if first_model_config and "api_key" in first_model_config:
+            api_token = first_model_config["api_key"]
+
+    # Fallback to environment variable if no configured models
+    if not api_token:
+        api_token = os.getenv("REPLICATE_API_TOKEN")
 
     if not api_token:
         raise HTTPException(
             503,
-            "No Replicate API token configured. Set REPLICATE_API_TOKEN environment variable."
+            "No Replicate API token configured. Either add a Replicate model to your config "
+            "or set REPLICATE_API_TOKEN environment variable."
         )
+
+    # Record metrics for status check
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start("status-check", "replicate")
 
     # Create a minimal client just for fetching prediction status
     # The prediction_id contains all necessary information for Replicate
     client = ReplicateClient("status-check", {"model": "dummy", "api_key": api_token})
     try:
-        return await omni_adapter.get_generation_status(prediction_id, client)
+        result = await omni_adapter.get_generation_status(prediction_id, client)
+        # Record success metrics
+        collector.record_request_success(
+            "status-check",
+            start_time,
+            prompt_tokens=0,
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure("status-check", start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure("status-check", start_time, 500)
+        raise
     finally:
         # Ensure the temporary client is closed to avoid resource leaks
         await client.close()

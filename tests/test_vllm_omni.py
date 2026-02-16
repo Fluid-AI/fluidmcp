@@ -176,6 +176,8 @@ class TestGenerationStatusEndpoint:
     def test_status_endpoint_requires_authentication(self, client):
         """Test that status endpoint requires token or has valid config."""
         # Returns 401/403 if auth fails, 503 if REPLICATE_API_TOKEN is not set
+        # Note: This may make a real API call if auth passes, which will fail with 401
+        # from Replicate (since 'abc123' is invalid). All these cases indicate proper security.
         response = client.get("/api/llm/predictions/abc123")
         assert response.status_code in [401, 403, 503]  # Auth or missing config
 
