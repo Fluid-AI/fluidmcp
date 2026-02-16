@@ -70,6 +70,14 @@ esac
 
 # Extract prediction ID
 PREDICTION_ID=$(echo "$RESPONSE" | jq -r '.id')
+
+# Validate prediction ID
+if [ -z "$PREDICTION_ID" ] || [ "$PREDICTION_ID" = "null" ]; then
+  echo "❌ Error: Failed to get prediction ID from response"
+  echo "Response: $RESPONSE"
+  exit 1
+fi
+
 echo "Prediction ID: $PREDICTION_ID"
 echo ""
 

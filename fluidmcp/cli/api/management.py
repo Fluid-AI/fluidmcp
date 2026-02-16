@@ -1981,8 +1981,6 @@ async def get_metrics_prometheus(
     Example:
         curl http://localhost:8099/api/metrics
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     return Response(
         content=collector.export_prometheus(),
@@ -2002,8 +2000,6 @@ async def get_metrics_json(
     Example:
         curl http://localhost:8099/api/metrics/json
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     return collector.export_json()
 
@@ -2026,8 +2022,6 @@ async def reset_metrics(
         # Reset specific model
         curl -X POST http://localhost:8099/api/metrics/reset?model_id=llama-2-70b
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     collector.reset_metrics(model_id)
 
@@ -2185,8 +2179,6 @@ async def get_model_metrics(
     Example:
         curl http://localhost:8099/api/metrics/models/llama-2-70b
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     metrics = collector.get_model_metrics(model_id)
 
@@ -2244,8 +2236,6 @@ async def generate_image(
           "aspect_ratio": "16:9"
         }
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     # Extract model from request body (OpenAI-compatible format)
     model_id = request_body.get("model")
     if not model_id:
@@ -2330,8 +2320,6 @@ async def generate_video(
           "fps": 24
         }
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     # Extract model from request body (OpenAI-compatible format)
     model_id = request_body.get("model")
     if not model_id:
@@ -2415,8 +2403,6 @@ async def animate_image(
           "fps": 24
         }
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     # Extract model from request body (OpenAI-compatible format)
     model_id = request_body.get("model")
     if not model_id:
@@ -2499,8 +2485,6 @@ async def get_generation_status(
           "output": ["https://replicate.delivery/image.png"]
         }
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     # Try to get Replicate API token from configured models first
     api_token = None
     replicate_models = list_models_by_type("replicate")
