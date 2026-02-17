@@ -1,0 +1,29 @@
+# Lightweight Railway deployment - Replicate LLM only (no MCP servers)
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY fluidmcp ./fluidmcp
+COPY examples/railway-replicate-only.json ./config.json
+COPY setup.py .
+COPY README.md .
+
+# Install FluidMCP
+RUN pip install -e .
+
+# Expose port (Railway auto-detects this)
+EXPOSE 8099
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8099/health').read()"
+
+# Start FluidMCP with Replicate-only config
+CMD ["fluidmcp", "run", "config.json", "--file", "--start-server"]
