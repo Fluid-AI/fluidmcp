@@ -148,6 +148,27 @@ class ApiClient {
       }
     );
   }
+
+  // Server Configuration Management (CRUD)
+  async addServer(config: any): Promise<{ message: string; id: string; name: string }> {
+    return this.request('/api/servers', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async updateServer(serverId: string, config: any): Promise<{ message: string; config: any }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async deleteServer(serverId: string): Promise<{ message: string; deleted_at: string }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'DELETE',
+    });
+  }
 }
 
 export const apiClient = new ApiClient(BASE_URL);
