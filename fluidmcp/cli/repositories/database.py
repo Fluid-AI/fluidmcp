@@ -524,7 +524,7 @@ class DatabaseManager(PersistenceBackend):
 
             # Check if update actually happened (for optimistic locking)
             if expected_pid is not None and result.matched_count == 0:
-                logger.debug(f"Optimistic lock failed for {server_key}: PID changed from {expected_pid}")
+                logger.warning(f"Optimistic lock failed for {server_key}: PID changed from {expected_pid}")
                 return False
 
             logger.debug(f"Saved instance state: {server_key}")

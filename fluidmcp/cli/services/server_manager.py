@@ -50,6 +50,9 @@ class ServerManager:
         # Stale PID update cache to throttle database writes
         # Maps server_id -> last_update_timestamp
         self._stale_pid_updates: Dict[str, float] = {}
+        # Cache stale PID updates for 30s to balance UI responsiveness vs DB load
+        # 30s provides quick feedback (max 30s delay) while preventing excessive writes
+        # when repeatedly checking the same stale server
         self._stale_pid_cache_ttl = 30.0  # seconds
 
         # Register cleanup handlers
@@ -179,8 +182,13 @@ class ServerManager:
             # Clear stale PID cache entry (if any) since server is now running
             self._stale_pid_updates.pop(id, None)
 
-            # Save state to database with user tracking
-            await self.db.save_instance_state({
+            # Get existing state for optimistic locking
+            existing_state = await self.db.get_instance_state(id)
+            existing_pid = existing_state.get("pid") if existing_state else None
+
+            # Save state to database with user tracking and optimistic locking
+            # Use optimistic locking to prevent race conditions with stale PID checker
+            success = await self.db.save_instance_state({
                 "server_id": id,
                 "state": "running",
                 "pid": process.pid,
@@ -191,7 +199,12 @@ class ServerManager:
                 "last_health_check": datetime.utcnow(),
                 "health_check_failures": 0,
                 "started_by": user_id  # Track who started this instance
-            })
+            }, expected_pid=existing_pid)
+
+            if not success:
+                logger.warning(f"Optimistic lock failed when starting server '{name}' - PID changed during start operation")
+                # Still return True since the process started successfully
+                # The state mismatch will be reconciled on next status check
 
             # Update metrics - server is now running (status code: 2)
             # Note: Metrics update after database save to ensure state consistency
