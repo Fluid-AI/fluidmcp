@@ -477,17 +477,21 @@ class ServerManager:
 
         Returns:
             List of server info dictionaries with nested config structure
+            (Only returns enabled servers - disabled/deleted servers are excluded)
         """
         servers = []
 
-        # Get all configs from database
-        configs = await self.db.list_server_configs()
+        # Get all enabled configs from database (excludes soft-deleted and disabled servers)
+        configs = await self.db.list_server_configs(enabled_only=True)
 
         # Merge with in-memory configs (for servers not in DB)
+        # Also filter out disabled/deleted servers from in-memory cache
         config_ids = {c.get("id") for c in configs}
         for id, config in self.configs.items():
             if id not in config_ids:
-                configs.append(config)
+                # Only include enabled servers (exclude disabled/deleted)
+                if config.get("enabled", True) and not config.get("deleted_at"):
+                    configs.append(config)
 
         for config in configs:
             id = config.get("id")
