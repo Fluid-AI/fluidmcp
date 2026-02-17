@@ -283,23 +283,60 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       .diagram-container {{
         position: relative;
         width: 100%;
-        min-height: {canvas_height}px;
-        height: auto;
+        height: {canvas_height}px;
         background: white;
         border-radius: 10px;
-        overflow: auto;
+        overflow: hidden;
         border: 3px solid #e9ecef;
         cursor: default;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }}
 
       .diagram-container.crosshair {{
         cursor: crosshair;
       }}
 
+      .diagram-container.panning {{
+        cursor: grab;
+      }}
+
+      .diagram-container.panning:active {{
+        cursor: grabbing;
+      }}
+
       svg {{
-        min-width: 100%;
-        min-height: 100%;
-        display: block;
+        transform-origin: center center;
+        flex-shrink: 0;
+        position: relative;
+      }}
+
+      .zoom-controls {{
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: flex;
+        gap: 5px;
+        z-index: 1000;
+        background: rgba(255,255,255,0.95);
+        padding: 5px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }}
+
+      .zoom-info-badge {{
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        background: rgba(76, 110, 245, 0.9);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        z-index: 1000;
+        pointer-events: none;
       }}
 
       .shape-element {{
@@ -588,6 +625,10 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       </div>
 
       <div class="diagram-container" id="diagramContainer">
+        <div class="zoom-controls">
+          <button class="tool-btn" onclick="resetDiagramView()" title="Reset View">↺</button>
+        </div>
+        <div class="zoom-info-badge" id="zoomInfo">100%</div>
         <svg id="diagram" width="{canvas_width}" height="{canvas_height}">
           <defs>
             <marker
@@ -609,7 +650,8 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
       <div class="controls">
         <strong>How to use:</strong><br />
-        <strong>Shapes:</strong> Select a shape, then click and drag to draw it | <strong>Text:</strong> Select a shape and click "Edit Text" button, or double-click the shape, or click the ✏️ icon | <strong>Move:</strong> Drag shapes in select mode | <strong>Resize:</strong> Drag corner handles | <strong>Connections:</strong> Click connection mode, then click blue dots on shapes to connect | <strong>Move connections:</strong> Drag the blue dots on connection lines
+        <strong>Shapes:</strong> Select a shape, then click and drag to draw it | <strong>Text:</strong> Select a shape and click "Edit Text" button, or double-click the shape, or click the ✏️ icon | <strong>Move:</strong> Drag shapes in select mode | <strong>Resize:</strong> Drag corner handles | <strong>Connections:</strong> Click connection mode, then click blue dots on shapes to connect | <strong>Move connections:</strong> Drag the blue dots on connection lines<br/>
+        <strong>🔍 Zoom:</strong> Hold <strong>Ctrl + Mouse Wheel</strong> to zoom in/out | <strong>Pan:</strong> Hold <strong>Space + Drag</strong> to pan around
       </div>
     </div>
 
@@ -631,6 +673,100 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       let nextId = 1;
 
       const svg = document.getElementById("diagram");
+      const diagramContainer = document.getElementById("diagramContainer");
+      const zoomInfo = document.getElementById("zoomInfo");
+
+      // Zoom and Pan variables
+      let diagramScale = 1;
+      let diagramTranslateX = 0;
+      let diagramTranslateY = 0;
+      let isPanning = false;
+      let panStartX = 0;
+      let panStartY = 0;
+      let spaceKeyPressed = false;
+
+      function updateDiagramTransform() {{
+        svg.style.transform = `translate(${{diagramTranslateX}}px, ${{diagramTranslateY}}px) scale(${{diagramScale}})`;
+        zoomInfo.textContent = Math.round(diagramScale * 100) + '%';
+      }}
+
+      function resetDiagramView() {{
+        diagramScale = 1;
+        diagramTranslateX = 0;
+        diagramTranslateY = 0;
+        updateDiagramTransform();
+      }}
+
+      // Zoom with Ctrl + Mouse Wheel
+      diagramContainer.addEventListener('wheel', (e) => {{
+        if (e.ctrlKey) {{
+          e.preventDefault();
+
+          const containerRect = diagramContainer.getBoundingClientRect();
+          const mouseX = e.clientX - containerRect.left;
+          const mouseY = e.clientY - containerRect.top;
+
+          const svgRect = svg.getBoundingClientRect();
+          const svgCenterX = svgRect.left - containerRect.left + svgRect.width / 2;
+          const svgCenterY = svgRect.top - containerRect.top + svgRect.height / 2;
+
+          const mouseRelativeX = mouseX - svgCenterX;
+          const mouseRelativeY = mouseY - svgCenterY;
+
+          const delta = e.deltaY > 0 ? 0.9 : 1.1;
+          const oldScale = diagramScale;
+          const newScale = Math.min(Math.max(diagramScale * delta, 0.1), 10);
+
+          const scaleDiff = newScale - oldScale;
+          diagramTranslateX -= mouseRelativeX * (scaleDiff / oldScale);
+          diagramTranslateY -= mouseRelativeY * (scaleDiff / oldScale);
+          diagramScale = newScale;
+
+          updateDiagramTransform();
+        }}
+      }}, {{ passive: false }});
+
+      // Pan with Space + Drag
+      document.addEventListener('keydown', (e) => {{
+        if (e.code === 'Space' && !isPanning) {{
+          spaceKeyPressed = true;
+          diagramContainer.classList.add('panning');
+        }}
+      }});
+
+      document.addEventListener('keyup', (e) => {{
+        if (e.code === 'Space') {{
+          spaceKeyPressed = false;
+          isPanning = false;
+          diagramContainer.classList.remove('panning');
+        }}
+      }});
+
+      diagramContainer.addEventListener('mousedown', (e) => {{
+        if (spaceKeyPressed && currentMode === 'select') {{
+          isPanning = true;
+          panStartX = e.clientX - diagramTranslateX;
+          panStartY = e.clientY - diagramTranslateY;
+          e.preventDefault();
+          return;
+        }}
+      }});
+
+      document.addEventListener('mousemove', (e) => {{
+        if (isPanning) {{
+          diagramTranslateX = e.clientX - panStartX;
+          diagramTranslateY = e.clientY - panStartY;
+          updateDiagramTransform();
+          e.preventDefault();
+          return;
+        }}
+      }});
+
+      document.addEventListener('mouseup', () => {{
+        if (isPanning) {{
+          isPanning = false;
+        }}
+      }});
 
       document.querySelectorAll("[data-mode]").forEach((btn) => {{
         btn.addEventListener("click", () => {{
@@ -701,8 +837,17 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       svg.addEventListener("dblclick", handleDoubleClick);
 
       function getSvgCoords(e) {{
-        const rect = svg.getBoundingClientRect();
-        return {{ x: e.clientX - rect.left, y: e.clientY - rect.top }};
+        const svgRect = svg.getBoundingClientRect();
+
+        // Get mouse position relative to the transformed SVG (in screen space)
+        const relativeScreenX = e.clientX - svgRect.left;
+        const relativeScreenY = e.clientY - svgRect.top;
+
+        // Convert from scaled coordinates back to original SVG coordinates
+        const svgX = relativeScreenX / diagramScale;
+        const svgY = relativeScreenY / diagramScale;
+
+        return {{ x: svgX, y: svgY }};
       }}
 
       function handleMouseDown(e) {{
@@ -1399,11 +1544,25 @@ def parse_sequence_steps(description: str) -> tuple:
 
 def generate_sequence_diagram_svg(title: str, description: str) -> str:
     """Generate beautiful custom SVG sequence diagram matching the professional template"""
-    participants, steps = parse_sequence_steps(description)
+    import sys
 
-    if not participants or not steps:
-        # Fallback: return a simple message
-        return f'<svg width="800" height="200"><text x="400" y="100" text-anchor="middle" fill="#1e293b" font-size="16">No valid sequence steps found</text></svg>'
+    try:
+        participants, steps = parse_sequence_steps(description)
+
+        print(f"DEBUG: Participants found: {len(participants)}", file=sys.stderr)
+        print(f"DEBUG: Steps found: {len(steps)}", file=sys.stderr)
+
+        if not participants or not steps:
+            # Fallback: return a detailed error message
+            error_msg = f"No valid sequence steps found. Participants: {len(participants)}, Steps: {len(steps)}"
+            print(f"ERROR: {error_msg}", file=sys.stderr)
+            print(f"ERROR: Description was: {description[:500]}", file=sys.stderr)
+            return f'<svg width="1000" height="300"><text x="500" y="150" text-anchor="middle" fill="#ef4444" font-size="18" font-weight="bold">Error: {error_msg}</text><text x="500" y="180" text-anchor="middle" fill="#64748b" font-size="14">Use bullet points like: - Service A sends request to Service B</text></svg>'
+    except Exception as e:
+        print(f"ERROR in generate_sequence_diagram_svg: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return f'<svg width="1000" height="200"><text x="500" y="100" text-anchor="middle" fill="#ef4444" font-size="16">Error generating diagram: {str(e)}</text></svg>'
 
     # Rich color gradients for different services
     color_schemes = [
@@ -1567,7 +1726,20 @@ def generate_sequence_diagram_svg(title: str, description: str) -> str:
 
 def generate_sequence_diagram_html(title: str, description: str) -> str:
     """Generate beautiful sequence diagram HTML with custom SVG matching professional template"""
-    svg_content = generate_sequence_diagram_svg(title, description)
+    import sys
+
+    try:
+        print(f"DEBUG: generate_sequence_diagram_html called with title='{title}'", file=sys.stderr)
+        print(f"DEBUG: Description has {len(description)} chars, {description.count(chr(10))} lines", file=sys.stderr)
+
+        svg_content = generate_sequence_diagram_svg(title, description)
+
+        print(f"DEBUG: SVG content generated, length={len(svg_content)}", file=sys.stderr)
+    except Exception as e:
+        print(f"ERROR in generate_sequence_diagram_html: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        svg_content = f'<svg width="1000" height="200"><text x="500" y="100" text-anchor="middle" fill="#ef4444" font-size="16">Error: {str(e)}</text></svg>'
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1661,6 +1833,73 @@ def generate_sequence_diagram_html(title: str, description: str) -> str:
         text-align: center;
         margin: 20px 0 10px 0;
       }}
+      .controls {{
+        display: flex;
+        justify-content: center;
+        gap: 15px;
+        margin-bottom: 30px;
+        flex-wrap: wrap;
+      }}
+      .btn {{
+        background: #3b82f6;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }}
+      .btn:hover {{
+        background: #2563eb;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      }}
+      .zoom-info {{
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(30, 41, 59, 0.9);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        z-index: 1000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        pointer-events: none;
+      }}
+      .help-text {{
+        text-align: center;
+        color: #64748b;
+        font-size: 13px;
+        margin-bottom: 20px;
+        font-style: italic;
+      }}
+      .svg-container {{
+        overflow: hidden;
+        cursor: grab;
+        position: relative;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        background: #fafafa;
+        width: 100%;
+        height: 75vh;
+        min-height: 500px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }}
+      .svg-container:active {{
+        cursor: grabbing;
+      }}
+      .svg-container svg {{
+        transform-origin: center center;
+        flex-shrink: 0;
+        position: relative;
+      }}
     </style>
   </head>
   <body>
@@ -1670,7 +1909,21 @@ def generate_sequence_diagram_html(title: str, description: str) -> str:
         Complete sequence flow with all service interactions
       </p>
 
-      {svg_content}
+      <p class="help-text">
+        💡 <strong>Ctrl + Mouse Wheel</strong> to zoom in/out at cursor position | <strong>Click & Drag</strong> to pan
+      </p>
+
+      <div class="controls">
+        <button class="btn" onclick="resetView()">↺ Reset View</button>
+        <button class="btn" onclick="exportPNG()">📷 Export PNG</button>
+        <button class="btn" onclick="exportSVG()">🎨 Export SVG</button>
+      </div>
+
+      <div class="svg-container" id="svgContainer">
+        {svg_content}
+      </div>
+
+      <div class="zoom-info" id="zoomLevel">100%</div>
 
       <!-- Legend -->
       <div class="legend">
@@ -1702,6 +1955,172 @@ def generate_sequence_diagram_html(title: str, description: str) -> str:
         </div>
       </div>
     </div>
+
+    <script>
+      const svgContainer = document.getElementById('svgContainer');
+      const svg = svgContainer.querySelector('svg');
+      const zoomLevelDisplay = document.getElementById('zoomLevel');
+
+      let scale = 1;
+      let translateX = 0;
+      let translateY = 0;
+      let isDragging = false;
+      let startX = 0;
+      let startY = 0;
+      let initialWidth, initialHeight;
+
+      // Initialize and center on load
+      window.addEventListener('load', () => {{
+        // Get SVG's natural dimensions
+        initialWidth = parseFloat(svg.getAttribute('width')) || svg.viewBox.baseVal.width || 800;
+        initialHeight = parseFloat(svg.getAttribute('height')) || svg.viewBox.baseVal.height || 600;
+
+        const containerRect = svgContainer.getBoundingClientRect();
+
+        // Calculate scale to fit
+        const scaleToFitX = (containerRect.width - 40) / initialWidth;
+        const scaleToFitY = (containerRect.height - 40) / initialHeight;
+        const initialScale = Math.min(scaleToFitX, scaleToFitY, 1) * 0.9;
+
+        scale = initialScale;
+
+        // Start with no translation (flexbox centers it)
+        translateX = 0;
+        translateY = 0;
+
+        updateTransform();
+      }});
+
+      function constrainBounds() {{
+        // No constraints - allow free panning in all directions
+        // User can pan completely out of view if needed
+      }}
+
+      function updateTransform() {{
+        svg.style.transform = `translate(${{translateX}}px, ${{translateY}}px) scale(${{scale}})`;
+        svg.style.transformOrigin = 'center center';
+        zoomLevelDisplay.textContent = Math.round(scale * 100) + '%';
+      }}
+
+      // Mouse wheel zoom with Ctrl key
+      svgContainer.addEventListener('wheel', (e) => {{
+        if (e.ctrlKey) {{
+          e.preventDefault();
+
+          // Get mouse position relative to container
+          const containerRect = svgContainer.getBoundingClientRect();
+          const mouseX = e.clientX - containerRect.left;
+          const mouseY = e.clientY - containerRect.top;
+
+          // Get SVG's current position and center
+          const svgRect = svg.getBoundingClientRect();
+          const svgCenterX = svgRect.left - containerRect.left + svgRect.width / 2;
+          const svgCenterY = svgRect.top - containerRect.top + svgRect.height / 2;
+
+          // Calculate mouse position relative to SVG center
+          const mouseRelativeX = mouseX - svgCenterX;
+          const mouseRelativeY = mouseY - svgCenterY;
+
+          // Zoom in or out
+          const delta = e.deltaY > 0 ? 0.9 : 1.1;
+          const oldScale = scale;
+          const newScale = Math.min(Math.max(scale * delta, 0.1), 10);
+
+          // Calculate how much to adjust translation to keep mouse point fixed
+          const scaleDiff = newScale - oldScale;
+          translateX -= mouseRelativeX * (scaleDiff / oldScale);
+          translateY -= mouseRelativeY * (scaleDiff / oldScale);
+          scale = newScale;
+
+          updateTransform();
+        }}
+      }}, {{ passive: false }});
+
+      // Drag to pan
+      svgContainer.addEventListener('mousedown', (e) => {{
+        isDragging = true;
+        startX = e.clientX - translateX;
+        startY = e.clientY - translateY;
+        svgContainer.style.cursor = 'grabbing';
+      }});
+
+      document.addEventListener('mousemove', (e) => {{
+        if (isDragging) {{
+          translateX = e.clientX - startX;
+          translateY = e.clientY - startY;
+          updateTransform();
+        }}
+      }});
+
+      document.addEventListener('mouseup', () => {{
+        isDragging = false;
+        svgContainer.style.cursor = 'grab';
+      }});
+
+      // Prevent text selection while dragging
+      svgContainer.addEventListener('selectstart', (e) => {{
+        if (isDragging) e.preventDefault();
+      }});
+
+      function resetView() {{
+        const containerRect = svgContainer.getBoundingClientRect();
+
+        // Recalculate scale to fit
+        const scaleToFitX = (containerRect.width - 40) / initialWidth;
+        const scaleToFitY = (containerRect.height - 40) / initialHeight;
+        scale = Math.min(scaleToFitX, scaleToFitY, 1) * 0.9;
+
+        // Reset to center position (flexbox handles centering)
+        translateX = 0;
+        translateY = 0;
+
+        updateTransform();
+      }}
+
+      function exportSVG() {{
+        const svgData = svg.outerHTML;
+        const blob = new Blob([svgData], {{ type: 'image/svg+xml' }});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = '{title.replace(" ", "_")}_sequence_diagram.svg';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }}
+
+      function exportPNG() {{
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+
+        const svgBlob = new Blob([svgData], {{ type: 'image/svg+xml;charset=utf-8' }});
+        const url = URL.createObjectURL(svgBlob);
+
+        img.onload = function() {{
+          canvas.width = img.width * 2;
+          canvas.height = img.height * 2;
+          ctx.scale(2, 2);
+          ctx.fillStyle = 'white';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+
+          canvas.toBlob(function(blob) {{
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = '{title.replace(" ", "_")}_sequence_diagram.png';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          }});
+        }};
+
+        img.src = url;
+      }}
+    </script>
   </body>
 </html>"""
 
@@ -2023,15 +2442,47 @@ def generate_flowchart_html(title: str, description: str) -> str:
       box-shadow: 0 20px 60px rgba(0,0,0,0.3);
       max-width: 1400px;
       width: 100%;
-      overflow-x: auto;
       animation: slideUp 0.8s ease-out;
     }}
 
+    .flowchart-viewport {{
+      overflow: hidden;
+      cursor: grab;
+      border-radius: 10px;
+      background: white;
+      width: 100%;
+      height: 75vh;
+      min-height: 500px;
+      position: relative;
+    }}
+
+    .flowchart-viewport:active {{
+      cursor: grabbing;
+    }}
+
+    .flowchart-viewport.scroll-mode {{
+      overflow-y: auto;
+      overflow-x: auto;
+      cursor: default;
+    }}
+
+    .flowchart-inner {{
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }}
+
     .flowchart {{
+      transform-origin: center center;
+      flex-shrink: 0;
+      position: relative;
       display: flex;
       flex-direction: column;
       align-items: center;
-      min-width: 800px;
+      width: 900px;
     }}
 
     .node {{ margin: 15px 0; position: relative; animation: fadeIn 0.5s ease-in; }}
@@ -2045,7 +2496,7 @@ def generate_flowchart_html(title: str, description: str) -> str:
       text-align: center;
       min-width: 280px;
       max-width: 400px;
-      transition: all 0.3s ease;
+      transition: transform 0.3s ease, box-shadow 0.3s ease, outline 0.15s ease;
       cursor: pointer;
       position: relative;
     }}
@@ -2128,18 +2579,21 @@ def generate_flowchart_html(title: str, description: str) -> str:
 
     .split {{
       display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
       justify-content: center;
-      gap: 80px;
+      align-items: flex-start;
+      gap: 60px;
       margin: 20px 0;
-      width: 100%;
+      width: 900px;
     }}
 
     .branch {{
       display: flex;
       flex-direction: column;
       align-items: center;
-      flex: 1;
-      max-width: 400px;
+      flex: 0 0 360px;
+      width: 360px;
     }}
 
     .label {{
@@ -2194,11 +2648,64 @@ def generate_flowchart_html(title: str, description: str) -> str:
       to {{ opacity: 1; transform: translateY(0); }}
     }}
 
-    .highlight {{ animation: pulse 1.5s infinite; }}
+    .highlight {{
+      outline: 4px solid #FFD700 !important;
+      outline-offset: 3px;
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 0 40px rgba(255, 165, 0, 0.5) !important;
+      animation: highlightPulse 0.8s ease-in-out !important;
+    }}
 
-    @keyframes pulse {{
-      0%, 100% {{ transform: scale(1); }}
-      50% {{ transform: scale(1.08); }}
+    @keyframes highlightPulse {{
+      0%   {{ transform: scale(1); }}
+      30%  {{ transform: scale(1.12); }}
+      60%  {{ transform: scale(1.06); }}
+      100% {{ transform: scale(1.08); }}
+    }}
+
+    .highlight-active {{
+      outline: 4px solid #FFD700 !important;
+      outline-offset: 3px;
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.7), 0 0 40px rgba(255, 165, 0, 0.4) !important;
+      transform: scale(1.06) !important;
+    }}
+
+    .zoom-info {{
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(102, 126, 234, 0.95);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      pointer-events: none;
+    }}
+
+    .scroll-hint {{
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(102, 126, 234, 0.95);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+    }}
+
+    .help-text {{
+      text-align: center;
+      color: white;
+      font-size: 14px;
+      margin-bottom: 20px;
+      opacity: 0.9;
     }}
 
     @media (max-width: 768px) {{
@@ -2215,15 +2722,24 @@ def generate_flowchart_html(title: str, description: str) -> str:
     <p>Interactive Process Flowchart</p>
   </div>
 
+  <p class="help-text">
+    💡 <strong>Ctrl + Mouse Wheel</strong> to zoom &nbsp;|&nbsp; <strong>Mouse Wheel</strong> to scroll &nbsp;|&nbsp; <strong>Click & Drag</strong> to pan
+  </p>
+
   <div class="controls">
     <button class="btn" onclick="resetAnimation()">🔄 Reset Animation</button>
     <button class="btn" onclick="highlightPath()">⚡ Highlight Flow</button>
-    <button class="btn" onclick="window.print()">💾 Export as PDF</button>
+    <button class="btn" onclick="resetView()">↺ Reset View</button>
+    <button class="btn" onclick="exportPNG()">📷 Export PNG</button>
   </div>
 
   <div class="flowchart-container">
-    <div class="flowchart">
-      {html_content}
+    <div class="flowchart-viewport" id="flowchartViewport">
+      <div class="flowchart-inner" id="flowchartInner">
+        <div class="flowchart" id="flowchart">
+          {html_content}
+        </div>
+      </div>
     </div>
 
     <div class="legend">
@@ -2250,38 +2766,237 @@ def generate_flowchart_html(title: str, description: str) -> str:
     </div>
   </div>
 
+  <div class="zoom-info" id="zoomLevel">100%</div>
+  <div class="scroll-hint" id="scrollHint" style="opacity:0;">🖱️ Scroll to navigate</div>
+
   <script>
-    function resetAnimation() {{
-      document.querySelectorAll('.box').forEach(box => box.classList.remove('highlight'));
+    const viewport   = document.getElementById('flowchartViewport');
+    const inner      = document.getElementById('flowchartInner');
+    const flowchart  = document.getElementById('flowchart');
+    const zoomDisplay= document.getElementById('zoomLevel');
+    const scrollHint = document.getElementById('scrollHint');
+
+    let scale      = 1;
+    let translateX = 0;
+    let translateY = 0;
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let initialWidth, initialHeight;
+
+    let scrollHintTimer;
+    function showScrollHint() {{
+      scrollHint.style.opacity = '1';
+      clearTimeout(scrollHintTimer);
+      scrollHintTimer = setTimeout(() => {{ scrollHint.style.opacity = '0'; }}, 2000);
     }}
 
-    function highlightPath() {{
-      resetAnimation();
-      const boxes = document.querySelectorAll('.box');
-      boxes.forEach((box, idx) => {{
-        setTimeout(() => {{
-          box.classList.add('highlight');
-          box.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-        }}, idx * 400);
-      }});
+    function updateTransform() {{
+      flowchart.style.transform = `translate(${{translateX}}px, ${{translateY}}px) scale(${{scale}})`;
+      flowchart.style.transformOrigin = 'center center';
+      zoomDisplay.textContent = Math.round(scale * 100) + '%';
     }}
-
-    document.querySelectorAll('.box').forEach(box => {{
-      box.addEventListener('click', function() {{
-        this.classList.toggle('highlight');
-      }});
-    }});
 
     window.addEventListener('load', () => {{
+      flowchart.style.transform = 'none';
+      const vp = viewport.getBoundingClientRect();
+
+      initialWidth  = 900;
+      initialHeight = flowchart.getBoundingClientRect().height;
+
+      const sx = (vp.width  - 40) / initialWidth;
+      const sy = (vp.height - 40) / initialHeight;
+      scale = Math.min(sx, sy, 1) * 0.9;
+      translateX = 0;
+      translateY = 0;
+      updateTransform();
+
       setTimeout(() => {{
-        const firstBox = document.querySelector('[data-step="1"]');
-        if (firstBox) {{
-          firstBox.classList.add('highlight');
-          setTimeout(() => firstBox.classList.remove('highlight'), 2000);
+        const first = document.querySelector('[data-step="1"]');
+        if (first) {{
+          first.classList.add('highlight-active');
+          setTimeout(() => first.classList.remove('highlight-active'), 2000);
         }}
       }}, 500);
     }});
+
+    viewport.addEventListener('wheel', (e) => {{
+      if (e.ctrlKey) {{
+        e.preventDefault();
+
+        const vpRect = viewport.getBoundingClientRect();
+        const fcRect = flowchart.getBoundingClientRect();
+
+        const mouseX = e.clientX - vpRect.left;
+        const mouseY = e.clientY - vpRect.top;
+
+        const centerX = fcRect.left - vpRect.left + fcRect.width  / 2;
+        const centerY = fcRect.top  - vpRect.top  + fcRect.height / 2;
+
+        const relX = mouseX - centerX;
+        const relY = mouseY - centerY;
+
+        const delta    = e.deltaY > 0 ? 0.9 : 1.1;
+        const oldScale = scale;
+        const newScale = Math.min(Math.max(scale * delta, 0.1), 10);
+
+        const scaleDiff = newScale - oldScale;
+        translateX -= relX * (scaleDiff / oldScale);
+        translateY -= relY * (scaleDiff / oldScale);
+        scale = newScale;
+        updateTransform();
+
+      }} else {{
+        e.preventDefault();
+        const step = 60;
+
+        if (e.shiftKey) {{
+          translateX -= (e.deltaY > 0 ? step : -step);
+        }} else {{
+          translateY -= (e.deltaY > 0 ? step : -step);
+        }}
+        updateTransform();
+        showScrollHint();
+      }}
+    }}, {{ passive: false }});
+
+    viewport.addEventListener('mousedown', (e) => {{
+      if (e.target.closest('.box')) return;
+      isDragging = true;
+      startX = e.clientX - translateX;
+      startY = e.clientY - translateY;
+      viewport.style.cursor = 'grabbing';
+    }});
+
+    document.addEventListener('mousemove', (e) => {{
+      if (!isDragging) return;
+      translateX = e.clientX - startX;
+      translateY = e.clientY - startY;
+      updateTransform();
+    }});
+
+    document.addEventListener('mouseup', () => {{
+      isDragging = false;
+      viewport.style.cursor = 'grab';
+    }});
+
+    viewport.addEventListener('selectstart', (e) => {{
+      if (isDragging) e.preventDefault();
+    }});
+
+    function resetView() {{
+      const vpRect = viewport.getBoundingClientRect();
+      const sx = (vpRect.width  - 40) / initialWidth;
+      const sy = (vpRect.height - 40) / initialHeight;
+      scale = Math.min(sx, sy, 1) * 0.9;
+      translateX = 0;
+      translateY = 0;
+      updateTransform();
+    }}
+
+    function resetAnimation() {{
+      document.querySelectorAll('.box').forEach(box => {{
+        box.classList.remove('highlight', 'highlight-active');
+      }});
+    }}
+
+    let highlightRunning = false;
+    let highlightTimeouts = [];
+
+    function highlightPath() {{
+      highlightTimeouts.forEach(t => clearTimeout(t));
+      highlightTimeouts = [];
+      resetAnimation();
+      highlightRunning = true;
+
+      const boxes = Array.from(document.querySelectorAll('[data-step]'))
+        .sort((a, b) => {{
+          const stepA = parseInt(a.dataset.step);
+          const stepB = parseInt(b.dataset.step);
+          return stepA - stepB;
+        }});
+
+      const DELAY_BETWEEN = 500;
+      const HOLD_DURATION = 400;
+
+      boxes.forEach((box, idx) => {{
+        const t1 = setTimeout(() => {{
+          if (idx > 0) {{
+            boxes[idx - 1].classList.remove('highlight-active');
+          }}
+
+          box.classList.add('highlight');
+          box.classList.add('highlight-active');
+
+          scrollToBox(box);
+
+        }}, idx * DELAY_BETWEEN);
+
+        highlightTimeouts.push(t1);
+      }});
+
+      const totalTime = boxes.length * DELAY_BETWEEN + HOLD_DURATION;
+      const tEnd = setTimeout(() => {{
+        if (boxes.length > 0) {{
+          boxes[boxes.length - 1].classList.remove('highlight-active');
+        }}
+        highlightRunning = false;
+      }}, totalTime);
+      highlightTimeouts.push(tEnd);
+    }}
+
+    function scrollToBox(box) {{
+      const vpRect  = viewport.getBoundingClientRect();
+      const boxRect = box.getBoundingClientRect();
+
+      const boxCenterX = boxRect.left - vpRect.left + boxRect.width  / 2;
+      const boxCenterY = boxRect.top  - vpRect.top  + boxRect.height / 2;
+
+      const diffX = boxCenterX - vpRect.width  / 2;
+      const diffY = boxCenterY - vpRect.height / 2;
+
+      translateX -= diffX;
+      translateY -= diffY;
+      updateTransform();
+    }}
+
+    document.querySelectorAll('.box').forEach(box => {{
+      box.addEventListener('click', function () {{
+        this.classList.toggle('highlight-active');
+      }});
+    }});
+
+    function exportPNG() {{
+      function captureAndDownload() {{
+        html2canvas(viewport, {{
+          scale: 2,
+          backgroundColor: '#ffffff',
+          logging: false,
+          useCORS: true
+        }}).then(canvas => {{
+          canvas.toBlob(function (blob) {{
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = '{title.replace(" ", "_")}_flowchart.png';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+          }});
+        }});
+      }}
+
+      if (typeof html2canvas === 'undefined') {{
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        script.onload = captureAndDownload;
+        document.head.appendChild(script);
+      }} else {{
+        captureAndDownload();
+      }}
+    }}
   </script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </body>
 </html>'''
 
@@ -2397,7 +3112,8 @@ def generate_mermaid_html(diagram_code: str, diagram_type: str) -> str:
         }}
         #diagram-wrapper {{
             overflow: auto;
-            max-height: 80vh;
+            height: 80vh;
+            width: 100%;
             border: 1px solid #e0e0e0;
             border-radius: 8px;
             background: #fafafa;
@@ -2561,10 +3277,13 @@ def generate_mermaid_html(diagram_code: str, diagram_type: str) -> str:
             updateZoom();
         }}
 
-        // Ctrl + Scroll wheel zoom towards cursor
-        document.getElementById('diagram-wrapper').addEventListener('wheel', (e) => {{
+        // Ctrl + Scroll wheel zoom towards cursor, or regular scroll wheel to pan
+        const diagramWrapper = document.getElementById('diagram-wrapper');
+        diagramWrapper.addEventListener('wheel', (e) => {{
             if (e.ctrlKey || e.metaKey) {{
+                // Ctrl/Cmd + Wheel: Zoom
                 e.preventDefault();
+                e.stopPropagation();
 
                 const oldZoom = currentZoom;
 
@@ -2585,6 +3304,8 @@ def generate_mermaid_html(diagram_code: str, diagram_type: str) -> str:
                     updateZoom(e.clientX, e.clientY);
                 }}
             }}
+            // When Ctrl is not pressed, let the default scroll behavior happen
+            // The wrapper has overflow: auto, so it will scroll naturally
         }}, {{ passive: false }});
 
         // Pan/drag functionality
@@ -3549,6 +4270,81 @@ def generate_gauge_dashboard_html(metrics: list, title: str = "System Monitoring
         font-size: 0.875rem;
       }}
 
+      .dashboard-wrapper {{
+        position: relative;
+        width: 100%;
+        min-height: 80vh;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }}
+
+      .dashboard-content {{
+        transform-origin: center center;
+        flex-shrink: 0;
+        position: relative;
+      }}
+
+      .zoom-controls {{
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        padding: 8px;
+        z-index: 1000;
+        display: flex;
+        gap: 4px;
+      }}
+
+      .zoom-controls button {{
+        width: 36px;
+        height: 36px;
+        border: none;
+        background: #f8fafc;
+        color: #1e293b;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+      }}
+
+      .zoom-controls button:hover {{
+        background: #e2e8f0;
+        transform: scale(1.05);
+      }}
+
+      .zoom-controls button:active {{
+        transform: scale(0.95);
+      }}
+
+      .zoom-info-badge {{
+        position: fixed;
+        bottom: 30px;
+        right: 90px;
+        background: white;
+        color: #1e293b;
+        padding: 8px 12px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        font-size: 14px;
+        font-weight: 600;
+        z-index: 1000;
+      }}
+
+      .dashboard-wrapper.panning {{
+        cursor: grab;
+      }}
+
+      .dashboard-wrapper.panning:active {{
+        cursor: grabbing;
+      }}
+
       @media (max-width: 768px) {{
         body {{
           padding: 1rem;
@@ -3565,45 +4361,54 @@ def generate_gauge_dashboard_html(metrics: list, title: str = "System Monitoring
     </style>
   </head>
   <body>
-    <div class="container">
-      <div class="header">
-        <h1>{title}</h1>
-        <p>{subtitle}</p>
-        <div class="alert-banner" id="alertBanner" style="display: none">
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#d97706"
-            stroke-width="2"
-          >
-            <path
-              d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-            />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span class="alert-text" id="alertText"></span>
-        </div>
+    <div class="dashboard-wrapper" id="dashboardWrapper">
+      <div class="zoom-controls">
+        <button onclick="resetDashboardView()" title="Reset View">↺</button>
       </div>
+      <div class="zoom-info-badge" id="zoomInfo">100%</div>
 
-      <div class="dashboard-grid" id="dashboard"></div>
+      <div class="dashboard-content" id="dashboardContent">
+        <div class="container">
+          <div class="header">
+            <h1>{title}</h1>
+            <p>{subtitle}</p>
+            <div class="alert-banner" id="alertBanner" style="display: none">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#d97706"
+                stroke-width="2"
+              >
+                <path
+                  d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              <span class="alert-text" id="alertText"></span>
+            </div>
+          </div>
 
-      <div class="legend">
-        <h2>Threshold Legend</h2>
-        <div class="legend-grid">
-          <div class="legend-item">
-            <div class="legend-color good"></div>
-            <span>Good / Optimal Range</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color warning"></div>
-            <span>Warning Threshold</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color critical"></div>
-            <span>Critical Threshold</span>
+          <div class="dashboard-grid" id="dashboard"></div>
+
+          <div class="legend">
+            <h2>Threshold Legend</h2>
+            <div class="legend-grid">
+              <div class="legend-item">
+                <div class="legend-color good"></div>
+                <span>Good / Optimal Range</span>
+              </div>
+              <div class="legend-item">
+                <div class="legend-color warning"></div>
+                <span>Warning Threshold</span>
+              </div>
+              <div class="legend-item">
+                <div class="legend-color critical"></div>
+                <span>Critical Threshold</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -3739,6 +4544,82 @@ def generate_gauge_dashboard_html(metrics: list, title: str = "System Monitoring
       }}
 
       init();
+
+      // Zoom and Pan functionality
+      const dashboardWrapper = document.getElementById("dashboardWrapper");
+      const dashboardContent = document.getElementById("dashboardContent");
+      const zoomInfo = document.getElementById("zoomInfo");
+
+      let dashboardScale = 1;
+      let dashboardTranslateX = 0;
+      let dashboardTranslateY = 0;
+      let isPanning = false;
+      let panStartX = 0;
+      let panStartY = 0;
+
+      function updateDashboardTransform() {{
+        dashboardContent.style.transform = `translate(${{dashboardTranslateX}}px, ${{dashboardTranslateY}}px) scale(${{dashboardScale}})`;
+        zoomInfo.textContent = Math.round(dashboardScale * 100) + '%';
+      }}
+
+      function resetDashboardView() {{
+        dashboardScale = 1;
+        dashboardTranslateX = 0;
+        dashboardTranslateY = 0;
+        updateDashboardTransform();
+      }}
+
+      // Zoom with Ctrl + Mouse Wheel
+      dashboardWrapper.addEventListener('wheel', (e) => {{
+        if (e.ctrlKey) {{
+          e.preventDefault();
+
+          const wrapperRect = dashboardWrapper.getBoundingClientRect();
+          const mouseX = e.clientX - wrapperRect.left;
+          const mouseY = e.clientY - wrapperRect.top;
+
+          const contentRect = dashboardContent.getBoundingClientRect();
+          const contentCenterX = contentRect.left - wrapperRect.left + contentRect.width / 2;
+          const contentCenterY = contentRect.top - wrapperRect.top + contentRect.height / 2;
+
+          const mouseRelativeX = mouseX - contentCenterX;
+          const mouseRelativeY = mouseY - contentCenterY;
+
+          const delta = e.deltaY > 0 ? 0.9 : 1.1;
+          const oldScale = dashboardScale;
+          const newScale = Math.min(Math.max(dashboardScale * delta, 0.1), 10);
+
+          const scaleDiff = newScale - oldScale;
+          dashboardTranslateX -= mouseRelativeX * (scaleDiff / oldScale);
+          dashboardTranslateY -= mouseRelativeY * (scaleDiff / oldScale);
+
+          dashboardScale = newScale;
+          updateDashboardTransform();
+        }}
+      }}, {{ passive: false }});
+
+      // Pan with Click & Drag
+      dashboardWrapper.addEventListener('mousedown', (e) => {{
+        isPanning = true;
+        panStartX = e.clientX - dashboardTranslateX;
+        panStartY = e.clientY - dashboardTranslateY;
+        dashboardWrapper.classList.add('panning');
+      }});
+
+      document.addEventListener('mousemove', (e) => {{
+        if (isPanning) {{
+          dashboardTranslateX = e.clientX - panStartX;
+          dashboardTranslateY = e.clientY - panStartY;
+          updateDashboardTransform();
+        }}
+      }});
+
+      document.addEventListener('mouseup', () => {{
+        if (isPanning) {{
+          isPanning = false;
+          dashboardWrapper.classList.remove('panning');
+        }}
+      }});
     </script>
   </body>
 </html>"""
