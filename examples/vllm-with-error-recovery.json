@@ -2,6 +2,7 @@
   "mcpServers": {},
   "llmModels": {
     "vllm": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",

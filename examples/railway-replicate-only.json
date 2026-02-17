@@ -1,0 +1,41 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llama-4-maverick": {
+      "type": "replicate",
+      "model": "meta/llama-4-maverick-instruct",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 4096,
+        "top_p": 0.9
+      },
+      "timeout": 300,
+      "max_retries": 3
+    },
+    "flux-image": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "capabilities": ["text-to-image"],
+      "default_params": {
+        "aspect_ratio": "16:9",
+        "output_format": "png"
+      },
+      "timeout": 120,
+      "max_retries": 3
+    },
+    "kling-video": {
+      "type": "replicate",
+      "model": "kwaivgi/kling-v2.6",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "capabilities": ["text-to-video", "image-to-video"],
+      "default_params": {
+        "duration": 5,
+        "aspect_ratio": "16:9"
+      },
+      "timeout": 300,
+      "max_retries": 3
+    }
+  }
+}
