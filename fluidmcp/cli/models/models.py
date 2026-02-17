@@ -28,6 +28,7 @@ class ServerConfigDocument:
     created_by: Optional[str] = None         # User who created config
     created_at: Optional[datetime] = None    # Creation timestamp
     updated_at: Optional[datetime] = None    # Last update timestamp
+    deleted_at: Optional[datetime] = None    # Soft delete timestamp
 
 
 @dataclass
