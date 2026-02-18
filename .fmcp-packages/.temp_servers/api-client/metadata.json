@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "api-client": {
+      "command": "python",
+      "args": [
+        "/workspaces/fluidmcp/examples/api-client-mcp/server.py"
+      ],
+      "env": {}
+    }
+  }
+}
