@@ -79,12 +79,19 @@ class InMemoryBackend(PersistenceBackend):
         logger.warning(f"Server config '{id}' not found in memory")
         return False
 
-    async def save_instance_state(self, state: Dict[str, Any]) -> bool:
+    async def save_instance_state(self, state: Dict[str, Any], expected_pid: Optional[int] = None) -> bool:
         """Save instance state to memory."""
         server_id = state.get("server_id")
         if not server_id:
             logger.error("Cannot save instance state without 'server_id' field")
             return False
+
+        # Optimistic locking: check if PID matches if expected_pid is provided
+        if expected_pid is not None:
+            current_state = self._instances.get(server_id)
+            if current_state and current_state.get("pid") != expected_pid:
+                logger.debug(f"Optimistic lock failed for {server_id}: PID changed from {expected_pid}")
+                return False
 
         # Make a deep copy to avoid mutations
         self._instances[server_id] = dict(state)
