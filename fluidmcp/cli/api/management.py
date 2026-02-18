@@ -565,7 +565,7 @@ async def delete_server(
     user_id: str = Depends(get_current_user)
 ):
     """
-    Delete server configuration (stops server if running).
+    Soft delete server configuration (preserves data, stops server if running).
 
     Authorization: Only admins can delete server configurations.
     Regular users cannot delete servers (they can only stop instances they started).
@@ -575,7 +575,7 @@ async def delete_server(
         user_id: Current user (from token)
 
     Returns:
-        Success message
+        Success message with deletion timestamp
     """
     manager = get_server_manager(request)
 
@@ -585,6 +585,10 @@ async def delete_server(
         config = await manager.db.get_server_config(id)
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
+
+    # Check if server is already deleted
+    if config.get("deleted_at"):
+        raise HTTPException(410, f"Server '{id}' is already deleted")
 
     # Authorization: Only allow in anonymous mode (no authentication) for now
     # This is intentionally restrictive - deletion is a destructive operation.
@@ -599,19 +603,24 @@ async def delete_server(
 
     # Stop server if running
     if id in manager.processes:
-        logger.info(f"Stopping server '{id}' before deletion...")
+        logger.info(f"Stopping server '{id}' before soft deletion...")
         await manager.stop_server(id)
 
-    # Delete from database
-    await manager.db.delete_server_config(id)
+    # Soft delete from database (sets deleted_at + enabled=false)
+    success = await manager.db.soft_delete_server_config(id)
+    if not success:
+        raise HTTPException(500, f"Failed to delete server '{id}'")
 
-    # Delete from in-memory
+    # Remove from in-memory cache
     if id in manager.configs:
         del manager.configs[id]
 
-    logger.info(f"Deleted server configuration: {id}")
+    from datetime import datetime
+    deleted_at = datetime.utcnow().isoformat()
+    logger.info(f"Soft deleted server configuration: {id}")
     return {
-        "message": f"Server '{id}' deleted successfully"
+        "message": f"Server '{id}' deleted successfully",
+        "deleted_at": deleted_at
     }
 
 
@@ -642,6 +651,10 @@ async def start_server(
         config = await manager.db.get_server_config(id)
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
+
+    # Check if server is enabled
+    if not config.get("enabled", True):
+        raise HTTPException(403, f"Cannot start server '{id}': Server is disabled")
 
     # Check if already running
     if id in manager.processes:
