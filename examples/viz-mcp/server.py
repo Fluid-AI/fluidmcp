@@ -340,11 +340,17 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       }}
 
       .shape-element {{
-        cursor: move;
+        cursor: grab;
+        transition: filter 0.2s, transform 0.1s;
       }}
 
       .shape-element:hover {{
-        filter: brightness(1.05);
+        filter: brightness(1.08) drop-shadow(0 2px 8px rgba(76, 110, 245, 0.3));
+        transform: translateY(-1px);
+      }}
+
+      .shape-element:active {{
+        cursor: grabbing;
       }}
 
       .shape-element.selected {{
@@ -394,13 +400,21 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         fill: #4c6ef5;
         stroke: white;
         stroke-width: 2;
-        cursor: pointer;
+        cursor: crosshair;
         transition: all 0.2s;
+        opacity: 0.6;
+      }}
+
+      .shape-element:hover .connection-point {{
+        opacity: 1;
+        animation: pulse 1.5s ease-in-out infinite;
       }}
 
       .connection-point:hover {{
         fill: #364fc7;
         r: 7;
+        opacity: 1;
+        animation: none;
       }}
 
       .connection-anchor {{
@@ -521,20 +535,9 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
       <div class="toolbar">
         <div class="toolbar-section">
-          <span class="toolbar-label">Mode:</span>
-          <button
-            class="tool-btn active"
-            data-mode="select"
-            title="Select and move elements"
-          >
-            <span>👆</span> Select
-          </button>
-        </div>
-
-        <div class="toolbar-section">
           <span class="toolbar-label">Shapes:</span>
           <button
-            class="tool-btn"
+            class="tool-btn active"
             data-mode="rectangle"
             title="Draw rectangle by dragging"
           >
@@ -649,16 +652,16 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       </div>
 
       <div class="controls">
-        <strong>How to use:</strong><br />
-        <strong>Shapes:</strong> Select a shape, then click and drag to draw it | <strong>Text:</strong> Select a shape and click "Edit Text" button, or double-click the shape, or click the ✏️ icon | <strong>Move:</strong> Drag shapes in select mode | <strong>Resize:</strong> Drag corner handles | <strong>Connections:</strong> Click connection mode, then click blue dots on shapes to connect | <strong>Move connections:</strong> Drag the blue dots on connection lines<br/>
-        <strong>🔍 Zoom:</strong> Hold <strong>Ctrl + Mouse Wheel</strong> to zoom in/out | <strong>Pan:</strong> Hold <strong>Space + Drag</strong> to pan around
+        <strong>✨ Intuitive Controls:</strong><br />
+        <strong>🎯 Auto-Drag:</strong> Just hover over any shape and drag to move it (no need to click Select!) | <strong>🔗 Drag-Drop Connect:</strong> Click and DRAG from a blue connection point, then DROP on another blue point to connect | <strong>✏️ Edit Text:</strong> Double-click any shape or click the "Edit Text" button | <strong>📐 Resize:</strong> Drag corner handles when shape is selected | <strong>🎨 New Shapes:</strong> Select a shape tool, then click and drag to draw<br/>
+        <strong>🔍 Zoom:</strong> Hold <strong>Ctrl + Mouse Wheel</strong> to zoom in/out | <strong>📍 Pan:</strong> Hold <strong>Space + Drag</strong> to pan around canvas
       </div>
     </div>
 
     <script>
       let elements = [];
       let connections = [];
-      let currentMode = "select";
+      let currentMode = "rectangle";  // Default to rectangle mode
       let selectedElement = null;
       let draggedElement = null;
       let isDrawing = false;
@@ -743,7 +746,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       }});
 
       diagramContainer.addEventListener('mousedown', (e) => {{
-        if (spaceKeyPressed && currentMode === 'select') {{
+        if (spaceKeyPressed) {{
           isPanning = true;
           panStartX = e.clientX - diagramTranslateX;
           panStartY = e.clientY - diagramTranslateY;
@@ -775,9 +778,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           currentMode = btn.getAttribute("data-mode");
 
           const container = document.getElementById("diagramContainer");
-          if (currentMode === "select") {{
-            container.classList.remove("crosshair");
-          }} else if (currentMode === "connection") {{
+          if (currentMode === "connection") {{
             container.classList.remove("crosshair");
           }} else {{
             container.classList.add("crosshair");
@@ -871,55 +872,53 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           return;
         }}
 
+        // DRAG-DROP CONNECT: Drag from connection point and drop on another
         if (target.classList.contains("shape-connection-point")) {{
           const elementId = target.dataset.elementId;
           const pointPosition = target.dataset.position;
           const element = elements.find((e) => e.id === elementId);
 
-          if (currentMode === "connection" && element) {{
-            if (!connectionStart) {{
-              connectionStart = element;
-              connectionStartPoint = pointPosition;
-              e.stopPropagation();
-            }} else if (connectionStart.id !== element.id) {{
-              createConnection(connectionStart.id, connectionStartPoint, element.id, pointPosition);
-              connectionStart = null;
-              connectionStartPoint = null;
-              tempConnectionLine = null;
-              renderTempConnection();
-              render();
-              e.stopPropagation();
-            }}
+          if (element) {{
+            // Start dragging connection line
+            connectionStart = element;
+            connectionStartPoint = pointPosition;
+            e.stopPropagation();
           }}
           return;
         }}
 
         if (editingElement) return;
 
-        if (currentMode !== "select" && currentMode !== "connection") {{
-          isDrawing = true;
-          drawStart = coords;
+        // Don't start dragging element if we're starting a connection
+        if (connectionStart && connectionStartPoint) {{
           return;
         }}
 
+        // AUTO-DRAG: Click on element allows dragging regardless of current mode
         const clickedElement = elements.find((el) => isPointInElement(coords, el));
         if (clickedElement) {{
-          if (currentMode === "select") {{
-            selectedElement = clickedElement;
-            draggedElement = clickedElement;
-            draggedElement.dragOffset = {{ x: coords.x - clickedElement.x, y: coords.y - clickedElement.y }};
-            document.getElementById("editTextBtn").style.display = "flex";
-            render();
-          }}
+          selectedElement = clickedElement;
+          draggedElement = clickedElement;
+          draggedElement.dragOffset = {{ x: coords.x - clickedElement.x, y: coords.y - clickedElement.y }};
+          document.getElementById("editTextBtn").style.display = "flex";
+          render();
           return;
         }}
 
+        // Allow selecting connections
         const clickedConnection = connections.find((c) => isPointNearLine(coords, c));
         if (clickedConnection) {{
           selectedElement = clickedConnection;
           selectedElement.type = "connection";
           document.getElementById("editTextBtn").style.display = "none";
           render();
+          return;
+        }}
+
+        // Draw new shapes if in a shape mode (not connection mode) and clicked on empty space
+        if (currentMode !== "connection") {{
+          isDrawing = true;
+          drawStart = coords;
           return;
         }}
 
@@ -950,7 +949,8 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         const coords = getSvgCoords(e);
         if (editingElement) return;
 
-        if (currentMode === "connection" && connectionStart && connectionStartPoint) {{
+        // AUTO-CONNECT: Show temp connection line when dragging from connection point (regardless of mode)
+        if (connectionStart && connectionStartPoint) {{
           const startCoords = getConnectionPointCoords(connectionStart, connectionStartPoint);
           tempConnectionLine = {{ x1: startCoords.x, y1: startCoords.y, x2: coords.x, y2: coords.y }};
           renderTempConnection();
@@ -1027,7 +1027,8 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           return;
         }}
 
-        if (draggedElement && currentMode === "select") {{
+        // AUTO-DRAG: Allow dragging element regardless of current mode
+        if (draggedElement) {{
           draggedElement.x = coords.x - draggedElement.dragOffset.x;
           draggedElement.y = coords.y - draggedElement.dragOffset.y;
           render();
@@ -1037,6 +1038,35 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
       function handleMouseUp(e) {{
         if (resizingHandle) {{ resizingHandle = null; return; }}
+
+        // DRAG-DROP CONNECT: Complete connection when dropping on connection point
+        const target = e.target;
+        if (connectionStart && connectionStartPoint && target.classList.contains("shape-connection-point")) {{
+          const elementId = target.dataset.elementId;
+          const pointPosition = target.dataset.position;
+          const element = elements.find((e) => e.id === elementId);
+
+          if (element && connectionStart.id !== element.id) {{
+            // Create connection on drop
+            createConnection(connectionStart.id, connectionStartPoint, element.id, pointPosition);
+          }}
+
+          // Clear connection state
+          connectionStart = null;
+          connectionStartPoint = null;
+          tempConnectionLine = null;
+          renderTempConnection();
+          render();
+          return;
+        }}
+
+        // Clear connection if dropped elsewhere
+        if (connectionStart) {{
+          connectionStart = null;
+          connectionStartPoint = null;
+          tempConnectionLine = null;
+          renderTempConnection();
+        }}
 
         if (draggedConnectionPoint) {{
           const coords = getSvgCoords(e);
