@@ -41,6 +41,10 @@ dist/
 build/
 *.tar.gz
 !fluidmcp/frontend/dist/
+# Build artifacts
+dist/
+build/
+*.tar.gz
 
 # Examples & Docs
 examples/

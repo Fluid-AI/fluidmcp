@@ -1,78 +1,48 @@
 FROM python:3.10-slim
 
-ARG NODE_VERSION=20
-ARG NPM_VERSION=11.4.0
-
+# Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies (git for GitHub repos, curl for Node.js)
+# Install git, curl (for Node.js install), and other necessary tools
 RUN apt-get update && apt-get install -y \
     git \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20 and npm 11 (intentional pairing from current Dockerfile)
-# Node 20 is LTS, npm 11 provides improved performance and security fixes
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+# Install Node.js 20 and npm 11
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
-    && npm install -g npm@${NPM_VERSION} \
-    && npm cache clean --force
+    && npm install -g npm@11.4.0
 
-# NOTE: Removed ajv, supergateway, yargs global installs
-# These are only needed for legacy run-mode (supergateway is FastAPI proxy wrapper)
-# fmcp serve uses native FastAPI - no external proxy needed
-# npx will fetch packages on-demand when MCP servers are started
 
-# Install Python dependencies (includes motor/pymongo for MongoDB)
+# Clean npm cache
+RUN npm cache clean --force    
+
+# Install ajv for NPX 
+RUN npm install -g ajv supergateway@2.8.3 yargs   
+
+# Log npm and npx versions for verification
+RUN echo "npm version: $(npm -v)" && echo "npx version: $(npx --version)"
+
+# Verify installation
+RUN node -v && npm -v && npx --version
+
+# Copy the requirements file into the container at /app
 COPY requirements.txt ./
+
+# Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the current directory contents into the container at /app
 COPY . .
 
-# Install FluidMCP in production mode (NOT editable)
-# Production containers don't need -e (editable mode is for development)
-RUN pip install --no-cache-dir .
+# Install the package in editable mode
+RUN pip install -e .
 
-# Build frontend (React + Vite)
-# Frontend is served by FastAPI backend at /ui path
-WORKDIR /app/fluidmcp/frontend
-RUN npm install && npm run build
 
-# Return to app root
-WORKDIR /app
+# Add entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-# Create token directory with secure permissions
-# NOTE: For Railway production, set FMCP_BEARER_TOKEN env var instead
-# Relying on auto-generated token causes regeneration on every container restart
-RUN mkdir -p /app/.fmcp/tokens && chmod 700 /app/.fmcp
-
-# Environment defaults
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    HOME=/app \
-    FMCP_HOME=/app/.fmcp \
-    PORT=8099
-
-# Health check for Railway monitoring
-# Start period: 40s (allows MongoDB connection retry: 2s + 4s + 8s + startup time)
-# CRITICAL: Use ${PORT} env var, not hardcoded 8099 (Railway assigns PORT dynamically)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
-
-# Expose port (informational only - Railway binds to $PORT env var)
-# Docker EXPOSE does not resolve env vars at build time
-EXPOSE 8099
-
-# Production command with secure mode
-# ⚠️  CRITICAL: Set FMCP_BEARER_TOKEN in Railway dashboard to prevent token regeneration
-# ⚠️  CRITICAL: Set MONGODB_URI in Railway (provided by MongoDB service)
-# --require-persistence: Fail fast if MongoDB unavailable (no silent in-memory fallback)
-CMD fmcp serve \
-    --host 0.0.0.0 \
-    --port ${PORT} \
-    --secure \
-    --mongodb-uri ${MONGODB_URI} \
-    --database ${FMCP_DATABASE:-fluidmcp} \
-    --require-persistence
+# Default command to run the entrypoint script
+CMD ["/app/entrypoint.sh"]
