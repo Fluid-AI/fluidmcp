@@ -418,15 +418,18 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       }}
 
       .connection-anchor {{
-        fill: #4c6ef5;
-        stroke: white;
-        stroke-width: 2;
-        cursor: move;
+        cursor: grab;
+        pointer-events: all;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
       }}
 
       .connection-anchor:hover {{
-        fill: #ff6b6b;
-        transform: scale(1.2);
+        filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.5));
+        cursor: grab;
+      }}
+
+      .connection-anchor:active {{
+        cursor: grabbing;
       }}
 
       .controls {{
@@ -648,12 +651,13 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           <g id="tempConnectionGroup"></g>
           <g id="connectionsGroup"></g>
           <g id="shapesGroup"></g>
+          <g id="anchorsGroup"></g>
         </svg>
       </div>
 
       <div class="controls">
         <strong>✨ Intuitive Controls:</strong><br />
-        <strong>🎯 Auto-Drag:</strong> Just hover over any shape and drag to move it (no need to click Select!) | <strong>🔗 Drag-Drop Connect:</strong> Click and DRAG from a blue connection point, then DROP on another blue point to connect | <strong>✏️ Edit Text:</strong> Double-click any shape or click the "Edit Text" button | <strong>📐 Resize:</strong> Drag corner handles when shape is selected | <strong>🎨 New Shapes:</strong> Select a shape tool, then click and drag to draw<br/>
+        <strong>🎯 Auto-Drag:</strong> Just hover over any shape and drag to move it (no need to click Select!) | <strong>🔗 Drag-Drop Connect:</strong> Click and DRAG from a blue connection point, then DROP on another blue point to connect | <strong>🔄 Reconnect:</strong> CLICK on any connection line to select it, then drag the ARROWHEAD itself (the arrow tip) to reconnect to a different shape | <strong>✏️ Edit Text:</strong> Double-click any shape or click the "Edit Text" button | <strong>📐 Resize:</strong> Drag corner handles when shape is selected | <strong>🎨 New Shapes:</strong> Select a shape tool, then click and drag to draw<br/>
         <strong>🔍 Zoom:</strong> Hold <strong>Ctrl + Mouse Wheel</strong> to zoom in/out | <strong>📍 Pan:</strong> Hold <strong>Space + Drag</strong> to pan around canvas
       </div>
     </div>
@@ -868,7 +872,31 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         }}
 
         if (target.classList.contains("connection-anchor")) {{
-          draggedConnectionPoint = {{ connection: connections.find((c) => c.id === target.dataset.connectionId), point: target.dataset.point }};
+          const conn = connections.find((c) => c.id === target.dataset.connectionId);
+          const point = target.dataset.point;
+
+          // Store original connection data for restoration if needed
+          draggedConnectionPoint = {{
+            connection: conn,
+            point: point,
+            dragHandle: target,  // Store reference to drag handle
+            originalData: {{
+              fromId: conn.fromId,
+              fromPoint: conn.fromPoint,
+              toId: conn.toId,
+              toPoint: conn.toPoint,
+              startX: conn.startX,
+              startY: conn.startY,
+              endX: conn.endX,
+              endY: conn.endY
+            }}
+          }};
+
+          // Disable pointer-events on drag handle so it doesn't block drop detection
+          target.style.pointerEvents = "none";
+          console.log("🎯 Started dragging connection anchor");
+
+          e.stopPropagation();
           return;
         }}
 
@@ -1070,12 +1098,19 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
         if (draggedConnectionPoint) {{
           const coords = getSvgCoords(e);
-          const target = e.target;
-          if (target.classList.contains("shape-connection-point")) {{
-            const elementId = target.dataset.elementId;
-            const pointPosition = target.dataset.position;
-            const conn = draggedConnectionPoint.connection;
+          const conn = draggedConnectionPoint.connection;
+          let reconnected = false;
+
+          // Use elementFromPoint to find what's UNDER the mouse cursor (not the drag handle itself)
+          const elementUnderCursor = document.elementFromPoint(e.clientX, e.clientY);
+          console.log("🎯 DROP on:", elementUnderCursor?.classList, elementUnderCursor?.dataset);
+
+          // Check if dropped on a valid connection point
+          if (elementUnderCursor && elementUnderCursor.classList.contains("shape-connection-point")) {{
+            const elementId = elementUnderCursor.dataset.elementId;
+            const pointPosition = elementUnderCursor.dataset.position;
             const element = elements.find((el) => el.id === elementId);
+            console.log("✅ Found connection point:", elementId, pointPosition);
             if (element) {{
               const pointCoords = getConnectionPointCoords(element, pointPosition);
               if (draggedConnectionPoint.point === "start") {{
@@ -1089,8 +1124,32 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
                 conn.endX = pointCoords.x;
                 conn.endY = pointCoords.y;
               }}
+              reconnected = true;
+              console.log("🎉 RECONNECTED!");
             }}
+          }} else {{
+            console.log("❌ Not dropped on connection point");
           }}
+
+          // If not reconnected to a valid point, restore original connection
+          if (!reconnected) {{
+            console.log("🔄 RESTORING original connection");
+            const orig = draggedConnectionPoint.originalData;
+            conn.fromId = orig.fromId;
+            conn.fromPoint = orig.fromPoint;
+            conn.toId = orig.toId;
+            conn.toPoint = orig.toPoint;
+            conn.startX = orig.startX;
+            conn.startY = orig.startY;
+            conn.endX = orig.endX;
+            conn.endY = orig.endY;
+          }}
+
+          // Re-enable pointer-events on drag handle (will be recreated in render)
+          if (draggedConnectionPoint.dragHandle) {{
+            draggedConnectionPoint.dragHandle.style.pointerEvents = "all";
+          }}
+
           draggedConnectionPoint = null;
           render();
           return;
@@ -1207,8 +1266,10 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       function render() {{
         const shapesGroup = document.getElementById("shapesGroup");
         const connectionsGroup = document.getElementById("connectionsGroup");
+        const anchorsGroup = document.getElementById("anchorsGroup");
         shapesGroup.innerHTML = "";
         connectionsGroup.innerHTML = "";
+        anchorsGroup.innerHTML = "";  // Clear anchors too
 
         connections.forEach((conn) => {{
           if (conn.fromId && conn.fromPoint) {{
@@ -1228,6 +1289,31 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
             }}
           }}
 
+          // Create wider invisible hit area for easier clicking
+          const hitArea = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          hitArea.setAttribute("x1", conn.startX);
+          hitArea.setAttribute("y1", conn.startY);
+          hitArea.setAttribute("x2", conn.endX);
+          hitArea.setAttribute("y2", conn.endY);
+          hitArea.setAttribute("stroke", "transparent");
+          hitArea.setAttribute("stroke-width", "20");
+          hitArea.style.cursor = "pointer";
+          hitArea.dataset.connectionId = conn.id;
+          hitArea.classList.add("connection-hit-area");
+
+          // CLICK to select connection (not hover!)
+          hitArea.addEventListener("click", (e) => {{
+            console.log("✅ CLICK SELECT:", conn.id, "from", conn.fromId, "to", conn.toId);
+            selectedElement = conn;
+            selectedElement.type = "connection";
+            document.getElementById("editTextBtn").style.display = "none";
+            e.stopPropagation();
+            render();
+          }});
+
+          connectionsGroup.appendChild(hitArea);
+
+          // Create visible connection line
           const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
           line.setAttribute("x1", conn.startX);
           line.setAttribute("y1", conn.startY);
@@ -1236,37 +1322,29 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           line.setAttribute("stroke", conn.color);
           line.setAttribute("marker-end", "url(#arrowhead)");
           line.classList.add("connection-line");
+          line.style.pointerEvents = "none";  // Let hit area handle events
           if (conn.style === "dashed") line.setAttribute("stroke-dasharray", "5,5");
           else if (conn.style === "dotted") line.setAttribute("stroke-dasharray", "2,3");
           if (selectedElement && selectedElement.id === conn.id) line.classList.add("selected");
+
           connectionsGroup.appendChild(line);
 
-          const anchorsGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
-          const startAnchor = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          startAnchor.setAttribute("cx", conn.startX);
-          startAnchor.setAttribute("cy", conn.startY);
-          startAnchor.setAttribute("r", 6);
-          startAnchor.classList.add("connection-anchor");
-          startAnchor.dataset.connectionId = conn.id;
-          startAnchor.dataset.point = "start";
-          anchorsGroup.appendChild(startAnchor);
-
-          const endAnchor = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          endAnchor.setAttribute("cx", conn.endX);
-          endAnchor.setAttribute("cy", conn.endY);
-          endAnchor.setAttribute("r", 6);
-          endAnchor.classList.add("connection-anchor");
-          endAnchor.dataset.connectionId = conn.id;
-          endAnchor.dataset.point = "end";
-          anchorsGroup.appendChild(endAnchor);
-          connectionsGroup.appendChild(anchorsGroup);
+          // Store anchor data for later rendering (after shapes, so anchors appear on top)
+          if (selectedElement && selectedElement.id === conn.id) {{
+            conn._showAnchors = true;
+          }} else {{
+            conn._showAnchors = false;
+          }}
         }});
 
         const allElements = tempShape ? [...elements, tempShape] : elements;
         allElements.forEach((element) => {{
           const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
           group.classList.add("shape-element");
-          if (currentMode === "connection") group.classList.add("connection-mode");
+          // Show connection points when: in connection mode, creating new connection, OR reconnecting existing connection
+          if (currentMode === "connection" || connectionStart || draggedConnectionPoint) {{
+            group.classList.add("connection-mode");
+          }}
           if (selectedElement && selectedElement.id === element.id) group.classList.add("selected");
           if (element.isTemp) group.classList.add("temp-shape");
 
@@ -1406,6 +1484,53 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           }}
 
           shapesGroup.appendChild(group);
+        }});
+
+        // Render anchors AFTER shapes so they appear on top and are always clickable
+        // BUT if currently dragging, hide them so they don't block connection points
+        connections.forEach((conn) => {{
+          if (conn._showAnchors && !draggedConnectionPoint) {{
+            // BLUE start anchor
+            const startAnchor = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            startAnchor.setAttribute("cx", conn.startX);
+            startAnchor.setAttribute("cy", conn.startY);
+            startAnchor.setAttribute("r", 12);
+            startAnchor.classList.add("connection-anchor");
+            startAnchor.dataset.connectionId = conn.id;
+            startAnchor.dataset.point = "start";
+            startAnchor.setAttribute("fill", "#4c6ef5");
+            startAnchor.setAttribute("stroke", "white");
+            startAnchor.setAttribute("stroke-width", "3");
+            startAnchor.style.pointerEvents = "all";
+            startAnchor.style.cursor = "grab";
+            anchorsGroup.appendChild(startAnchor);
+
+            // Create INVISIBLE drag area over the actual arrowhead
+            const dx = conn.endX - conn.startX;
+            const dy = conn.endY - conn.startY;
+            const length = Math.sqrt(dx * dx + dy * dy);
+
+            // Position drag handle right at the arrowhead location
+            const offset = 8;  // Position at the actual arrowhead
+            const arrowHeadX = conn.endX - (dx / length) * offset;
+            const arrowHeadY = conn.endY - (dy / length) * offset;
+
+            // Create COMPLETELY INVISIBLE circle over the arrowhead for easy dragging
+            // This makes it feel like you're dragging the actual arrowhead
+            const endDragHandle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            endDragHandle.setAttribute("cx", arrowHeadX);
+            endDragHandle.setAttribute("cy", arrowHeadY);
+            endDragHandle.setAttribute("r", 25);  // Large invisible hit area over arrowhead
+            endDragHandle.classList.add("connection-anchor");
+            endDragHandle.dataset.connectionId = conn.id;
+            endDragHandle.dataset.point = "end";
+            endDragHandle.setAttribute("fill", "transparent");  // COMPLETELY INVISIBLE
+            endDragHandle.setAttribute("stroke", "none");  // No stroke - totally invisible
+            endDragHandle.style.pointerEvents = "all";
+            endDragHandle.style.cursor = "grab";
+
+            anchorsGroup.appendChild(endDragHandle);
+          }}
         }});
       }}
 
