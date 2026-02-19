@@ -30,17 +30,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Install FluidMCP in production mode (NOT editable)
-# Production containers don't need -e (editable mode is for development)
-RUN pip install --no-cache-dir .
-
 # Build frontend (React + Vite)
-# Frontend is served by FastAPI backend at /ui path
 WORKDIR /app/fluidmcp/frontend
 RUN npm install && npm run build
 
 # Return to app root
 WORKDIR /app
+
+# Install FluidMCP in production mode (NOT editable)
+# Production containers don't need -e (editable mode is for development)
+RUN pip install --no-cache-dir .
 
 # Create token directory with secure permissions
 # NOTE: For Railway production, set FMCP_BEARER_TOKEN env var instead
