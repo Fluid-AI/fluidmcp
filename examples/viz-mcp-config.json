@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "viz-mcp": {
+      "command": "python3",
+      "args": [
+        "/workspaces/fluidmcp/examples/viz-mcp/server.py"
+      ],
+      "env": {}
+    }
+  }
+}
