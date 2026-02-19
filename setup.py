@@ -21,6 +21,9 @@ setup(
     packages=['fluidmcp', 'fluidmcp.services', 'fluidmcp.models', 'fluidmcp.utils', 'fluidmcp.api', 'fluidmcp.repositories'],
     package_dir={'fluidmcp': 'fluidmcp/cli'},
     include_package_data=True,
+    package_data={
+        'fluidmcp': ['frontend/dist/**/*'],
+    },
     install_requires=[
         "requests",
         "loguru",
