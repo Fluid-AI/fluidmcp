@@ -40,6 +40,38 @@ A comprehensive web UI for managing and interacting with any MCP-compatible serv
 - **Error Handling** - Comprehensive error boundaries and user-friendly error messages
 - **Tool History** - Track recent tool executions for quick re-runs
 
+### Server Management Page
+
+A dedicated interface for CRUD operations on MCP server configurations:
+
+**Access:** Navigate to "Manage" in the navigation bar or visit `/servers/manage`
+
+**Features:**
+- **Add Servers** - Create new server configurations with validation
+  - Server ID (immutable, lowercase alphanumeric + hyphens)
+  - Display name and description
+  - Command and arguments
+  - Environment variables (KEY=value format)
+  - Enabled/disabled toggle
+- **Edit Servers** - Modify existing configurations (blocked while server is running)
+- **Delete Servers** - Two-step delete flow:
+  - **Disable**: Sets `enabled=false`, hides from Dashboard (reversible)
+  - **Delete**: Soft delete with recovery option for administrators
+- **Search & Filter** - Find servers by name/ID, filter by status (all/running/stopped/failed)
+- **Pagination** - Browse configurations 10 per page
+- **Show Deleted** - Toggle to view soft-deleted servers (admin recovery)
+
+**Lifecycle States:**
+- **Enabled** - Visible on Dashboard, can be started/stopped
+- **Disabled** - Hidden from Dashboard, shown in Manage page, cannot be started
+- **Deleted** - Soft-deleted, hidden from both Dashboard and Manage (admin recovery only)
+
+**Validation & Safety:**
+- Cannot edit servers while they're running
+- Cannot start disabled servers
+- Server ID is immutable after creation
+- Deleting a running server automatically stops it first
+
 **User Flow:**
 1. User opens the dashboard at `/ui`
 2. Browses available MCP servers (filesystem, memory, Airbnb, etc.)
@@ -64,6 +96,7 @@ frontend/
 │   ├── pages/
 │   │   ├── Dashboard.tsx         # Main server list view
 │   │   ├── ServerDetails.tsx     # Server detail page with tools list
+│   │   ├── ManageServers.tsx     # Server configuration management (CRUD)
 │   │   └── ToolRunner.tsx        # Tool execution interface
 │   ├── components/
 │   │   ├── form/                 # JSON Schema form components
@@ -75,18 +108,23 @@ frontend/
 │   │   │   ├── ToolResult.tsx          # Main result container
 │   │   │   ├── JsonResultView.tsx      # JSON pretty-print view
 │   │   │   ├── McpContentView.tsx      # MCP content renderer
+│   │   ├── Navbar.tsx            # Reusable navigation bar
 │   │   ├── ServerCard.tsx        # Server list item component
+│   │   ├── ServerForm.tsx        # Server configuration form (create/edit)
 │   │   ├── ServerEnvForm.tsx     # Environment variable editor
+│   │   ├── DeleteConfirmationModal.tsx # Two-step delete flow
 │   │   ├── ErrorBoundary.tsx     # Error boundary wrapper
 │   │   ├── ErrorMessage.tsx      # Error display component
 │   │   └── LoadingSpinner.tsx    # Loading indicator
 │   ├── hooks/
 │   │   ├── useServers.ts         # Server list data hook
 │   │   ├── useServerDetails.ts   # Server detail data hook
+│   │   ├── useServerManagement.ts # Server CRUD operations hook
 │   │   ├── useServerEnv.ts       # Environment management hook
 │   │   └── useToolRunner.ts      # Tool execution hook
 │   ├── services/
 │   │   ├── api.ts                # API client for backend
+│   │   ├── toast.ts              # Toast notification service
 │   │   └── toolHistory.ts        # Tool execution history
 │   ├── types/
 │   │   └── server.ts             # TypeScript type definitions
@@ -224,6 +262,12 @@ VITE_API_BASE_URL=http://localhost:8099
 - ✅ **Multiple result viewers** - JSON, Table, Text, and MCP Content formats
 - ✅ **Environment management** - Server-level and instance-level configuration
 - ✅ **Single-port deployment** - Frontend served from backend at `/ui`
+- ✅ **Server Management Page** - Full CRUD operations for server configurations
+  - Create/edit/delete servers with validation
+  - Two-step delete flow (disable vs soft delete)
+  - Search, filter, and pagination
+  - Show deleted servers toggle for admin recovery
+  - Runtime safety (cannot edit running servers)
 
 ### Planned Improvements
 - **Real-time updates** - WebSocket support for server status and logs
