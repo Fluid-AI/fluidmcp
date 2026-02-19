@@ -669,6 +669,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       let selectedElement = null;
       let draggedElement = null;
       let isDrawing = false;
+      let mouseDownForDrawing = false;  // Track if mouse is down for drawing
       let drawStart = {{ x: 0, y: 0 }};
       let tempShape = null;
       let connectionStart = null;
@@ -944,8 +945,9 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         }}
 
         // Draw new shapes if in a shape mode (not connection mode) and clicked on empty space
+        // Don't start drawing immediately - wait for mouse to actually move (drag)
         if (currentMode !== "connection") {{
-          isDrawing = true;
+          mouseDownForDrawing = true;
           drawStart = coords;
           return;
         }}
@@ -1026,6 +1028,12 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           }}
           render();
           return;
+        }}
+
+        // Start drawing only if mouse moved while button is down
+        if (mouseDownForDrawing && !isDrawing) {{
+          // Mouse moved after mousedown - now actually start drawing
+          isDrawing = true;
         }}
 
         if (isDrawing) {{
@@ -1165,10 +1173,13 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           }}
           tempShape = null;
           isDrawing = false;
+          mouseDownForDrawing = false;  // Reset flag
           render();
           return;
         }}
 
+        // Clear flags on mouseup
+        mouseDownForDrawing = false;
         draggedElement = null;
       }}
 
