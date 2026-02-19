@@ -944,6 +944,9 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           return;
         }}
 
+        // Clicked on empty space - clear selection
+        clearSelection();
+
         // Draw new shapes if in a shape mode (not connection mode) and clicked on empty space
         // Don't start drawing immediately - wait for mouse to actually move (drag)
         if (currentMode !== "connection") {{
@@ -951,8 +954,6 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           drawStart = coords;
           return;
         }}
-
-        clearSelection();
       }}
 
       function handleDoubleClick(e) {{
