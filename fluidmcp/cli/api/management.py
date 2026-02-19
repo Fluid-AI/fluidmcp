@@ -436,15 +436,19 @@ async def add_server(
 
 
 @router.get("/servers")
-async def list_servers(request: Request):
+async def list_servers(request: Request, enabled_only: bool = True, include_deleted: bool = False):
     """
     List all configured servers with their status.
+
+    Args:
+        enabled_only: If True (default), only return enabled servers. If False, return all including disabled.
+        include_deleted: If True, include soft-deleted servers (for admin recovery). Default: False.
 
     Returns:
         List of servers with config and status
     """
     manager = get_server_manager(request)
-    servers = await manager.list_servers()
+    servers = await manager.list_servers(enabled_only=enabled_only, include_deleted=include_deleted)
 
     return {
         "servers": servers,
@@ -590,16 +594,16 @@ async def delete_server(
     if config.get("deleted_at"):
         raise HTTPException(410, f"Server '{id}' is already deleted")
 
-    # Authorization: Only allow in anonymous mode (no authentication) for now
-    # This is intentionally restrictive - deletion is a destructive operation.
+    # Authorization: Temporarily allow all users to delete servers
     # TODO: Implement proper role-based access control (RBAC) with admin roles
-    # when JWT authentication with role claims is added. Current token-based
-    # auth (user_id = first 8 chars of token) is too weak for delete permissions.
-    if user_id != "anonymous":
-        raise HTTPException(
-            403,
-            "Server deletion requires administrator privileges"
-        )
+    # when JWT authentication with role claims is added. For now, we allow
+    # everyone to delete as requested (will add proper user/admin roles later).
+    # Uncomment the check below when RBAC is ready:
+    # if user_id != "admin":
+    #     raise HTTPException(
+    #         403,
+    #         "Server deletion requires administrator privileges"
+    #     )
 
     # Stop server if running
     if id in manager.processes:

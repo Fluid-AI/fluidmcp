@@ -441,12 +441,13 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error retrieving server config: {e}")
             return None
 
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
             enabled_only: If True, only return enabled servers
+            include_deleted: If True, include soft-deleted servers (for admin recovery)
 
         Returns:
             List of server config dicts in flat format (for backend compatibility)
@@ -455,8 +456,9 @@ class DatabaseManager(PersistenceBackend):
             # Build query filter
             query = {}
 
-            # ALWAYS exclude soft-deleted servers
-            query["deleted_at"] = {"$exists": False}
+            # Exclude soft-deleted servers unless explicitly requested
+            if not include_deleted:
+                query["deleted_at"] = {"$exists": False}
 
             # Additionally filter by enabled status if requested
             if enabled_only:
