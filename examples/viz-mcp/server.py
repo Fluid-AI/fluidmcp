@@ -632,6 +632,8 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
       <div class="diagram-container" id="diagramContainer">
         <div class="zoom-controls">
+          <button class="tool-btn" id="undoBtn" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↶</button>
+          <button class="tool-btn" id="redoBtn" onclick="redo()" title="Redo (Ctrl+Y)" disabled>↷</button>
           <button class="tool-btn" onclick="resetDiagramView()" title="Reset View">↺</button>
         </div>
         <div class="zoom-info-badge" id="zoomInfo">100%</div>
@@ -679,6 +681,11 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       let draggedConnectionPoint = null;
       let editingElement = null;
       let nextId = 1;
+
+      // Undo/Redo history
+      let history = [];
+      let historyIndex = -1;
+      let isUndoRedoAction = false;  // Flag to prevent saving state during undo/redo
 
       const svg = document.getElementById("diagram");
       const diagramContainer = document.getElementById("diagramContainer");
@@ -736,6 +743,15 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
       // Pan with Space + Drag
       document.addEventListener('keydown', (e) => {{
+        // Undo/Redo shortcuts
+        if (e.ctrlKey && e.key === 'z' && !editingElement) {{
+          e.preventDefault();
+          undo();
+        }}
+        if (e.ctrlKey && e.key === 'y' && !editingElement) {{
+          e.preventDefault();
+          redo();
+        }}
         if (e.code === 'Space' && !isPanning) {{
           spaceKeyPressed = true;
           diagramContainer.classList.add('panning');
@@ -813,6 +829,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           }}
           selectedElement = null;
           document.getElementById("editTextBtn").style.display = "none";
+          saveState();  // Save after deleting
           render();
         }}
       }});
@@ -823,6 +840,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           connections = [];
           selectedElement = null;
           document.getElementById("editTextBtn").style.display = "none";
+          saveState();  // Save after clearing
           render();
         }}
       }});
@@ -1074,7 +1092,11 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       }}
 
       function handleMouseUp(e) {{
-        if (resizingHandle) {{ resizingHandle = null; return; }}
+        if (resizingHandle) {{
+          saveState();  // Save after resizing
+          resizingHandle = null;
+          return;
+        }}
 
         // DRAG-DROP CONNECT: Complete connection when dropping on connection point
         const target = e.target;
@@ -1134,6 +1156,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
                 conn.endY = pointCoords.y;
               }}
               reconnected = true;
+              saveState();  // Save after reconnecting
               console.log("🎉 RECONNECTED!");
             }}
           }} else {{
@@ -1171,6 +1194,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
             elements.push(tempShape);
             selectedElement = tempShape;
             document.getElementById("editTextBtn").style.display = "flex";
+            saveState();  // Save after creating shape
           }}
           tempShape = null;
           isDrawing = false;
@@ -1180,6 +1204,9 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         }}
 
         // Clear flags on mouseup
+        if (draggedElement) {{
+          saveState();  // Save after dragging
+        }}
         mouseDownForDrawing = false;
         draggedElement = null;
       }}
@@ -1209,6 +1236,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           color: document.getElementById("strokeColor").value,
           style: document.getElementById("lineStyle").value
         }});
+        saveState();  // Save after creating connection
       }}
 
       function isPointInElement(point, element) {{
@@ -1258,6 +1286,74 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         selectedElement = null;
         document.getElementById("editTextBtn").style.display = "none";
         render();
+      }}
+
+      function saveState() {{
+        if (isUndoRedoAction) return;  // Don't save during undo/redo
+
+        // Create deep copy of current state
+        const state = {{
+          elements: JSON.parse(JSON.stringify(elements)),
+          connections: JSON.parse(JSON.stringify(connections)),
+          nextId: nextId
+        }};
+
+        // Remove any history after current index (for redo)
+        history = history.slice(0, historyIndex + 1);
+
+        // Add new state
+        history.push(state);
+        historyIndex++;
+
+        // Limit history size to 50 states
+        if (history.length > 50) {{
+          history.shift();
+          historyIndex--;
+        }}
+
+        updateUndoRedoButtons();
+      }}
+
+      function undo() {{
+        if (historyIndex <= 0) return;
+
+        isUndoRedoAction = true;
+        historyIndex--;
+
+        const state = history[historyIndex];
+        elements = JSON.parse(JSON.stringify(state.elements));
+        connections = JSON.parse(JSON.stringify(state.connections));
+        nextId = state.nextId;
+
+        clearSelection();
+        render();
+        updateUndoRedoButtons();
+        isUndoRedoAction = false;
+      }}
+
+      function redo() {{
+        if (historyIndex >= history.length - 1) return;
+
+        isUndoRedoAction = true;
+        historyIndex++;
+
+        const state = history[historyIndex];
+        elements = JSON.parse(JSON.stringify(state.elements));
+        connections = JSON.parse(JSON.stringify(state.connections));
+        nextId = state.nextId;
+
+        clearSelection();
+        render();
+        updateUndoRedoButtons();
+        isUndoRedoAction = false;
+      }}
+
+      function updateUndoRedoButtons() {{
+        const undoBtn = document.getElementById("undoBtn");
+        const redoBtn = document.getElementById("redoBtn");
+
+        undoBtn.disabled = historyIndex <= 0;
+        redoBtn.disabled = historyIndex >= history.length - 1;
       }}
 
       function renderTempConnection() {{
@@ -1431,6 +1527,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
 
             textarea.addEventListener("blur", () => {{
               element.text = textarea.value || "New Element";
+              saveState();  // Save after text edit
               stopEditingText();
             }});
 
@@ -1438,6 +1535,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
               if (e.key === "Enter" && !e.shiftKey) {{
                 e.preventDefault();
                 element.text = textarea.value || "New Element";
+                saveState();  // Save after text edit
                 stopEditingText();
               }}
               if (e.key === "Escape") stopEditingText();
@@ -1568,6 +1666,7 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
       connections = {connections_js};
 
       render();
+      saveState();  // Save initial state for undo/redo
     </script>
   </body>
 </html>"""
