@@ -689,8 +689,11 @@ class ServerManager:
                     config = await self.db.get_server_config(server_id)
                     if config:
                         config["tools"] = tools
-                        await self.db.save_server_config(config)
-                        logger.info(f"Discovered and cached {len(tools)} tools for server '{server_id}'")
+                        try:
+                            await self.db.save_server_config(config)
+                            logger.info(f"Discovered and cached {len(tools)} tools for server '{server_id}'")
+                        except Exception as e:
+                            logger.warning(f"Failed to save tools for '{server_id}': {e}")
                     else:
                         logger.warning(f"Could not find config for '{server_id}' to cache tools")
                 else:

@@ -18,8 +18,16 @@ def get_frontend_dist_path() -> Optional[Path]:
     """
     Get the path to the frontend dist directory.
 
-    The frontend is located at fluidmcp/frontend/dist relative to the package root.
-    This function works regardless of where it's called from within the package.
+    Tries multiple locations in order:
+    1. FRONTEND_DIST_PATH environment variable (custom override)
+    2. Installed package location (2 levels up - for pip install, primary success path)
+    3. Docker build location (/app/fluidmcp/frontend/dist - fallback for Railway)
+    4. Source development location (3 levels up - fallback for editable install)
+
+    This multi-location approach ensures the frontend is found regardless of:
+    - Development vs production environment
+    - Editable vs production pip install
+    - Local development vs Docker deployment
 
     Returns:
         Path to frontend dist directory if it exists, None otherwise
@@ -29,15 +37,52 @@ def get_frontend_dist_path() -> Optional[Path]:
         >>> if path:
         ...     print(f"Frontend found at: {path}")
     """
-    # Get the fluidmcp package root
-    # This file is at: fluidmcp/cli/services/frontend_utils.py
-    # Package root is 3 levels up: ../../..  ->  fluidmcp/
-    package_root = Path(__file__).parent.parent.parent
-    frontend_dist = package_root / "frontend" / "dist"
+    import os
 
-    if frontend_dist.exists() and frontend_dist.is_dir():
-        return frontend_dist
+    # 1. Check environment variable override (highest priority)
+    env_path = os.environ.get('FRONTEND_DIST_PATH')
+    if env_path:
+        path = Path(env_path)
+        if path.exists() and path.is_dir():
+            logger.debug(f"Frontend found via FRONTEND_DIST_PATH: {path}")
+            return path
+        logger.warning(f"FRONTEND_DIST_PATH set but directory not found: {env_path}")
 
+    # Current file location:
+    # - Source: fluidmcp/cli/services/frontend_utils.py
+    # - Installed: site-packages/fluidmcp/services/frontend_utils.py (cli removed by package_dir)
+
+    # 2. Try installed package location (2 levels up)
+    # After pip install, setup.py maps 'fluidmcp/cli/' -> 'fluidmcp/' package
+    # So we need 2 levels: services -> fluidmcp -> frontend/dist
+    installed_root = Path(__file__).parent.parent
+    installed_dist = installed_root / "frontend" / "dist"
+    if installed_dist.exists() and installed_dist.is_dir():
+        logger.debug(f"Frontend found at installed location: {installed_dist}")
+        return installed_dist
+
+    # 3. Try Docker build location (Railway/container deployment)
+    # Frontend is built to /app/fluidmcp/frontend/dist during Docker build
+    # Fallback for when package_data doesn't work as expected
+    docker_dist = Path("/app/fluidmcp/frontend/dist")
+    if docker_dist.exists() and docker_dist.is_dir():
+        logger.debug(f"Frontend found at Docker location: {docker_dist}")
+        return docker_dist
+
+    # 4. Try source development location (3 levels up)
+    # In source code: cli/services -> cli -> fluidmcp -> frontend/dist
+    # For editable installs or pre-install scenarios
+    source_root = Path(__file__).parent.parent.parent
+    source_dist = source_root / "frontend" / "dist"
+    if source_dist.exists() and source_dist.is_dir():
+        logger.debug(f"Frontend found at source location: {source_dist}")
+        return source_dist
+
+    # All locations failed
+    logger.debug(f"Frontend not found. Tried locations:")
+    logger.debug(f"  - Installed: {installed_dist}")
+    logger.debug(f"  - Docker: {docker_dist}")
+    logger.debug(f"  - Source: {source_dist}")
     return None
 
 
@@ -78,6 +123,15 @@ def setup_frontend_routes(
     if not frontend_dist:
         logger.warning("Frontend dist directory not found")
         logger.warning("Run 'npm run build' in fluidmcp/frontend to build the UI")
+
+        # Log attempted paths for troubleshooting
+        current_file = Path(__file__)
+        logger.debug(f"frontend_utils.py location: {current_file}")
+        logger.debug(f"Attempted paths:")
+        logger.debug(f"  - Installed (2 levels up): {current_file.parent.parent / 'frontend' / 'dist'}")
+        logger.debug(f"  - Docker path: /app/fluidmcp/frontend/dist")
+        logger.debug(f"  - Source (3 levels up): {current_file.parent.parent.parent / 'frontend' / 'dist'}")
+
         return False
 
     try:

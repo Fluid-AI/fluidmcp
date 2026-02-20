@@ -14,7 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
 from ..utils.env_utils import is_placeholder
-
+from .metrics import MetricsCollector, RequestTimer
 security = HTTPBearer(auto_error=False)
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -299,7 +299,7 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
     
 
 def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock: threading.Lock = None) -> APIRouter:
-    from .metrics import MetricsCollector, RequestTimer
+    
 
     # Create a lock if not provided
     if process_lock is None:

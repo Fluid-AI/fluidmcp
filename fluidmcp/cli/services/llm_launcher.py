@@ -874,6 +874,34 @@ class LLMHealthMonitor:
                         if process.restart_policy == "no":
                             continue
 
+                        # Verify process is still running before health check
+                        if not process.is_running():
+                            logger.warning(f"LLM model '{model_id}' process has exited unexpectedly")
+                            process.consecutive_health_failures += 1
+
+                            # Check if restart is needed
+                            if process.needs_restart():
+                                # Issue #5 fix: Only start restart if not already in progress
+                                if model_id in self._restarts_in_progress:
+                                    logger.debug(f"Restart already in progress for '{model_id}', skipping")
+                                    continue
+
+                                logger.warning(f"LLM model '{model_id}' needs restart (process exited)")
+                                self._restarts_in_progress.add(model_id)
+
+                                try:
+                                    success = await process.attempt_restart()
+                                    if success:
+                                        logger.info(f"LLM model '{model_id}' recovered successfully")
+                                    else:
+                                        logger.error(
+                                            f"LLM model '{model_id}' failed to recover. "
+                                            f"Restart count: {process.restart_count}/{process.max_restarts}"
+                                        )
+                                finally:
+                                    self._restarts_in_progress.discard(model_id)
+                            continue
+
                         # Perform health check
                         is_healthy, error_msg = await process.check_health()
 
