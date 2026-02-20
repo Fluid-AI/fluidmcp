@@ -39,6 +39,11 @@ RUN pip install --no-cache-dir .
 WORKDIR /app/fluidmcp/frontend
 RUN npm install && npm run build
 
+# Copy built dist INTO package directory BEFORE pip install
+# This ensures the frontend dist is included in the installed Python package
+RUN mkdir -p /app/fluidmcp/cli/frontend && \
+    cp -r /app/fluidmcp/frontend/dist /app/fluidmcp/cli/frontend/
+
 # Return to app root
 WORKDIR /app
 
