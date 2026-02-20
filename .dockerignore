@@ -1,0 +1,58 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Testing & Development
+tests/
+.git/
+.gitignore
+.vscode/
+.idea/
+*.md
+!README.md
+
+# Logs & Temp
+*.log
+logs/
+*.tmp
+*.swp
+.DS_Store
+
+# Node modules (installed fresh in container)
+node_modules/
+npm-debug.log*
+
+# Environment files (set in Railway dashboard)
+.env
+.env.*
+
+# Build artifacts (EXCEPT frontend dist - needed at runtime)
+dist/
+build/
+*.tar.gz
+!fluidmcp/frontend/dist/
+# Build artifacts
+dist/
+build/
+*.tar.gz
+
+# Examples & Docs
+examples/
+docs/
+
+# CI/CD
+.github/
+
+# Old Dockerfile
+Dockerfile.run-mode
+entrypoint.sh
