@@ -65,8 +65,11 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
               Add Server
             </button>
           )}
-          <button
-            style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+          <a
+            href="https://www.fluid.ai/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0, textDecoration: 'none' }}
             onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
             onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
           >
@@ -74,9 +77,12 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
             </svg>
             Fluid MCP for your Enterprise
-          </button>
-          <button
-            style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+          </a>
+          <a
+            href="https://www.fluid.ai/contact-us"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0, textDecoration: 'none' }}
             onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
             onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
           >
@@ -84,7 +90,7 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
             </svg>
             Report Issue
-          </button>
+          </a>
         </div>
       </div>
     </header>
