@@ -32,6 +32,8 @@ from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
 from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
+from .server_manager import ServerManager
+from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
 
 # Default ports
@@ -258,6 +260,14 @@ def run_servers(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Initialize database manager and server manager for management API
+    db_manager = InMemoryBackend()  # Use in-memory persistence for now
+    server_manager = ServerManager(db_manager)
+
+    # Store managers in app state for dependency injection
+    app.state.db_manager = db_manager
+    app.state.server_manager = server_manager
 
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)

@@ -17,8 +17,12 @@ from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
 # Import rate limiter and cache at module level for efficiency
-from .rate_limiter import get_rate_limiter, configure_rate_limiter
+from .rate_limiter import get_rate_limiter, configure_rate_limiter, remove_rate_limiter
 from .response_cache import get_response_cache
+
+# Import shared registry lock to ensure thread-safe access to both
+# _llm_models_config (in llm_provider_registry) and _replicate_clients (here)
+from .llm_provider_registry import _registry_lock
 
 # Constants
 DEFAULT_TIMEOUT = 60.0  # Default timeout for API requests (seconds)
@@ -100,6 +104,15 @@ class ReplicateClient:
             if len(self.api_key.strip()) < 8:
                 raise ValueError(
                     f"Replicate model '{model_id}' API key is too short (minimum 8 characters)"
+                )
+
+            # CRITICAL SECURITY FIX: Validate that the expanded API key is not a placeholder value
+            # This prevents storing/using placeholder values like "placeholder", "YOUR_API_KEY_HERE", "xxxx", etc.
+            from ..utils.env_utils import is_placeholder
+            if is_placeholder(self.api_key):
+                raise ValueError(
+                    f"Replicate model '{model_id}' has placeholder API key. "
+                    f"Please set a valid Replicate API token in the environment variable."
                 )
         # Validate optional dict-typed configuration fields
         endpoints = config.get("endpoints")
@@ -227,17 +240,34 @@ class ReplicateClient:
                 )
             self.cache_max_size = max_size
 
-        # Initialize HTTP client
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers={
-                "Authorization": f"Token {self.api_key}",
-                "Content-Type": "application/json"
-            },
-            timeout=self.timeout
-        )
-
-        logger.info(f"Initialized Replicate client for model '{model_id}' (model: {self.model_name})")
+        # Initialize HTTP client (do this LAST to avoid resource leaks on validation errors)
+        # SECURITY FIX: Create client after all validation to prevent resource leak if init fails
+        self.client = None  # Initialize to None first
+        try:
+            self.client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={
+                    "Authorization": f"Token {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                timeout=self.timeout
+            )
+            logger.info(f"Initialized Replicate client for model '{model_id}' (model: {self.model_name})")
+        except Exception as e:
+            # If client creation fails, ensure we don't leak resources
+            if self.client is not None:
+                try:
+                    import asyncio
+                    # Try to close if we're in an async context
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(self.client.aclose())
+                    except RuntimeError:
+                        # No event loop, can't async close
+                        pass
+                except Exception as close_error:
+                    logger.error(f"Error closing client during init failure: {close_error}")
+            raise
 
     async def predict(
         self,
@@ -672,9 +702,8 @@ class ReplicateClient:
 
 
 # Global registry of active Replicate clients
+# Protected by _registry_lock imported from llm_provider_registry
 _replicate_clients: Dict[str, ReplicateClient] = {}
-# Thread-safety lock for registry operations
-_registry_lock = threading.RLock()
 
 
 async def initialize_replicate_models(replicate_models: Dict[str, Dict[str, Any]]) -> Dict[str, ReplicateClient]:
@@ -755,25 +784,34 @@ async def stop_all_replicate_models() -> None:
     """
     global _replicate_clients
 
-    # Thread-safe snapshot creation
+    # RACE CONDITION FIX: Use two-phase approach to prevent client leaks
+    # Phase 1: Create snapshot and remove from registry (inside lock)
     with _registry_lock:
         clients_count = len(_replicate_clients)
         # Create snapshot to avoid RuntimeError: dictionary changed size during iteration
         # await client.close() yields control, allowing concurrent modifications
         clients_snapshot = list(_replicate_clients.items())
+        # Remove these clients from registry immediately (prevents new requests)
+        # This ensures clients added between snapshot and close are not cleared without closing
+        _replicate_clients.clear()
 
     logger.info(f"Stopping {clients_count} Replicate client(s)")
 
+    # Phase 2: Close clients and cleanup rate limiters (outside lock to avoid blocking)
     for model_id, client in clients_snapshot:
         try:
             await client.close()
             logger.info(f"Stopped Replicate client for model '{model_id}'")
+
+            # MEMORY LEAK FIX: Remove rate limiter to prevent unbounded memory growth
+            try:
+                await remove_rate_limiter(model_id)
+            except Exception as limiter_error:
+                logger.warning(f"Failed to remove rate limiter for '{model_id}': {limiter_error}")
+
         except Exception as e:
             logger.error(f"Error stopping Replicate client '{model_id}': {e}")
 
-    # Thread-safe registry clear
-    with _registry_lock:
-        _replicate_clients.clear()
     logger.info("All Replicate clients stopped")
 
 

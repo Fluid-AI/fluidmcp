@@ -202,6 +202,30 @@ async def clear_rate_limiters() -> int:
     return count
 
 
+async def remove_rate_limiter(model_id: str) -> bool:
+    """
+    Remove rate limiter for a specific model (called when model is stopped).
+
+    This prevents memory leaks by cleaning up rate limiters when models are no longer active.
+
+    Args:
+        model_id: Model identifier to remove rate limiter for
+
+    Returns:
+        True if rate limiter was found and removed, False otherwise
+
+    Example:
+        await remove_rate_limiter("llama-2-70b")
+    """
+    global _rate_limiters
+    async with _get_limiter_lock():
+        if model_id in _rate_limiters:
+            del _rate_limiters[model_id]
+            logger.info(f"Removed rate limiter for '{model_id}' (registry size: {len(_rate_limiters)})")
+            return True
+        return False
+
+
 async def get_all_rate_limiter_stats() -> Dict[str, Dict[str, Any]]:
     """
     Get statistics for all rate limiters (thread-safe snapshot).

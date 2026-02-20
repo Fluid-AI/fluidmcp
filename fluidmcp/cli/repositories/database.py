@@ -10,9 +10,9 @@ from datetime import datetime
 from collections import deque
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from pymongo.errors import DuplicateKeyError, ConnectionFailure
+from pymongo.errors import DuplicateKeyError as PyMongoDuplicateKeyError, ConnectionFailure
 from loguru import logger
-from .base import PersistenceBackend
+from .base import PersistenceBackend, DuplicateKeyError
 from ..utils.env_utils import is_placeholder
 
 
@@ -90,7 +90,21 @@ class DatabaseManager(PersistenceBackend):
             mongodb_uri: MongoDB connection string (defaults to env var or localhost)
             database_name: Database name to use (default: fluidmcp)
         """
-        self.mongodb_uri = mongodb_uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+        # Get MongoDB URI with explicit fallback logging
+        mongodb_uri_env = os.getenv("MONGODB_URI")
+        if mongodb_uri:
+            self.mongodb_uri = mongodb_uri
+        elif mongodb_uri_env:
+            self.mongodb_uri = mongodb_uri_env
+            logger.info("Using MongoDB URI from MONGODB_URI environment variable")
+        else:
+            self.mongodb_uri = "mongodb://localhost:27017"
+            logger.warning(
+                "No MONGODB_URI environment variable set, defaulting to mongodb://localhost:27017. "
+                "This may fail in containerized environments (Railway, Docker, etc.). "
+                "Set MONGODB_URI env var or use --in-memory for development."
+            )
+
         self.database_name = database_name
         self.client: Optional[AsyncIOMotorClient] = None
         self.db: Optional[AsyncIOMotorDatabase] = None
@@ -272,6 +286,17 @@ class DatabaseManager(PersistenceBackend):
             await self.db.fluidmcp_server_logs.create_index([("server_name", 1), ("timestamp", -1)])
             logger.info("Created compound index on fluidmcp_server_logs")
 
+            # Create indexes on fluidmcp_llm_models collection
+            await self.db.fluidmcp_llm_models.create_index("model_id", unique=True)
+            logger.info("Created unique index on fluidmcp_llm_models.model_id")
+
+            # MEDIUM PRIORITY FIX #7: Create compound index on version history for efficient rollback queries
+            await self.db.fluidmcp_llm_model_versions.create_index([
+                ("model_id", 1),
+                ("archived_at", -1)  # Descending for most recent first
+            ])
+            logger.info("Created compound index on fluidmcp_llm_model_versions for rollback queries")
+
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:
                 # Check if collection exists
@@ -412,9 +437,10 @@ class DatabaseManager(PersistenceBackend):
             logger.debug(f"Saved server config: {config['id']} ({config.get('name', 'unknown')})")
             return True
 
-        except DuplicateKeyError:
-            logger.error(f"Server with id '{config['id']}' already exists")
-            return False
+        except PyMongoDuplicateKeyError as e:
+            logger.warning(f"Server with id '{config['id']}' already exists")
+            # Re-raise as our custom exception for consistent error handling
+            raise DuplicateKeyError(str(e)) from e
         except Exception as e:
             logger.error(f"Error saving server config: {e}")
             return False
@@ -441,18 +467,19 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error retrieving server config: {e}")
             return None
 
-    async def list_server_configs(self, filter_dict: Optional[Dict] = None) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
-            filter_dict: Optional MongoDB filter
+            enabled_only: If True, only return enabled servers
 
         Returns:
             List of server config dicts in flat format (for backend compatibility)
         """
         try:
-            filter_dict = filter_dict or {}
+            # Build filter based on enabled_only parameter
+            filter_dict = {"enabled": True} if enabled_only else {}
             cursor = self.db.fluidmcp_servers.find(filter_dict, {"_id": 0})  # Exclude MongoDB _id
             configs = await cursor.to_list(length=None)
 
@@ -642,29 +669,24 @@ class DatabaseManager(PersistenceBackend):
 
     # ==================== Log Operations ====================
 
-    async def save_log_entry(self, server_name: str, stream: str, content: str) -> bool:
+    async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """
         Save a log entry with automatic buffering on failure.
 
         Args:
-            server_name: Server name
-            stream: 'stdout' or 'stderr'
-            content: Log content
+            log_entry: Log entry dict with fields: server_name, timestamp, stream, content
 
-        Returns:
-            True if saved successfully
+        Note:
+            This method implements the PersistenceBackend interface.
+            Timestamps are added automatically if not provided.
         """
-        log_entry = {
-            "server_name": server_name,
-            "timestamp": datetime.utcnow(),
-            "stream": stream,
-            "content": content
-        }
+        # Ensure timestamp is present
+        if "timestamp" not in log_entry:
+            log_entry["timestamp"] = datetime.utcnow()
 
         try:
             await self.db.fluidmcp_server_logs.insert_one(log_entry)
             self._log_buffer.success_count += 1
-            return True
 
         except Exception as e:
             # Buffer the failed log entry for retry
@@ -675,8 +697,6 @@ class DatabaseManager(PersistenceBackend):
             # Start retry task if not already running
             if self._retry_task is None or self._retry_task.done():
                 self._retry_task = asyncio.create_task(self._retry_failed_logs())
-
-            return False
 
     async def _retry_failed_logs(self):
         """Periodic retry of buffered log entries."""
@@ -755,6 +775,275 @@ class DatabaseManager(PersistenceBackend):
         except Exception as e:
             logger.error(f"Error retrieving logs: {e}")
             return []
+
+    # ==================== LLM Model Persistence ====================
+
+    async def save_llm_model(self, model_config: Dict[str, Any]) -> bool:
+        """
+        Register a new LLM model configuration.
+
+        This will create a new model entry and fail if a model with the same
+        model_id already exists. Use update_llm_model to modify an existing
+        model configuration.
+
+        Args:
+            model_config: Model configuration dict with keys:
+                - model_id (required): Unique model identifier
+                - type (required): Provider type ('replicate', 'vllm', 'ollama', etc.)
+                - model: Provider-specific model name
+                - api_key: API key (can be env var placeholder)
+                - default_params: Default inference parameters
+                - timeout: Request timeout
+                - max_retries: Maximum retry attempts
+                - endpoints: Optional endpoints configuration
+
+        Returns:
+            True if saved successfully
+
+        Raises:
+            DuplicateKeyError: If a model with the same model_id already exists
+        """
+        try:
+            if "model_id" not in model_config:
+                logger.error("Cannot save LLM model: missing 'model_id'")
+                return False
+
+            model_id = model_config["model_id"]
+
+            # Insert new model directly - rely on MongoDB unique index to prevent duplicates
+            # This avoids TOCTOU race condition in check-then-insert pattern
+            model_config["created_at"] = datetime.utcnow()
+            model_config["updated_at"] = datetime.utcnow()
+            model_config["version"] = 1  # Initial version
+
+            # Remove _id if present (MongoDB will auto-generate)
+            insert_config = {k: v for k, v in model_config.items() if k != "_id"}
+
+            await self.db.fluidmcp_llm_models.insert_one(insert_config)
+
+            logger.info(f"Saved LLM model config: {model_id} (type: {model_config.get('type', 'unknown')})")
+            return True
+
+        except PyMongoDuplicateKeyError as e:
+            # MongoDB unique index violation - model_id already exists
+            logger.warning(f"LLM model '{model_id}' already exists (use update_llm_model to modify)")
+            # Re-raise as our custom exception for consistent error handling
+            raise DuplicateKeyError(str(e)) from e
+        except Exception as e:
+            logger.error(f"Error saving LLM model config: {e}")
+            return False
+
+    async def get_llm_model(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve LLM model configuration by model_id.
+
+        Args:
+            model_id: Model identifier
+
+        Returns:
+            Model config dict or None if not found
+        """
+        try:
+            config = await self.db.fluidmcp_llm_models.find_one(
+                {"model_id": model_id},
+                {"_id": 0}  # Exclude MongoDB _id
+            )
+            return config
+        except Exception as e:
+            logger.error(f"Error retrieving LLM model config: {e}")
+            return None
+
+    async def list_llm_models(self, filter_dict: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """
+        List all LLM model configurations.
+
+        Args:
+            filter_dict: Optional MongoDB filter (e.g., {"type": "replicate"})
+
+        Returns:
+            List of model config dicts
+        """
+        try:
+            filter_dict = filter_dict or {}
+
+            # Security: Validate and sanitize filter_dict to prevent injection
+            if filter_dict:
+                # Allowed fields for filtering LLM models
+                allowed_fields = ["model_id", "type", "model", "version", "created_at", "updated_at"]
+                self._validate_field_names(filter_dict, allowed_fields)
+                # Sanitize input values
+                filter_dict = self._sanitize_mongodb_input(filter_dict)
+
+                # COPILOT FIX: Recursively reject MongoDB operator keys to prevent injection
+                def _reject_mongo_operators(value, path="filter_dict"):
+                    """
+                    Recursively walk a filter structure and reject any dict key
+                    that starts with '$', which would indicate a MongoDB operator.
+                    """
+                    if isinstance(value, dict):
+                        for k, v in value.items():
+                            if isinstance(k, str) and k.startswith("$"):
+                                raise ValueError(f"Use of MongoDB operators is not allowed in filters: {path}.{k}")
+                            _reject_mongo_operators(v, f"{path}.{k}")
+                    elif isinstance(value, list):
+                        for idx, item in enumerate(value):
+                            _reject_mongo_operators(item, f"{path}[{idx}]")
+
+                _reject_mongo_operators(filter_dict)
+
+            cursor = self.db.fluidmcp_llm_models.find(filter_dict, {"_id": 0})
+            models = await cursor.to_list(length=None)
+            return models
+        except Exception as e:
+            logger.error(f"Error listing LLM models: {e}")
+            return []
+
+    async def delete_llm_model(self, model_id: str) -> bool:
+        """
+        Delete LLM model configuration.
+
+        Args:
+            model_id: Model identifier to delete
+
+        Returns:
+            True if deleted successfully
+        """
+        try:
+            result = await self.db.fluidmcp_llm_models.delete_one({"model_id": model_id})
+
+            if result.deleted_count > 0:
+                logger.info(f"Deleted LLM model config: {model_id}")
+                return True
+            else:
+                logger.warning(f"LLM model not found for deletion: {model_id}")
+                return False
+        except Exception as e:
+            logger.error(f"Error deleting LLM model: {e}")
+            return False
+
+    async def update_llm_model(self, model_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update LLM model configuration with version history.
+
+        Creates a snapshot in the version history collection before updating.
+
+        Args:
+            model_id: Model identifier
+            updates: Dict of fields to update
+
+        Returns:
+            True if updated successfully, False if not found
+        """
+        try:
+            # COPILOT COMMENT 5 FIX: Validate updates dict to prevent MongoDB operator injection
+            # Allowed fields for updating LLM models
+            allowed_fields = ["type", "model", "api_key", "default_params", "timeout", "max_retries", "endpoints"]
+            self._validate_field_names(updates, allowed_fields)
+            # Sanitize input values
+            updates = self._sanitize_mongodb_input(updates)
+
+            # Use find_one_and_update with $inc for atomic version increment
+            # This prevents TOCTOU race conditions where two threads could read the same version
+            from pymongo import ReturnDocument
+
+            # Atomically update the model and increment version, returning OLD document for history
+            result = await self.db.fluidmcp_llm_models.find_one_and_update(
+                {"model_id": model_id},
+                {
+                    "$set": {**updates, "updated_at": datetime.utcnow()},
+                    "$inc": {"version": 1}  # Atomic increment
+                },
+                return_document=ReturnDocument.BEFORE  # Get document BEFORE update for history
+            )
+
+            if not result:
+                logger.warning(f"LLM model not found for update: {model_id}")
+                return False
+
+            # Save old version to history (using version BEFORE increment)
+            # CRITICAL: Version history is essential for rollback feature
+            old_version = result.get("version", 1)
+            version_doc = {
+                **result,
+                "archived_at": datetime.utcnow(),
+                "version": old_version
+            }
+
+            # COPILOT FIX: Try to save version history, but don't fail update if history save fails
+            try:
+                await self.db.fluidmcp_llm_model_versions.insert_one(version_doc)
+                logger.debug(f"Saved version {old_version} of model '{model_id}' to history")
+            except Exception as history_error:
+                logger.warning(f"Failed to save version history for '{model_id}': {history_error}")
+                logger.warning("Model update succeeded, but rollback may not be available for this version")
+
+            new_version = old_version + 1
+            logger.info(f"Updated LLM model config: {model_id} (version {old_version} → {new_version})")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error updating LLM model: {e}")
+            return False
+
+    async def rollback_llm_model(self, model_id: str, version: Optional[int] = None) -> bool:
+        """
+        Rollback LLM model to a previous version.
+
+        Args:
+            model_id: Model identifier
+            version: Specific version to rollback to (None = most recent)
+
+        Returns:
+            True if rolled back successfully, False if not found
+        """
+        try:
+            # HIGH PRIORITY FIX #4: Defense-in-depth validation at database layer
+            # Even though API layer validates, database layer should validate too
+            if not isinstance(model_id, str) or not model_id.strip():
+                raise ValueError("Invalid model_id: must be non-empty string")
+            if version is not None and (not isinstance(version, int) or version < 1):
+                raise ValueError(f"Invalid version: must be positive integer, got {version}")
+
+            # Find the version to rollback to
+            query = {"model_id": model_id}
+            if version is not None:
+                query["version"] = version
+
+            # Motor doesn't accept sort parameter on find_one, use find().sort().limit()
+            cursor = self.db.fluidmcp_llm_model_versions.find(query).sort("archived_at", -1).limit(1)
+            version_docs = await cursor.to_list(length=1)
+            version_doc = version_docs[0] if version_docs else None
+
+            if not version_doc:
+                logger.warning(f"No version history found for model '{model_id}'")
+                return False
+
+            # Restore the version (remove version history metadata)
+            restore_doc = {k: v for k, v in version_doc.items() if k not in ["_id", "archived_at"]}
+            restore_doc["updated_at"] = datetime.utcnow()
+
+            result = await self.db.fluidmcp_llm_models.replace_one(
+                {"model_id": model_id},
+                restore_doc,
+                upsert=True
+            )
+
+            logger.info(f"Rolled back model '{model_id}' to version {version_doc.get('version', 'unknown')}")
+            return True
+        except Exception as e:
+            logger.error(f"Error rolling back LLM model: {e}")
+            return False
+
+    def supports_rollback(self) -> bool:
+        """
+        DatabaseManager supports model rollback via version history.
+
+        Returns:
+            True (MongoDB backend supports versioning)
+        """
+        return True
+
+    # ==================== Connection Management ====================
 
     async def disconnect(self):
         """Disconnect from MongoDB and cleanup resources."""

@@ -676,6 +676,23 @@ def main():
             # Generate a secure random token
             token = secrets.token_urlsafe(32)
             logger.debug("Generated new bearer token")
+
+            # Save token to file for later retrieval
+            token_dir = get_token_file().parent
+            token_dir.mkdir(parents=True, exist_ok=True)
+            token_file = get_token_file()
+            token_file.write_text(token)
+            token_file.chmod(0o600)
+
+            # Print token to console (NOT in logs for security)
+            print("\n" + "="*70)
+            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
+            print("="*70)
+            print(f"\n{token}\n")
+            print("="*70)
+            print(f"Token saved to: {token_file}")
+            print(f"View anytime with: fmcp token show")
+            print("="*70 + "\n")
         else:
             logger.debug("Using provided bearer token")
         # else use the provided token and set it in the environment variables
@@ -736,7 +753,17 @@ def main():
         # Generate token if secure mode enabled but no token provided
         if secure_mode and not token:
             token = secrets.token_urlsafe(32)
-            logger.info(f"Generated bearer token: {token}")
+            # SECURITY FIX: Do not log the actual token (violates security policy at line 701)
+            logger.info("Generated bearer token (token value printed to console only)")
+
+            # Print token to console (NOT in logs for security)
+            print("\n" + "="*70)
+            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
+            print("="*70)
+            print(f"\n{token}\n")
+            print("="*70)
+            print("This token is required for API authentication.")
+            print("="*70 + "\n")
 
         try:
             asyncio.run(server_main(args))
