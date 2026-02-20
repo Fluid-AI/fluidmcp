@@ -25,7 +25,7 @@ export function Footer() {
             </p>
             <div className="flex space-x-4">
               <a
-                href="https://twitter.com"
+                href="https://x.com/fluidAI1"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -35,7 +35,7 @@ export function Footer() {
                 </svg>
               </a>
               <a
-                href="https://linkedin.com"
+                href="https://www.linkedin.com/company/fluid-ai/posts/?feedView=all"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -57,17 +57,17 @@ export function Footer() {
                 </Link>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/servers" className="text-muted-foreground hover:text-foreground transition-colors">
                   Featured Packages
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/servers/manage" className="text-muted-foreground hover:text-foreground transition-colors">
                   Submit Package
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <a href="https://www.fluid.ai/contact-us" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors">
                   Report Issue
                 </a>
               </li>
@@ -79,24 +79,24 @@ export function Footer() {
             <h4 className="text-sm font-semibold">Documentation</h4>
             <ul className="space-y-2 text-sm">
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/documentation#getting-started" className="text-muted-foreground hover:text-foreground transition-colors">
                   Getting Started
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/documentation#using-fluidai-mcp" className="text-muted-foreground hover:text-foreground transition-colors">
                   Integration Guide
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/documentation#available-endpoints" className="text-muted-foreground hover:text-foreground transition-colors">
                   API Reference
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <Link to="/documentation#troubleshooting" className="text-muted-foreground hover:text-foreground transition-colors">
                   Best Practices
-                </a>
+                </Link>
               </li>
             </ul>
           </div>
@@ -106,12 +106,12 @@ export function Footer() {
             <h4 className="text-sm font-semibold">Community</h4>
             <ul className="space-y-2 text-sm">
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <a href="https://x.com/fluidAI1" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors">
                   Twitter
                 </a>
               </li>
               <li>
-                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                <a href="https://www.linkedin.com/company/fluid-ai/" target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground transition-colors">
                   LinkedIn
                 </a>
               </li>
@@ -121,8 +121,8 @@ export function Footer() {
 
         {/* Copyright */}
         <div className="mt-12 pt-8 border-t border-border/40 text-center text-sm text-muted-foreground">
-          <p>© 2026 Fluid MCP . All rights reserved.</p>
-          <p className="mt-2">❤️ Made with love for the AI community</p>
+          <p>© 2026 Fluid MCP. All rights reserved.</p>
+          <p className="mt-2">Your Path to Unstoppable Success!</p>
         </div>
       </div>
     </footer>
