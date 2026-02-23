@@ -256,6 +256,69 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         border-color: #4c6ef5;
       }}
 
+      .dropdown {{
+        position: relative;
+        display: inline-block;
+      }}
+
+      .dropdown-btn {{
+        padding: 8px 16px;
+        border: 2px solid #dee2e6;
+        background: white;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }}
+
+      .dropdown-btn:hover {{
+        background: #e9ecef;
+        border-color: #adb5bd;
+        transform: translateY(-1px);
+      }}
+
+      .dropdown-content {{
+        display: none;
+        position: absolute;
+        background-color: white;
+        min-width: 160px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        border-radius: 6px;
+        z-index: 1000;
+        border: 2px solid #dee2e6;
+        overflow: hidden;
+        margin-top: 5px;
+      }}
+
+      .dropdown-content.show {{
+        display: block;
+      }}
+
+      .dropdown-item {{
+        padding: 10px 16px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid #f1f3f5;
+      }}
+
+      .dropdown-item:last-child {{
+        border-bottom: none;
+      }}
+
+      .dropdown-item:hover {{
+        background: #f8f9fa;
+        color: #4c6ef5;
+      }}
+
       .color-picker {{
         width: 40px;
         height: 35px;
@@ -624,9 +687,22 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
           <button class="tool-btn" id="clearBtn" title="Clear all">
             <span>🧹</span> Clear
           </button>
-          <button class="tool-btn" id="exportBtn" title="Export as JSON">
-            <span>💾</span> Export
-          </button>
+          <div class="dropdown">
+            <button class="dropdown-btn" id="downloadBtn" title="Download diagram">
+              <span>💾</span> Download <span>▼</span>
+            </button>
+            <div class="dropdown-content" id="downloadDropdown">
+              <div class="dropdown-item" data-format="svg">
+                <span>🎨</span> Download as SVG
+              </div>
+              <div class="dropdown-item" data-format="png">
+                <span>📷</span> Download as PNG
+              </div>
+              <div class="dropdown-item" data-format="json">
+                <span>💾</span> Download as JSON
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -845,7 +921,39 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         }}
       }});
 
-      document.getElementById("exportBtn").addEventListener("click", () => {{
+      // Dropdown toggle functionality
+      const downloadBtn = document.getElementById("downloadBtn");
+      const downloadDropdown = document.getElementById("downloadDropdown");
+
+      downloadBtn.addEventListener("click", (e) => {{
+        e.stopPropagation();
+        downloadDropdown.classList.toggle("show");
+      }});
+
+      // Close dropdown when clicking outside
+      document.addEventListener("click", () => {{
+        downloadDropdown.classList.remove("show");
+      }});
+
+      // Handle dropdown item clicks
+      document.querySelectorAll(".dropdown-item").forEach(item => {{
+        item.addEventListener("click", (e) => {{
+          e.stopPropagation();
+          const format = item.getAttribute("data-format");
+          downloadDropdown.classList.remove("show");
+
+          if (format === "svg") {{
+            exportAsSVG();
+          }} else if (format === "png") {{
+            exportAsPNG();
+          }} else if (format === "json") {{
+            exportAsJSON();
+          }}
+        }});
+      }});
+
+      // Export functions
+      function exportAsJSON() {{
         const data = JSON.stringify({{ elements, connections }}, null, 2);
         const blob = new Blob([data], {{ type: "application/json" }});
         const url = URL.createObjectURL(blob);
@@ -853,7 +961,59 @@ def generate_excalidraw_html(diagram_id: str, initial_data: dict = None, element
         a.href = url;
         a.download = "{diagram_id}.json";
         a.click();
-      }});
+        URL.revokeObjectURL(url);
+      }}
+
+      function exportAsSVG() {{
+        const svg = document.getElementById("diagram");
+        const serializer = new XMLSerializer();
+        let svgString = serializer.serializeToString(svg);
+
+        // Add XML declaration and ensure proper namespaces
+        svgString = '<?xml version="1.0" encoding="UTF-8"?>\\n' + svgString;
+
+        const blob = new Blob([svgString], {{ type: "image/svg+xml;charset=utf-8" }});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "{diagram_id}.svg";
+        a.click();
+        URL.revokeObjectURL(url);
+      }}
+
+      function exportAsPNG() {{
+        const svg = document.getElementById("diagram");
+        const svgData = new XMLSerializer().serializeToString(svg);
+
+        const canvas = document.createElement("canvas");
+        const svgRect = svg.getBoundingClientRect();
+        canvas.width = svg.getAttribute("width") || svgRect.width;
+        canvas.height = svg.getAttribute("height") || svgRect.height;
+
+        const ctx = canvas.getContext("2d");
+        const img = new Image();
+
+        const svgBlob = new Blob([svgData], {{ type: "image/svg+xml;charset=utf-8" }});
+        const url = URL.createObjectURL(svgBlob);
+
+        img.onload = function() {{
+          ctx.fillStyle = "white";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+
+          canvas.toBlob(function(blob) {{
+            const pngUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = pngUrl;
+            a.download = "{diagram_id}.png";
+            a.click();
+            URL.revokeObjectURL(pngUrl);
+          }}, "image/png");
+        }};
+
+        img.src = url;
+      }}
 
       svg.addEventListener("mousedown", handleMouseDown);
       svg.addEventListener("mousemove", handleMouseMove);
