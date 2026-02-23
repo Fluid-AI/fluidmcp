@@ -21,6 +21,7 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .otel import init_otel, instrument_fastapi_app
 
 
 def save_token_to_file(token: str) -> Path:
@@ -60,6 +61,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     Returns:
         FastAPI application
     """
+    # Initialize OpenTelemetry (must happen before FastAPI app creation)
+    init_otel()
+
     app = FastAPI(
         title="FluidMCP Gateway",
         description="Unified gateway for MCP servers with dynamic management",
@@ -111,6 +115,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
+
+    # Instrument FastAPI with OpenTelemetry (captures HTTP request spans)
+    instrument_fastapi_app(app)
 
     # Add a health check endpoint with actual connection verification
     # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
