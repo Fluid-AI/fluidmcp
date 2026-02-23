@@ -29,7 +29,6 @@ import {
   PanelLeft,
   PanelLeftClose
 } from "lucide-react"
-import { Navbar } from "@/components/Navbar"
 import { Footer } from "@/components/Footer"
 
 // Sidebar navigation structure
@@ -177,30 +176,28 @@ export default function Documentation() {
   // Handle URL hash navigation - React Router location changes
   useEffect(() => {
     const hash = location.hash.replace('#', '')
-    console.log('[Documentation] Location hash changed:', hash)
     if (!hash) return
 
     const allItems = sidebarGroups.flatMap(group => group.items)
     const matchingItem = allItems.find(item => item.id === hash)
 
     if (matchingItem) {
-      console.log('[Documentation] Matched item:', matchingItem.label)
       setActiveItem(hash)
 
       const group = sidebarGroups.find(g =>
         g.items.some(item => item.id === hash)
       )
 
-      if (group && !expandedGroups.includes(group.title)) {
-        setExpandedGroups(prev => [...prev, group.title])
+      if (group) {
+        setExpandedGroups(prev =>
+          prev.includes(group.title) ? prev : [...prev, group.title]
+        )
       }
 
       // Scroll to top after React renders the new section
       setTimeout(() => {
         window.scrollTo({ top: 0, behavior: "smooth" })
       }, 50)
-    } else {
-      console.log('[Documentation] No matching item found for hash:', hash)
     }
   }, [location.hash])
 
@@ -208,14 +205,12 @@ export default function Documentation() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '')
-      console.log('[Documentation] Native hashchange event:', hash)
       if (!hash) return
 
       const allItems = sidebarGroups.flatMap(group => group.items)
       const matchingItem = allItems.find(item => item.id === hash)
 
       if (matchingItem) {
-        console.log('[Documentation] Hashchange matched item:', matchingItem.label)
         setActiveItem(hash)
 
         const group = sidebarGroups.find(g =>
@@ -260,18 +255,13 @@ export default function Documentation() {
   }
 
   const handleItemClick = (item: string) => {
-    setActiveItem(item)
-
-    // Update URL hash for consistent navigation (using pushState to avoid double-render)
-    window.history.pushState(null, "", `#${item}`)
+    // Update URL hash - this will trigger the hashchange event which handles everything
+    window.location.hash = item
 
     // Close mobile sidebar after item selection on mobile
     if (window.innerWidth < 768) {
       setMobileSidebarOpen(false)
     }
-
-    // Always scroll to top when changing sections
-    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   
   // Filter sidebar items based on search term
