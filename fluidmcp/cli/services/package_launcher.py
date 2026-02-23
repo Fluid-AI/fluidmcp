@@ -15,6 +15,7 @@ import uvicorn
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
+from .tracing import trace_mcp_operation, set_span_attribute
 security = HTTPBearer(auto_error=False)
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -324,44 +325,45 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         collector = MetricsCollector(package_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics
+        # Track request with metrics and distributed tracing
         with RequestTimer(collector, method):
-            try:
-                # Extract all headers from incoming HTTP request
-                all_headers = dict(http_request.headers)
+            with trace_mcp_operation(method, package_name, {"request_id": request.get("id")}):
+                try:
+                    # Extract all headers from incoming HTTP request
+                    all_headers = dict(http_request.headers)
 
-                logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
+                    logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
 
-                # Only inject headers if this is a tools/call request
-                if request.get("method") == "tools/call" and all_headers:
-                    params = request.get("params", {})
-                    if "arguments" not in params:
-                        params["arguments"] = {}
+                    # Only inject headers if this is a tools/call request
+                    if request.get("method") == "tools/call" and all_headers:
+                        params = request.get("params", {})
+                        if "arguments" not in params:
+                            params["arguments"] = {}
 
-                    logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
-                    logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
+                        logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
+                        logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
 
-                    params["arguments"]["headers"] = all_headers
-                    request["params"] = params
+                        params["arguments"]["headers"] = all_headers
+                        request["params"] = params
 
-                    logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
+                        logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
 
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    msg = json.dumps(request)
-                    logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
+                    # Thread-safe communication with MCP server
+                    with process_lock:
+                        msg = json.dumps(request)
+                        logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
 
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
 
-                    logger.debug(f"[{package_name}] Waiting for response from stdout...")
-                    response_line = process.stdout.readline()
-                    logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
+                        logger.debug(f"[{package_name}] Waiting for response from stdout...")
+                        response_line = process.stdout.readline()
+                        logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
 
-                return JSONResponse(content=json.loads(response_line))
-            except Exception as e:
-                logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
-                return JSONResponse(status_code=500, content={"error": str(e)})
+                        return JSONResponse(content=json.loads(response_line))
+                except Exception as e:
+                    logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
+                    return JSONResponse(status_code=500, content={"error": str(e)})
     
     # New SSE endpoint
     @router.post(f"/{package_name}/sse", tags=[package_name])
@@ -579,38 +581,39 @@ def create_dynamic_router(server_manager):
         collector = MetricsCollector(server_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics (RequestTimer automatically records all errors)
+        # Track request with metrics and distributed tracing
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
-            # Check if server exists
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+            with trace_mcp_operation(method, server_name, {"request_id": request.get("id")}):
+                # Check if server exists
+                if server_name not in server_manager.processes:
+                    raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
-            process = server_manager.processes[server_name]
+                process = server_manager.processes[server_name]
 
-            # Check if process is alive
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+                # Check if process is alive
+                if process.poll() is not None:
+                    raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
-            try:
-                # Send request to MCP server
-                msg = json.dumps(request)
                 try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                    # Send request to MCP server
+                    msg = json.dumps(request)
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Read response (non-blocking with asyncio.to_thread)
-                response_line = await asyncio.to_thread(process.stdout.readline)
-                return JSONResponse(content=json.loads(response_line))
+                    # Read response (non-blocking with asyncio.to_thread)
+                    response_line = await asyncio.to_thread(process.stdout.readline)
+                    return JSONResponse(content=json.loads(response_line))
 
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Error proxying request to '{server_name}': {e}")
-                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error proxying request to '{server_name}': {e}")
+                    raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/sse", tags=["mcp"])
     async def sse_stream(

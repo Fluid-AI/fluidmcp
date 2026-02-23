@@ -47,10 +47,10 @@ urllib3==2.4.0
 uvicorn==0.34.2
 uv==0.7.2
 
-# OpenTelemetry Phase-1 & Phase-2: Jaeger integration
-# Note: Using 1.21.0 for API/SDK to match Jaeger exporter compatibility
-# Jaeger exporter 1.21.0 is the last version before deprecation (moved to OTLP)
+# OpenTelemetry Phase-2: OTLP HTTP integration (Codespaces-compatible)
+# Note: Using 1.21.0 for API/SDK consistency
+# OTLP uses HTTP instead of UDP, works reliably in restricted networks
 opentelemetry-api==1.21.0
 opentelemetry-sdk==1.21.0
 opentelemetry-instrumentation-fastapi==0.42b0
-opentelemetry-exporter-jaeger==1.21.0
+opentelemetry-exporter-otlp-proto-http==1.21.0

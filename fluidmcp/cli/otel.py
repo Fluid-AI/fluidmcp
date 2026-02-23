@@ -1,8 +1,9 @@
 """
 OpenTelemetry initialization for FluidMCP.
 
-Phase-2: Jaeger exporter with optional console debugging.
+Phase-2: OTLP HTTP exporter with optional console debugging.
 Supports multiple exporters with graceful fallback.
+Works reliably in restricted networks (GitHub Codespaces, containers).
 """
 import os
 from loguru import logger
@@ -20,8 +21,7 @@ def init_otel() -> bool:
         OTEL_SERVICE_NAME: Service name for traces (default: 'fluidmcp')
         OTEL_SERVICE_VERSION: Service version (default: '2.0.0')
         OTEL_EXPORTER: Exporter type - 'jaeger', 'console', 'both' (default: 'jaeger')
-        JAEGER_AGENT_HOST: Jaeger agent hostname (default: 'localhost')
-        JAEGER_AGENT_PORT: Jaeger agent UDP port (default: 6831)
+        OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint URL (default: 'http://localhost:4318/v1/traces')
 
     Returns:
         True if initialized successfully, False if disabled or failed
@@ -67,27 +67,27 @@ def init_otel() -> bool:
         exporter_type = os.getenv("OTEL_EXPORTER", "jaeger").lower()
         exporters_added = []
 
-        # Add Jaeger exporter
+        # Add OTLP exporter (HTTP - compatible with Jaeger OTLP collector)
         if exporter_type in ["jaeger", "both"]:
             try:
-                from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
-                jaeger_host = os.getenv("JAEGER_AGENT_HOST", "localhost")
-                jaeger_port = int(os.getenv("JAEGER_AGENT_PORT", "6831"))
-
-                jaeger_exporter = JaegerExporter(
-                    agent_host_name=jaeger_host,
-                    agent_port=jaeger_port,
+                # OTLP endpoint (HTTP) - compatible with Jaeger collector
+                otlp_endpoint = os.getenv(
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    "http://localhost:4318/v1/traces"  # Jaeger OTLP HTTP endpoint
                 )
-                jaeger_processor = BatchSpanProcessor(jaeger_exporter)
-                provider.add_span_processor(jaeger_processor)
-                exporters_added.append(f"jaeger({jaeger_host}:{jaeger_port})")
-                logger.debug(f"Jaeger exporter added: {jaeger_host}:{jaeger_port}")
+
+                otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
+                otlp_processor = BatchSpanProcessor(otlp_exporter)
+                provider.add_span_processor(otlp_processor)
+                exporters_added.append(f"otlp({otlp_endpoint})")
+                logger.info(f"✓ OTLP exporter configured: {otlp_endpoint}")
 
             except ImportError:
-                logger.warning("⚠️  Jaeger exporter not installed: pip install opentelemetry-exporter-jaeger")
+                logger.error("❌ OTLP exporter not installed: pip install opentelemetry-exporter-otlp-proto-http")
             except Exception as e:
-                logger.warning(f"⚠️  Failed to initialize Jaeger exporter: {e}")
+                logger.error(f"❌ Failed to initialize OTLP exporter: {e}")
 
         # Add Console exporter
         if exporter_type in ["console", "both"]:
@@ -103,7 +103,8 @@ def init_otel() -> bool:
 
         # Check if at least one exporter was added
         if not exporters_added:
-            logger.error("❌ No exporters configured successfully")
+            logger.error("❌ No OpenTelemetry exporters configured successfully")
+            logger.error("❌ Traces will NOT be collected. Check OTEL_EXPORTER configuration and dependencies.")
             return False
 
         # Set global tracer provider
@@ -117,13 +118,54 @@ def init_otel() -> bool:
         return True
 
     except ImportError as e:
-        logger.warning(f"⚠️  OpenTelemetry packages not installed: {e}")
-        logger.warning("⚠️  Install with: pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-jaeger")
+        logger.error(f"❌ OpenTelemetry packages not installed: {e}")
+        logger.error("❌ Install with: pip install -r requirements.txt")
         return False
 
     except Exception as e:
-        logger.warning(f"⚠️  Failed to initialize OpenTelemetry: {e}")
+        logger.error(f"❌ Failed to initialize OpenTelemetry: {e}")
         logger.warning("⚠️  Continuing without tracing")
+        return False
+
+
+def verify_otlp_endpoint(endpoint: str, timeout: float = 2.0) -> bool:
+    """
+    Test connectivity to OTLP endpoint.
+
+    Args:
+        endpoint: OTLP HTTP endpoint URL
+        timeout: Connection timeout in seconds
+
+    Returns:
+        True if reachable, False otherwise
+
+    Safety:
+        - Quick connectivity check (doesn't send actual traces)
+        - Uses httpx with timeout
+        - Catches all exceptions
+    """
+    try:
+        import httpx
+
+        # Extract base URL (remove /v1/traces path)
+        base_url = endpoint.rsplit("/v1/traces", 1)[0]
+
+        # Quick connectivity check to the base endpoint
+        # Note: We don't send actual trace data, just verify HTTP connectivity
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(base_url, follow_redirects=False)
+            # Any HTTP response (even 404) means the endpoint is reachable
+            logger.debug(f"OTLP endpoint {base_url} is reachable (status: {response.status_code})")
+            return True
+
+    except httpx.ConnectError as e:
+        logger.warning(f"⚠️  OTLP endpoint {endpoint} not reachable: {e}")
+        return False
+    except httpx.TimeoutException:
+        logger.warning(f"⚠️  OTLP endpoint {endpoint} timed out after {timeout}s")
+        return False
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to verify OTLP endpoint {endpoint}: {e}")
         return False
 
 
