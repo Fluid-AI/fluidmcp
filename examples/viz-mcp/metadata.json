@@ -1,0 +1,60 @@
+{
+  "name": "viz-mcp",
+  "version": "1.0.0",
+  "description": "Interactive visualization and diagram editing MCP server with Excalidraw, Mermaid.js, Chart.js, Plotly, and ECharts support",
+  "author": "FluidMCP",
+  "license": "MIT",
+  "mcp_config": {
+    "command": "python3",
+    "args": [
+      "server.py"
+    ],
+    "env": {}
+  },
+  "features": [
+    "Interactive Excalidraw diagram editor",
+    "Mermaid.js flowcharts and diagrams",
+    "Chart.js visualizations",
+    "Plotly advanced plots",
+    "ECharts dashboards",
+    "Export to PNG/SVG/JSON",
+    "Persistent diagram storage",
+    "Self-contained HTML outputs"
+  ],
+  "tools": [
+    {
+      "name": "create_diagram",
+      "description": "Create interactive Excalidraw diagrams for flowcharts, wireframes, and architecture"
+    },
+    {
+      "name": "load_diagram",
+      "description": "Load previously saved Excalidraw diagrams"
+    },
+    {
+      "name": "list_diagrams",
+      "description": "List all saved diagrams with metadata"
+    },
+    {
+      "name": "generate_flowchart",
+      "description": "Generate Mermaid.js flowcharts, sequence diagrams, and more"
+    },
+    {
+      "name": "create_chart",
+      "description": "Create Chart.js visualizations (bar, line, pie, etc.)"
+    },
+    {
+      "name": "create_plot",
+      "description": "Create Plotly advanced plots (3D, heatmap, scatter, etc.)"
+    },
+    {
+      "name": "create_dashboard",
+      "description": "Create ECharts dashboards and complex visualizations"
+    }
+  ],
+  "requirements": [
+    "python3",
+    "mcp"
+  ],
+  "installation": "No additional dependencies required - uses CDN-based libraries",
+  "usage": "Add to your FluidMCP configuration and call visualization tools to create interactive diagrams and charts"
+}
