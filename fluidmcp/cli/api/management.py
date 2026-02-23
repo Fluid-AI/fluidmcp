@@ -204,7 +204,11 @@ def get_rate_limit_key(action: str, token: str, client_ip: str) -> str:
     import hashlib
 
     # Hash token to avoid logging sensitive data
-    token_hash = hashlib.sha256(token.encode()).hexdigest()[:16]
+    # Handle None token (insecure mode)
+    if token is None:
+        token_hash = "insecure"
+    else:
+        token_hash = hashlib.sha256(token.encode()).hexdigest()[:16]
 
     return f"{action}:{token_hash}:{client_ip}"
 
