@@ -404,10 +404,16 @@ async def load_models_from_mongodb(db_manager: PersistenceBackend) -> int:
                 continue
 
             try:
-                # Only initialize Replicate models for now
+                # Strip MongoDB-specific metadata fields
+                mongo_internal_fields = ["created_at", "updated_at", "_id"]
+                model_config = {
+                    k: v
+                    for k, v in model_doc.items()
+                    if k not in mongo_internal_fields and k != "model_id"
+                }
+
                 if model_type == "replicate":
                     # Early check for existing model (optimization to skip expensive operations)
-                    # Note: This is NOT authoritative - we check again after health check
                     already_exists = False
                     with _registry_lock:
                         if model_id in _replicate_clients or model_id in _llm_models_config:
@@ -417,15 +423,6 @@ async def load_models_from_mongodb(db_manager: PersistenceBackend) -> int:
                         logger.info(f"⚠ Model '{model_id}' already registered, skipping MongoDB load")
                         loaded_count += 1  # Count as loaded (already exists)
                         continue
-
-                    # COPILOT FIX: Preserve logical configuration fields like "version" used for
-                    # version tracking and rollback; only strip MongoDB-specific metadata.
-                    mongo_internal_fields = ["created_at", "updated_at", "_id"]
-                    model_config = {
-                        k: v
-                        for k, v in model_doc.items()
-                        if k not in mongo_internal_fields and k != "model_id"
-                    }
 
                     # Initialize Replicate client
                     client = ReplicateClient(model_id, model_config)
@@ -455,6 +452,34 @@ async def load_models_from_mongodb(db_manager: PersistenceBackend) -> int:
                     else:
                         await client.close()
                         logger.warning(f"✗ Health check failed for model: {model_id}")
+
+                elif model_type in ("vllm", "ollama", "lmstudio"):
+                    # Import launch helper and registry functions
+                    from .services.llm_launcher import launch_single_llm_model
+                    from .services.run_servers import get_llm_processes, register_llm_process
+
+                    # Check if already running
+                    llm_processes = get_llm_processes()
+                    if model_id in llm_processes:
+                        logger.info(f"⚠ Model '{model_id}' already running, skipping MongoDB load")
+                        loaded_count += 1
+                        continue
+
+                    # Launch the LLM process
+                    process = launch_single_llm_model(model_id, model_config)
+
+                    if process:
+                        # Register in global registry
+                        register_llm_process(model_id, process)
+
+                        # Also register config in _llm_models_config for consistency
+                        with _registry_lock:
+                            _llm_models_config[model_id] = model_config
+
+                        logger.info(f"✓ Loaded model: {model_id} (type: {model_type})")
+                        loaded_count += 1
+                    else:
+                        logger.warning(f"✗ Failed to launch model: {model_id}")
 
                 else:
                     logger.warning(f"Unsupported model type '{model_type}' for model '{model_id}' (skipping)")

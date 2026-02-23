@@ -768,6 +768,45 @@ class LLMProcess:
             return False
 
 
+def launch_single_llm_model(model_id: str, config: Dict[str, Any]) -> Optional[LLMProcess]:
+    """
+    Launch a single LLM model process.
+
+    Args:
+        model_id: Unique identifier for the model
+        config: Model configuration dictionary containing command, args, env, endpoints
+
+    Returns:
+        LLMProcess instance if successful, None if failed
+
+    Example:
+        config = {
+            "command": "vllm",
+            "args": ["serve", "facebook/opt-125m", "--port", "8001"],
+            "env": {},
+            "endpoints": {"base_url": "http://localhost:8001/v1"}
+        }
+        process = launch_single_llm_model("vllm", config)
+    """
+    try:
+        process = LLMProcess(model_id, config)
+        process.start()
+
+        # Brief delay to allow process to initialize before checking status
+        time.sleep(PROCESS_START_DELAY)
+
+        if not process.is_running():
+            logger.error(f"LLM model '{model_id}' failed to start")
+            return None
+
+        logger.info(f"LLM model '{model_id}' is running")
+        return process
+
+    except Exception as e:
+        logger.error(f"Failed to launch LLM model '{model_id}': {e}")
+        return None
+
+
 def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
     """
     Launch all configured LLM models.
@@ -797,25 +836,9 @@ def launch_llm_models(llm_config: Dict[str, Any]) -> Dict[str, LLMProcess]:
     logger.info(f"Launching {len(llm_config)} LLM model(s)...")
 
     for model_id, config in llm_config.items():
-        try:
-            process = LLMProcess(model_id, config)
-            process.start()
-
-            # Brief delay to allow process to initialize before checking status
-            time.sleep(PROCESS_START_DELAY)
-
-            if not process.is_running():
-                logger.error(f"LLM model '{model_id}' failed to start")
-                # Don't add failed processes to the dictionary
-            else:
-                # Only add successfully running processes
-                processes[model_id] = process
-                logger.info(f"LLM model '{model_id}' is running")
-
-        except Exception as e:
-            logger.error(f"Failed to launch LLM model '{model_id}': {e}")
-            # Continue launching other models even if one fails
-            continue
+        process = launch_single_llm_model(model_id, config)
+        if process:
+            processes[model_id] = process
 
     return processes
 

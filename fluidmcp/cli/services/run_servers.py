@@ -88,6 +88,18 @@ def get_llm_processes() -> Dict[str, LLMProcess]:
 def get_llm_health_monitor() -> Optional[LLMHealthMonitor]:
     """Get the LLM health monitor instance. Used by management API."""
     return _llm_health_monitor
+
+def register_llm_process(model_id: str, process: LLMProcess) -> None:
+    """
+    Register a single LLM process in the global registry.
+
+    Args:
+        model_id: Unique identifier for the model
+        process: LLMProcess instance to register
+    """
+    with _llm_registry_lock:
+        _llm_processes[model_id] = process
+        logger.info(f"Registered LLM process: {model_id}")
 # Thread-safety locks for process stdin/stdout communication
 _process_locks: Dict[str, threading.Lock] = {}
 

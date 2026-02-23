@@ -1719,14 +1719,14 @@ async def stop_llm_model(
     token: str = Depends(get_token)
 ):
     """
-    Stop a specific LLM model.
+    Stop a specific LLM model and persist state to database.
 
     Args:
         model_id: Model identifier
         force: If true, force kill the process (SIGKILL)
 
     Returns:
-        Stop result
+        Stop result with persisted state
     """
     llm_processes = get_llm_processes()
 
@@ -1736,20 +1736,142 @@ async def stop_llm_model(
     process = llm_processes[model_id]
 
     if not process.is_running():
-        return {"message": f"LLM model '{model_id}' is already stopped"}
+        return {"message": f"LLM model '{model_id}' is already stopped", "status": "stopped"}
 
     logger.info(f"Stop requested for LLM model '{model_id}' (force={force})")
 
     try:
+        # Stop the process
         if force:
             process.force_kill()
-            return {"message": f"LLM model '{model_id}' force killed"}
+            stop_method = "force_killed"
         else:
             process.stop()
-            return {"message": f"LLM model '{model_id}' stopped gracefully"}
+            stop_method = "graceful"
+
+        # Update state in persistence backend
+        db = get_db_manager()
+        if db and hasattr(db, 'update_llm_model'):
+            try:
+                from datetime import datetime
+                await db.update_llm_model(model_id, {
+                    "state": "stopped",
+                    "stopped_at": datetime.utcnow().isoformat(),
+                    "stop_method": stop_method
+                })
+                state_persisted = True
+            except Exception as e:
+                logger.warning(f"Failed to persist stopped state for '{model_id}': {e}")
+                state_persisted = False
+        else:
+            state_persisted = False
+
+        return {
+            "message": f"LLM model '{model_id}' stopped ({stop_method})",
+            "status": "stopped",
+            "persisted": state_persisted
+        }
     except Exception as e:
         logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)
         raise HTTPException(500, "Failed to stop LLM model")
+
+
+@router.post("/llm/models/{model_id}/start")
+async def start_llm_model(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Start a previously stopped LLM model.
+
+    Reads model configuration from database and launches the process.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Start result with process status
+    """
+    from ..services.llm_launcher import launch_single_llm_model
+    from ..services.run_servers import get_llm_processes, register_llm_process
+    from ..services.llm_provider_registry import _registry_lock, _llm_models_config
+
+    # Check if already running
+    llm_processes = get_llm_processes()
+    if model_id in llm_processes:
+        process = llm_processes[model_id]
+        if process.is_running():
+            return {
+                "message": f"LLM model '{model_id}' is already running",
+                "status": "running"
+            }
+
+    # Get model config from database
+    db = get_db_manager()
+    if not db:
+        raise HTTPException(500, "Database not available")
+
+    try:
+        model_doc = await db.get_llm_model(model_id)
+        if not model_doc:
+            raise HTTPException(404, f"Model '{model_id}' not found in database")
+
+        model_type = model_doc.get("type")
+        if model_type not in ("vllm", "ollama", "lmstudio"):
+            raise HTTPException(400, f"Model type '{model_type}' does not support start operation")
+
+        # Extract config
+        mongo_internal_fields = ["created_at", "updated_at", "_id", "model_id", "type", "state", "stopped_at", "started_at", "stop_method"]
+        model_config = {
+            k: v
+            for k, v in model_doc.items()
+            if k not in mongo_internal_fields
+        }
+
+        # Launch the process
+        logger.info(f"Starting LLM model '{model_id}' (type: {model_type})")
+        process = launch_single_llm_model(model_id, model_config)
+
+        if not process:
+            raise HTTPException(500, f"Failed to start model '{model_id}'")
+
+        # Register in global registry (direct assignment to avoid nested locks)
+        from ..services.run_servers import get_llm_processes
+        with _registry_lock:
+            _llm_processes = get_llm_processes()
+            _llm_processes[model_id] = process
+            _llm_models_config[model_id] = model_config
+
+        # Update state in database
+        state_persisted = False
+        try:
+            from datetime import datetime
+            await db.update_llm_model(model_id, {
+                "state": "running",
+                "started_at": datetime.utcnow().isoformat(),
+                "stopped_at": None,
+                "stop_method": None
+            })
+            state_persisted = True
+        except Exception as e:
+            logger.warning(f"Failed to persist running state for '{model_id}': {e}")
+
+        logger.info(f"Successfully started LLM model '{model_id}'")
+
+        return {
+            "message": f"LLM model '{model_id}' started successfully",
+            "status": "running",
+            "model_id": model_id,
+            "type": model_type,
+            "persisted": state_persisted
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting LLM model '{model_id}': {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to start model: {str(e)}")
 
 
 @router.get("/llm/models/{model_id}/logs")
@@ -2832,13 +2954,121 @@ async def register_llm_model(
             logger.error(f"Failed to register Replicate model '{model_id}': {sanitized_error}")
             raise HTTPException(500, truncate_error(f"Failed to register model: {sanitized_error}"))
 
-    elif model_type == "vllm":
-        # TODO: Implement vLLM model registration
-        raise HTTPException(501, "vLLM model registration not yet implemented")
+    elif model_type in ("vllm", "ollama", "lmstudio"):
+        # Import LLM launcher and registry functions
+        from ..services.llm_launcher import launch_single_llm_model
+        from ..services.run_servers import get_llm_processes, register_llm_process
+        from ..services.llm_provider_registry import _registry_lock, _llm_models_config
 
-    elif model_type == "ollama":
-        # TODO: Implement Ollama model registration
-        raise HTTPException(501, "Ollama model registration not yet implemented")
+        try:
+            # Early check for existing model
+            llm_processes = get_llm_processes()
+            with _registry_lock:
+                if model_id in llm_processes:
+                    raise HTTPException(400, f"Model '{model_id}' already registered as {model_type} model")
+                if model_id in _llm_models_config:
+                    raise HTTPException(400, f"Model '{model_id}' already registered in provider registry")
+
+            # Extract model config from request
+            model_config = config.model_dump()
+            model_config.pop("model_id", None)
+            model_config.pop("type", None)
+
+            # Save to persistence backend FIRST (before launching process)
+            try:
+                saved = await db.save_llm_model(config.model_dump())
+                if not saved:
+                    require_persistence = os.getenv("REQUIRE_MONGODB_PERSISTENCE", "false").lower() == "true"
+                    if require_persistence:
+                        raise HTTPException(500, "Persistence required but save failed")
+                    else:
+                        logger.warning(f"Failed to save model '{model_id}' to persistence backend (running in-memory only)")
+
+            except DuplicateKeyError:
+                logger.warning(f"Model '{model_id}' already exists in persistence backend (concurrent registration)")
+                saved = True
+            except HTTPException:
+                raise
+            except Exception as e:
+                sanitized_error = sanitize_error_message(str(e))
+                logger.error(f"Error saving model '{model_id}' to persistence backend: {sanitized_error}")
+                raise HTTPException(500, truncate_error(f"Failed to persist model: {sanitized_error}"))
+
+            # Launch the LLM process
+            process = launch_single_llm_model(model_id, model_config)
+
+            if not process:
+                raise HTTPException(500, f"Failed to launch {model_type} model '{model_id}'")
+
+            # Register in global registries
+            process_registered = False
+            try:
+                with _registry_lock:
+                    # Final check for concurrent registration
+                    if model_id not in llm_processes and model_id not in _llm_models_config:
+                        # Direct assignment to avoid nested lock acquisition
+                        llm_processes[model_id] = process
+                        _llm_models_config[model_id] = model_config
+                        process_registered = True
+                        logger.info(f"✓ Registered {model_type} model: {model_id}")
+                    else:
+                        logger.info(f"⚠ Model '{model_id}' concurrently registered; stopping duplicate")
+
+                # If concurrent registration detected, stop the process we just launched
+                if not process_registered:
+                    try:
+                        process.stop()
+                    except Exception as stop_error:
+                        logger.debug(f"Failed to stop duplicate process: {stop_error}")
+
+            except Exception as e:
+                # Rollback: Stop process if registration failed
+                try:
+                    process.stop()
+                    logger.debug(f"Cleaned up process for model '{model_id}' after registration failure")
+                except Exception as cleanup_error:
+                    logger.debug(f"Failed to clean up process during rollback: {cleanup_error}")
+                raise
+
+            logger.info(f"Successfully registered {model_type} model: {model_id}")
+
+            # Audit log
+            await log_audit_event(
+                db=db,
+                action="register_model",
+                model_id=model_id,
+                client_ip=client_ip,
+                changes={"type": model_type, "config": model_config, "persisted": saved},
+                status="success"
+            )
+
+            return {
+                "message": f"Model '{model_id}' registered successfully",
+                "model_id": model_id,
+                "type": model_type,
+                "status": "running",
+                "persisted": saved
+            }
+
+        except HTTPException as e:
+            # Audit log failed registration
+            if db is not None:
+                try:
+                    await log_audit_event(
+                        db=db,
+                        action="register_model",
+                        model_id=model_id,
+                        client_ip=client_ip,
+                        status="failure",
+                        error_message=str(e.detail)
+                    )
+                except Exception:
+                    pass
+            raise
+        except Exception as e:
+            sanitized_error = sanitize_error_message(str(e))
+            logger.error(f"Failed to register {model_type} model '{model_id}': {sanitized_error}")
+            raise HTTPException(500, truncate_error(f"Failed to register model: {sanitized_error}"))
 
     else:
         raise HTTPException(400, f"Unsupported model type: {model_type}")
