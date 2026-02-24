@@ -5,7 +5,6 @@ import { showSuccess, showError, showLoading } from "../services/toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Navbar } from "@/components/Navbar";
 
 export default function Status() {
   const { servers, activeServers, loading, error, refetch, stopServer, restartServer } = useServers();

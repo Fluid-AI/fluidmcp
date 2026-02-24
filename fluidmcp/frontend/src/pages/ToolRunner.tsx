@@ -8,7 +8,6 @@ import type { Server, Tool } from '../types/server';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Navbar } from '@/components/Navbar';
 
 export const ToolRunner: React.FC = () => {
   const { serverId, toolName } = useParams<{ serverId: string; toolName: string }>();
