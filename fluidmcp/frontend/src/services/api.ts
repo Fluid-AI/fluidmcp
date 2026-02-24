@@ -9,6 +9,14 @@ import type {
   ServerEnvMetadataResponse,
   UpdateEnvResponse,
 } from '../types/server';
+import type {
+  LLMModelsListResponse,
+  LLMModelDetailsResponse,
+  LLMModelLogsResponse,
+  LLMHealthCheckResponse,
+  LLMModelRestartResponse,
+  LLMModelStopResponse,
+} from '../types/llm';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
@@ -147,6 +155,38 @@ class ApiClient {
         body: JSON.stringify(env),
       }
     );
+  }
+
+  // LLM Model Management APIs
+  async listLLMModels(options?: { signal?: AbortSignal }): Promise<LLMModelsListResponse> {
+    return this.request<LLMModelsListResponse>('/api/llm/models', options);
+  }
+
+  async getLLMModelDetails(modelId: string, options?: { signal?: AbortSignal }): Promise<LLMModelDetailsResponse> {
+    return this.request<LLMModelDetailsResponse>(`/api/llm/models/${modelId}`, options);
+  }
+
+  async restartLLMModel(modelId: string): Promise<LLMModelRestartResponse> {
+    return this.request<LLMModelRestartResponse>(`/api/llm/models/${modelId}/restart`, { method: 'POST' });
+  }
+
+  async stopLLMModel(modelId: string, force = false): Promise<LLMModelStopResponse> {
+    return this.request<LLMModelStopResponse>(
+      `/api/llm/models/${modelId}/stop?force=${force}`,
+      { method: 'POST' }
+    );
+  }
+
+  async getLLMModelLogs(
+    modelId: string,
+    lines = 100,
+    options?: { signal?: AbortSignal }
+  ): Promise<LLMModelLogsResponse> {
+    return this.request<LLMModelLogsResponse>(`/api/llm/models/${modelId}/logs?lines=${lines}`, options);
+  }
+
+  async triggerLLMHealthCheck(modelId: string): Promise<LLMHealthCheckResponse> {
+    return this.request<LLMHealthCheckResponse>(`/api/llm/models/${modelId}/health-check`, { method: 'POST' });
   }
 }
 

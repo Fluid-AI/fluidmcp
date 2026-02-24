@@ -124,14 +124,20 @@ export default function Dashboard() {
                 <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
               </Link>
               <nav className="hidden md:flex items-center space-x-1 text-sm">
-                <Link 
-                  to="/servers" 
+                <Link
+                  to="/servers"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
                 >
                   Servers
                 </Link>
-                <Link 
-                  to="/status" 
+                <Link
+                  to="/llm/models"
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  LLM Models
+                </Link>
+                <Link
+                  to="/status"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
                 >
                   Status
@@ -220,14 +226,20 @@ export default function Dashboard() {
                 <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
               </Link>
               <nav className="hidden md:flex items-center space-x-1 text-sm">
-                <Link 
-                  to="/servers" 
+                <Link
+                  to="/servers"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
                 >
                   Servers
                 </Link>
-                <Link 
-                  to="/status" 
+                <Link
+                  to="/llm/models"
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  LLM Models
+                </Link>
+                <Link
+                  to="/status"
                   className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
                 >
                   Status
