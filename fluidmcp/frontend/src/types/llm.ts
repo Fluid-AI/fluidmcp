@@ -70,6 +70,49 @@ export interface LLMModelStopResponse {
   message: string;
 }
 
+// Chat completion types
+export interface ChatMessage {
+  role: string;
+  content: string;
+}
+
+export interface ChatCompletionRequest {
+  model: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+}
+
+export interface ChatCompletionResponse {
+  choices: Array<{
+    message: {
+      role: string;
+      content: string;
+    };
+    index?: number;
+    finish_reason?: string;
+  }>;
+  model: string;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  id?: string;
+  created?: number;
+}
+
+// Future-proof chat session structure for multi-model comparison
+export interface ChatSession {
+  modelId: string;
+  messages: ChatMessage[];
+  parameters: {
+    temperature: number;
+    max_tokens: number;
+  };
+}
+
 // Helper type guards
 export function isProcessBasedModel(model: LLMModel): model is ProcessBasedModel {
   return model.type === "process";

@@ -7,6 +7,7 @@ import { ToolRunner } from "./pages/ToolRunner";
 import Documentation from "./pages/Documentation";
 import LLMModels from "./pages/LLMModels";
 import LLMModelDetails from "./pages/LLMModelDetails";
+import LLMPlayground from "./pages/LLMPlayground";
 import ManageServers from "./pages/ManageServers";
 
 function App() {
@@ -30,6 +31,7 @@ function App() {
         <Route path="/servers/:serverId/tools/:toolName" element={<ToolRunner />} />
         <Route path="/llm/models" element={<LLMModels />} />
         <Route path="/llm/models/:modelId" element={<LLMModelDetails />} />
+        <Route path="/llm/playground" element={<LLMPlayground />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </>

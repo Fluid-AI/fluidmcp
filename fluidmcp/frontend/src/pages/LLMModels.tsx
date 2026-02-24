@@ -1,19 +1,20 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import LLMModelCard from "../components/LLMModelCard";
+import LLMModelRow from "../components/LLMModelRow";
 import { Pagination } from "../components/Pagination";
 import ErrorMessage from "../components/ErrorMessage";
 import { useLLMModels } from "../hooks/useLLMModels";
 import { showSuccess, showError, showLoading } from "../services/toast";
+import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, Filter, RefreshCw } from "lucide-react";
+import { Search, Filter, RefreshCw, MessageSquare } from "lucide-react";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
 
 export default function LLMModels() {
   const navigate = useNavigate();
-  const { models, loading, error, refetch, restartModel, stopModel } = useLLMModels();
+  const { models, loading, error, refetch, restartModel, stopModel, triggerHealthCheck } = useLLMModels();
 
   // Controls state
   const [searchQuery, setSearchQuery] = useState("");
@@ -136,22 +137,43 @@ export default function LLMModels() {
     }
   };
 
-  const handleViewDetails = (modelId: string) => {
-    navigate(`/llm/models/${modelId}`);
+  const handleHealthCheck = async (modelId: string) => {
+    if (actionState.type !== null) return;
+
+    const model = models.find(m => m.id === modelId);
+    const modelName = model?.id || modelId;
+
+    setActionState({ modelId, type: 'health-checking' as any });
+    const toastId = showLoading(`Checking health of ${modelName}...`);
+
+    try {
+      await triggerHealthCheck(modelId);
+      showSuccess(`Health check completed for ${modelName}`, toastId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      showError(`Failed to check health of ${modelName}: ${message}`, toastId);
+    } finally {
+      setActionState({ modelId: null, type: null });
+    }
   };
 
   if (error) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-4">
-        <ErrorMessage message={error} />
+      <div className="min-h-screen bg-black text-white">
+        <Navbar />
+        <div className="flex items-center justify-center p-4 pt-32">
+          <ErrorMessage message={error} />
+        </div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-black text-white">
+      <Navbar />
+
       {/* Hero Section */}
-      <div className="relative overflow-hidden">
+      <div className="relative overflow-hidden pt-16">
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 via-purple-500/10 to-pink-500/10" />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
           <div className="text-center" data-aos="fade-up">
@@ -181,6 +203,17 @@ export default function LLMModels() {
               <div className="text-2xl font-bold text-purple-400">{models.filter(m => m.type === 'replicate').length}</div>
               <div className="text-sm text-zinc-400">Cloud Models</div>
             </div>
+          </div>
+
+          {/* Try the llms Button */}
+          <div className="mt-8 flex justify-center" data-aos="fade-up" data-aos-delay="200">
+            <button
+              onClick={() => navigate('/llm/playground')}
+              className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-indigo-500/50"
+            >
+              <MessageSquare className="w-5 h-5" />
+              Try the llms
+            </button>
           </div>
         </div>
       </div>
@@ -251,11 +284,11 @@ export default function LLMModels() {
           )}
         </div>
 
-        {/* Models Grid */}
+        {/* Models List */}
         {loading && models.length === 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="flex flex-col gap-4">
             {[...Array(6)].map((_, i) => (
-              <Skeleton key={i} className="h-64 rounded-2xl bg-zinc-900" />
+              <Skeleton key={i} className="h-32 rounded-2xl bg-zinc-900" />
             ))}
           </div>
         ) : paginatedModels.length === 0 ? (
@@ -272,16 +305,15 @@ export default function LLMModels() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-aos="fade-up">
+            <div className="flex flex-col gap-4" data-aos="fade-up">
               {paginatedModels.map((model, index) => (
                 <div key={model.id} data-aos="fade-up" data-aos-delay={index * 50}>
-                  <LLMModelCard
+                  <LLMModelRow
                     model={model}
-                    onRestart={model.type === 'process' ? () => handleRestartModel(model.id) : undefined}
-                    onStop={model.type === 'process' ? () => handleStopModel(model.id) : undefined}
-                    onViewDetails={() => handleViewDetails(model.id)}
-                    isRestarting={actionState.modelId === model.id && actionState.type === 'restarting'}
-                    isStopping={actionState.modelId === model.id && actionState.type === 'stopping'}
+                    onRestart={handleRestartModel}
+                    onStop={handleStopModel}
+                    onHealthCheck={handleHealthCheck}
+                    isPerformingAction={actionState.modelId === model.id && actionState.type !== null}
                   />
                 </div>
               ))}

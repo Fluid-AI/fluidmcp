@@ -16,6 +16,8 @@ import type {
   LLMHealthCheckResponse,
   LLMModelRestartResponse,
   LLMModelStopResponse,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
 } from '../types/llm';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
@@ -190,6 +192,30 @@ class ApiClient {
 
   async triggerLLMHealthCheck(modelId: string): Promise<LLMHealthCheckResponse> {
     return this.request<LLMHealthCheckResponse>(`/api/llm/models/${modelId}/health-check`, { method: 'POST' });
+  }
+
+  async chatCompletion(
+    payload: ChatCompletionRequest,
+    options?: { stream?: boolean; signal?: AbortSignal }
+  ): Promise<ChatCompletionResponse> {
+    const { stream = false, signal } = options || {};
+
+    // Future-proof: structured for both streaming and non-streaming
+    if (stream) {
+      // TODO: Implement streaming with requestRaw when ready
+      // return this.requestRaw('/api/llm/v1/chat/completions', { ... });
+      throw new Error('Streaming not yet implemented');
+    }
+
+    // Non-streaming: use existing request method with full error handling, timeout, AbortController
+    return this.request<ChatCompletionResponse>(
+      '/api/llm/v1/chat/completions',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal,
+      }
+    );
   }
 
   // Server Configuration Management (CRUD)
