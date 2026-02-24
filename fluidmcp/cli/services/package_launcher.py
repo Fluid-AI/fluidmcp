@@ -586,6 +586,17 @@ def create_dynamic_router(server_manager):
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
             with trace_mcp_operation(method, server_name, {"request_id": request.get("id")}):
+                # Enrich with server context (user_id not available in proxy)
+                from ..services.tracing import enrich_current_span
+                from ..context import set_server_id
+
+                enrich_current_span(
+                    server_id=server_name,
+                    request_id=request.get("id"),
+                    method=method
+                )
+                set_server_id(server_name)
+
                 # Check if server exists
                 if server_name not in server_manager.processes:
                     raise HTTPException(404, f"Server '{server_name}' not found or not running")

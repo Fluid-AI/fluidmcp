@@ -13,6 +13,7 @@ from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -22,6 +23,34 @@ from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .otel import init_otel, instrument_fastapi_app
+from .context import set_trace_id, set_span_id, clear_context
+
+
+class TraceContextMiddleware(BaseHTTPMiddleware):
+    """Extract OTEL trace context and store in contextvars for log correlation."""
+
+    async def dispatch(self, request, call_next):
+        """Extract trace context from active OTEL span and store in contextvars."""
+        clear_context()  # Clean slate per request
+
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+
+            if span and span.is_recording():
+                ctx = span.get_span_context()
+                if ctx.is_valid:
+                    # Format as hex (standard OTEL format)
+                    trace_id = format(ctx.trace_id, '032x')
+                    span_id = format(ctx.span_id, '016x')
+
+                    set_trace_id(trace_id)
+                    set_span_id(span_id)
+        except Exception as e:
+            logger.debug(f"Failed to extract trace context: {e}")
+
+        response = await call_next(request)
+        return response
 
 
 def save_token_to_file(token: str) -> Path:
@@ -93,6 +122,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add trace context extraction middleware
+    app.add_middleware(TraceContextMiddleware)
+    logger.info("Trace context middleware added")
 
     # Store managers in app state for dependency injection
     app.state.db_manager = db_manager

@@ -152,3 +152,88 @@ def record_mcp_error(error: Exception, message: Optional[str] = None) -> None:
                 span.add_event(message, {"error.message": str(error)})
     except Exception as e:
         logger.debug(f"Failed to record error in span: {e}")
+
+
+def enrich_current_span(
+    user_id: Optional[str] = None,
+    server_id: Optional[str] = None,
+    request_id: Optional[Any] = None,
+    **kwargs
+) -> None:
+    """
+    Enrich current active span with business context.
+
+    Args:
+        user_id: User identifier (from bearer token)
+        server_id: MCP server identifier
+        request_id: JSON-RPC request ID
+        **kwargs: Additional custom attributes
+
+    Example:
+        enrich_current_span(
+            user_id="user_abc123",
+            server_id="filesystem",
+            request_id=1
+        )
+    """
+    try:
+        span = trace.get_current_span()
+        if span and span.is_recording():
+            if user_id:
+                span.set_attribute("user.id", user_id)
+            if server_id:
+                span.set_attribute("mcp.server_id", server_id)
+            if request_id is not None:
+                span.set_attribute("request.id", str(request_id))
+
+            # Custom attributes
+            for key, value in kwargs.items():
+                if value is not None:
+                    span.set_attribute(key, str(value))
+    except Exception as e:
+        logger.debug(f"Failed to enrich span: {e}")
+
+
+def enrich_span_with_error(
+    error: Exception,
+    user_id: Optional[str] = None,
+    server_id: Optional[str] = None,
+    message: Optional[str] = None
+) -> None:
+    """
+    Record error on span with business context.
+
+    Args:
+        error: Exception that occurred
+        user_id: User identifier
+        server_id: MCP server identifier
+        message: Custom error message
+
+    Example:
+        try:
+            result = await operation()
+        except ValueError as e:
+            enrich_span_with_error(e, user_id=user_id, server_id="filesystem")
+            raise
+    """
+    try:
+        span = trace.get_current_span()
+        if span and span.is_recording():
+            span.set_status(Status(StatusCode.ERROR, str(error)))
+            span.set_attribute("error", True)
+
+            if user_id:
+                span.set_attribute("user.id", user_id)
+            if server_id:
+                span.set_attribute("mcp.server_id", server_id)
+
+            span.record_exception(error)
+
+            if message:
+                span.add_event("error", {
+                    "message": message,
+                    "error.type": type(error).__name__,
+                    "error.message": str(error)
+                })
+    except Exception as e:
+        logger.debug(f"Failed to record error: {e}")
