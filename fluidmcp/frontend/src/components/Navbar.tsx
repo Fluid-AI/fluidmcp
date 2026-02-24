@@ -27,6 +27,14 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
               Servers
             </Link>
             <Link
+              to="/llm/models"
+              className={`inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none ${
+                isActive('/llm/models') ? 'text-foreground' : 'text-foreground/60'
+              }`}
+            >
+              LLM Models
+            </Link>
+            <Link
               to="/status"
               className={`inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none ${
                 isActive('/status') ? 'text-foreground' : 'text-foreground/60'

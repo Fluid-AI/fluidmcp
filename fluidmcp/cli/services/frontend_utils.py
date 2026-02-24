@@ -10,8 +10,24 @@ This module provides functionality to:
 from pathlib import Path
 from typing import Optional
 from loguru import logger
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Middleware to disable caching for frontend assets during development."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        # Only apply to /ui paths
+        if request.url.path.startswith("/ui"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+
+        return response
 
 
 def get_frontend_dist_path() -> Optional[Path]:
@@ -135,6 +151,9 @@ def setup_frontend_routes(
         return False
 
     try:
+        # Add no-cache middleware for frontend assets
+        app.add_middleware(NoCacheMiddleware)
+
         # Mount StaticFiles for serving built assets (JS, CSS, images)
         # The html=True parameter enables SPA mode:
         # - Serves static files normally (app.js, styles.css, etc.)
@@ -142,7 +161,7 @@ def setup_frontend_routes(
         # This eliminates the need for separate route handlers
         app.mount("/ui", StaticFiles(directory=str(frontend_dist), html=True), name="ui")
 
-        logger.info("✓ Frontend UI routes registered")
+        logger.info("✓ Frontend UI routes registered (with no-cache headers)")
 
         # Log the URL with the correct host
         # Use localhost for better UX if host is 0.0.0.0
