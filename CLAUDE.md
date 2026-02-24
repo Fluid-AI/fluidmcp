@@ -184,6 +184,98 @@ Available sample files:
 - `examples/replicate-inference.json` - Replicate cloud inference models
 - `examples/README.md` - Detailed testing guide
 
+## Railway Deployment
+
+FluidMCP supports deployment to Railway using `fmcp serve` with MongoDB persistence.
+
+### Quick Deployment
+
+1. **Add MongoDB Service**: Railway → New → Database → MongoDB
+2. **Connect Repository**: Railway → New → GitHub Repo → fluidmcp (branch: `fluidmcp_V1`)
+3. **Set Bearer Token**: Generate with `openssl rand -hex 32`, set as `FMCP_BEARER_TOKEN` in Railway
+4. **Deploy**: Railway auto-detects Dockerfile and deploys
+5. **Verify**: Check `/health` endpoint shows `database: "connected"`
+
+### Environment Variables
+
+Railway automatically provides:
+- `PORT` - Service port (assigned by Railway)
+- `MONGODB_URI` - MongoDB connection string (from MongoDB service)
+
+**CRITICAL - Must set manually**:
+- `FMCP_BEARER_TOKEN` - Authentication token (prevents regeneration on restart)
+  - Generate: `openssl rand -hex 32`
+  - **Why required?** Railway containers are ephemeral. Auto-generated tokens regenerate on every restart, breaking authentication.
+
+Optional configuration:
+- `FMCP_ALLOWED_ORIGINS` - CORS origins (comma-separated, e.g., `https://app.example.com`)
+- `FMCP_DATABASE` - Database name (default: `fluidmcp`)
+- `FMCP_MONGODB_SERVER_TIMEOUT` - Server timeout (default: 30000ms)
+- `FMCP_MONGODB_CONNECT_TIMEOUT` - Connect timeout (default: 10000ms)
+
+### Managing MCP Servers
+
+Once deployed, add/manage servers via REST API:
+
+```bash
+# Add server
+curl -X POST https://your-app.railway.app/api/servers \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_id": "filesystem",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    }
+  }'
+
+# Start server
+curl -X POST https://your-app.railway.app/api/servers/filesystem/start \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# List servers
+curl -X GET https://your-app.railway.app/api/servers \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Health Endpoint
+
+Railway monitors: `GET /health`
+
+Returns:
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "persistence_enabled": true
+}
+```
+
+### MongoDB Connection Behavior
+
+- **Automatic retry**: 3 attempts with exponential backoff (2s, 4s, 8s)
+- **Fail-fast mode**: Container exits if MongoDB unavailable (`--require-persistence` flag)
+- **Crash loop**: Intentional behavior if MongoDB misconfigured (fix MongoDB to resolve)
+
+### Dockerfile Selection
+
+Two Dockerfiles available:
+- `Dockerfile` (default) - Railway deployment with `fmcp serve` ← **Use this for Railway**
+- `Dockerfile.run-mode` - Legacy mode with `fmcp run` and entrypoint.sh
+
+### Key Differences: fmcp serve vs fmcp run
+
+| Feature | `fmcp serve` (Railway) | `fmcp run` (Legacy) |
+|---------|------------------------|---------------------|
+| Config storage | MongoDB (persistent) | Environment variable (ephemeral) |
+| Server management | REST API (dynamic) | Static config file (requires rebuild) |
+| Authentication | Bearer token (secure) | None (open access) |
+| Use case | Production API backend | Development/testing with known config |
+
+See [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) for complete deployment guide, API documentation, and troubleshooting.
+
 ## Environment Variables
 
 ```bash
