@@ -259,20 +259,12 @@ Returns:
 - **Fail-fast mode**: Container exits if MongoDB unavailable (`--require-persistence` flag)
 - **Crash loop**: Intentional behavior if MongoDB misconfigured (fix MongoDB to resolve)
 
-### Dockerfile Selection
+### Dockerfile
 
-Two Dockerfiles available:
-- `Dockerfile` (default) - Railway deployment with `fmcp serve` ← **Use this for Railway**
-- `Dockerfile.run-mode` - Legacy mode with `fmcp run` and entrypoint.sh
-
-### Key Differences: fmcp serve vs fmcp run
-
-| Feature | `fmcp serve` (Railway) | `fmcp run` (Legacy) |
-|---------|------------------------|---------------------|
-| Config storage | MongoDB (persistent) | Environment variable (ephemeral) |
-| Server management | REST API (dynamic) | Static config file (requires rebuild) |
-| Authentication | Bearer token (secure) | None (open access) |
-| Use case | Production API backend | Development/testing with known config |
+FluidMCP uses a single production Dockerfile:
+- `Dockerfile` - Railway deployment with `fmcp serve` + MongoDB
+- Includes frontend build, bearer token auth, and health monitoring
+- **Note**: `fmcp run` mode is deprecated (blocks other processes)
 
 See [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) for complete deployment guide, API documentation, and troubleshooting.
 
