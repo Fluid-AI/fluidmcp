@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect } from "react"
-import { Link } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import {
   ChevronDown,
   ChevronRight,
@@ -29,6 +29,7 @@ import {
   PanelLeft,
   PanelLeftClose
 } from "lucide-react"
+import { Footer } from "@/components/Footer"
 
 // Sidebar navigation structure
 const sidebarGroups = [
@@ -142,6 +143,7 @@ const cn = (...classes: (string | boolean | undefined)[]) => {
 }
 
 export default function Documentation() {
+  const location = useLocation()
   const [activeItem, setActiveItem] = useState("fluidai-mcp-installer")
   const [searchTerm, setSearchTerm] = useState("")
   const [expandedGroups, setExpandedGroups] = useState<string[]>(["Introduction"])
@@ -166,9 +168,70 @@ export default function Documentation() {
         setMobileSidebarOpen(false)
       }
     }
-    
+
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Handle URL hash navigation - React Router location changes
+  useEffect(() => {
+    const hash = location.hash.replace('#', '')
+    if (!hash) return
+
+    const allItems = sidebarGroups.flatMap(group => group.items)
+    const matchingItem = allItems.find(item => item.id === hash)
+
+    if (matchingItem) {
+      setActiveItem(hash)
+
+      const group = sidebarGroups.find(g =>
+        g.items.some(item => item.id === hash)
+      )
+
+      if (group) {
+        setExpandedGroups(prev =>
+          prev.includes(group.title) ? prev : [...prev, group.title]
+        )
+      }
+
+      // Scroll to top after React renders the new section
+      setTimeout(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" })
+      }, 50)
+    }
+  }, [location.hash])
+
+  // Handle native browser hashchange events (fallback for same-page navigation)
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (!hash) return
+
+      const allItems = sidebarGroups.flatMap(group => group.items)
+      const matchingItem = allItems.find(item => item.id === hash)
+
+      if (matchingItem) {
+        setActiveItem(hash)
+
+        const group = sidebarGroups.find(g =>
+          g.items.some(item => item.id === hash)
+        )
+
+        if (group) {
+          setExpandedGroups(prev =>
+            prev.includes(group.title) ? prev : [...prev, group.title]
+          )
+        }
+
+        // Scroll to top after React renders the new section
+        setTimeout(() => {
+          window.scrollTo({ top: 0, behavior: "smooth" })
+        }, 50)
+      }
+    }
+
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
   }, [])
   
   const scrollToTop = () => {
@@ -192,15 +255,13 @@ export default function Documentation() {
   }
 
   const handleItemClick = (item: string) => {
-    setActiveItem(item)
-    
+    // Update URL hash - this will trigger the hashchange event which handles everything
+    window.location.hash = item
+
     // Close mobile sidebar after item selection on mobile
     if (window.innerWidth < 768) {
       setMobileSidebarOpen(false)
     }
-    
-    // Always scroll to top when changing sections
-    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
   
   // Filter sidebar items based on search term
@@ -4381,7 +4442,10 @@ curl -X PUT http://localhost:8099/api/servers/my-server/instance/env \\
           )}
         </main>
       </div>
-      
+
+      {/* Footer */}
+      <Footer />
+
       {/* Scroll to top button */}
       {showScrollTop && (
         <button
