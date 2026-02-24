@@ -19,9 +19,11 @@ import httpx
 import time
 import json
 
-from ..services.llm_provider_registry import get_model_type, get_model_config
+from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.replicate_openai_adapter import replicate_chat_completion
+from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
+from ..services import omni_adapter
 
 from ..utils.env_utils import is_placeholder
 
@@ -1979,8 +1981,6 @@ async def get_metrics_prometheus(
     Example:
         curl http://localhost:8099/api/metrics
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     return Response(
         content=collector.export_prometheus(),
@@ -2000,8 +2000,6 @@ async def get_metrics_json(
     Example:
         curl http://localhost:8099/api/metrics/json
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     return collector.export_json()
 
@@ -2024,8 +2022,6 @@ async def reset_metrics(
         # Reset specific model
         curl -X POST http://localhost:8099/api/metrics/reset?model_id=llama-2-70b
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     collector.reset_metrics(model_id)
 
@@ -2183,8 +2179,6 @@ async def get_model_metrics(
     Example:
         curl http://localhost:8099/api/metrics/models/llama-2-70b
     """
-    from ..services.llm_metrics import get_metrics_collector
-
     collector = get_metrics_collector()
     metrics = collector.get_model_metrics(model_id)
 
@@ -2213,3 +2207,336 @@ async def get_model_metrics(
         },
         "errors_by_status": dict(metrics.errors_by_status),
     }
+# ============================================================================
+# vLLM Omni Multimodal Generation Endpoints
+# Image and video generation via Replicate integration
+# ============================================================================
+
+@router.post("/llm/v1/generate/image")
+async def generate_image(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Generate image from text prompt (text-to-image).
+
+    OpenAI-compatible endpoint. Works with Replicate image generation models
+    (FLUX, Stable Diffusion, etc.). Validates that model supports 'text-to-image' capability.
+
+    Args:
+        request_body: Generation parameters including model and prompt
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "model": "flux-image-gen",
+          "prompt": "A serene Japanese garden with cherry blossoms",
+          "aspect_ratio": "16:9"
+        }
+    """
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Image generation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
+    # Record metrics for image generation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
+    # Get or create Replicate client
+    client = get_replicate_client(model_id)
+    created_temp_client = False
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
+
+    try:
+        result = await omni_adapter.generate_image(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Image generation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
+
+
+@router.post("/llm/v1/generate/video")
+async def generate_video(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Generate video from text prompt (text-to-video).
+
+    OpenAI-compatible endpoint. Supports video generation models like
+    Google Veo 3, Kling v2.6, etc. Validates that model supports
+    'text-to-video' capability.
+
+    Args:
+        request_body: Generation parameters including model and prompt
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "model": "veo-video",
+          "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
+          "duration": 5,
+          "fps": 24
+        }
+    """
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Video generation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
+    # Record metrics for video generation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
+    # Get or create Replicate client
+    client = get_replicate_client(model_id)
+    created_temp_client = False
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
+
+    try:
+        result = await omni_adapter.generate_video(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Video generation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
+
+
+@router.post("/llm/v1/animate")
+async def animate_image(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Animate image into video (image-to-video).
+
+    OpenAI-compatible endpoint. Supports models like Kling v2.6.
+    Validates that model supports 'image-to-video' capability.
+
+    Args:
+        request_body: Animation parameters including model and image
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "model": "kling-animate",
+          "image_url": "https://example.com/photo.jpg",
+          "motion_bucket_id": 127,
+          "fps": 24
+        }
+    """
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Image animation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
+    # Record metrics for image animation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
+    # Get or create Replicate client
+    client = get_replicate_client(model_id)
+    created_temp_client = False
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
+
+    try:
+        result = await omni_adapter.animate_image(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Image animation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
+
+
+@router.get("/llm/predictions/{prediction_id}")
+async def get_generation_status(
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Check status of async generation (image/video).
+
+    Returns prediction status and output URLs when complete.
+    Works for any Replicate prediction (image, video, animation).
+
+    Args:
+        prediction_id: Replicate prediction ID
+
+    Returns:
+        Prediction status with output URLs
+
+    Example response:
+        {
+          "id": "abc123",
+          "status": "succeeded",
+          "output": ["https://replicate.delivery/image.png"]
+        }
+    """
+    # Try to get Replicate API token from configured models first
+    api_token = None
+    replicate_models = list_models_by_type("replicate")
+
+    if replicate_models:
+        # Use the first configured Replicate model's token
+        first_model_id = replicate_models[0]
+        first_model_config = get_model_config(first_model_id)
+        if first_model_config:
+            config_token = first_model_config.get("api_key")
+            # Only use non-placeholder, non-empty tokens from config
+            if config_token and not is_placeholder(config_token):
+                api_token = config_token
+
+    # Fallback to environment variable if no configured models or only placeholders
+    if not api_token:
+        api_token = os.getenv("REPLICATE_API_TOKEN")
+
+    if not api_token:
+        raise HTTPException(
+            503,
+            "No Replicate API token configured. Either add a Replicate model to your config "
+            "or set REPLICATE_API_TOKEN environment variable."
+        )
+
+    # Record metrics for status check
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start("status-check", "replicate")
+
+    # Create a minimal client just for fetching prediction status
+    # The prediction_id contains all necessary information for Replicate
+    client = ReplicateClient("status-check", {"model": "dummy", "api_key": api_token})
+    try:
+        result = await omni_adapter.get_generation_status(prediction_id, client)
+        # Record success metrics
+        collector.record_request_success(
+            "status-check",
+            start_time,
+            prompt_tokens=0,
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure("status-check", start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure("status-check", start_time, 500)
+        raise
+    finally:
+        # Ensure the temporary client is closed to avoid resource leaks
+        await client.close()
+
+
