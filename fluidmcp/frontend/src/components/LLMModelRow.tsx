@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, RefreshCw, Square, Activity, AlertCircle, Clock, PlayCircle } from "lucide-react";
+import { ChevronDown, RefreshCw, Square, Activity, AlertCircle, Clock, PlayCircle, Edit2, Trash2 } from "lucide-react";
 import * as Collapsible from "@radix-ui/react-collapsible";
 import apiClient from "../services/api";
-import type { LLMModel, LLMModelLogsResponse } from "../types/llm";
+import type { LLMModel, LLMModelLogsResponse, ReplicateModel } from "../types/llm";
 import { isProcessBasedModel, isReplicateModel } from "../types/llm";
 
 interface LLMModelRowProps {
@@ -11,10 +11,12 @@ interface LLMModelRowProps {
   onRestart: (modelId: string) => Promise<void>;
   onStop: (modelId: string) => Promise<void>;
   onHealthCheck: (modelId: string) => Promise<void>;
+  onEdit?: (model: ReplicateModel) => void;
+  onDelete?: (modelId: string) => void;
   isPerformingAction: boolean;
 }
 
-export default function LLMModelRow({ model, onRestart, onStop, onHealthCheck, isPerformingAction }: LLMModelRowProps) {
+export default function LLMModelRow({ model, onRestart, onStop, onHealthCheck, onEdit, onDelete, isPerformingAction }: LLMModelRowProps) {
   const navigate = useNavigate();
   const [isExpanded, setIsExpanded] = useState(false);
   const [logsLoaded, setLogsLoaded] = useState(false);
@@ -256,34 +258,59 @@ export default function LLMModelRow({ model, onRestart, onStop, onHealthCheck, i
               )}
 
               {/* Action Buttons */}
-              {isProcess && model.is_running && (
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => onRestart(model.id)}
-                    disabled={isPerformingAction}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${isPerformingAction ? 'animate-spin' : ''}`} />
-                    Restart
-                  </button>
-                  <button
-                    onClick={() => onStop(model.id)}
-                    disabled={isPerformingAction}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
-                  >
-                    <Square className="w-4 h-4" />
-                    Stop
-                  </button>
-                  <button
-                    onClick={() => onHealthCheck(model.id)}
-                    disabled={isPerformingAction}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
-                  >
-                    <Activity className="w-4 h-4" />
-                    Health Check
-                  </button>
-                </div>
-              )}
+              <div className="space-y-4">
+                {/* Process-specific actions */}
+                {isProcess && model.is_running && (
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => onRestart(model.id)}
+                      disabled={isPerformingAction}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${isPerformingAction ? 'animate-spin' : ''}`} />
+                      Restart
+                    </button>
+                    <button
+                      onClick={() => onStop(model.id)}
+                      disabled={isPerformingAction}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                    >
+                      <Square className="w-4 h-4" />
+                      Stop
+                    </button>
+                    <button
+                      onClick={() => onHealthCheck(model.id)}
+                      disabled={isPerformingAction}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                    >
+                      <Activity className="w-4 h-4" />
+                      Health Check
+                    </button>
+                  </div>
+                )}
+
+                {/* Edit and Delete actions (available for all models, especially Replicate) */}
+                {isReplicate && onEdit && onDelete && (
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => onEdit(model as ReplicateModel)}
+                      disabled={isPerformingAction}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => onDelete(model.id)}
+                      disabled={isPerformingAction}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Right: Logs or Config */}

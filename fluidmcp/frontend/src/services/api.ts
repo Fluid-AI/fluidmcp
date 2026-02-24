@@ -18,6 +18,7 @@ import type {
   LLMModelStopResponse,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ReplicateModelConfig,
 } from '../types/llm';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
@@ -216,6 +217,30 @@ class ApiClient {
         signal,
       }
     );
+  }
+
+  // LLM Model Management (CRUD)
+  async createLLMModel(config: ReplicateModelConfig): Promise<{ message: string; model_id: string }> {
+    return this.request('/api/llm/models', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async updateLLMModel(
+    modelId: string,
+    updates: Partial<Pick<ReplicateModelConfig, 'default_params' | 'timeout' | 'max_retries'>>
+  ): Promise<{ message: string; model_id: string; updated_fields: string[] }> {
+    return this.request(`/api/llm/models/${modelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteLLMModel(modelId: string): Promise<{ message: string; model_id: string }> {
+    return this.request(`/api/llm/models/${modelId}`, {
+      method: 'DELETE',
+    });
   }
 
   // Server Configuration Management (CRUD)

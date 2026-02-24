@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import LLMModelRow from "../components/LLMModelRow";
+import LLMModelForm from "../components/LLMModelForm";
 import { Pagination } from "../components/Pagination";
 import ErrorMessage from "../components/ErrorMessage";
 import { useLLMModels } from "../hooks/useLLMModels";
@@ -8,9 +9,11 @@ import { showSuccess, showError, showLoading } from "../services/toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, Filter, RefreshCw, MessageSquare } from "lucide-react";
+import { Search, Filter, RefreshCw, MessageSquare, Plus } from "lucide-react";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
+import apiClient from "../services/api";
+import type { ReplicateModelConfig, ReplicateModel } from "../types/llm";
 
 export default function LLMModels() {
   const navigate = useNavigate();
@@ -26,6 +29,13 @@ export default function LLMModels() {
     modelId: string | null;
     type: 'restarting' | 'stopping' | null;
   }>({ modelId: null, type: null });
+
+  // Modal state for add/edit
+  const [modalState, setModalState] = useState<{
+    open: boolean;
+    mode: 'add' | 'edit';
+    model?: ReplicateModel;
+  }>({ open: false, mode: 'add' });
 
   // Filtering, sorting, searching logic
   const filteredModels = models
@@ -157,6 +167,67 @@ export default function LLMModels() {
     }
   };
 
+  const handleCreateModel = async (config: ReplicateModelConfig | Partial<ReplicateModelConfig>) => {
+    const toastId = showLoading('Creating model...');
+    try {
+      await apiClient.createLLMModel(config as ReplicateModelConfig);
+      showSuccess('Model created successfully', toastId);
+      refetch(); // Refresh the models list
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      showError(`Failed to create model: ${message}`, toastId);
+      throw err; // Re-throw so form knows it failed
+    }
+  };
+
+  const handleUpdateModel = async (modelId: string, updates: Partial<ReplicateModelConfig>) => {
+    const toastId = showLoading('Updating model...');
+    try {
+      await apiClient.updateLLMModel(modelId, updates);
+      showSuccess('Model updated successfully', toastId);
+      refetch(); // Refresh the models list
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      showError(`Failed to update model: ${message}`, toastId);
+      throw err; // Re-throw so form knows it failed
+    }
+  };
+
+  const handleDeleteModel = async (modelId: string) => {
+    const model = models.find(m => m.id === modelId);
+    const modelName = model?.id || modelId;
+
+    if (!confirm(`Are you sure you want to delete ${modelName}? This action cannot be undone.`)) {
+      return;
+    }
+
+    const toastId = showLoading(`Deleting ${modelName}...`);
+    try {
+      await apiClient.deleteLLMModel(modelId);
+      showSuccess(`${modelName} deleted successfully`, toastId);
+      refetch(); // Refresh the models list
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      showError(`Failed to delete ${modelName}: ${message}`, toastId);
+    }
+  };
+
+  const handleOpenAddModal = () => {
+    setModalState({ open: true, mode: 'add' });
+  };
+
+  const handleOpenEditModal = (model: ReplicateModel) => {
+    setModalState({ open: true, mode: 'edit', model });
+  };
+
+  const handleFormSubmit = async (config: ReplicateModelConfig | Partial<ReplicateModelConfig>) => {
+    if (modalState.mode === 'add') {
+      await handleCreateModel(config);
+    } else if (modalState.mode === 'edit' && modalState.model) {
+      await handleUpdateModel(modalState.model.id, config);
+    }
+  };
+
   if (error) {
     return (
       <div className="min-h-screen bg-black text-white">
@@ -205,8 +276,15 @@ export default function LLMModels() {
             </div>
           </div>
 
-          {/* Try the llms Button */}
-          <div className="mt-8 flex justify-center" data-aos="fade-up" data-aos-delay="200">
+          {/* Action Buttons */}
+          <div className="mt-8 flex justify-center gap-4" data-aos="fade-up" data-aos-delay="200">
+            <button
+              onClick={handleOpenAddModal}
+              className="flex items-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-green-500/50"
+            >
+              <Plus className="w-5 h-5" />
+              Add LLM Model
+            </button>
             <button
               onClick={() => navigate('/llm/playground')}
               className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-indigo-500/50"
@@ -313,6 +391,8 @@ export default function LLMModels() {
                     onRestart={handleRestartModel}
                     onStop={handleStopModel}
                     onHealthCheck={handleHealthCheck}
+                    onEdit={handleOpenEditModal}
+                    onDelete={handleDeleteModel}
                     isPerformingAction={actionState.modelId === model.id && actionState.type !== null}
                   />
                 </div>
@@ -337,6 +417,15 @@ export default function LLMModels() {
       </div>
 
       <Footer />
+
+      {/* Add/Edit Model Modal */}
+      <LLMModelForm
+        open={modalState.open}
+        onOpenChange={(open) => setModalState({ ...modalState, open })}
+        onSubmit={handleFormSubmit}
+        mode={modalState.mode}
+        existingModel={modalState.model}
+      />
     </div>
   );
 }

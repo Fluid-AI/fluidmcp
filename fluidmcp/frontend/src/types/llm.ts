@@ -113,6 +113,25 @@ export interface ChatSession {
   };
 }
 
+// LLM Model Registration/Configuration
+export interface ReplicateModelConfig {
+  model_id: string;
+  type: "replicate";
+  model: string;
+  api_key: string;
+  default_params?: {
+    temperature?: number;
+    max_tokens?: number;
+    top_p?: number;
+    top_k?: number;
+    stop?: string | string[];
+    frequency_penalty?: number;
+    presence_penalty?: number;
+  };
+  timeout?: number;
+  max_retries?: number;
+}
+
 // Helper type guards
 export function isProcessBasedModel(model: LLMModel): model is ProcessBasedModel {
   return model.type === "process";
