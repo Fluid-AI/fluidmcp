@@ -11,6 +11,7 @@ import signal
 import secrets
 from pathlib import Path
 from loguru import logger
+from fastapi import FastAPI, Depends, Request
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
@@ -45,8 +46,7 @@ def save_token_to_file(token: str) -> Path:
     logger.info(f"Token saved to: {token_file}")
     return token_file
 
-
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099, auth0_mode: bool = False) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -56,6 +56,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
         allowed_origins: List of allowed CORS origins (default: localhost only)
+        auth0_mode: Enable OAuth0 (Auth0) authentication
+        host: Host address for URL logging (default: 0.0.0.0)
+        port: Port number for URL logging (default: 8099)
 
     Returns:
         FastAPI application
@@ -76,12 +79,19 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "http://localhost:8080",
         ]
     
+    # Auto-expand CORS for OAuth environments
+    if auth0_mode:
+        from .auth.url_utils import get_cors_origins
+        auto_origins = get_cors_origins(port)
+        allowed_origins = list(set((allowed_origins or []) + auto_origins))
+        logger.info(f"OAuth mode: Auto-detected CORS origins: {auto_origins}")
+
     if "*" in allowed_origins:
         logger.warning("⚠️  WARNING: CORS wildcard enabled - any website can access this API!")
         logger.warning("⚠️  This is a SECURITY RISK and should only be used for development!")
-    
+
     logger.info(f"CORS allowed origins: {allowed_origins}")
-    
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
@@ -89,6 +99,37 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add security headers middleware
+    @app.middleware("http")
+    async def add_security_headers(request: Request, call_next):
+        """Add security headers to all responses"""
+        response = await call_next(request)
+
+        # Content Security Policy (CSP) - prevent XSS
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "  # Allow inline scripts for docs
+            "style-src 'self' 'unsafe-inline'; "   # Allow inline styles
+            "img-src 'self' data: https:; "
+            "font-src 'self' data:;"
+        )
+
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        # Prevent clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
+
+        # XSS protection (legacy browsers)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+
+        # Referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        return response
+
+    logger.info("Security headers middleware enabled")
 
     # Store managers in app state for dependency injection
     app.state.db_manager = db_manager
@@ -109,6 +150,13 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(mcp_router, tags=["mcp"])
     logger.info("Dynamic MCP router mounted")
 
+    # Mount OAuth routes if enabled
+    if auth0_mode:
+        from .auth import auth_router, init_auth_routes, Auth0Config
+        auth_config = Auth0Config.from_env(port=8099)
+        init_auth_routes(auth_config)
+        app.include_router(auth_router, tags=["Authentication"])
+        logger.info("✓ OAuth routes mounted at /auth")
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
 
@@ -285,12 +333,15 @@ async def main(args):
     server_manager = ServerManager(persistence)
 
     # 3. Create FastAPI app (without MCP servers)
+    auth0_mode = getattr(args, 'auth0', False)
     app = await create_app(
         db_manager=persistence,
         server_manager=server_manager,
         secure_mode=args.secure,
         token=args.token,
         allowed_origins=allowed_origins,
+        auth0_mode=auth0_mode,
+        host=args.host,
         port=args.port
     )
 
@@ -395,6 +446,11 @@ def run():
         help="Bearer token for secure mode (will be generated if not provided)"
     )
     parser.add_argument(
+        "--auth0",
+        action="store_true",
+        help="Enable OAuth0 (Auth0) authentication (mutually exclusive with --secure)"
+    )
+    parser.add_argument(
         "--allowed-origins",
         type=str,
         help="Comma-separated list of allowed CORS origins (default: localhost only)"
@@ -412,26 +468,55 @@ def run():
 
     args = parser.parse_args()
 
+    # Validate authentication modes (mutually exclusive)
+    if args.secure and args.auth0:
+        logger.error("❌ Cannot use --secure and --auth0 together. Choose one authentication method.")
+        logger.info("   --secure: Bearer token authentication (simple, for CI/CD)")
+        logger.info("   --auth0:  OAuth0 authentication (multi-user, SSO)")
+        return
+
+    # Validate Auth0 configuration if enabled
+    if args.auth0:
+        required_vars = ["FMCP_AUTH0_DOMAIN", "FMCP_AUTH0_CLIENT_ID", "FMCP_AUTH0_CLIENT_SECRET"]
+        missing = [v for v in required_vars if not os.getenv(v)]
+        if missing:
+            logger.error(f"❌ Auth0 mode requires environment variables: {', '.join(missing)}")
+            logger.info("   Set these environment variables or create auth0-config.json")
+            logger.info("   See .env.example for configuration template")
+            return
+        os.environ["FMCP_AUTH0_MODE"] = "true"
+        logger.info(f"✓ OAuth0 enabled with domain: {os.getenv('FMCP_AUTH0_DOMAIN')}")
+
     # Generate and save token if secure mode enabled but no token provided
     if args.secure and not args.token:
-        args.token = secrets.token_urlsafe(32)
-        logger.info(f"Generated bearer token: {args.token}")
+        # Check if token file exists first (for persistence across restarts)
+        token_file = Path.home() / ".fmcp" / "tokens" / "current_token.txt"
 
-        # Save to secure file
-        token_file = save_token_to_file(args.token)
+        if token_file.exists():
+            # Use existing token
+            args.token = token_file.read_text().strip()
+            logger.info(f"Using existing bearer token from: {token_file}")
+            logger.info(f"Token (starts with: {args.token[:4]}****)")
+        else:
+            # Generate new token
+            args.token = secrets.token_urlsafe(32)
+            logger.info(f"Generated bearer token: {args.token}")
 
-        # Print full token to console (NOT in logs)
-        print("\n" + "="*70)
-        print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-        print("="*70)
-        print(f"\n{args.token}\n")
-        print("="*70)
-        print(f"Token saved to: {token_file}")
-        print("To retrieve later: fluidmcp token show")
-        print("="*70 + "\n")
+            # Save to secure file
+            token_file = save_token_to_file(args.token)
 
-        # Only log masked version
-        logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
+            # Print full token to console (NOT in logs)
+            print("\n" + "="*70)
+            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
+            print("="*70)
+            print(f"\n{args.token}\n")
+            print("="*70)
+            print(f"Token saved to: {token_file}")
+            print("To retrieve later: fluidmcp token show")
+            print("="*70 + "\n")
+
+            # Only log masked version
+            logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
 
     try:
         asyncio.run(main(args))

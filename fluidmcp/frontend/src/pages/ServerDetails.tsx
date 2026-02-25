@@ -1,5 +1,5 @@
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useServerDetails } from "../hooks/useServerDetails";
 import { useServerEnv } from "../hooks/useServerEnv";
 import { useServerPolling } from "../hooks/useServerPolling";
@@ -9,10 +9,12 @@ import { ServerEnvForm } from "../components/ServerEnvForm";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function ServerDetails() {
   const { serverId } = useParams<{ serverId: string }>();
   const navigate = useNavigate();
+  const { requireAuth } = useAuth();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [envFormExpanded, setEnvFormExpanded] = useState(false);
   const [envSubmitting, setEnvSubmitting] = useState(false);
@@ -54,6 +56,25 @@ export default function ServerDetails() {
   const shouldExpandEnvForm = needsEnv && !hasInstanceEnv;
 
   const handleStartServer = async () => {
+    // Store action context
+    const actionContext = {
+      action: 'start',
+      serverId: serverId,
+      timestamp: Date.now()
+    };
+    sessionStorage.setItem('auth_pending_action', JSON.stringify(actionContext));
+
+    // Check authentication - will redirect to Auth0 if not authenticated
+    const isAuthenticated = await requireAuth(window.location.pathname);
+    if (!isAuthenticated) {
+      // User will be redirected to Auth0 login
+      // After login, they'll return to this page and resume the action
+      return;
+    }
+
+    // Clear pending action
+    sessionStorage.removeItem('auth_pending_action');
+
     const toastId = `server-${serverId}`;
     const serverName = serverDetails?.name || serverId;
 
@@ -103,6 +124,28 @@ export default function ServerDetails() {
       setActionLoading(null);
     }
   };
+
+  // Listen for action replay events after OAuth authentication
+  useEffect(() => {
+    const handleReplayAction = async (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const action = customEvent.detail;
+
+      if (action.action === 'start' && action.serverId === serverId) {
+        setTimeout(async () => {
+          if (serverDetails?.status?.state !== 'running') {
+            await handleStartServer();
+          }
+        }, 500);
+      }
+    };
+
+    window.addEventListener('replay-action', handleReplayAction);
+
+    return () => {
+      window.removeEventListener('replay-action', handleReplayAction);
+    };
+  }, [serverId, serverDetails]);
 
   const handleEnvSubmit = async (env: Record<string, string>) => {
     if (!serverId) return;

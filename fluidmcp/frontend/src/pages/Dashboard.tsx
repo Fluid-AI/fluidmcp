@@ -8,12 +8,15 @@ import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "../contexts/AuthContext";
+import { UserMenu } from "../components/UserMenu";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
 //dummy comment to change file
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
+  const { requireAuth } = useAuth();
 
   // Controls state
   const [searchQuery, setSearchQuery] = useState("");
@@ -88,6 +91,34 @@ export default function Dashboard() {
     });
   }, []);
 
+  // Listen for action replay events after OAuth authentication
+  useEffect(() => {
+    const handleReplayAction = async (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const action = customEvent.detail;
+
+      if (action.action === 'start' && action.serverId) {
+        // Wait a bit for the UI to settle
+        setTimeout(async () => {
+          // Find the server and start it
+          const server = servers.find(s => s.id === action.serverId);
+          if (server && server.status?.state !== 'running') {
+            // Call the start handler directly
+            await handleStartServer(action.serverId);
+          }
+        }, 500);
+      }
+    };
+
+    // Add event listener
+    window.addEventListener('replay-action', handleReplayAction);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('replay-action', handleReplayAction);
+    };
+  }, [servers]);
+
   const [actionState, setActionState] = useState<{
     serverId: string | null;
     type: 'starting' | 'stopping' | 'restarting' | null;
@@ -95,6 +126,26 @@ export default function Dashboard() {
 
   const handleStartServer = async (serverId: string) => {
     if (actionState.type !== null) return;
+
+    // Store the action context before auth check
+    // This allows us to replay the action after authentication
+    const actionContext = {
+      action: 'start',
+      serverId: serverId,
+      timestamp: Date.now()
+    };
+    sessionStorage.setItem('auth_pending_action', JSON.stringify(actionContext));
+
+    // Check authentication - will redirect to Auth0 if not authenticated
+    const isAuthenticated = await requireAuth(window.location.pathname);
+    if (!isAuthenticated) {
+      // User will be redirected to Auth0 login
+      // After login, they'll return to this page and resume the action
+      return;
+    }
+
+    // Clear the pending action since we're authenticated
+    sessionStorage.removeItem('auth_pending_action');
 
     const server = servers.find(s => s.id === serverId);
     const serverName = server?.name || serverId;
@@ -145,7 +196,7 @@ export default function Dashboard() {
               </nav>
             </div>
             <div className="flex items-center space-x-3">
-              <button 
+              <button
                 style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
                 onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
                 onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
@@ -155,7 +206,7 @@ export default function Dashboard() {
                 </svg>
                 Fluid MCP for your Enterprise
               </button>
-              <button 
+              <button
                 style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
                 onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
                 onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
@@ -165,6 +216,7 @@ export default function Dashboard() {
                 </svg>
                 Report Issue
               </button>
+              <UserMenu />
             </div>
           </div>
         </header>
