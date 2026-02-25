@@ -48,7 +48,7 @@ fluidmcp run examples/vllm-config.json --file --start-server
 
 **OpenAI-compatible endpoint**:
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -149,7 +149,7 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 **Key Points**:
 - Each model runs on a separate port (8001, 8002, etc.)
 - Adjust `--gpu-memory-utilization` so total doesn't exceed 1.0 (e.g., 0.45 + 0.45 = 0.9); exceeding 1.0 can lead to GPU out-of-memory errors
-- Access via different model IDs: `/llm/vllm-opt/v1/...` and `/llm/vllm-gpt2/v1/...`
+- Access via unified endpoint `/llm/v1/chat/completions` with model ID in request body
 - Models run independently and can handle concurrent requests
 - See `examples/vllm-multi-model-config.json` for complete example
 
@@ -158,15 +158,15 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 # Start multi-model setup
 fluidmcp run examples/vllm-multi-model-config.json --file --start-server
 
-# Query first model
-curl -X POST http://localhost:8099/llm/vllm-opt/v1/chat/completions \
+# Query first model (specify model ID in request body)
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "facebook/opt-125m", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "vllm-opt", "messages": [{"role": "user", "content": "Hello"}]}'
 
-# Query second model
-curl -X POST http://localhost:8099/llm/vllm-gpt2/v1/chat/completions \
+# Query second model (specify model ID in request body)
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "gpt2", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "vllm-gpt2", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # Check status of all models
 curl http://localhost:8099/api/llm/status
@@ -387,7 +387,7 @@ The old raw args format continues to work without changes:
 
 FluidMCP proxies requests to vLLM's native OpenAI server:
 
-#### `POST /llm/{model_id}/v1/chat/completions`
+#### `POST /llm/v1/chat/completions`
 
 **Request**:
 ```json
@@ -428,7 +428,7 @@ FluidMCP proxies requests to vLLM's native OpenAI server:
 }
 ```
 
-#### `POST /llm/{model_id}/v1/completions`
+#### `POST /llm/v1/completions`
 
 **Request**:
 ```json
@@ -440,9 +440,9 @@ FluidMCP proxies requests to vLLM's native OpenAI server:
 }
 ```
 
-#### `GET /llm/{model_id}/v1/models`
+#### `GET /llm/v1/models`
 
-List available models from vLLM server.
+List all available models or get details for a specific model using `?model={model_id}` query parameter.
 
 ---
 
@@ -451,7 +451,7 @@ List available models from vLLM server.
 ### Basic Chat Completion
 
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -462,7 +462,7 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 ### With System Prompt
 
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -480,7 +480,7 @@ curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
 **NEW**: Real-time token streaming using Server-Sent Events (SSE):
 
 ```bash
-curl -X POST http://localhost:8099/llm/vllm/v1/chat/completions \
+curl -X POST http://localhost:8099/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -510,7 +510,7 @@ from openai import OpenAI
 
 # Point to FluidMCP gateway
 client = OpenAI(
-    base_url="http://localhost:8099/llm/vllm/v1",
+    base_url="http://localhost:8099/llm/v1",
     api_key="dummy"  # Not used, but required by SDK
 )
 
@@ -550,7 +550,7 @@ Client Request (OpenAI format)
     ↓
 FluidMCP Gateway (port 8099)
     ↓
-POST /llm/vllm/v1/chat/completions
+POST /llm/v1/chat/completions (with model="vllm" in body)
     ↓
 HTTP Proxy (httpx)
     ↓
@@ -710,7 +710,7 @@ POST /vllm/mcp
 
 **New** (OpenAI):
 ```bash
-POST /llm/vllm/v1/chat/completions
+POST /llm/v1/chat/completions
 {"model": "...", "messages": [...]}
 ```
 

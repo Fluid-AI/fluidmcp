@@ -14,11 +14,15 @@ def is_placeholder(value: str) -> bool:
 
     Common placeholder patterns detected:
     - Wrapped in angle brackets: <your-username>, <password>
-    - Contains repeated 'x' characters: xxxx-xxxx-xxxx, XXXXXXXX
+    - Contains repeated 'x' characters (6+ consecutive): xxxxxx-xxxx, XXXXXXXX
     - Contains 'placeholder' keyword
     - Generic instruction patterns: 'your-*', 'my-*', 'insert-*', 'enter-*'
-    - Common placeholder values: 'changeme', 'replace_me', 'todo'
+    - Common placeholder values: 'changeme', 'replace_me', 'todo', 'none', 'null'
     - Too short for real credentials (< 8 chars) with placeholder keywords
+
+    Note: 'none' and 'null' are flagged as placeholders because in the context of
+    environment variables for credentials (API keys, tokens, secrets), these values
+    are almost always placeholders indicating missing configuration.
 
     Args:
         value: The environment variable value to check
@@ -33,6 +37,10 @@ def is_placeholder(value: str) -> bool:
         True
         >>> is_placeholder("xxxx-xxxx-xxxx")
         True
+        >>> is_placeholder("none")
+        True  # 'none' as an API key value is a placeholder
+        >>> is_placeholder("null")
+        True  # 'null' as an API key value is a placeholder
         >>> is_placeholder("my-api-key-abc123def456ghi789")
         False  # Too long and complex to be placeholder
         >>> is_placeholder("sk-1234567890abcdef")
@@ -56,8 +64,8 @@ def is_placeholder(value: str) -> bool:
     if 'placeholder' in value_lower:
         return True
 
-    # Repeated 'x' characters (4+ consecutive x's)
-    if 'xxxx' in value_lower or 'XXXX' in value:
+    # Repeated 'x' characters (6+ consecutive x's to avoid false positives)
+    if 'xxxxxx' in value_lower or 'XXXXXX' in value:
         return True
 
     # Common placeholder values (exact match)
@@ -65,9 +73,11 @@ def is_placeholder(value: str) -> bool:
         'changeme', 'change_me', 'change-me',
         'replace_me', 'replace-me', 'replaceme',
         'todo', 'tbd', 'fixme',
+        'none', 'null',  # Special null-like values
         'example', 'sample', 'test',
         'your_key', 'your_token', 'your_password',
         'my_key', 'my_token', 'my_password',
+        'none', 'null',
     ]
     if value_lower in common_placeholders:
         return True

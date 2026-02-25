@@ -29,6 +29,8 @@ from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
 from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
+from .replicate_client import initialize_replicate_models, stop_all_replicate_models
+from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 
@@ -319,64 +321,140 @@ def run_servers(
     if launched_servers > 0:
         logger.info(f"Successfully launched {launched_servers} MCP server(s)")
 
-    # Launch LLM models if configured
+    # Launch LLM models if configured (supports multiple types: vllm, replicate, etc.)
     if config.llm_models:
-        logger.info(f"Validating and transforming {len(config.llm_models)} LLM model config(s)...")
-        try:
-            # Validate and transform high-level configs to vLLM args
-            validated_llm_config = validate_and_transform_llm_config(config.llm_models)
-            logger.info(f"✓ LLM configuration validated successfully")
-        except VLLMConfigError as e:
-            logger.error(f"LLM configuration validation failed: {e}")
-            logger.error("Fix the configuration errors and try again")
-            if launched_servers > 0:
-                logger.warning(
-                    f"Note: {launched_servers} MCP server(s) were launched before validation failed. "
-                    "These servers remain running and must be stopped manually. "
-                    "Use 'ps aux | grep mcp' (Unix) or Task Manager (Windows) to locate processes, "
-                    "then terminate with 'kill'/'pkill' (Unix) or Task Manager/'taskkill' (Windows)."
-                )
-            return
+        logger.info(f"Processing {len(config.llm_models)} LLM model(s)...")
 
-        logger.info(f"Launching {len(validated_llm_config)} LLM model(s)...")
-        llm_processes = launch_llm_models(validated_llm_config)
+        # Separate models by type
+        vllm_models = {}
+        replicate_models = {}
 
-        # Thread-safe update of LLM registries
-        with _llm_registry_lock:
-            _llm_processes.update(llm_processes)
+        for model_id, model_config in config.llm_models.items():
+            model_type = model_config.get("type", "vllm")  # Default to vllm for backward compat
 
-            # Register LLM endpoints only for successfully running processes
-            for model_id in llm_processes.keys():
-                model_config = validated_llm_config[model_id]
-                endpoints = model_config.get("endpoints", {})
+            if model_type == "vllm":
+                vllm_models[model_id] = model_config
+            elif model_type == "replicate":
+                replicate_models[model_id] = model_config
+            else:
+                logger.warning(f"Model '{model_id}' has unsupported type '{model_type}', skipping")
 
-                # Determine base_url with smart port extraction
-                base_url = endpoints.get("base_url")
-                if not base_url:
-                    # Try to extract port from command args
-                    port = _extract_port_from_args(model_config.get("args", []))
-                    base_url = f"http://localhost:{port}/v1"
-                    logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
+        # Initialize unified LLM provider registry for all models
+        initialize_llm_registry(config.llm_models)
 
-                _llm_endpoints[model_id] = {
-                    "base_url": base_url,
-                    "chat": endpoints.get("chat", "/chat/completions"),
-                    "completions": endpoints.get("completions", "/completions"),
-                    "models": endpoints.get("models", "/models"),
-                }
-                logger.info(f"Registered LLM endpoints for '{model_id}' at {base_url}")
+        # Launch vLLM models
+        if vllm_models:
+            logger.info(f"Validating and transforming {len(vllm_models)} vLLM model config(s)...")
+            validated_llm_config = None
+            try:
+                # Validate and transform high-level configs to vLLM args
+                validated_llm_config = validate_and_transform_llm_config(vllm_models)
+                logger.info(f"✓ vLLM configuration validated successfully")
+            except VLLMConfigError as e:
+                logger.error(f"vLLM configuration validation failed: {e}")
+                logger.error("Skipping vLLM models - will continue with other model types if configured")
+                if launched_servers > 0:
+                    logger.info(
+                        f"Note: {launched_servers} MCP server(s) were launched successfully. "
+                        "They will continue running."
+                    )
+                # Don't return - continue to initialize Replicate models if configured
+                validated_llm_config = None  # Clear to skip vLLM launch
 
-        # Add OpenAI proxy routes if any models started successfully
-        if _llm_endpoints:
-            _add_llm_proxy_routes(app)
-        else:
-            logger.warning("No LLM models started successfully - skipping proxy routes")
+            # Only launch if validation succeeded
+            if validated_llm_config:
+                logger.info(f"Launching {len(validated_llm_config)} vLLM model(s)...")
+                llm_processes = launch_llm_models(validated_llm_config)
 
-        # Register startup event to start health monitor after event loop is running
-        @app.on_event("startup")
-        async def startup_health_monitor():
-            """Start LLM health monitor when FastAPI server starts."""
-            await _start_llm_health_monitor_async()
+                # Thread-safe update of LLM registries
+                with _llm_registry_lock:
+                    _llm_processes.update(llm_processes)
+
+                    # Register LLM endpoints only for successfully running processes
+                    for model_id in llm_processes.keys():
+                        model_config = validated_llm_config[model_id]
+                        endpoints = model_config.get("endpoints", {})
+
+                        # Determine base_url with smart port extraction
+                        base_url = endpoints.get("base_url")
+                        if not base_url:
+                            # Try to extract port from command args
+                            port = _extract_port_from_args(model_config.get("args", []))
+                            base_url = f"http://localhost:{port}/v1"
+                            logger.debug(f"Inferred base_url for '{model_id}': {base_url}")
+
+                        _llm_endpoints[model_id] = {
+                            "base_url": base_url,
+                            "chat": endpoints.get("chat", "/chat/completions"),
+                            "completions": endpoints.get("completions", "/completions"),
+                            "models": endpoints.get("models", "/models"),
+                        }
+                        logger.info(f"Registered vLLM endpoints for '{model_id}' at {base_url}")
+
+                        # Update registry with inferred base_url for unified API
+                        update_model_endpoints(model_id, {"base_url": base_url})
+
+                # Add OpenAI proxy routes if any models started successfully
+                if _llm_endpoints:
+                    _add_llm_proxy_routes(app)
+                else:
+                    logger.warning("No vLLM models started successfully - skipping proxy routes")
+
+                # Register startup event to start health monitor after event loop is running
+                @app.on_event("startup")
+                async def startup_health_monitor():
+                    """Start LLM health monitor when FastAPI server starts."""
+                    await _start_llm_health_monitor_async()
+
+        # Initialize Replicate models
+        if replicate_models:
+            logger.info(f"Initializing {len(replicate_models)} Replicate model(s)...")
+
+            # Register startup event to initialize Replicate clients
+            @app.on_event("startup")
+            async def startup_replicate_models():
+                """Initialize Replicate models when FastAPI server starts."""
+                try:
+                    replicate_clients = await initialize_replicate_models(replicate_models)
+                    if replicate_clients:
+                        logger.info(f"Successfully initialized {len(replicate_clients)} Replicate model(s)")
+                    else:
+                        logger.warning("No Replicate models initialized successfully")
+                except Exception as e:
+                    logger.error(f"Error initializing Replicate models: {e}")
+
+            # Register shutdown event to cleanup Replicate clients on same event loop
+            @app.on_event("shutdown")
+            async def shutdown_replicate_models():
+                """Cleanup Replicate models when FastAPI server shuts down."""
+                try:
+                    await stop_all_replicate_models()
+                    logger.info("Replicate clients shutdown completed")
+                except Exception as e:
+                    logger.error(f"Error during Replicate clients shutdown: {e}")
+
+        # Register global shutdown event for HTTP client cleanup (used by vLLM proxy and other features)
+        # This runs regardless of whether Replicate models are configured
+        @app.on_event("shutdown")
+        async def shutdown_http_client():
+            """Cleanup management API's shared HTTP client (used for vLLM proxying and more)."""
+            try:
+                from ..api.management import cleanup_http_client
+                await cleanup_http_client()
+                logger.info("Management HTTP client shutdown completed")
+            except Exception as e:
+                logger.error(f"Error during management HTTP client shutdown: {e}")
+
+        # Final check: warn if no models of any type actually launched/initialized
+        vllm_launched = bool(_llm_processes)
+        replicate_will_init = bool(replicate_models)  # Will be initialized on startup
+
+        if not vllm_launched and not replicate_will_init:
+            if launched_servers == 0:
+                logger.error("No MCP servers or LLM models successfully configured - aborting")
+                return
+            else:
+                logger.warning("No LLM models successfully launched, but MCP servers are running")
 
     # Add unified tool discovery endpoint
     _add_unified_tools_endpoint(app, secure_mode)
@@ -721,17 +799,23 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
     Add OpenAI-compatible proxy routes for LLM models.
 
     Creates endpoints with /llm prefix to avoid conflicts with MCP server names:
-    - POST /llm/{model_id}/v1/chat/completions
-    - POST /llm/{model_id}/v1/completions
-    - GET /llm/{model_id}/v1/models
+    - POST /llm/v1/chat/completions
+    - POST /llm/v1/completions
+    - GET /llm/v1/models
+    - GET /llm/v1/models/{model_id}
 
     Args:
         app: FastAPI application instance
     """
-    @app.post("/llm/{model_id}/v1/chat/completions", tags=["llm"])
-    async def proxy_chat_completions(model_id: str, request: Request):
+    @app.post("/llm/v1/chat/completions", tags=["llm"])
+    async def proxy_chat_completions(request: Request):
         """Proxy OpenAI chat completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Extract model_id from request body (OpenAI-style)
+        model_id = body.get("model")
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
 
         # Check if streaming is requested
         if body.get("stream", False):
@@ -746,10 +830,15 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Non-streaming request
         return await _proxy_llm_request(model_id, "chat", "POST", body)
 
-    @app.post("/llm/{model_id}/v1/completions", tags=["llm"])
-    async def proxy_completions(model_id: str, request: Request):
+    @app.post("/llm/v1/completions", tags=["llm"])
+    async def proxy_completions(request: Request):
         """Proxy OpenAI completions to LLM backend with optional streaming support."""
         body = await request.json()
+
+        # Extract model_id from request body (OpenAI-style)
+        model_id = body.get("model")
+        if not model_id:
+            raise HTTPException(status_code=400, detail="Missing required field 'model' in request body")
 
         # Check if streaming is requested
         if body.get("stream", False):
@@ -764,10 +853,69 @@ def _add_llm_proxy_routes(app: FastAPI) -> None:
         # Non-streaming request
         return await _proxy_llm_request(model_id, "completions", "POST", body)
 
-    @app.get("/llm/{model_id}/v1/models", tags=["llm"])
-    async def proxy_models(model_id: str):
-        """Proxy models list endpoint to LLM backend."""
-        return await _proxy_llm_request(model_id, "models", "GET")
+    @app.get("/llm/v1/models", tags=["llm"])
+    async def proxy_models(model: str = None):
+        """List models or get specific model details (OpenAI-compatible)."""
+        if model:
+            # Return specific model details in OpenAI format
+            # Check if model exists in registry
+            with _llm_registry_lock:
+                if model not in _llm_endpoints:
+                    raise HTTPException(404, f"Model '{model}' not found")
+
+            # Return single model object (same format as /llm/v1/models/{model_id})
+            created_timestamp = int(time.time())
+            return {
+                "id": model,
+                "object": "model",
+                "created": created_timestamp,
+                "owned_by": "fluidmcp",
+                "permission": [],
+                "root": model,
+                "parent": None
+            }
+        else:
+            # Return all configured models in OpenAI format
+            with _llm_registry_lock:
+                endpoints_snapshot = dict(_llm_endpoints)
+
+            created_timestamp = int(time.time())
+            all_models = []
+            for model_id in endpoints_snapshot.keys():
+                all_models.append({
+                    "id": model_id,
+                    "object": "model",
+                    "created": created_timestamp,
+                    "owned_by": "fluidmcp",
+                    "permission": [],
+                    "root": model_id,
+                    "parent": None
+                })
+
+            return {
+                "object": "list",
+                "data": all_models
+            }
+
+    @app.get("/llm/v1/models/{model_id}", tags=["llm"])
+    async def proxy_get_model(model_id: str):
+        """Get specific model details (OpenAI-compatible)."""
+        # Check if model exists in registry
+        with _llm_registry_lock:
+            if model_id not in _llm_endpoints:
+                raise HTTPException(404, f"Model '{model_id}' not found")
+
+        # Return single model object in OpenAI format
+        created_timestamp = int(time.time())
+        return {
+            "id": model_id,
+            "object": "model",
+            "created": created_timestamp,
+            "owned_by": "fluidmcp",
+            "permission": [],
+            "root": model_id,
+            "parent": None
+        }
 
     @app.get("/api/llm/status", tags=["llm"])
     async def llm_status():
@@ -988,6 +1136,23 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
             collector = MetricsCollector(server_name)
             collector.set_uptime(uptime)
 
+        # Update Replicate metrics (cache and rate limiters) before rendering
+        # This ensures Prometheus scrapes always reflect current state
+        try:
+            from .replicate_metrics import update_cache_metrics, update_rate_limiter_metrics
+            await update_cache_metrics()
+            await update_rate_limiter_metrics()
+        except ModuleNotFoundError as e:
+            # Missing dependency (truly optional, should not happen in normal deployment)
+            # Must catch ModuleNotFoundError first (subclass of ImportError)
+            logger.debug(f"Replicate metrics module not found (optional dependency): {e}")
+        except ImportError as e:
+            # Replicate metrics module import failed (unexpected, should be part of codebase)
+            logger.warning(f"Failed to import Replicate metrics (unexpected packaging issue): {e}")
+        except Exception as e:
+            # Other errors - log with stack trace but don't fail metrics endpoint
+            logger.warning(f"Failed to update Replicate metrics: {e}", exc_info=True)
+
         registry = get_registry()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
         return PlainTextResponse(
@@ -1150,6 +1315,19 @@ def _cleanup_resources():
             logger.info("Shutting down LLM processes...")
             stop_all_llm_models(_llm_processes)
             _llm_processes.clear()
+
+        # Stop all Replicate clients (fallback - should be handled by FastAPI shutdown event)
+        # This is only reached if atexit is triggered before FastAPI shutdown
+        logger.debug("Attempting fallback Replicate clients cleanup...")
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(stop_all_replicate_models())
+            logger.debug("Replicate clients stopped successfully (fallback)")
+        except Exception as e:
+            logger.warning(f"Error during Replicate clients cleanup (fallback): {e}")
+        finally:
+            loop.close()
 
         # Close shared HTTP client
         if _http_client is not None:

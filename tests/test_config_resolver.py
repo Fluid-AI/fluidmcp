@@ -3,14 +3,13 @@
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 from argparse import Namespace
 
 from fluidmcp.cli.services.config_resolver import (
     ServerConfig,
     resolve_config,
     resolve_from_package,
-    resolve_from_installed,
     resolve_from_file,
     _resolve_package_dest_dir,
     _collect_installed_servers,
@@ -209,3 +208,127 @@ class TestResolvePackageDestDir:
         tmp_path.mkdir(exist_ok=True)
         with pytest.raises(FileNotFoundError):
             _resolve_package_dest_dir("Missing@1.0.0", tmp_path)
+
+
+class TestBackwardCompatibilityMerge:
+    """Tests for backward compatibility: replicateModels → llmModels merge"""
+
+    def test_merge_replicate_into_empty_llm_models(self, tmp_path):
+        """Test merging replicateModels when llmModels is empty"""
+        config_file = tmp_path / "config.json"
+        config_data = {
+            "mcpServers": {},
+            "llmModels": {},
+            "replicateModels": {
+                "llama-2-70b": {
+                    "model": "meta/llama-2-70b-chat",
+                    "api_key": "r8_test"
+                }
+            }
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        result = resolve_from_file(str(config_file))
+
+        # Should have merged replicate model into llmModels with type field
+        assert "llama-2-70b" in result.llm_models
+        assert result.llm_models["llama-2-70b"]["type"] == "replicate"
+        assert result.llm_models["llama-2-70b"]["model"] == "meta/llama-2-70b-chat"
+
+    def test_merge_preserves_existing_llm_models(self, tmp_path):
+        """Test that existing llmModels are preserved during merge"""
+        config_file = tmp_path / "config.json"
+        config_data = {
+            "mcpServers": {},
+            "llmModels": {
+                "vllm-local": {
+                    "type": "vllm",
+                    "command": "vllm",
+                    "args": ["serve", "model"]
+                }
+            },
+            "replicateModels": {
+                "llama-2-70b": {
+                    "model": "meta/llama-2-70b-chat",
+                    "api_key": "r8_test"
+                }
+            }
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        result = resolve_from_file(str(config_file))
+
+        # Both models should exist
+        assert "vllm-local" in result.llm_models
+        assert result.llm_models["vllm-local"]["type"] == "vllm"
+        assert "llama-2-70b" in result.llm_models
+        assert result.llm_models["llama-2-70b"]["type"] == "replicate"
+
+    def test_collision_prefers_llm_models(self, tmp_path):
+        """Test that llmModels entry wins when same ID exists in both sections"""
+        config_file = tmp_path / "config.json"
+        config_data = {
+            "mcpServers": {},
+            "llmModels": {
+                "my-model": {
+                    "type": "vllm",
+                    "command": "vllm"
+                }
+            },
+            "replicateModels": {
+                "my-model": {
+                    "model": "meta/llama-2-70b-chat",
+                    "api_key": "r8_test"
+                }
+            }
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        result = resolve_from_file(str(config_file))
+
+        # llmModels entry should win
+        assert "my-model" in result.llm_models
+        assert result.llm_models["my-model"]["type"] == "vllm"
+        assert "model" not in result.llm_models["my-model"]  # Not from replicate
+
+    def test_type_field_cannot_be_overridden(self, tmp_path):
+        """Test that type='replicate' is forced even if replicateModels has a type field"""
+        config_file = tmp_path / "config.json"
+        config_data = {
+            "mcpServers": {},
+            "llmModels": {},
+            "replicateModels": {
+                "llama-2-70b": {
+                    "type": "vllm",  # Wrong type in deprecated section
+                    "model": "meta/llama-2-70b-chat",
+                    "api_key": "r8_test"
+                }
+            }
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        result = resolve_from_file(str(config_file))
+
+        # Type should be forced to 'replicate'
+        assert result.llm_models["llama-2-70b"]["type"] == "replicate"
+
+    def test_no_merge_when_replicate_models_empty(self, tmp_path):
+        """Test that empty replicateModels doesn't affect llmModels"""
+        config_file = tmp_path / "config.json"
+        config_data = {
+            "mcpServers": {},
+            "llmModels": {
+                "vllm-local": {
+                    "type": "vllm",
+                    "command": "vllm"
+                }
+            },
+            "replicateModels": {}
+        }
+        config_file.write_text(json.dumps(config_data))
+
+        result = resolve_from_file(str(config_file))
+
+        # Only vllm model should exist
+        assert len(result.llm_models) == 1
+        assert "vllm-local" in result.llm_models

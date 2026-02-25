@@ -1,0 +1,44 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llava-1.5-7b": {
+      "type": "vllm",
+      "command": "vllm",
+      "args": [
+        "serve",
+        "llava-hf/llava-1.5-7b-hf",
+        "--port", "8001",
+        "--dtype", "float16",
+        "--max-model-len", "4096"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "endpoints": {
+        "base_url": "http://localhost:8001/v1"
+      },
+      "capabilities": ["text", "vision"],
+      "restart_policy": "on-failure",
+      "max_restarts": 3
+    },
+    "qwen-vl": {
+      "type": "vllm",
+      "command": "vllm",
+      "args": [
+        "serve",
+        "Qwen/Qwen-VL-Chat",
+        "--port", "8002",
+        "--dtype", "float16",
+        "--trust-remote-code"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "1"
+      },
+      "endpoints": {
+        "base_url": "http://localhost:8002/v1"
+      },
+      "capabilities": ["text", "vision"],
+      "restart_policy": "on-failure"
+    }
+  }
+}

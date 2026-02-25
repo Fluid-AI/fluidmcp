@@ -1,5 +1,7 @@
 import React from 'react';
 import type { JsonSchemaProperty } from '../../types/server';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 interface NumberInputProps {
   name: string;
@@ -37,17 +39,19 @@ export const NumberInput: React.FC<NumberInputProps> = ({
   };
 
   return (
-    <div className="form-field">
-      <label htmlFor={name}>
+    <div className="space-y-2">
+      <Label htmlFor={name} className="text-sm font-medium text-zinc-200">
         {label}
-        {required && <span className="required">*</span>}
-      </label>
+        {required && <span className="text-red-400 ml-1">*</span>}
+      </Label>
 
       {schema.description && (
-        <p id={descId} className="field-description">{schema.description}</p>
+        <p id={descId} className="text-xs text-zinc-400">
+          {schema.description}
+        </p>
       )}
 
-      <input
+      <Input
         type="number"
         id={name}
         name={name}
@@ -56,13 +60,17 @@ export const NumberInput: React.FC<NumberInputProps> = ({
         step={isInteger ? '1' : 'any'}
         min={schema.minimum}
         max={schema.maximum}
-        className={error ? 'error' : ''}
+        className={error ? 'border-red-500 focus-visible:ring-red-500' : ''}
         aria-invalid={error ? 'true' : 'false'}
         aria-describedby={[descId, errorId].filter(Boolean).join(' ') || undefined}
         aria-required={required}
       />
 
-      {error && <span id={errorId} className="error-message" role="alert">{error}</span>}
+      {error && (
+        <p id={errorId} className="text-xs text-red-400 mt-1" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 };

@@ -6,12 +6,24 @@ Provides REST API for:
 - Starting/stopping/restarting servers
 - Querying server status and logs
 - Listing all configured servers
+- Replicate model inference
 """
-from typing import Dict, Any
-from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends, Response
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import os
+import asyncio
+import httpx
+import time
+import json
+
+from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
+from ..services.replicate_openai_adapter import replicate_chat_completion
+from ..services.replicate_client import ReplicateClient, get_replicate_client
+from ..services.llm_metrics import get_metrics_collector
+from ..services import omni_adapter
 
 from ..auth import get_token, security
 from ..auth.dependencies import get_current_user
@@ -19,6 +31,38 @@ from ..utils.env_utils import is_placeholder
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+
+# Constants
+MAX_ERROR_MESSAGE_LENGTH = 1000  # Limit error messages to prevent DoS via large responses and protect sensitive data
+
+# Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
+_http_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """
+    Get or create the shared HTTP client (lazy initialization).
+
+    Lazy initialization prevents resource leaks when the module is imported
+    but the client is never used (e.g., in Replicate-only or test configurations).
+    """
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=300.0)
+    return _http_client
+
+
+async def cleanup_http_client():
+    """Close the shared HTTP client to prevent resource leaks."""
+    global _http_client
+    if _http_client is not None:
+        try:
+            await _http_client.aclose()
+        except Exception as e:
+            logger.error(f"Error closing management HTTP client: {e}")
+        finally:
+            # Always clear the reference so the client can be recreated if needed
+            _http_client = None
 
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -105,27 +149,53 @@ def sanitize_input(value: Any) -> Any:
     """
     Sanitize user input to prevent MongoDB injection attacks.
 
-    Removes MongoDB operators and special characters from input.
+    ⚠️  WARNING: This is a basic defense layer. For production:
+    - Use MongoDB's query parameterization
+    - Validate input types strictly at API boundaries
+    - Use schema validation (Pydantic models)
+    - Never construct queries by string concatenation
+
+    This function:
+    - Rejects dict keys that start with "$" (MongoDB-style operators)
+    - Leaves string values unchanged (no escaping performed)
+    - Recursively sanitizes nested dicts and lists
 
     Args:
         value: Input value to sanitize
 
     Returns:
         Sanitized value
+
+    Raises:
+        HTTPException: If MongoDB operator detected in dict keys
     """
-    if isinstance(value, str):
-        # Remove MongoDB operator prefixes
-        if value.startswith("$"):
-            value = value.lstrip("$")
-        # Remove braces that could be part of injection attempts
-        value = value.replace("{", "").replace("}", "")
-    elif isinstance(value, dict):
+    if isinstance(value, dict):
+        # Check for MongoDB operators and dot notation in dictionary keys (most dangerous)
+        for key in value.keys():
+            if isinstance(key, str):
+                if key.startswith("$"):
+                    raise HTTPException(
+                        400,
+                        "MongoDB operator-style keys (starting with '$') are not allowed in input"
+                    )
+                if "." in key:
+                    raise HTTPException(
+                        400,
+                        "Dictionary keys containing '.' (dot notation) are not allowed in input"
+                    )
         # Recursively sanitize dictionary values
         return {k: sanitize_input(v) for k, v in value.items()}
     elif isinstance(value, list):
         # Recursively sanitize list items
         return [sanitize_input(item) for item in value]
-    return value
+    elif isinstance(value, str):
+        # For string values, MongoDB operators are generally safe but can be escaped
+        # Don't modify the string - let MongoDB handle it with parameterized queries
+        # Removing $ or {} can break legitimate values
+        return value
+    else:
+        # Primitive types (int, float, bool, None) are safe
+        return value
 
 
 def validate_server_config(config: Dict[str, Any]) -> None:
@@ -1292,7 +1362,6 @@ async def run_tool(
     # Send tools/call request
     try:
         import json
-        import asyncio
 
         tool_request = {
             "jsonrpc": "2.0",
@@ -1612,3 +1681,1070 @@ async def trigger_health_check(
         # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
         "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
     }
+
+
+# ============================================================================
+# Unified LLM Inference Endpoints (Provider-Agnostic OpenAI-Compatible)
+# ============================================================================
+
+@router.post("/llm/v1/chat/completions")
+async def unified_chat_completions(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible chat completions endpoint (works for ALL provider types).
+
+    Supports vLLM, Replicate, Ollama, and future providers.
+    Provider type is determined from config, not from the route.
+
+    Args:
+        request_body: OpenAI-format chat request with model, messages, temperature, etc.
+
+    Returns:
+        OpenAI-format chat completion response
+
+    Example request:
+        {
+          "model": "llama-2-70b",
+          "messages": [{"role": "user", "content": "Hello"}],
+          "temperature": 0.7,
+          "max_tokens": 100
+        }
+    """
+    # Extract model_id from request body (OpenAI-style)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing required field 'model' in request body")
+
+    # Get provider type from registry
+    provider_type = get_model_type(model_id)
+    if not provider_type:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    logger.info(f"Chat completion request for model '{model_id}' (type: {provider_type})")
+
+    # Initialize metrics collector (record start after config validation)
+    collector = get_metrics_collector()
+
+    # Route to appropriate provider handler
+    if provider_type == "replicate":
+        # Use Replicate adapter (converts OpenAI → Replicate → OpenAI)
+        # The adapter already converts httpx errors to HTTPException, no need to catch them here
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
+
+        try:
+            timeout = request_body.get("timeout", 300)
+            response = await replicate_chat_completion(model_id, request_body, timeout)
+
+            # Record successful request with token usage
+            usage = response.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response
+        except HTTPException as e:
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.status_code
+            )
+            raise
+        except Exception as e:
+            # Record unexpected error and log details
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=500
+            )
+            logger.exception(f"Unexpected error in chat completions for model '{model_id}': {e}")
+            raise HTTPException(500, f"Internal server error while processing request for model '{model_id}'")
+
+    elif provider_type in ("vllm", "ollama", "lmstudio"):
+        # Proxy to OpenAI-compatible endpoint (vLLM, Ollama, LM Studio all use same format)
+        # Validate config first (before metrics tracking)
+        model_config = get_model_config(model_id)
+        if not model_config:
+            raise HTTPException(500, f"Model '{model_id}' config not found")
+
+        base_url = model_config.get("endpoints", {}).get("base_url")
+
+        if not base_url:
+            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
+
+        # Record request start (after config validation, before any processing)
+        start_time = collector.record_request_start(model_id, provider_type)
+
+        # Check if streaming is requested
+        is_streaming = request_body.get("stream", False)
+
+        if is_streaming:
+            # Return streaming response using shared client
+            http_client = _get_http_client()
+            async def stream_generator():
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        f"{base_url}/chat/completions",
+                        json=request_body
+                    ) as response:
+                        response.raise_for_status()
+
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+
+                        # Record successful streaming request after stream completes
+                        # Note: Token usage not available for streaming responses
+                        collector.record_request_success(
+                            model_id=model_id,
+                            start_time=start_time,
+                            prompt_tokens=0,
+                            completion_tokens=0
+                        )
+                except httpx.HTTPStatusError as e:
+                    # Read error body with size limit to avoid buffering entire response
+                    try:
+                        # Read at most MAX_ERROR_MESSAGE_LENGTH bytes from response
+                        error_bytes = await e.response.aread()
+                        error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                        if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                            error_text += "... [truncated]"
+                    except Exception:
+                        error_text = str(e)
+
+                    logger.error(f"{provider_type} streaming error {e.response.status_code}: {error_text}")
+
+                    # Record failed streaming request
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=e.response.status_code
+                    )
+
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"{provider_type} error: {error_text}", "status": e.response.status_code})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
+                except httpx.RequestError as e:
+                    logger.error(f"{provider_type} streaming connection error: {e}")
+
+                    # Record connection error
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=502
+                    )
+
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"Failed to connect to {provider_type} server: {str(e)}"})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
+
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request using shared client
+        try:
+            http_client = _get_http_client()
+            response = await http_client.post(
+                f"{base_url}/chat/completions",
+                json=request_body
+            )
+            response.raise_for_status()
+            response_json = response.json()
+
+            # Record successful request with token usage
+            usage = response_json.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response_json
+        except httpx.HTTPStatusError as e:
+            # Read error body with size limit to avoid buffering entire response
+            try:
+                error_bytes = await e.response.aread()
+                error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                    error_text += "... [truncated]"
+            except Exception:
+                error_text = str(e)
+
+            logger.error(f"{provider_type} returned error {e.response.status_code}: {error_text}")
+
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.response.status_code
+            )
+
+            raise HTTPException(e.response.status_code, f"{provider_type} error: {error_text}")
+        except httpx.RequestError as e:
+            logger.error(f"Failed to connect to {provider_type}: {e}")
+
+            # Record connection error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=502
+            )
+
+            raise HTTPException(502, f"Failed to connect to {provider_type} server: {str(e)}")
+
+    else:
+        raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
+
+
+@router.post("/llm/v1/completions")
+async def unified_completions(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible text completions endpoint (currently supports provider types: vllm, ollama, lmstudio).
+
+    Args:
+        request_body: OpenAI-format completion request with model and prompt
+
+    Returns:
+        OpenAI-format completion response
+
+    Example request:
+        {
+          "model": "llama-2-70b",
+          "prompt": "Once upon a time",
+          "max_tokens": 100
+        }
+    """
+    # Extract model_id from request body (OpenAI-style)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing required field 'model' in request body")
+
+    provider_type = get_model_type(model_id)
+    if not provider_type:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Initialize metrics collector (record start after config validation)
+    collector = get_metrics_collector()
+
+    if provider_type in ("vllm", "ollama", "lmstudio"):
+        # Proxy to OpenAI-compatible completions endpoint (vLLM, Ollama, LM Studio)
+        model_config = get_model_config(model_id)
+        if not model_config:
+            raise HTTPException(500, f"Model '{model_id}' config not found")
+
+        base_url = model_config.get("endpoints", {}).get("base_url")
+
+        if not base_url:
+            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
+
+        # Record request start after config validation
+        start_time = collector.record_request_start(model_id, provider_type)
+
+        # Check if streaming is requested
+        is_streaming = request_body.get("stream", False)
+
+        if is_streaming:
+            # Return streaming response using shared client
+            http_client = _get_http_client()
+            async def stream_generator():
+                try:
+                    async with http_client.stream(
+                        "POST",
+                        f"{base_url}/completions",
+                        json=request_body
+                    ) as response:
+                        response.raise_for_status()
+
+                        async for chunk in response.aiter_bytes():
+                            yield chunk
+
+                        # Record successful streaming request after stream completes
+                        # Note: Token usage not available for streaming responses
+                        collector.record_request_success(
+                            model_id=model_id,
+                            start_time=start_time,
+                            prompt_tokens=0,
+                            completion_tokens=0
+                        )
+                except httpx.HTTPStatusError as e:
+                    # Read error body with size limit to avoid buffering entire response
+                    try:
+                        # Read at most MAX_ERROR_MESSAGE_LENGTH bytes from response
+                        error_bytes = await e.response.aread()
+                        error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                        if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                            error_text += "... [truncated]"
+                    except Exception:
+                        error_text = str(e)
+
+                    logger.error(f"{provider_type} streaming error {e.response.status_code}: {error_text}")
+
+                    # Record failed streaming request
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=e.response.status_code
+                    )
+
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"{provider_type} error: {error_text}", "status": e.response.status_code})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
+                except httpx.RequestError as e:
+                    logger.error(f"{provider_type} streaming connection error: {e}")
+
+                    # Record connection error
+                    collector.record_request_failure(
+                        model_id=model_id,
+                        start_time=start_time,
+                        status_code=502
+                    )
+
+                    # Emit SSE error event with proper JSON escaping
+                    error_payload = json.dumps({"error": f"Failed to connect to {provider_type} server: {str(e)}"})
+                    yield f"event: error\ndata: {error_payload}\n\n".encode()
+
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream"
+            )
+
+        # Non-streaming request using shared client
+        try:
+            http_client = _get_http_client()
+            response = await http_client.post(
+                f"{base_url}/completions",
+                json=request_body
+            )
+            response.raise_for_status()
+            response_json = response.json()
+
+            # Record successful request with token usage
+            usage = response_json.get("usage", {})
+            collector.record_request_success(
+                model_id=model_id,
+                start_time=start_time,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0)
+            )
+
+            return response_json
+        except httpx.HTTPStatusError as e:
+            # Read error body with size limit to avoid buffering entire response
+            try:
+                error_bytes = await e.response.aread()
+                error_text = error_bytes[:MAX_ERROR_MESSAGE_LENGTH].decode('utf-8', errors='replace')
+                if len(error_bytes) > MAX_ERROR_MESSAGE_LENGTH:
+                    error_text += "... [truncated]"
+            except Exception:
+                error_text = str(e)
+
+            # Record failed request
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=e.response.status_code
+            )
+
+            raise HTTPException(e.response.status_code, f"{provider_type} error: {error_text}")
+        except httpx.RequestError as e:
+            # Record connection error
+            collector.record_request_failure(
+                model_id=model_id,
+                start_time=start_time,
+                status_code=502
+            )
+
+            raise HTTPException(502, f"Failed to connect to {provider_type}: {str(e)}")
+
+    else:
+        raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")
+
+
+@router.get("/llm/v1/models")
+async def unified_list_models(
+    token: str = Depends(get_token),
+    model: str = None
+):
+    """
+    OpenAI-compatible models list endpoint.
+
+    Lists all available models or returns details for a specific model.
+
+    Args:
+        model: Optional model ID to get details for specific model
+
+    Returns:
+        OpenAI-format model list or single model details
+    """
+    if model:
+        # Return specific model details (single model object, not list)
+        config = get_model_config(model)
+        if not config:
+            raise HTTPException(404, f"Model '{model}' not found")
+
+        return {
+            "id": model,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "fluidmcp",
+            "permission": [],
+            "root": model,
+            "parent": None
+        }
+    else:
+        # Return all models
+        from ..services.llm_provider_registry import list_all_models
+        models = list_all_models()
+
+        created_timestamp = int(time.time())
+        all_models = []
+        for model_info in models:
+            all_models.append({
+                "id": model_info["id"],
+                "object": "model",
+                "created": created_timestamp,
+                "owned_by": "fluidmcp",
+                "permission": [],
+                "root": model_info["id"],
+                "parent": None
+            })
+
+        return {
+            "object": "list",
+            "data": all_models
+        }
+
+
+@router.get("/llm/v1/models/{model_id}")
+async def unified_get_model(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    OpenAI-compatible retrieve model endpoint.
+
+    Returns details for a specific model by ID.
+
+    Args:
+        model_id: The model ID to retrieve
+
+    Returns:
+        OpenAI-format model details
+
+    Example:
+        GET /api/llm/v1/models/llama-2-70b
+        {
+            "id": "llama-2-70b",
+            "object": "model",
+            "created": 1677649963,
+            "owned_by": "fluidmcp"
+        }
+    """
+    config = get_model_config(model_id)
+    if not config:
+        raise HTTPException(404, f"Model '{model_id}' not found")
+
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": int(time.time()),
+        "owned_by": "fluidmcp",
+        "permission": [],
+        "root": model_id,
+        "parent": None
+    }
+
+
+# ============================================================================
+# ============================================================================
+# Metrics Endpoints (Observability)
+# ============================================================================
+
+@router.get("/metrics")
+async def get_metrics_prometheus(
+    token: str = Depends(get_token)
+):
+    """
+    Get Prometheus-formatted metrics for all LLM models.
+
+    Returns metrics including:
+    - Request counts (total, successful, failed)
+    - Latency statistics (avg, min, max)
+    - Token usage (prompt, completion, total)
+    - Error counts by status code
+    - Uptime
+
+    Example:
+        curl http://localhost:8099/api/metrics
+    """
+    collector = get_metrics_collector()
+    return Response(
+        content=collector.export_prometheus(),
+        media_type="text/plain; version=0.0.4"
+    )
+
+
+@router.get("/metrics/json")
+async def get_metrics_json(
+    token: str = Depends(get_token)
+):
+    """
+    Get JSON-formatted metrics for all LLM models.
+
+    Returns structured metrics data suitable for dashboards and monitoring tools.
+
+    Example:
+        curl http://localhost:8099/api/metrics/json
+    """
+    collector = get_metrics_collector()
+    return collector.export_json()
+
+
+@router.post("/metrics/reset")
+async def reset_metrics(
+    model_id: str = Query(None, description="Model ID to reset, or omit to reset all"),
+    token: str = Depends(get_token)
+):
+    """
+    Reset LLM metrics for a specific model or all models.
+
+    Args:
+        model_id: Optional model ID. If not provided, resets all metrics.
+
+    Example:
+        # Reset all metrics
+        curl -X POST http://localhost:8099/api/metrics/reset
+
+        # Reset specific model
+        curl -X POST http://localhost:8099/api/metrics/reset?model_id=llama-2-70b
+    """
+    collector = get_metrics_collector()
+    collector.reset_metrics(model_id)
+
+    target = "all models" if not model_id else f"model '{model_id}'"
+    return {
+        "message": f"Metrics reset successfully for {target}"
+    }
+
+
+@router.get("/metrics/cache/stats")
+async def get_cache_stats(token: str = Depends(get_token)):
+    """
+    Get response cache statistics.
+
+    Returns cache performance metrics including:
+    - Hit/miss counts
+    - Hit rate percentage
+    - Current cache size
+    - TTL configuration
+
+    Also updates the unified metrics registry for Prometheus scraping.
+
+    Returns:
+        Cache statistics dict
+    """
+    from ..services.response_cache import peek_response_cache
+    from ..services.replicate_metrics import update_cache_metrics
+
+    # Peek at existing cache without creating it
+    cache = await peek_response_cache()
+    if cache is None:
+        # Update metrics (will set all to 0)
+        await update_cache_metrics()
+        return {
+            "enabled": False,
+            "message": "Cache is not initialized (no models with caching enabled have been used)"
+        }
+
+    stats = await cache.get_stats()
+
+    # Update unified metrics registry
+    await update_cache_metrics()
+
+    return {
+        "enabled": True,
+        **stats
+    }
+
+
+@router.post("/metrics/cache/clear")
+async def clear_cache(token: str = Depends(get_token)):
+    """
+    Clear all cached responses.
+
+    Useful for testing or forcing fresh API calls.
+
+    Returns:
+        Number of entries cleared
+    """
+    from ..services.response_cache import clear_response_cache
+
+    count = await clear_response_cache()
+    logger.info(f"Cache cleared via API: {count} entries removed")
+    return {"message": "Cache cleared successfully", "entries_cleared": count}
+
+
+@router.get("/metrics/rate-limiters")
+async def get_rate_limiter_stats(token: str = Depends(get_token)):
+    """
+    Get rate limiter statistics for all models.
+
+    Returns available token counts for each model's rate limiter.
+
+    Also updates the unified metrics registry for Prometheus scraping.
+
+    Returns:
+        Dict with rate_limiters (dict of model_id -> stats) and total_models count
+    """
+    from ..services.rate_limiter import get_all_rate_limiter_stats
+    from ..services.replicate_metrics import update_rate_limiter_metrics
+
+    stats = await get_all_rate_limiter_stats()
+
+    # Update unified metrics registry
+    await update_rate_limiter_metrics()
+
+    return {
+        "rate_limiters": stats,
+        "total_models": len(stats)
+    }
+
+
+@router.get("/metrics/rate-limiters/{model_id}")
+async def get_model_rate_limiter_stats(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get rate limiter statistics for a specific model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Rate limiter stats including available tokens, capacity, and utilization
+
+    Raises:
+        HTTPException(404): If no rate limiter exists for the model
+    """
+    from ..services.rate_limiter import get_all_rate_limiter_stats
+
+    # Use get_all to avoid creating limiters as side effect
+    stats = await get_all_rate_limiter_stats()
+    model_stats = stats.get(model_id)
+
+    if model_stats is None:
+        raise HTTPException(404, f"No rate limiter found for model '{model_id}'")
+
+    return {
+        "model_id": model_id,
+        **model_stats
+    }
+
+
+@router.post("/metrics/rate-limiters/clear")
+async def clear_rate_limiters(token: str = Depends(get_token)):
+    """
+    Clear all rate limiters (removes all registered limiters).
+
+    Useful for testing or freeing memory in long-running processes.
+
+    Returns:
+        Number of limiters cleared
+    """
+    from ..services.rate_limiter import clear_rate_limiters as clear_limiters_func
+
+    count = await clear_limiters_func()
+    return {"message": "Rate limiters cleared successfully", "limiters_cleared": count}
+
+
+@router.get("/metrics/models/{model_id}")
+async def get_model_metrics(
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Get detailed LLM metrics for a specific model.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Detailed metrics including request counts, latency, tokens, and errors
+
+    Example:
+        curl http://localhost:8099/api/metrics/models/llama-2-70b
+    """
+    collector = get_metrics_collector()
+    metrics = collector.get_model_metrics(model_id)
+
+    if not metrics:
+        raise HTTPException(404, f"No metrics found for model '{model_id}'")
+
+    return {
+        "model_id": model_id,
+        "provider_type": metrics.provider_type,
+        "requests": {
+            "total": metrics.total_requests,
+            "successful": metrics.successful_requests,
+            "failed": metrics.failed_requests,
+            "success_rate_percent": round(metrics.success_rate(), 2),
+            "error_rate_percent": round(metrics.error_rate(), 2),
+        },
+        "latency": {
+            "avg_seconds": round(metrics.avg_latency(), 3),
+            "min_seconds": round(metrics.min_latency, 3) if metrics.min_latency != float('inf') else None,
+            "max_seconds": round(metrics.max_latency, 3),
+        },
+        "tokens": {
+            "prompt": metrics.total_prompt_tokens,
+            "completion": metrics.total_completion_tokens,
+            "total": metrics.total_tokens,
+        },
+        "errors_by_status": dict(metrics.errors_by_status),
+    }
+# ============================================================================
+# vLLM Omni Multimodal Generation Endpoints
+# Image and video generation via Replicate integration
+# ============================================================================
+
+@router.post("/llm/v1/generate/image")
+async def generate_image(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Generate image from text prompt (text-to-image).
+
+    OpenAI-compatible endpoint. Works with Replicate image generation models
+    (FLUX, Stable Diffusion, etc.). Validates that model supports 'text-to-image' capability.
+
+    Args:
+        request_body: Generation parameters including model and prompt
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "model": "flux-image-gen",
+          "prompt": "A serene Japanese garden with cherry blossoms",
+          "aspect_ratio": "16:9"
+        }
+    """
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Image generation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
+    # Record metrics for image generation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
+    # Get or create Replicate client
+    client = get_replicate_client(model_id)
+    created_temp_client = False
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
+
+    try:
+        result = await omni_adapter.generate_image(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Image generation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
+
+
+@router.post("/llm/v1/generate/video")
+async def generate_video(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Generate video from text prompt (text-to-video).
+
+    OpenAI-compatible endpoint. Supports video generation models like
+    Google Veo 3, Kling v2.6, etc. Validates that model supports
+    'text-to-video' capability.
+
+    Args:
+        request_body: Generation parameters including model and prompt
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "model": "veo-video",
+          "prompt": "一只熊猫在雨中弹吉他 (A panda playing guitar in the rain)",
+          "duration": 5,
+          "fps": 24
+        }
+    """
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Video generation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
+    # Record metrics for video generation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
+    # Get or create Replicate client
+    client = get_replicate_client(model_id)
+    created_temp_client = False
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
+
+    try:
+        result = await omni_adapter.generate_video(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Video generation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
+
+
+@router.post("/llm/v1/animate")
+async def animate_image(
+    request_body: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Animate image into video (image-to-video).
+
+    OpenAI-compatible endpoint. Supports models like Kling v2.6.
+    Validates that model supports 'image-to-video' capability.
+
+    Args:
+        request_body: Animation parameters including model and image
+
+    Returns:
+        Prediction response with prediction_id and status
+
+    Example:
+        {
+          "model": "kling-animate",
+          "image_url": "https://example.com/photo.jpg",
+          "motion_bucket_id": 127,
+          "fps": 24
+        }
+    """
+    # Extract model from request body (OpenAI-compatible format)
+    model_id = request_body.get("model")
+    if not model_id:
+        raise HTTPException(400, "Missing 'model' field in request body")
+
+    # Get model config and validate it exists
+    model_config = get_model_config(model_id)
+    if not model_config:
+        raise HTTPException(404, f"Model '{model_id}' not found in configuration")
+
+    # Validate provider type
+    provider_type = get_model_type(model_id)
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Image animation only supported for Replicate models. "
+            f"Model '{model_id}' is type '{provider_type}'"
+        )
+
+    # Remove 'model' field from payload before sending to Replicate
+    payload = {k: v for k, v in request_body.items() if k != "model"}
+
+    # Record metrics for image animation
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start(model_id, provider_type)
+
+    # Get or create Replicate client
+    client = get_replicate_client(model_id)
+    created_temp_client = False
+    if not client:
+        # Create temporary client for on-demand generation
+        client = ReplicateClient(model_id, model_config)
+        created_temp_client = True
+
+    try:
+        result = await omni_adapter.animate_image(model_id, model_config, payload, client)
+        # Record success metrics
+        collector.record_request_success(
+            model_id,
+            start_time,
+            prompt_tokens=0,  # Image animation doesn't use tokens
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure(model_id, start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure(model_id, start_time, 500)
+        raise
+    finally:
+        # Ensure any temporary client is closed to avoid resource leaks
+        if created_temp_client:
+            await client.close()
+
+
+@router.get("/llm/predictions/{prediction_id}")
+async def get_generation_status(
+    prediction_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Check status of async generation (image/video).
+
+    Returns prediction status and output URLs when complete.
+    Works for any Replicate prediction (image, video, animation).
+
+    Args:
+        prediction_id: Replicate prediction ID
+
+    Returns:
+        Prediction status with output URLs
+
+    Example response:
+        {
+          "id": "abc123",
+          "status": "succeeded",
+          "output": ["https://replicate.delivery/image.png"]
+        }
+    """
+    # Try to get Replicate API token from configured models first
+    api_token = None
+    replicate_models = list_models_by_type("replicate")
+
+    if replicate_models:
+        # Use the first configured Replicate model's token
+        first_model_id = replicate_models[0]
+        first_model_config = get_model_config(first_model_id)
+        if first_model_config:
+            config_token = first_model_config.get("api_key")
+            # Only use non-placeholder, non-empty tokens from config
+            if config_token and not is_placeholder(config_token):
+                api_token = config_token
+
+    # Fallback to environment variable if no configured models or only placeholders
+    if not api_token:
+        api_token = os.getenv("REPLICATE_API_TOKEN")
+
+    if not api_token:
+        raise HTTPException(
+            503,
+            "No Replicate API token configured. Either add a Replicate model to your config "
+            "or set REPLICATE_API_TOKEN environment variable."
+        )
+
+    # Record metrics for status check
+    collector = get_metrics_collector()
+    start_time = collector.record_request_start("status-check", "replicate")
+
+    # Create a minimal client just for fetching prediction status
+    # The prediction_id contains all necessary information for Replicate
+    client = ReplicateClient("status-check", {"model": "dummy", "api_key": api_token})
+    try:
+        result = await omni_adapter.get_generation_status(prediction_id, client)
+        # Record success metrics
+        collector.record_request_success(
+            "status-check",
+            start_time,
+            prompt_tokens=0,
+            completion_tokens=0
+        )
+        return result
+    except HTTPException as e:
+        # Record failure metrics
+        collector.record_request_failure("status-check", start_time, e.status_code)
+        raise
+    except Exception:
+        # Record unexpected failure with status 500
+        collector.record_request_failure("status-check", start_time, 500)
+        raise
+    finally:
+        # Ensure the temporary client is closed to avoid resource leaks
+        await client.close()
+
+

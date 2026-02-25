@@ -70,6 +70,16 @@ class Metric:
 
         return "\n".join(lines)
 
+    def clear_samples(self):
+        """
+        Clear all samples for this metric (thread-safe).
+
+        Useful for cleaning up stale series when data sources are removed
+        (e.g., rate limiters cleared, servers stopped).
+        """
+        with self._lock:
+            self.samples.clear()
+
     def render(self) -> str:
         """Render metric in Prometheus exposition format."""
         raise NotImplementedError

@@ -181,7 +181,92 @@ Available sample files:
 - `examples/sample-config.json` - Basic config with filesystem & memory servers
 - `examples/sample-metadata.json` - Package metadata example
 - `examples/sample-config-with-api-keys.json` - Config with API keys
+- `examples/replicate-inference.json` - Replicate cloud inference models
 - `examples/README.md` - Detailed testing guide
+
+## Railway Deployment
+
+FluidMCP supports deployment to Railway using `fmcp serve` with MongoDB persistence.
+
+### Quick Deployment
+
+1. **Add MongoDB Service**: Railway → New → Database → MongoDB
+2. **Connect Repository**: Railway → New → GitHub Repo → fluidmcp (branch: `fluidmcp_V1`)
+3. **Set Bearer Token**: Generate with `openssl rand -hex 32`, set as `FMCP_BEARER_TOKEN` in Railway
+4. **Deploy**: Railway auto-detects Dockerfile and deploys
+5. **Verify**: Check `/health` endpoint shows `database: "connected"`
+
+### Environment Variables
+
+Railway automatically provides:
+- `PORT` - Service port (assigned by Railway)
+- `MONGODB_URI` - MongoDB connection string (from MongoDB service)
+
+**CRITICAL - Must set manually**:
+- `FMCP_BEARER_TOKEN` - Authentication token (prevents regeneration on restart)
+  - Generate: `openssl rand -hex 32`
+  - **Why required?** Railway containers are ephemeral. Auto-generated tokens regenerate on every restart, breaking authentication.
+
+Optional configuration:
+- `FMCP_ALLOWED_ORIGINS` - CORS origins (comma-separated, e.g., `https://app.example.com`)
+- `FMCP_DATABASE` - Database name (default: `fluidmcp`)
+- `FMCP_MONGODB_SERVER_TIMEOUT` - Server timeout (default: 30000ms)
+- `FMCP_MONGODB_CONNECT_TIMEOUT` - Connect timeout (default: 10000ms)
+
+### Managing MCP Servers
+
+Once deployed, add/manage servers via REST API:
+
+```bash
+# Add server
+curl -X POST https://your-app.railway.app/api/servers \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_id": "filesystem",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    }
+  }'
+
+# Start server
+curl -X POST https://your-app.railway.app/api/servers/filesystem/start \
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# List servers
+curl -X GET https://your-app.railway.app/api/servers \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Health Endpoint
+
+Railway monitors: `GET /health`
+
+Returns:
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "persistence_enabled": true
+}
+```
+
+### MongoDB Connection Behavior
+
+- **Automatic retry**: 3 attempts with exponential backoff (2s, 4s, 8s)
+- **Fail-fast mode**: Container exits if MongoDB unavailable (`--require-persistence` flag)
+- **Crash loop**: Intentional behavior if MongoDB misconfigured (fix MongoDB to resolve)
+
+### Dockerfile
+
+FluidMCP uses a single production Dockerfile:
+- `Dockerfile` - Railway deployment with `fmcp serve` + MongoDB
+- Includes frontend build, bearer token auth, and health monitoring
+- **Note**: `fmcp run` mode is deprecated (blocks other processes)
+
+See [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) for complete deployment guide, API documentation, and troubleshooting.
 
 ## Environment Variables
 
@@ -197,12 +282,89 @@ MCP_TOKEN
 FMCP_GITHUB_TOKEN  # Default GitHub token
 GITHUB_TOKEN       # Alternative environment variable
 
+# Replicate API access (for cloud inference)
+REPLICATE_API_TOKEN  # Replicate API token for model inference
+
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
 MCP_CLIENT_SERVER_ALL_PORT=8099
 
 # Server startup configuration
 MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (default: 5)
+```
+
+## Replicate Cloud Inference
+
+FluidMCP supports running AI models via **Replicate's cloud API** for inference without local GPU requirements.
+
+### Key Features
+
+- **Inference-only** - No local model deployment or GPU required
+- **Simple setup** - Just API key needed
+- **Wide model selection** - Access to thousands of models (Llama, Mistral, CodeLlama, etc.)
+- **Automatic retries** - Built-in error recovery
+- **No OpenAI-style streaming** - Unified OpenAI endpoints return 501 for `stream: true` (polling-based API)
+
+### Quick Start
+
+```bash
+# Get your Replicate API token from https://replicate.com/account/api-tokens
+export REPLICATE_API_TOKEN="r8_..."
+
+# Create config with Replicate models
+cat > replicate-config.json << 'EOF'
+{
+  "mcpServers": {},
+  "llmModels": {
+    "llama-2-70b": {
+      "type": "replicate",
+      "model": "meta/llama-2-70b-chat",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 1000
+      }
+    }
+  }
+}
+EOF
+
+# Run FluidMCP
+fluidmcp run replicate-config.json --file --start-server
+
+# Test the model via the unified OpenAI-compatible chat completions endpoint
+curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-2-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain quantum computing in simple terms"
+      }
+    ]
+  }'
+```
+
+### Configuration Format
+
+```json
+{
+  "mcpServers": {},
+  "llmModels": {
+    "model-id": {
+      "type": "replicate",
+      "model": "owner/model-name",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "temperature": 0.7,
+        "max_tokens": 1000
+      },
+      "timeout": 120,
+      "max_retries": 3
+    }
+  }
+}
 ```
 
 ## LLM Inference Servers (vLLM, Ollama, LM Studio)
@@ -218,6 +380,7 @@ Add LLM models to your config using the `llmModels` section:
   "mcpServers": {},
   "llmModels": {
     "vllm": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",
@@ -238,6 +401,56 @@ Add LLM models to your config using the `llmModels` section:
   }
 }
 ```
+
+### Available Models
+
+Find models at [replicate.com/explore](https://replicate.com/explore):
+- `meta/llama-2-70b-chat` - Meta's Llama 2 70B
+- `mistralai/mistral-7b-instruct-v0.2` - Mistral 7B
+- `meta/codellama-34b-instruct` - CodeLlama 34B
+- And thousands more...
+
+### Documentation
+
+See [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) for complete documentation including:
+- API endpoints
+- Error handling and retries
+- Polling-based predictions
+- Cost management tips
+- Security best practices
+- Troubleshooting guide
+
+### Example Config
+
+See [examples/replicate-inference.json](examples/replicate-inference.json) for a complete working example with multiple models.
+
+### Testing
+
+```bash
+# Run Replicate client tests (25 tests)
+pytest tests/test_replicate_client.py -v
+
+# Run with coverage
+pytest tests/test_replicate_client.py --cov=fluidmcp.cli.services.replicate_client
+```
+
+### Comparison: Replicate vs vLLM
+
+| Feature | Replicate | vLLM |
+|---------|-----------|------|
+| Deployment | Cloud (Replicate) | Local (your hardware) |
+| GPU Required | No | Yes |
+| Setup | Simple (API key) | Complex (GPU, drivers) |
+| Cost | Pay-per-use | Hardware + electricity |
+| Privacy | Data sent to Replicate | Data stays local |
+| Best For | Prototyping, low volume | Production, high volume |
+
+### Implementation Files
+
+- [fluidmcp/cli/services/replicate_client.py](fluidmcp/cli/services/replicate_client.py) - Core HTTP client
+- [tests/test_replicate_client.py](tests/test_replicate_client.py) - Comprehensive tests (25 tests)
+- [docs/REPLICATE_SUPPORT.md](docs/REPLICATE_SUPPORT.md) - Complete documentation
+- [examples/replicate-inference.json](examples/replicate-inference.json) - Example configuration
 
 ### Key Features
 
@@ -311,6 +524,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "vllm": {
+      "type": "vllm",
       "command": "vllm",
       "args": ["serve", "facebook/opt-125m", "--port", "8001"],
       "endpoints": {"base_url": "http://localhost:8001/v1"}
@@ -324,6 +538,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "vllm-production": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",
@@ -352,6 +567,7 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 {
   "llmModels": {
     "ollama": {
+      "type": "ollama",
       "command": "ollama",
       "args": ["serve"],
       "endpoints": {"base_url": "http://localhost:11434"},
@@ -367,3 +583,55 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 - [tests/test_llm_security.py](tests/test_llm_security.py) - Security tests (18 tests, 100% passing)
 - [tests/test_llm_integration.py](tests/test_llm_integration.py) - Integration tests (10 tests, 100% passing)
 - [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.json) - Example config
+## vLLM Omni - Multimodal Generation Support
+
+FluidMCP supports multimodal model capabilities through "vLLM Omni", providing:
+- **Vision-language models** (vLLM native): Image understanding with LLaVA, Qwen-VL, etc.
+- **Image generation** (Replicate): Text-to-image with FLUX, Stable Diffusion
+- **Video generation** (Replicate): Text-to-video with AnimateDiff Lightning, CogVideoX
+- **Image animation** (Replicate): Image-to-video with Stable Video Diffusion
+
+### Quick Start
+
+```bash
+# 1. Create config with vision + generation models
+cat > omni-config.json << 'EOFJSON'
+{
+  "llmModels": {
+    "flux-image": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "capabilities": ["text-to-image"]
+    }
+  }
+}
+EOFJSON
+
+# 2. Start FluidMCP
+export REPLICATE_API_TOKEN="r8_..."
+fluidmcp run omni-config.json --file --start-server
+
+# 3. Generate an image (OpenAI-compatible format)
+# Note: Add -H "Authorization: Bearer YOUR_TOKEN" if running in secure mode
+curl -X POST http://localhost:8099/api/llm/v1/generate/image \
+  -H "Content-Type: application/json" \
+  -d '{"model": "flux-image", "prompt": "A serene Japanese garden with cherry blossoms"}'
+```
+
+### API Endpoints
+
+OpenAI-compatible endpoints (model specified in request body):
+
+- `POST /api/llm/v1/generate/image` - Text-to-image generation
+- `POST /api/llm/v1/generate/video` - Text-to-video generation
+- `POST /api/llm/v1/animate` - Image-to-video animation
+- `GET /api/llm/predictions/{prediction_id}` - Check generation status
+
+### Examples
+
+- [examples/vllm-omni-complete.json](examples/vllm-omni-complete.json) - Complete multimodal setup
+- [examples/omni-api-examples.sh](examples/omni-api-examples.sh) - API usage demonstrations
+
+See [docs/VLLM_OMNI_IMPLEMENTATION_PLAN.md](docs/VLLM_OMNI_IMPLEMENTATION_PLAN.md) for complete implementation details.
+

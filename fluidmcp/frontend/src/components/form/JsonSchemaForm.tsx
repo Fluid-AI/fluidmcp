@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import type { JsonSchemaProperty } from '../../types/server';
 import { SchemaFieldRenderer } from './SchemaFieldRenderer';
 import { validateForm, initializeFormValues } from './FormValidation';
+import { Button } from '@/components/ui/button';
+import { AlertCircle } from 'lucide-react';
 
 interface JsonSchemaFormProps {
   schema: {
@@ -82,39 +84,55 @@ export const JsonSchemaForm: React.FC<JsonSchemaFormProps> = ({
   };
 
   if (!schema.properties) {
-    return <div className="form-error">Invalid schema: no properties defined</div>;
+    return (
+      <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-4">
+        <div className="flex items-center gap-2 text-red-400">
+          <AlertCircle className="h-5 w-5" />
+          <p className="font-medium">Invalid schema: no properties defined</p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="json-schema-form">
-      {Object.entries(schema.properties).map(([fieldName, fieldSchema]) => {
-        const isRequired = schema.required?.includes(fieldName) || false;
-        const fieldError = touched[fieldName] ? errors[fieldName] : undefined;
+    <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="space-y-4">
+        {Object.entries(schema.properties).map(([fieldName, fieldSchema]) => {
+          const isRequired = schema.required?.includes(fieldName) || false;
+          const fieldError = touched[fieldName] ? errors[fieldName] : undefined;
 
-        return (
-          <SchemaFieldRenderer
-            key={fieldName}
-            name={fieldName}
-            schema={fieldSchema}
-            value={values[fieldName]}
-            onChange={(value) => handleFieldChange(fieldName, value)}
-            error={fieldError}
-            required={isRequired}
-          />
-        );
-      })}
-
-      <div className="form-actions">
-        <button type="submit" className="btn-primary" disabled={loading}>
-          {loading ? 'Loading...' : submitLabel}
-        </button>
+          return (
+            <SchemaFieldRenderer
+              key={fieldName}
+              name={fieldName}
+              schema={fieldSchema}
+              value={values[fieldName]}
+              onChange={(value) => handleFieldChange(fieldName, value)}
+              error={fieldError}
+              required={isRequired}
+            />
+          );
+        })}
       </div>
 
       {Object.keys(errors).length > 0 && (
-        <div className="form-summary-error">
-          Please fix the errors above before submitting.
+        <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-4">
+          <div className="flex items-center gap-2 text-red-400">
+            <AlertCircle className="h-4 w-4" />
+            <p className="text-sm font-medium">Please fix the errors above before submitting.</p>
+          </div>
         </div>
       )}
+
+      <div className="flex gap-3 pt-2">
+        <Button 
+          type="submit" 
+          disabled={loading}
+          className="bg-white hover:bg-zinc-100 text-black font-medium"
+        >
+          {loading ? 'Loading...' : submitLabel}
+        </Button>
+      </div>
     </form>
   );
 };
