@@ -25,7 +25,6 @@ from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
-from ..auth import get_token, security
 from ..auth.dependencies import get_current_user
 from ..utils.env_utils import is_placeholder
 

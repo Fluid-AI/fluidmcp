@@ -161,7 +161,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
                 // Token stored in httpOnly cookie (secure, XSS-safe)
                 // Redirect to dashboard/docs after 1 second
                 setTimeout(function() {{
-                    window.location.href = '/docs';
+                    window.location.href = '/ui';
                 }}, 1000);
             </script>
         </body>
@@ -177,7 +177,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
             value=access_token,
             httponly=True,  # Not accessible to JavaScript (XSS protection)
             secure=not is_local_development(),  # HTTPS only in production, HTTP ok for localhost
-            samesite="strict",  # CSRF protection
+            samesite="lax",  # CSRF protection + allows OAuth redirects
             max_age=86400,  # 24 hours
             path="/"
         )

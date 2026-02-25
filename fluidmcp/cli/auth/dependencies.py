@@ -46,6 +46,10 @@ async def get_current_user(
     auth0_mode = os.getenv("FMCP_AUTH0_MODE") == "true"
     secure_mode = os.getenv("FMCP_SECURE_MODE") == "true"
 
+    # DEBUG: Log all cookies received
+    logger.info(f"[Auth Debug] Cookies received: {list(request.cookies.keys())}")
+    logger.info(f"[Auth Debug] fmcp_auth_token exists: {'fmcp_auth_token' in request.cookies}")
+
     # Anonymous mode - no authentication required
     if not auth0_mode and not secure_mode:
         return {
@@ -61,13 +65,16 @@ async def get_current_user(
     # 1. Authorization header (highest priority - for API clients)
     if credentials:
         token = credentials.credentials
+        logger.info(f"[Auth Debug] Token from Authorization header: {token[:20]}...")
 
     # 2. httpOnly cookie (for browser-based OAuth)
     elif "fmcp_auth_token" in request.cookies:
         token = request.cookies["fmcp_auth_token"]
+        logger.info(f"[Auth Debug] Token from cookie: {token[:20]}...")
 
     # Authentication required but no token found
     if not token:
+        logger.warning(f"[Auth Debug] No token found. Cookies: {list(request.cookies.keys())}")
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Please provide a valid token."
