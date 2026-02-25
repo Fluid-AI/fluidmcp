@@ -113,8 +113,8 @@ export default function LLMModelForm({
 
     // Temperature validation
     const temp = formData.default_params?.temperature;
-    if (temp !== undefined && (temp < 0 || temp > 1)) {
-      newErrors.temperature = "Temperature must be between 0 and 1";
+    if (temp !== undefined && (temp < 0 || temp > 2)) {
+      newErrors.temperature = "Temperature must be between 0 and 2";
     }
 
     // Max tokens validation
@@ -267,7 +267,7 @@ export default function LLMModelForm({
                     type="number"
                     step="0.1"
                     min="0"
-                    max="1"
+                    max="2"
                     value={formData.default_params?.temperature ?? 0.7}
                     onChange={(e) =>
                       setFormData({

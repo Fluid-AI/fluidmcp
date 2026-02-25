@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Trash2, Settings } from "lucide-react";
+import { Send, Trash2, Settings, Search } from "lucide-react";
 import { useLLMModels } from "../hooks/useLLMModels";
 import apiClient from "../services/api";
 import type { ChatMessage } from "../types/llm";
@@ -33,6 +33,15 @@ export default function LLMPlayground() {
     max_tokens: 1000
   });
   const [preset, setPreset] = useState<'creative' | 'balanced' | 'precise'>('balanced');
+  const [modelSearch, setModelSearch] = useState('');
+
+  // Filter models based on search query (memoized to avoid recreation on every render)
+  const filteredModels = useMemo(() => {
+    return availableModels.filter(m =>
+      m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
+      (m.type && m.type.toLowerCase().includes(modelSearch.toLowerCase()))
+    );
+  }, [availableModels, modelSearch]);
 
   // CRITICAL: Ref to avoid stale closure in async operations
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -59,10 +68,10 @@ export default function LLMPlayground() {
 
   // Select first available model if none selected
   useEffect(() => {
-    if (!selectedModel && availableModels.length > 0) {
-      setSelectedModel(availableModels[0].id);
+    if (!selectedModel && filteredModels.length > 0) {
+      setSelectedModel(filteredModels[0].id);
     }
-  }, [availableModels, selectedModel]);
+  }, [filteredModels, selectedModel]);
 
   const handleModelChange = (newModelId: string) => {
     if (messages.length > 0 && newModelId !== selectedModel) {
@@ -146,15 +155,46 @@ export default function LLMPlayground() {
                     No healthy models available. Please start a model first.
                   </div>
                 ) : (
-                  <select
-                    value={selectedModel || ''}
-                    onChange={(e) => handleModelChange(e.target.value)}
-                    className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-                  >
-                    {availableModels.map(m => (
-                      <option key={m.id} value={m.id}>{m.id}</option>
-                    ))}
-                  </select>
+                  <div className="space-y-3">
+                    {/* Search Input */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                      <input
+                        type="text"
+                        value={modelSearch}
+                        onChange={(e) => setModelSearch(e.target.value)}
+                        placeholder="Search models..."
+                        className="w-full pl-10 pr-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    {/* Model Dropdown */}
+                    <select
+                      value={selectedModel || ''}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      className="w-full px-4 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      {filteredModels.length === 0 ? (
+                        <option value="">No models match your search</option>
+                      ) : (
+                        <>
+                          {/* Show selected model even if filtered out */}
+                          {selectedModel && !filteredModels.find(m => m.id === selectedModel) && (
+                            <option value={selectedModel}>{selectedModel} (current)</option>
+                          )}
+                          {filteredModels.map(m => (
+                            <option key={m.id} value={m.id}>{m.id}</option>
+                          ))}
+                        </>
+                      )}
+                    </select>
+
+                    {filteredModels.length > 0 && (
+                      <div className="text-xs text-zinc-500">
+                        Showing {filteredModels.length} of {availableModels.length} models
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {/* Selected Model Info */}
@@ -257,7 +297,7 @@ export default function LLMPlayground() {
                     <input
                       type="range"
                       min="0"
-                      max="1"
+                      max="2"
                       step="0.1"
                       value={parameters.temperature}
                       onChange={(e) => setParameters(prev => ({ ...prev, temperature: Number(e.target.value) }))}
