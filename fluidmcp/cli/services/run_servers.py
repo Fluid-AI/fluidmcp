@@ -33,6 +33,7 @@ from .replicate_client import initialize_replicate_models, stop_all_replicate_mo
 from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
+from ..otel import init_otel, shutdown_otel
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -258,6 +259,9 @@ def run_servers(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Initialize OpenTelemetry (must happen before server starts)
+    init_otel()
 
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
@@ -1310,6 +1314,13 @@ def _cleanup_resources():
                 logger.warning(f"Error stopping health monitor: {e}")
             finally:
                 _llm_health_monitor = None
+
+        # Shutdown OpenTelemetry (flush spans before other cleanup)
+        logger.info("Shutting down OpenTelemetry...")
+        try:
+            shutdown_otel()
+        except Exception as e:
+            logger.warning(f"Error during OpenTelemetry shutdown: {e}")
 
         if _llm_processes:
             logger.info("Shutting down LLM processes...")
