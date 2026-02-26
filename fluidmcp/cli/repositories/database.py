@@ -520,7 +520,7 @@ class DatabaseManager(PersistenceBackend):
 
     # ==================== Server Instance Operations ====================
 
-    async def save_instance_state(self, instance: Dict[str, Any]) -> bool:
+    async def save_instance_state(self, instance: Dict[str, Any], expected_pid: Optional[int] = None) -> bool:
         """
         Save server instance runtime state.
 
@@ -531,9 +531,10 @@ class DatabaseManager(PersistenceBackend):
                 - restart_count, last_health_check, health_check_failures
                 - host, port, last_error (PDF spec fields)
                 - started_by (optional): User who started this instance
+            expected_pid: Optional PID for optimistic locking. Update only if current PID matches.
 
         Returns:
-            True if saved successfully
+            True if saved successfully (or if optimistic lock failed, returns False)
         """
         try:
             # Add PDF spec fields with defaults
@@ -547,11 +548,21 @@ class DatabaseManager(PersistenceBackend):
             # Support both server_id (new) and server_name (old) for backward compatibility
             server_key = instance.get("server_id", instance.get("server_name"))
 
+            # Build filter with optimistic locking if expected_pid is provided
+            filter_query = {"server_id": server_key}
+            if expected_pid is not None:
+                filter_query["pid"] = expected_pid
+
             result = await self.db.fluidmcp_server_instances.update_one(
-                {"server_id": server_key},
+                filter_query,
                 {"$set": instance},
-                upsert=True
+                upsert=(expected_pid is None)  # Only upsert if no optimistic locking
             )
+
+            # Check if update actually happened (for optimistic locking)
+            if expected_pid is not None and result.matched_count == 0:
+                logger.warning(f"Optimistic lock failed for {server_key}: PID changed from {expected_pid}")
+                return False
 
             logger.debug(f"Saved instance state: {server_key}")
             return True

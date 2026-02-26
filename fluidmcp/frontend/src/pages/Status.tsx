@@ -1,10 +1,11 @@
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Navbar } from "@/components/Navbar";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 
 export default function Status() {
   const { servers, activeServers, loading, error, refetch, stopServer, restartServer } = useServers();
@@ -14,7 +15,7 @@ export default function Status() {
     type: 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
 
-  const handleStopServer = async (serverId: string) => {
+  const handleStopServer = useCallback(async (serverId: string) => {
     if (actionState.type !== null) return;
 
     const server = servers.find(s => s.id === serverId);
@@ -32,9 +33,9 @@ export default function Status() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  };
+  }, [actionState.type, servers, stopServer]);
 
-  const handleRestartServer = async (serverId: string) => {
+  const handleRestartServer = useCallback(async (serverId: string) => {
     if (actionState.type !== null) return;
 
     const server = servers.find(s => s.id === serverId);
@@ -52,7 +53,7 @@ export default function Status() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  };
+  }, [actionState.type, servers, restartServer]);
 
   if (loading) {
     return (
@@ -129,54 +130,64 @@ export default function Status() {
         </header>
 
         {/* Currently Active Servers */}
-        <section className="dashboard-section" style={{ flex: 1 }}>
-          <h2>Currently active servers</h2>
-
-        <div className="active-server-container">
-          {activeServers.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state-icon">💤</div>
-              <h3 className="empty-state-title">No servers running</h3>
-              <p className="empty-state-description">
-                Start a server from the <Link to="/servers" style={{ color: '#60a5fa', textDecoration: 'underline' }}>Servers page</Link>
-              </p>
+        <ErrorBoundary fallback={
+          <section className="dashboard-section" style={{ flex: 1 }}>
+            <h2>Currently active servers</h2>
+            <div className="result-error">
+              <h3>Error Loading Active Servers</h3>
+              <p>Failed to render active server list. Please refresh the page.</p>
             </div>
-          ) : (
-            <div className="active-server-list">
-              {activeServers.map((server) => (
-                <div key={server.id} className="active-server-row">
-                  <div>
-                    <strong>{server.name}</strong>
-                    <span className={`status ${server.status?.state}`}>
-                      {server.status?.state}
-                    </span>
-                  </div>
+          </section>
+        }>
+          <section className="dashboard-section" style={{ flex: 1 }}>
+            <h2>Currently active servers</h2>
 
-                  <div className="active-server-actions">
-                    <button
-                      className="stop-btn"
-                      onClick={() => handleStopServer(server.id)}
-                      disabled={actionState.serverId === server.id && actionState.type === 'stopping'}
-                    >
-                      {actionState.serverId === server.id && actionState.type === 'stopping' ? 'Stopping...' : 'Stop'}
-                    </button>
-                    <button
-                      className="restart-btn"
-                      onClick={() => handleRestartServer(server.id)}
-                      disabled={actionState.serverId === server.id && actionState.type === 'restarting'}
-                    >
-                      {actionState.serverId === server.id && actionState.type === 'restarting' ? 'Restarting...' : 'Restart'}
-                    </button>
-                    <Link to={`/servers/${server.id}`} className="details-btn">
-                      Details
-                    </Link>
+          <div className="active-server-container">
+            {activeServers.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">💤</div>
+                <h3 className="empty-state-title">No servers running</h3>
+                <p className="empty-state-description">
+                  Start a server from the <Link to="/servers" style={{ color: '#60a5fa', textDecoration: 'underline' }}>Servers page</Link>
+                </p>
+              </div>
+            ) : (
+              <div className="active-server-list">
+                {activeServers.map((server) => (
+                  <div key={server.id} className="active-server-row">
+                    <div>
+                      <strong>{server.name}</strong>
+                      <span className={`status ${server.status?.state}`}>
+                        {server.status?.state}
+                      </span>
+                    </div>
+
+                    <div className="active-server-actions">
+                      <button
+                        className="stop-btn"
+                        onClick={() => handleStopServer(server.id)}
+                        disabled={actionState.serverId === server.id && actionState.type === 'stopping'}
+                      >
+                        {actionState.serverId === server.id && actionState.type === 'stopping' ? 'Stopping...' : 'Stop'}
+                      </button>
+                      <button
+                        className="restart-btn"
+                        onClick={() => handleRestartServer(server.id)}
+                        disabled={actionState.serverId === server.id && actionState.type === 'restarting'}
+                      >
+                        {actionState.serverId === server.id && actionState.type === 'restarting' ? 'Restarting...' : 'Restart'}
+                      </button>
+                      <Link to={`/servers/${server.id}`} className="details-btn">
+                        Details
+                      </Link>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+        </ErrorBoundary>
       </div>
 
       {/* Footer */}

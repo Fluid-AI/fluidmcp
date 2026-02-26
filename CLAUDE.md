@@ -259,20 +259,12 @@ Returns:
 - **Fail-fast mode**: Container exits if MongoDB unavailable (`--require-persistence` flag)
 - **Crash loop**: Intentional behavior if MongoDB misconfigured (fix MongoDB to resolve)
 
-### Dockerfile Selection
+### Dockerfile
 
-Two Dockerfiles available:
-- `Dockerfile` (default) - Railway deployment with `fmcp serve` ← **Use this for Railway**
-- `Dockerfile.run-mode` - Legacy mode with `fmcp run` and entrypoint.sh
-
-### Key Differences: fmcp serve vs fmcp run
-
-| Feature | `fmcp serve` (Railway) | `fmcp run` (Legacy) |
-|---------|------------------------|---------------------|
-| Config storage | MongoDB (persistent) | Environment variable (ephemeral) |
-| Server management | REST API (dynamic) | Static config file (requires rebuild) |
-| Authentication | Bearer token (secure) | None (open access) |
-| Use case | Production API backend | Development/testing with known config |
+FluidMCP uses a single production Dockerfile:
+- `Dockerfile` - Railway deployment with `fmcp serve` + MongoDB
+- Includes frontend build, bearer token auth, and health monitoring
+- **Note**: `fmcp run` mode is deprecated (blocks other processes)
 
 See [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) for complete deployment guide, API documentation, and troubleshooting.
 
@@ -591,3 +583,55 @@ See [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.j
 - [tests/test_llm_security.py](tests/test_llm_security.py) - Security tests (18 tests, 100% passing)
 - [tests/test_llm_integration.py](tests/test_llm_integration.py) - Integration tests (10 tests, 100% passing)
 - [examples/vllm-with-error-recovery.json](examples/vllm-with-error-recovery.json) - Example config
+## vLLM Omni - Multimodal Generation Support
+
+FluidMCP supports multimodal model capabilities through "vLLM Omni", providing:
+- **Vision-language models** (vLLM native): Image understanding with LLaVA, Qwen-VL, etc.
+- **Image generation** (Replicate): Text-to-image with FLUX, Stable Diffusion
+- **Video generation** (Replicate): Text-to-video with AnimateDiff Lightning, CogVideoX
+- **Image animation** (Replicate): Image-to-video with Stable Video Diffusion
+
+### Quick Start
+
+```bash
+# 1. Create config with vision + generation models
+cat > omni-config.json << 'EOFJSON'
+{
+  "llmModels": {
+    "flux-image": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "capabilities": ["text-to-image"]
+    }
+  }
+}
+EOFJSON
+
+# 2. Start FluidMCP
+export REPLICATE_API_TOKEN="r8_..."
+fluidmcp run omni-config.json --file --start-server
+
+# 3. Generate an image (OpenAI-compatible format)
+# Note: Add -H "Authorization: Bearer YOUR_TOKEN" if running in secure mode
+curl -X POST http://localhost:8099/api/llm/v1/generate/image \
+  -H "Content-Type: application/json" \
+  -d '{"model": "flux-image", "prompt": "A serene Japanese garden with cherry blossoms"}'
+```
+
+### API Endpoints
+
+OpenAI-compatible endpoints (model specified in request body):
+
+- `POST /api/llm/v1/generate/image` - Text-to-image generation
+- `POST /api/llm/v1/generate/video` - Text-to-video generation
+- `POST /api/llm/v1/animate` - Image-to-video animation
+- `GET /api/llm/predictions/{prediction_id}` - Check generation status
+
+### Examples
+
+- [examples/vllm-omni-complete.json](examples/vllm-omni-complete.json) - Complete multimodal setup
+- [examples/omni-api-examples.sh](examples/omni-api-examples.sh) - API usage demonstrations
+
+See [docs/VLLM_OMNI_IMPLEMENTATION_PLAN.md](docs/VLLM_OMNI_IMPLEMENTATION_PLAN.md) for complete implementation details.
+

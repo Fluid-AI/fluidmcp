@@ -36,6 +36,11 @@ npm-debug.log*
 .env
 .env.*
 
+# Build artifacts (EXCEPT frontend dist - needed at runtime)
+dist/
+build/
+*.tar.gz
+!fluidmcp/frontend/dist/
 # Build artifacts
 dist/
 build/
