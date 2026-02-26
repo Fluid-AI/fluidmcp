@@ -8,7 +8,7 @@ Provides REST API for:
 - Listing all configured servers
 - Replicate model inference
 """
-from typing import Dict, Any, Optional, Literal
+from typing import Dict, Any, Optional, Literal, List
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -297,7 +297,8 @@ class ReplicateModelConfig(BaseModel):
                     "top_p": 0.9
                 },
                 "timeout": 300,
-                "max_retries": 3
+                "max_retries": 3,
+                "capabilities": []
             }
         }
     )
@@ -324,6 +325,10 @@ class ReplicateModelConfig(BaseModel):
     )
     timeout: int = Field(default=300, ge=10, le=3600, description="Request timeout in seconds")
     max_retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
+    capabilities: List[str] = Field(
+        default_factory=list,
+        description="Model capabilities (e.g., ['text-to-image', 'text-to-video'])"
+    )
 
     @field_validator('api_key')
     @classmethod
