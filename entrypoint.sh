@@ -5,24 +5,20 @@ set -e
 # Railway deployment for FluidMCP Unified Platform
 # Supports MCP servers, LLM models, image/video generation
 
-# Check for legacy configuration and provide migration guidance
+# Support METADATA_ENV_FILE_CONTENT for serverless/Railway deployments
+# This is REQUIRED for platforms with read-only filesystems
 if [ -n "$METADATA_ENV_FILE_CONTENT" ]; then
   echo "=========================================="
-  echo "❌ ERROR: Legacy Configuration Not Supported"
+  echo "✓ Using METADATA_ENV_FILE_CONTENT for serverless deployment"
   echo "=========================================="
-  echo "METADATA_ENV_FILE_CONTENT is NO LONGER SUPPORTED as of version 1.0.0"
+  echo "Detected configuration via environment variable (read-only filesystem mode)"
   echo ""
-  echo "Migration Guide:"
-  echo "1. Remove METADATA_ENV_FILE_CONTENT environment variable"
-  echo "2. Set FMCP_BEARER_TOKEN for authentication"
-  echo "3. Set MONGODB_URI for persistence (required for production)"
-  echo "4. Configure models via:"
-  echo "   - Config file (set FMCP_CONFIG_PATH)"
-  echo "   - POST /api/llm/models API endpoint"
-  echo ""
-  echo "Documentation: https://github.com/Fluid-AI/fluidmcp"
+  # Write config to temporary file
+  CONFIG_FILE="/tmp/fluidmcp-config.json"
+  echo "$METADATA_ENV_FILE_CONTENT" > "$CONFIG_FILE"
+  export FMCP_CONFIG_PATH="$CONFIG_FILE"
+  echo "Config written to: $CONFIG_FILE"
   echo "=========================================="
-  exit 1
 fi
 
 # Get port from environment (Railway sets this)

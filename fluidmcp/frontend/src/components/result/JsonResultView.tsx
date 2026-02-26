@@ -6,7 +6,7 @@ interface JsonNodeProps {
   expandAll?: boolean;
 }
 
-const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) => {
+const JsonNodeBase: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) => {
   const [isCollapsed, setIsCollapsed] = useState(!expandAll);
 
   // Sync with parent expand/collapse control
@@ -145,6 +145,16 @@ const JsonNode: React.FC<JsonNodeProps> = ({ data, name, expandAll = false }) =>
 
   return <div style={{ marginBottom: '0.35rem', color: '#e5e7eb' }}>{String(data)}</div>;
 };
+
+// Memoize JsonNode with custom comparison to prevent unnecessary re-renders
+// Only re-render if data reference, name, or expandAll actually changed
+const JsonNode = React.memo(JsonNodeBase, (prevProps, nextProps) => {
+  return (
+    prevProps.data === nextProps.data &&
+    prevProps.name === nextProps.name &&
+    prevProps.expandAll === nextProps.expandAll
+  );
+});
 
 interface JsonResultViewProps {
   data: unknown;

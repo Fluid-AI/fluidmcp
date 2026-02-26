@@ -5,6 +5,7 @@ import Status from "./pages/Status";
 import ServerDetails from "./pages/ServerDetails";
 import { ToolRunner } from "./pages/ToolRunner";
 import Documentation from "./pages/Documentation";
+import ManageServers from "./pages/ManageServers";
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/servers" element={<Dashboard />} />
         <Route path="/status" element={<Status />} />
+        <Route path="/servers/manage" element={<ManageServers />} />
         <Route path="/documentation" element={<Documentation />} />
         <Route path="/servers/:serverId" element={<ServerDetails />} />
         <Route path="/servers/:serverId/tools/:toolName" element={<ToolRunner />} />

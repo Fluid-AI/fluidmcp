@@ -467,20 +467,30 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error retrieving server config: {e}")
             return None
 
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
             enabled_only: If True, only return enabled servers
+            include_deleted: If True, include soft-deleted servers (for admin recovery)
 
         Returns:
             List of server config dicts in flat format (for backend compatibility)
         """
         try:
-            # Build filter based on enabled_only parameter
-            filter_dict = {"enabled": True} if enabled_only else {}
-            cursor = self.db.fluidmcp_servers.find(filter_dict, {"_id": 0})  # Exclude MongoDB _id
+            # Build query filter
+            query = {}
+
+            # Exclude soft-deleted servers unless explicitly requested
+            if not include_deleted:
+                query["deleted_at"] = {"$exists": False}
+
+            # Additionally filter by enabled status if requested
+            if enabled_only:
+                query["enabled"] = True
+
+            cursor = self.db.fluidmcp_servers.find(query, {"_id": 0})  # Exclude MongoDB _id
             configs = await cursor.to_list(length=None)
 
             # Convert all configs from nested to flat format for backend
@@ -508,9 +518,35 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error deleting server config: {e}")
             return False
 
+    async def soft_delete_server_config(self, id: str) -> bool:
+        """
+        Soft delete a server configuration by setting deleted_at timestamp.
+
+        Args:
+            id: Server identifier
+
+        Returns:
+            True if soft deleted successfully
+        """
+        try:
+            result = await self.db.fluidmcp_servers.update_one(
+                {"id": id, "deleted_at": {"$exists": False}},
+                {
+                    "$set": {
+                        "deleted_at": datetime.utcnow(),
+                        "enabled": False,  # Also disable on soft delete
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error soft deleting server config: {e}")
+            return False
+
     # ==================== Server Instance Operations ====================
 
-    async def save_instance_state(self, instance: Dict[str, Any]) -> bool:
+    async def save_instance_state(self, instance: Dict[str, Any], expected_pid: Optional[int] = None) -> bool:
         """
         Save server instance runtime state.
 
@@ -521,9 +557,10 @@ class DatabaseManager(PersistenceBackend):
                 - restart_count, last_health_check, health_check_failures
                 - host, port, last_error (PDF spec fields)
                 - started_by (optional): User who started this instance
+            expected_pid: Optional PID for optimistic locking. Update only if current PID matches.
 
         Returns:
-            True if saved successfully
+            True if saved successfully (or if optimistic lock failed, returns False)
         """
         try:
             # Add PDF spec fields with defaults
@@ -537,11 +574,21 @@ class DatabaseManager(PersistenceBackend):
             # Support both server_id (new) and server_name (old) for backward compatibility
             server_key = instance.get("server_id", instance.get("server_name"))
 
+            # Build filter with optimistic locking if expected_pid is provided
+            filter_query = {"server_id": server_key}
+            if expected_pid is not None:
+                filter_query["pid"] = expected_pid
+
             result = await self.db.fluidmcp_server_instances.update_one(
-                {"server_id": server_key},
+                filter_query,
                 {"$set": instance},
-                upsert=True
+                upsert=(expected_pid is None)  # Only upsert if no optimistic locking
             )
+
+            # Check if update actually happened (for optimistic locking)
+            if expected_pid is not None and result.matched_count == 0:
+                logger.warning(f"Optimistic lock failed for {server_key}: PID changed from {expected_pid}")
+                return False
 
             logger.debug(f"Saved instance state: {server_key}")
             return True

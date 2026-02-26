@@ -18,6 +18,7 @@ from loguru import logger
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
+from .health_checker import HealthChecker
 
 
 class ServerManager:
@@ -42,6 +43,17 @@ class ServerManager:
 
         # Event loop for async operations
         self._loop = None
+
+        # Health checker for process validation
+        self.health_checker = HealthChecker()
+
+        # Stale PID update cache to throttle database writes
+        # Maps server_id -> last_update_timestamp
+        self._stale_pid_updates: Dict[str, float] = {}
+        # Cache stale PID updates for 30s to balance UI responsiveness vs DB load
+        # 30s provides quick feedback (max 30s delay) while preventing excessive writes
+        # when repeatedly checking the same stale server
+        self._stale_pid_cache_ttl = 30.0  # seconds
 
         # Register cleanup handlers
         atexit.register(self._cleanup_on_exit)
@@ -167,8 +179,16 @@ class ServerManager:
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
-            # Save state to database with user tracking
-            await self.db.save_instance_state({
+            # Clear stale PID cache entry (if any) since server is now running
+            self._stale_pid_updates.pop(id, None)
+
+            # Get existing state for optimistic locking
+            existing_state = await self.db.get_instance_state(id)
+            existing_pid = existing_state.get("pid") if existing_state else None
+
+            # Save state to database with user tracking and optimistic locking
+            # Use optimistic locking to prevent race conditions with stale PID checker
+            success = await self.db.save_instance_state({
                 "server_id": id,
                 "state": "running",
                 "pid": process.pid,
@@ -179,7 +199,12 @@ class ServerManager:
                 "last_health_check": datetime.utcnow(),
                 "health_check_failures": 0,
                 "started_by": user_id  # Track who started this instance
-            })
+            }, expected_pid=existing_pid)
+
+            if not success:
+                logger.warning(f"Optimistic lock failed when starting server '{name}' - PID changed during start operation")
+                # Still return True since the process started successfully
+                # The state mismatch will be reconciled on next status check
 
             # Update metrics - server is now running (status code: 2)
             # Note: Metrics update after database save to ensure state consistency
@@ -452,10 +477,63 @@ class ServerManager:
         # Check database
         instance = await self.db.get_instance_state(id)
         if instance:
+            state = instance.get("state", "unknown")
+            pid = instance.get("pid")
+
+            # Validate PID if state is "running" - fix stale PID issue
+            if state == "running" and pid:
+                is_alive, error_msg = self.health_checker.check_process_alive(pid)
+                if not is_alive:
+                    # Check if we recently updated this stale PID (throttling)
+                    current_time = time.time()
+                    last_update = self._stale_pid_updates.get(id, 0)
+
+                    if current_time - last_update < self._stale_pid_cache_ttl:
+                        # Return cached failed status without database write
+                        logger.debug(f"Server {id} stale PID {pid} cached, skipping DB update")
+                        return {
+                            "id": id,
+                            "state": "failed",
+                            "pid": None,
+                            "uptime": None,
+                            "restart_count": instance.get("restart_count", 0),
+                            "exit_code": -1
+                        }
+
+                    logger.warning(f"Server {id} has stale PID {pid}: {error_msg}. Updating state to 'failed'.")
+                    # Update database with corrected state using optimistic locking
+                    # Only update if PID hasn't changed (prevents race condition)
+                    success = await self.db.save_instance_state({
+                        "server_id": id,
+                        "state": "failed",
+                        "pid": None,
+                        "exit_code": -1,  # Unknown exit code for stale PID
+                        "updated_at": datetime.utcnow()
+                    }, expected_pid=pid)
+
+                    # If optimistic lock failed, PID changed - re-fetch status
+                    if not success:
+                        logger.debug(f"Server {id} PID changed during stale check, re-fetching status")
+                        return await self.get_server_status(id)
+
+                    # Cache the update timestamp
+                    self._stale_pid_updates[id] = current_time
+
+                    # Return corrected status
+                    return {
+                        "id": id,
+                        "state": "failed",
+                        "pid": None,
+                        "uptime": None,
+                        "restart_count": instance.get("restart_count", 0),
+                        "exit_code": -1
+                    }
+
+            # Return database state as-is (PID validated or not applicable)
             return {
                 "id": id,
-                "state": instance.get("state", "unknown"),
-                "pid": instance.get("pid"),
+                "state": state,
+                "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
                 "exit_code": instance.get("exit_code")
@@ -471,23 +549,36 @@ class ServerManager:
             "exit_code": None
         }
 
-    async def list_servers(self) -> List[Dict[str, Any]]:
+    async def list_servers(self, enabled_only: bool = True, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all configured servers with their status.
+
+        Args:
+            enabled_only: If True, only return enabled servers. If False, return all servers including disabled ones.
+            include_deleted: If True, include soft-deleted servers (for admin recovery).
 
         Returns:
             List of server info dictionaries with nested config structure
         """
         servers = []
 
-        # Get all configs from database
-        configs = await self.db.list_server_configs()
+        # Get configs from database (filter by enabled_only and include_deleted parameters)
+        configs = await self.db.list_server_configs(enabled_only=enabled_only, include_deleted=include_deleted)
 
         # Merge with in-memory configs (for servers not in DB)
         config_ids = {c.get("id") for c in configs}
         for id, config in self.configs.items():
             if id not in config_ids:
-                configs.append(config)
+                # Apply same filtering logic as database query
+                if enabled_only:
+                    # Only include enabled servers
+                    if config.get("enabled", True):
+                        if include_deleted or not config.get("deleted_at"):
+                            configs.append(config)
+                else:
+                    # Include all servers, optionally including deleted ones
+                    if include_deleted or not config.get("deleted_at"):
+                        configs.append(config)
 
         for config in configs:
             id = config.get("id")

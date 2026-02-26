@@ -34,6 +34,7 @@ export interface Server {
   description?: string;
   config: ServerConfig;
   enabled: boolean;
+  deleted_at?: string;             // Soft delete timestamp
   status?: ServerStatus;
   tools?: Tool[];
   created_at?: string;

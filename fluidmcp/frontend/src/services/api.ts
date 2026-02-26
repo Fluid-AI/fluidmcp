@@ -86,8 +86,11 @@ class ApiClient {
   }
 
   // Server Management APIs
-  async listServers(options?: { signal?: AbortSignal }): Promise<ServersListResponse> {
-    return this.request<ServersListResponse>('/api/servers', options);
+  async listServers(options?: { signal?: AbortSignal; enabled_only?: boolean; include_deleted?: boolean }): Promise<ServersListResponse> {
+    const enabled_only = options?.enabled_only ?? true;
+    const include_deleted = options?.include_deleted ?? false;
+    const url = `/api/servers?enabled_only=${enabled_only}&include_deleted=${include_deleted}`;
+    return this.request<ServersListResponse>(url, options);
   }
 
   async getServerDetails(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerDetailsResponse> {
@@ -147,6 +150,27 @@ class ApiClient {
         body: JSON.stringify(env),
       }
     );
+  }
+
+  // Server Configuration Management (CRUD)
+  async addServer(config: any): Promise<{ message: string; id: string; name: string }> {
+    return this.request('/api/servers', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async updateServer(serverId: string, config: any): Promise<{ message: string; config: any }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async deleteServer(serverId: string): Promise<{ message: string; deleted_at: string }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'DELETE',
+    });
   }
 }
 

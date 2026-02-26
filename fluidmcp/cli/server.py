@@ -366,12 +366,12 @@ async def connect_with_retry(
         return False
 
 
-async def load_models_from_mongodb(db_manager: PersistenceBackend) -> int:
+async def load_models_from_persistence(db_manager: PersistenceBackend) -> int:
     """
-    Load and initialize LLM models from MongoDB.
+    Load and initialize LLM models from persistence backend (MongoDB or in-memory).
 
     Args:
-        db_manager: Database manager instance
+        db_manager: Persistence backend instance (PersistenceBackend interface)
 
     Returns:
         Number of models successfully loaded
@@ -382,17 +382,17 @@ async def load_models_from_mongodb(db_manager: PersistenceBackend) -> int:
     try:
         # Check if backend supports model persistence (list_llm_models method)
         if not hasattr(db_manager, 'list_llm_models'):
-            logger.info("Backend does not support model persistence, skipping MongoDB model loading")
+            logger.info("Backend does not support model persistence, skipping model loading")
             return 0
 
-        logger.info("Loading LLM models from MongoDB...")
+        logger.info("Loading LLM models from persistence backend...")
         models = await db_manager.list_llm_models()
 
         if not models:
-            logger.info("No LLM models found in MongoDB")
+            logger.info("No LLM models found in persistence backend")
             return 0
 
-        logger.info(f"Found {len(models)} model(s) in MongoDB")
+        logger.info(f"Found {len(models)} model(s) in persistence backend")
         loaded_count = 0
 
         for model_doc in models:
@@ -420,7 +420,7 @@ async def load_models_from_mongodb(db_manager: PersistenceBackend) -> int:
                             already_exists = True
 
                     if already_exists:
-                        logger.info(f"⚠ Model '{model_id}' already registered, skipping MongoDB load")
+                        logger.info(f"⚠ Model '{model_id}' already registered, skipping persistence load")
                         loaded_count += 1  # Count as loaded (already exists)
                         continue
 
@@ -552,7 +552,7 @@ async def main(args):
 
     # 4. Load models from MongoDB (if persistence is enabled)
     if db_connected:
-        loaded_models = await load_models_from_mongodb(persistence)
+        loaded_models = await load_models_from_persistence(persistence)
         if loaded_models > 0:
             logger.info(f"✓ Loaded {loaded_models} model(s) from MongoDB on startup")
     else:
