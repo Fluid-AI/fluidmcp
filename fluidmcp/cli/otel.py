@@ -84,6 +84,14 @@ def init_otel() -> bool:
                 exporters_added.append(f"otlp({otlp_endpoint})")
                 logger.info(f"✓ OTLP exporter configured: {otlp_endpoint}")
 
+                # Verify endpoint connectivity (non-blocking)
+                if verify_otlp_endpoint(otlp_endpoint, timeout=2.0):
+                    logger.info(f"✓ OTLP endpoint verified and reachable: {otlp_endpoint}")
+                else:
+                    logger.warning(f"⚠️  OTLP endpoint not reachable: {otlp_endpoint}")
+                    logger.warning("⚠️  Traces will be exported but may be dropped if collector remains unavailable")
+                    logger.warning("⚠️  Check network connectivity and OTEL_EXPORTER_OTLP_ENDPOINT configuration")
+
             except ImportError:
                 logger.error("❌ OTLP exporter not installed: pip install opentelemetry-exporter-otlp-proto-http")
             except Exception as e:
