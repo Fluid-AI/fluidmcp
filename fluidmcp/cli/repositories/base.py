@@ -78,15 +78,16 @@ class PersistenceBackend(ABC):
         pass
 
     @abstractmethod
-    async def save_instance_state(self, state: Dict[str, Any]) -> bool:
+    async def save_instance_state(self, state: Dict[str, Any], expected_pid: Optional[int] = None) -> bool:
         """
         Save server instance runtime state.
 
         Args:
             state: Instance state dict with fields like server_id, state, pid, etc.
+            expected_pid: Optional PID for optimistic locking. Update only if current PID matches.
 
         Returns:
-            True if save successful
+            True if save successful (or False if optimistic lock failed)
         """
         pass
 

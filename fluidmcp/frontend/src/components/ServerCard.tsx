@@ -1,3 +1,4 @@
+import React from "react";
 import { AlertCircle, Play } from "lucide-react";
 import type { Server } from "../types/server";
 
@@ -8,7 +9,7 @@ interface ServerCardProps {
   isStarting: boolean;
 }
 
-export default function ServerCard({
+function ServerCard({
   server,
   onStart,
   onViewDetails,
@@ -119,3 +120,5 @@ export default function ServerCard({
     </div>
   );
 }
+
+export default React.memo(ServerCard);
