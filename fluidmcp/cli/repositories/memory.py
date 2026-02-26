@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from collections import deque, defaultdict
 from datetime import datetime
 from loguru import logger
-from .base import PersistenceBackend
+from .base import PersistenceBackend, DuplicateKeyError
 
 
 class InMemoryBackend(PersistenceBackend):
@@ -25,6 +25,7 @@ class InMemoryBackend(PersistenceBackend):
         self._servers: Dict[str, Dict[str, Any]] = {}
         self._instances: Dict[str, Dict[str, Any]] = {}
         self._logs: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self._llm_models: Dict[str, Dict[str, Any]] = {}
         self._connected = False
 
     async def connect(self) -> bool:
@@ -39,6 +40,7 @@ class InMemoryBackend(PersistenceBackend):
         self._servers.clear()
         self._instances.clear()
         self._logs.clear()
+        self._llm_models.clear()
         self._connected = False
         logger.info("Disconnected in-memory backend")
 
@@ -132,3 +134,127 @@ class InMemoryBackend(PersistenceBackend):
         logs = list(self._logs.get(server_name, []))
         # Return most recent 'lines' logs
         return logs[-lines:] if logs else []
+
+    # ==================== LLM Model Persistence ====================
+
+    async def save_llm_model(self, model_config: Dict[str, Any]) -> bool:
+        """
+        Save LLM model configuration to memory.
+
+        Registration-only operation - raises exception on duplicate to match DatabaseManager.
+
+        Args:
+            model_config: Model configuration dict (must contain 'model_id')
+
+        Returns:
+            True if saved successfully
+
+        Raises:
+            DuplicateKeyError: If model_id already exists (use update_llm_model to modify)
+        """
+        model_id = model_config.get("model_id")
+        if not model_id:
+            logger.error("Cannot save LLM model without 'model_id' field")
+            return False
+
+        try:
+            # Check for duplicate (registration should fail, not overwrite)
+            if model_id in self._llm_models:
+                logger.warning(f"LLM model '{model_id}' already exists (use update_llm_model to modify)")
+                raise DuplicateKeyError(f"Model '{model_id}' already exists")
+
+            # Add timestamps
+            now = datetime.utcnow()
+            model_doc = {
+                **model_config,
+                "created_at": now,
+                "updated_at": now,
+                "version": 1  # Initial version for consistency with DatabaseManager
+            }
+            self._llm_models[model_id] = model_doc
+            logger.debug(f"Saved LLM model '{model_id}' to memory")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving LLM model '{model_id}' to memory: {e}")
+            raise  # Re-raise to be caught by caller
+
+    async def get_llm_model(self, model_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get LLM model configuration from memory.
+
+        Args:
+            model_id: Model identifier
+
+        Returns:
+            Model configuration dict or None if not found
+        """
+        model = self._llm_models.get(model_id)
+        if model:
+            # Return a copy to avoid mutations
+            return dict(model)
+        return None
+
+    async def list_llm_models(self, filter_dict: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """
+        List all LLM model configurations from memory.
+
+        Args:
+            filter_dict: Optional filter (e.g., {"type": "replicate"})
+
+        Returns:
+            List of model configuration dicts
+        """
+        # Return copies to avoid mutations
+        models = [dict(m) for m in self._llm_models.values()]
+
+        # Apply filtering if provided
+        if filter_dict:
+            models = [
+                m for m in models
+                if all(m.get(k) == v for k, v in filter_dict.items())
+            ]
+
+        return models
+
+    async def delete_llm_model(self, model_id: str) -> bool:
+        """
+        Delete LLM model configuration from memory.
+
+        Args:
+            model_id: Model identifier
+
+        Returns:
+            True if deleted, False if not found
+        """
+        if model_id in self._llm_models:
+            del self._llm_models[model_id]
+            logger.debug(f"Deleted LLM model '{model_id}' from memory")
+            return True
+        logger.warning(f"LLM model '{model_id}' not found in memory")
+        return False
+
+    async def update_llm_model(self, model_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update LLM model configuration in memory.
+
+        Args:
+            model_id: Model identifier
+            updates: Dict of fields to update
+
+        Returns:
+            True if updated, False if not found
+        """
+        if model_id not in self._llm_models:
+            logger.warning(f"LLM model '{model_id}' not found in memory")
+            return False
+
+        try:
+            # Update fields
+            self._llm_models[model_id].update(updates)
+            # Update timestamp
+            self._llm_models[model_id]["updated_at"] = datetime.utcnow()
+            logger.debug(f"Updated LLM model '{model_id}' in memory")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating LLM model '{model_id}' in memory: {e}")
+            return False

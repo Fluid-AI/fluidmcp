@@ -90,9 +90,89 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_headers=["*"],
     )
 
+    # Add request size limiting middleware for security (prevent DoS via large payloads)
+    # Max 10MB request body size (configurable via MAX_REQUEST_SIZE_MB env var)
+    # Uses Starlette's exception to ensure proper handling and prevent bypassing
+    default_request_size_mb = 10
+    max_request_size_env = os.getenv("MAX_REQUEST_SIZE_MB")
+    if max_request_size_env is None:
+        max_request_size_mb = default_request_size_mb
+    else:
+        try:
+            max_request_size_mb = int(max_request_size_env)
+        except ValueError:
+            logger.warning(
+                f"Invalid MAX_REQUEST_SIZE_MB value '{max_request_size_env}', "
+                f"falling back to default {default_request_size_mb}MB."
+            )
+            max_request_size_mb = default_request_size_mb
+    max_request_size = max_request_size_mb * 1024 * 1024  # bytes
+
+    @app.middleware("http")
+    async def limit_request_size(request, call_next):
+        """
+        Middleware to limit request body size and prevent memory exhaustion attacks.
+
+        Checks Content-Length header when present to provide early rejection.
+
+        IMPORTANT: This middleware only enforces limits when Content-Length is present.
+        Chunked transfer encoding (no Content-Length header) can bypass this check.
+        For production deployments, ALWAYS configure server-level limits:
+        - Uvicorn: Use --limit-max-requests parameter (e.g., --limit-max-requests 10485760)
+        - Nginx: Set client_max_body_size directive in nginx.conf
+        - Apache: Set LimitRequestBody directive in httpd.conf
+        - Cloudflare/CDN: Configure maximum upload size at edge
+
+        Without server-level limits, attackers can stream large bodies via chunked
+        encoding to cause memory exhaustion.
+
+        Raises HTTPException 413 to ensure FastAPI's exception handling is triggered,
+        preventing bypasses through direct body reading.
+        """
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        if request.method in ["POST", "PUT", "PATCH"]:
+            content_length = request.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    content_length_value = int(content_length)
+                except (TypeError, ValueError):
+                    raise StarletteHTTPException(
+                        status_code=400,
+                        detail="Invalid Content-Length header"
+                    )
+                if content_length_value < 0:
+                    raise StarletteHTTPException(
+                        status_code=400,
+                        detail="Invalid Content-Length header"
+                    )
+                if content_length_value > max_request_size:
+                    raise StarletteHTTPException(
+                        status_code=413,
+                        detail=f"Request body too large (max {max_request_size // (1024*1024)}MB)"
+                    )
+        return await call_next(request)
+
+    logger.info(f"Request size limit (Content-Length check): {max_request_size // (1024*1024)}MB")
+    logger.warning(
+        "SECURITY: Content-Length-based limit does not protect against chunked transfer encoding. "
+        "Configure server-level limits (Uvicorn --limit-max-requests, Nginx client_max_body_size, etc.) "
+        "for production deployments."
+    )
+
     # Store managers in app state for dependency injection
     app.state.db_manager = db_manager
     app.state.server_manager = server_manager
+
+    # Check MongoDB configuration and warn if not available
+    if not hasattr(db_manager, 'client') or db_manager.client is None:
+        logger.warning("=" * 80)
+        logger.warning("⚠️  WARNING: MongoDB NOT CONFIGURED - Running in EPHEMERAL MODE")
+        logger.warning("=" * 80)
+        logger.warning("⚠️  All model registrations will be LOST on server restart!")
+        logger.warning("⚠️  For production deployments, set MONGODB_URI environment variable")
+        logger.warning("⚠️  In-memory rate limiting does NOT work across multiple instances")
+        logger.warning("=" * 80)
 
     # Set up secure mode if enabled
     if secure_mode and token:
@@ -119,11 +199,25 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     # (MCP requests) are instrumented and counted in fluidmcp_requests_total.
     @app.get("/health")
     async def health_check():
-        """Health check endpoint with database connection status."""
+        """
+        Health check endpoint with comprehensive status information.
+
+        Returns:
+            - status: Overall health status
+            - database: MongoDB connection status
+            - models: Registered model statistics
+            - version: FluidMCP version
+        """
+        from datetime import datetime
+        from .services.replicate_client import _replicate_clients
+        from .services.llm_provider_registry import _llm_models_config
+
+        # Check database
         db_status = "disconnected"
         db_error = None
+        db_type = type(db_manager).__name__
 
-        if db_manager.client:
+        if hasattr(db_manager, 'client') and db_manager.client:
             try:
                 # Actually ping the database to verify connection
                 await db_manager.client.admin.command('ping')
@@ -132,11 +226,36 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 db_status = "error"
                 db_error = str(e)
 
+        # Count registered models
+        replicate_count = len(_replicate_clients)
+        total_models = len(_llm_models_config)
+
+        # Determine overall health status based on components
+        overall_status = "healthy"
+        if db_status == "error":
+            overall_status = "degraded"  # Database error but service still operational
+        elif db_status == "disconnected":
+            if total_models == 0:
+                overall_status = "starting"  # No database, no models (likely still starting up)
+            else:
+                overall_status = "degraded"  # No database but models loaded (lost persistence)
+
         return {
-            "status": "healthy",
-            "database": db_status,
-            "database_error": db_error,
-            "persistence_enabled": db_status == "connected"
+            "status": overall_status,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "database": {
+                "status": db_status,
+                "type": db_type,
+                "error": db_error,
+                "persistence_enabled": db_status == "connected"
+            },
+            "models": {
+                "total": total_models,
+                "by_type": {
+                    "replicate": replicate_count
+                }
+            },
+            "version": getattr(app, "version", "2.0.0")
         }
 
     @app.get("/metrics")
@@ -183,13 +302,20 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             }
         }
 
-    # Register cleanup handler for HTTP client
+    # Register cleanup handler for HTTP client and Redis connections
     @app.on_event("shutdown")
     async def shutdown_event():
         """Clean up resources on application shutdown."""
         from .api.management import cleanup_http_client
         await cleanup_http_client()
         logger.info("HTTP client cleaned up")
+
+        # CRITICAL FIX #2: Close Redis connection pool gracefully
+        try:
+            from .utils.rate_limiter import close_redis_client
+            await close_redis_client()
+        except Exception as e:
+            logger.warning(f"Error during Redis cleanup: {e}")
 
     logger.info("FastAPI application created (no MCP servers started)")
     return app
@@ -238,6 +364,136 @@ async def connect_with_retry(
         logger.warning("⚠️  Server state will NOT be saved across restarts.")
         logger.warning("⚠️  Use --require-persistence to fail instead of degrading.")
         return False
+
+
+async def load_models_from_persistence(db_manager: PersistenceBackend) -> int:
+    """
+    Load and initialize LLM models from persistence backend (MongoDB or in-memory).
+
+    Args:
+        db_manager: Persistence backend instance (PersistenceBackend interface)
+
+    Returns:
+        Number of models successfully loaded
+    """
+    from .services.replicate_client import ReplicateClient, _replicate_clients
+    from .services.llm_provider_registry import _llm_models_config, _registry_lock
+
+    try:
+        # Check if backend supports model persistence (list_llm_models method)
+        if not hasattr(db_manager, 'list_llm_models'):
+            logger.info("Backend does not support model persistence, skipping model loading")
+            return 0
+
+        logger.info("Loading LLM models from persistence backend...")
+        models = await db_manager.list_llm_models()
+
+        if not models:
+            logger.info("No LLM models found in persistence backend")
+            return 0
+
+        logger.info(f"Found {len(models)} model(s) in persistence backend")
+        loaded_count = 0
+
+        for model_doc in models:
+            model_id = model_doc.get("model_id")
+            model_type = model_doc.get("type")
+
+            if not model_id or not model_type:
+                logger.warning(f"Skipping invalid model doc: {model_doc}")
+                continue
+
+            try:
+                # Strip MongoDB-specific metadata fields
+                mongo_internal_fields = ["created_at", "updated_at", "_id"]
+                model_config = {
+                    k: v
+                    for k, v in model_doc.items()
+                    if k not in mongo_internal_fields and k != "model_id"
+                }
+
+                if model_type == "replicate":
+                    # Early check for existing model (optimization to skip expensive operations)
+                    already_exists = False
+                    with _registry_lock:
+                        if model_id in _replicate_clients or model_id in _llm_models_config:
+                            already_exists = True
+
+                    if already_exists:
+                        logger.info(f"⚠ Model '{model_id}' already registered, skipping persistence load")
+                        loaded_count += 1  # Count as loaded (already exists)
+                        continue
+
+                    # Initialize Replicate client
+                    client = ReplicateClient(model_id, model_config)
+
+                    # Health check (outside lock)
+                    health_ok = await client.health_check()
+
+                    if health_ok:
+                        # Register in global registries (both protected by same lock)
+                        client_to_close = None
+                        with _registry_lock:
+                            # Double-check after acquiring lock (TOCTOU protection)
+                            if model_id not in _replicate_clients and model_id not in _llm_models_config:
+                                _replicate_clients[model_id] = client
+                                _llm_models_config[model_id] = model_config
+                                logger.info(f"✓ Loaded model: {model_id} (type: {model_type})")
+                                loaded_count += 1
+                            else:
+                                # Race condition: Another thread registered it first
+                                client_to_close = client
+                                logger.info(f"⚠ Model '{model_id}' registered by another thread, skipping")
+                                loaded_count += 1
+
+                        # Close outside lock if needed
+                        if client_to_close:
+                            await client_to_close.close()
+                    else:
+                        await client.close()
+                        logger.warning(f"✗ Health check failed for model: {model_id}")
+
+                elif model_type in ("vllm", "ollama", "lmstudio"):
+                    # Import launch helper and registry functions
+                    from .services.llm_launcher import launch_single_llm_model
+                    from .services.run_servers import get_llm_processes, register_llm_process
+
+                    # Check if already running
+                    llm_processes = get_llm_processes()
+                    if model_id in llm_processes:
+                        logger.info(f"⚠ Model '{model_id}' already running, skipping MongoDB load")
+                        loaded_count += 1
+                        continue
+
+                    # Launch the LLM process
+                    process = launch_single_llm_model(model_id, model_config)
+
+                    if process:
+                        # Register in global registry
+                        register_llm_process(model_id, process)
+
+                        # Also register config in _llm_models_config for consistency
+                        with _registry_lock:
+                            _llm_models_config[model_id] = model_config
+
+                        logger.info(f"✓ Loaded model: {model_id} (type: {model_type})")
+                        loaded_count += 1
+                    else:
+                        logger.warning(f"✗ Failed to launch model: {model_id}")
+
+                else:
+                    logger.warning(f"Unsupported model type '{model_type}' for model '{model_id}' (skipping)")
+
+            except Exception as e:
+                logger.error(f"Failed to load model '{model_id}': {e}")
+                continue
+
+        logger.info(f"Successfully loaded {loaded_count}/{len(models)} model(s) from MongoDB")
+        return loaded_count
+
+    except Exception as e:
+        logger.error(f"Error loading models from MongoDB: {e}")
+        return 0
 
 
 async def main(args):
@@ -294,7 +550,15 @@ async def main(args):
         port=args.port
     )
 
-    # 3. Setup graceful shutdown with comprehensive signal handlers
+    # 4. Load models from MongoDB (if persistence is enabled)
+    if db_connected:
+        loaded_models = await load_models_from_persistence(persistence)
+        if loaded_models > 0:
+            logger.info(f"✓ Loaded {loaded_models} model(s) from MongoDB on startup")
+    else:
+        logger.info("Skipping MongoDB model loading (not connected)")
+
+    # 5. Setup graceful shutdown with comprehensive signal handlers
     shutdown_event = asyncio.Event()
 
     def signal_handler(sig, frame):
@@ -311,13 +575,24 @@ async def main(args):
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, signal_handler)  # Hangup (terminal closed)
 
-    # 4. Run server
+    # 6. Run server
+    # Get max request size from env var (same as middleware, for consistency)
+    max_request_size_mb = 10
+    max_request_size_env = os.getenv("MAX_REQUEST_SIZE_MB")
+    if max_request_size_env:
+        try:
+            max_request_size_mb = int(max_request_size_env)
+        except ValueError:
+            pass  # Already logged in middleware
+
     config = Config(
         app,
         host=args.host,
         port=args.port,
         loop="asyncio",
         log_level="info"
+        # Note: Uvicorn doesn't provide a direct body size limit parameter
+        # For production, configure limits at reverse proxy level (Nginx, Cloudflare, etc.)
     )
     server = Server(config)
 
@@ -412,26 +687,31 @@ def run():
 
     args = parser.parse_args()
 
-    # Generate and save token if secure mode enabled but no token provided
+    # Handle token for secure mode: CLI arg > env var > generate new
     if args.secure and not args.token:
-        args.token = secrets.token_urlsafe(32)
-        logger.info(f"Generated bearer token: {args.token}")
+        # Try environment variable first (more secure than CLI arg)
+        args.token = os.getenv("FMCP_BEARER_TOKEN")
 
-        # Save to secure file
-        token_file = save_token_to_file(args.token)
+        # Generate new token if still not provided
+        if not args.token:
+            args.token = secrets.token_urlsafe(32)
+            logger.info("Generated new bearer token (see console output for full token)")
 
-        # Print full token to console (NOT in logs)
-        print("\n" + "="*70)
-        print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-        print("="*70)
-        print(f"\n{args.token}\n")
-        print("="*70)
-        print(f"Token saved to: {token_file}")
-        print("To retrieve later: fluidmcp token show")
-        print("="*70 + "\n")
+            # Save to secure file
+            token_file = save_token_to_file(args.token)
 
-        # Only log masked version
-        logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
+            # Print full token to console (NOT in logs)
+            print("\n" + "="*70)
+            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
+            print("="*70)
+            print(f"\n{args.token}\n")
+            print("="*70)
+            print(f"Token saved to: {token_file}")
+            print("To retrieve later: fluidmcp token show")
+            print("="*70 + "\n")
+
+            # Only log masked version (show first 8 chars for better identification)
+            logger.info(f"Bearer token generated (starts with: {args.token[:8]}{'*' * (len(args.token) - 8)})")
 
     try:
         asyncio.run(main(args))

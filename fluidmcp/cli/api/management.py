@@ -8,16 +8,49 @@ Provides REST API for:
 - Listing all configured servers
 - Replicate model inference
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal, List
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from loguru import logger
 import os
 import asyncio
 import httpx
 import time
 import json
+import threading
+from collections import defaultdict
+from time import time as current_time
+from datetime import datetime
+
+# Import centralized validators
+from .validators import (
+    validate_temperature,
+    validate_max_tokens,
+    validate_top_p,
+    validate_inference_params,
+    validate_env_variables,
+    validate_server_config,
+    validate_model_id,
+    validate_updatable_model_fields
+)
+
+# Import rate limiter utilities
+from ..utils.rate_limiter import check_rate_limit, get_rate_limiter_stats, clear_rate_limiter
+
+# COPILOT COMMENT 2 FIX: Simplified DuplicateKeyError import pattern
+# Import custom DuplicateKeyError from base module (eliminates pymongo dependency)
+# All backends (MongoDB, in-memory) raise this exception for duplicate key violations
+from ..repositories.base import DuplicateKeyError
+
+# Optional Redis support for distributed rate limiting
+try:
+    import redis.asyncio as redis
+    _redis_available = True
+except ImportError:
+    redis = None
+    _redis_available = False
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.replicate_openai_adapter import replicate_chat_completion
@@ -25,13 +58,313 @@ from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
-from ..utils.env_utils import is_placeholder
+from ..utils.env_utils import is_placeholder, has_env_var_syntax
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 # Constants
 MAX_ERROR_MESSAGE_LENGTH = 1000  # Limit error messages to prevent DoS via large responses and protect sensitive data
+
+# LOW PRIORITY FIX #12: Rate limit configurations (requests, window_seconds)
+RATE_LIMIT_MODEL_REGISTRATION = (10, 60)   # 10 req/min - restrictive for resource-intensive operation
+RATE_LIMIT_MODEL_UPDATE = (20, 60)         # 20 req/min - moderate for config changes
+RATE_LIMIT_MODEL_DELETE = (20, 60)         # 20 req/min - moderate for destructive operation
+RATE_LIMIT_MODEL_ROLLBACK = (10, 60)       # 10 req/min - restrictive for destructive operation
+RATE_LIMIT_MODEL_LIST = (60, 60)           # 60 req/min - permissive for read operation
+# CRITICAL FIX: Add rate limits for inference endpoints to prevent DDoS attacks
+RATE_LIMIT_CHAT_COMPLETIONS = (60, 60)     # 60 req/min - permissive for production inference
+RATE_LIMIT_COMPLETIONS = (60, 60)          # 60 req/min - permissive for production inference
+RATE_LIMIT_MODELS_GET = (120, 60)          # 120 req/min - very permissive for metadata reads
+
+
+def truncate_error(error_msg: str) -> str:
+    """
+    Truncate error message to MAX_ERROR_MESSAGE_LENGTH to prevent DoS and info leakage.
+
+    Args:
+        error_msg: Error message to truncate
+
+    Returns:
+        Truncated error message with ellipsis if needed
+    """
+    if len(error_msg) > MAX_ERROR_MESSAGE_LENGTH:
+        return error_msg[:MAX_ERROR_MESSAGE_LENGTH] + "... (truncated)"
+    return error_msg
+
+
+def sanitize_audit_changes(changes: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Redact sensitive fields from audit log changes to prevent credential leakage.
+
+    Args:
+        changes: Dictionary of changes to sanitize
+
+    Returns:
+        Sanitized dictionary with sensitive fields redacted
+    """
+    sensitive_fields = {"api_key", "api_token", "auth_token", "password", "secret", "token", "bearer_token"}
+
+    sanitized = {}
+    for key, value in changes.items():
+        if isinstance(value, dict):
+            # Recursively sanitize nested dictionaries
+            sanitized[key] = {
+                k: "***REDACTED***" if k.lower() in sensitive_fields else v
+                for k, v in value.items()
+            }
+        elif key.lower() in sensitive_fields:
+            sanitized[key] = "***REDACTED***"
+        else:
+            sanitized[key] = value
+
+    return sanitized
+
+
+def sanitize_error_message(error_msg: str) -> str:
+    """
+    CRITICAL SECURITY: Redact sensitive data patterns from error messages.
+
+    Prevents API keys, tokens, and other secrets from being exposed in logs,
+    exception messages, and HTTP responses.
+
+    Detects and redacts:
+    - Replicate API keys (r8_...)
+    - Generic tokens starting with sk_, pk_, tok_, key_
+    - Bearer tokens
+    - Long alphanumeric strings that look like credentials (20+ chars)
+
+    Args:
+        error_msg: Error message string that may contain sensitive data
+
+    Returns:
+        Sanitized error message with credentials redacted
+    """
+    import re
+
+    if not isinstance(error_msg, str):
+        return str(error_msg)
+
+    # Redact Replicate API keys (r8_followed by alphanumeric)
+    error_msg = re.sub(r'\br8_[A-Za-z0-9]{20,}\b', 'r8_***REDACTED***', error_msg)
+
+    # Redact common API key patterns (sk_, pk_, tok_, key_ prefixes)
+    error_msg = re.sub(r'\b(sk|pk|tok|key)_[A-Za-z0-9_-]{10,}\b', r'\1_***REDACTED***', error_msg, flags=re.IGNORECASE)
+
+    # Redact Bearer tokens
+    error_msg = re.sub(r'Bearer\s+[A-Za-z0-9_\-\.]{20,}', 'Bearer ***REDACTED***', error_msg, flags=re.IGNORECASE)
+
+    # Redact long alphanumeric strings that look like tokens (20+ chars, mixed case/numbers)
+    # But only if they contain both letters and numbers (to avoid false positives with regular words)
+    error_msg = re.sub(
+        r'\b(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9_\-\.]{20,}\b',
+        '***REDACTED***',
+        error_msg
+    )
+
+    return error_msg
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extract client IP address with proxy support.
+
+    Checks X-Forwarded-For header first (for requests behind proxies/load balancers),
+    then falls back to direct connection IP.
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        Client IP address string, or "unknown" if not available
+    """
+    # Check X-Forwarded-For header first (if behind trusted proxy)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # Take first IP (original client), strip whitespace
+        return forwarded_for.split(",")[0].strip()
+
+    # Fall back to direct connection IP
+    return request.client.host if request.client else "unknown"
+
+
+def get_rate_limit_key(action: str, token: str, client_ip: str) -> str:
+    """
+    Generate a composite rate limit key using both token and IP address.
+
+    This prevents rate limit bypass scenarios where multiple users share the same IP
+    (e.g., behind NAT, corporate proxy, or load balancer).
+
+    Args:
+        action: Action being rate limited (e.g., "register_model", "update_model")
+        token: Bearer token for authentication
+        client_ip: Client IP address
+
+    Returns:
+        Rate limit key in format: "action:token_hash:ip"
+    """
+    import hashlib
+
+    # Hash token to avoid logging sensitive data
+    # Handle None token (insecure mode)
+    if token is None:
+        token_hash = "insecure"
+    else:
+        token_hash = hashlib.sha256(token.encode()).hexdigest()[:16]
+
+    return f"{action}:{token_hash}:{client_ip}"
+
+
+# ==================== Rate Limiting ====================
+# Rate limiting implementation has been moved to fluidmcp/cli/utils/rate_limiter.py
+# Import check_rate_limit, get_rate_limiter_stats, clear_rate_limiter from that module
+
+
+# ==================== Audit Logging ====================
+
+async def log_audit_event(
+    db: Any,
+    action: str,
+    model_id: str,
+    client_ip: str,
+    changes: Optional[Dict[str, Any]] = None,
+    status: str = "success",
+    error_message: Optional[str] = None
+):
+    """
+    Log model operation to audit trail for security compliance and forensics.
+
+    Args:
+        db: Database manager instance
+        action: Operation performed (register_model, update_model, delete_model)
+        model_id: Model identifier
+        client_ip: Client IP address
+        changes: Optional dict of changes made
+        status: Operation status (success, failure)
+        error_message: Optional error message if status is failure
+    """
+    if not hasattr(db, 'db') or db.db is None:
+        # No MongoDB available - log to file only
+        logger.info(
+            f"AUDIT: action={action} model_id={model_id} client={client_ip} "
+            f"status={status} changes={changes}"
+        )
+        return
+
+    try:
+        audit_entry = {
+            "action": action,
+            "model_id": model_id,
+            "client_ip": client_ip,
+            "timestamp": datetime.utcnow(),
+            "status": status,
+        }
+
+        if changes:
+            audit_entry["changes"] = changes
+
+        if error_message:
+            audit_entry["error_message"] = error_message
+
+        await db.db.fluidmcp_audit_log.insert_one(audit_entry)
+        logger.debug(f"Audit log recorded: {action} on model '{model_id}' by {client_ip}")
+    except Exception as e:
+        # Audit logging should never break the main operation
+        # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+        sanitized_error = sanitize_error_message(str(e))
+        logger.error(f"Failed to write audit log (non-fatal): {sanitized_error}")
+
+
+# ==================== Shared Validation Functions ====================
+
+# Validation functions moved to validators.py module for consolidation
+
+
+# ==================== Pydantic Models for Request Validation ====================
+
+class ReplicateModelConfig(BaseModel):
+    """Validation model for Replicate LLM model registration."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "model_id": "llama-4-maverick",
+                "type": "replicate",
+                "model": "meta/llama-4-maverick-instruct",
+                "api_key": "${REPLICATE_API_TOKEN}",
+                "default_params": {
+                    "temperature": 0.7,
+                    "max_tokens": 4096,
+                    "top_p": 0.9
+                },
+                "timeout": 300,
+                "max_retries": 3,
+                "capabilities": []
+            }
+        }
+    )
+
+    model_id: str = Field(
+        ...,
+        min_length=2,
+        max_length=100,
+        pattern="^[a-zA-Z0-9_-]+$",
+        description="Unique model identifier (alphanumeric, dash, underscore only; minimum 2 characters)"
+    )
+    type: Literal["replicate"] = Field(..., description="Model provider type")
+    model: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        pattern="^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(:[a-zA-Z0-9_.-]+)?$",
+        description="Replicate model name in the form owner/model-name or owner/model-name:version (e.g., meta/llama-4-maverick-instruct, black-forest-labs/flux-1.1-pro)"
+    )
+    api_key: str = Field(..., min_length=1, max_length=500, description="Replicate API token (use ${ENV_VAR} placeholder)")
+    default_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Default inference parameters (temperature, max_tokens, etc.)"
+    )
+    timeout: int = Field(default=300, ge=10, le=3600, description="Request timeout in seconds")
+    max_retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
+    capabilities: List[str] = Field(
+        default_factory=list,
+        description="Model capabilities (e.g., ['text-to-image', 'text-to-video'])"
+    )
+
+    @field_validator('api_key')
+    @classmethod
+    def validate_api_key(cls, v):
+        """
+        Validate API key uses environment variable syntax.
+
+        Security requirement: API keys must not be stored as raw values in configuration
+        to prevent credential exposure in logs, backups, or version control.
+        """
+        if v and not has_env_var_syntax(v):
+            raise ValueError(
+                "api_key must use environment variable placeholders for security "
+                "(e.g., '${REPLICATE_API_TOKEN}' or '$API_KEY'). "
+                "Raw API keys are not accepted to prevent credential exposure in configuration."
+            )
+        return v
+
+    @field_validator('default_params')
+    @classmethod
+    def validate_params(cls, v):
+        """Validate allowed parameter keys."""
+        allowed_keys = {'temperature', 'max_tokens', 'top_p', 'top_k', 'stop', 'frequency_penalty', 'presence_penalty'}
+        invalid = set(v.keys()) - allowed_keys
+        if invalid:
+            raise ValueError(f"Invalid parameters: {invalid}. Allowed: {allowed_keys}")
+
+        # Validate parameter ranges using shared validation functions
+        try:
+            validate_inference_params(v)
+        except ValueError as e:
+            # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+            raise ValueError(sanitize_error_message(str(e)))
+
+        return v
+
 
 # Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None
@@ -109,7 +442,7 @@ def validate_env_variables(env: Dict[str, str], max_vars: int = 100, max_key_len
     for key, value in env.items():
         # Type check
         if not isinstance(key, str) or not isinstance(value, str):
-            raise HTTPException(400, f"Environment variable keys and values must be strings")
+            raise HTTPException(400, "Environment variable keys and values must be strings")
 
         # Key length check (DoS prevention)
         if len(key) > max_key_length:
@@ -178,6 +511,13 @@ def get_server_manager(request: Request):
     if not hasattr(request.app.state, "server_manager"):
         raise HTTPException(500, "ServerManager not initialized")
     return request.app.state.server_manager
+
+
+def get_database_manager(request: Request):
+    """Dependency injection for DatabaseManager."""
+    if not hasattr(request.app.state, "db_manager") or request.app.state.db_manager is None:
+        raise HTTPException(500, "DatabaseManager not initialized")
+    return request.app.state.db_manager
 
 
 def sanitize_input(value: Any) -> Any:
@@ -421,10 +761,14 @@ async def add_server(
         raise HTTPException(400, f"Server with id '{id}' already exists")
 
     # Try to save to database, fall back to in-memory storage
-    success = await manager.db.save_server_config(config)
-    if not success:
-        # Store in-memory as fallback
-        logger.warning(f"Database save failed for '{name}', storing in-memory only")
+    try:
+        success = await manager.db.save_server_config(config)
+        if not success:
+            # Store in-memory as fallback
+            logger.warning(f"Database save failed for '{name}', storing in-memory only")
+    except DuplicateKeyError:
+        # Race condition: another request created the same server concurrently
+        raise HTTPException(409, f"Server with id '{id}' was created concurrently")
 
     # Always store in configs dict for immediate access
     manager.configs[id] = config
@@ -549,9 +893,14 @@ async def update_server(
     config["id"] = id
 
     # Save updated config (both database and in-memory)
-    success = await manager.db.save_server_config(config)
-    if not success:
-        logger.warning(f"Database save failed for '{config['name']}', storing in-memory only")
+    try:
+        success = await manager.db.save_server_config(config)
+        if not success:
+            logger.warning(f"Database save failed for '{config['name']}', storing in-memory only")
+    except DuplicateKeyError:
+        # This shouldn't happen in update, but handle it anyway
+        logger.error(f"Unexpected duplicate key error when updating server '{id}'")
+        # Continue with in-memory update
 
     # Always update in-memory
     manager.configs[id] = config
@@ -671,7 +1020,7 @@ async def start_server(
     # Start server with user tracking
     success = await manager.start_server(id, config, user_id=user_id)
     if not success:
-        raise HTTPException(500, f"Failed to start server '{id}'")
+        raise HTTPException(500, truncate_error(f"Failed to start server '{id}'"))
 
     # Get PID
     process = manager.processes.get(id)
@@ -725,7 +1074,7 @@ async def stop_server(
     # Stop server
     success = await manager.stop_server(id, force=force)
     if not success:
-        raise HTTPException(500, f"Failed to stop server '{id}'")
+        raise HTTPException(500, truncate_error(f"Failed to stop server '{id}'"))
 
     logger.info(f"Stopped server '{id}' via API (force={force})")
     return {
@@ -776,7 +1125,7 @@ async def restart_server(
     # Restart server
     success = await manager.restart_server(id)
     if not success:
-        raise HTTPException(500, f"Failed to restart server '{id}'")
+        raise HTTPException(500, truncate_error(f"Failed to restart server '{id}'"))
 
     # Get new PID
     process = manager.processes.get(id)
@@ -1046,11 +1395,11 @@ async def update_server_instance_env(
                 try:
                     # Rollback to old env
                     await manager.db.update_instance_env(id, old_env)
-                    raise HTTPException(500, f"Failed to restart server '{id}' after updating env. Changes have been rolled back.")
+                    raise HTTPException(500, truncate_error(f"Failed to restart server '{id}' after updating env. Changes have been rolled back."))
                 except Exception as rollback_error:
                     logger.critical(f"CRITICAL: Rollback failed for server '{id}': {rollback_error}")
-                    raise HTTPException(500, f"Failed to restart server '{id}' and rollback also failed. Manual intervention required.")
-            raise HTTPException(500, f"Failed to restart server '{id}' after updating env.")
+                    raise HTTPException(500, truncate_error(f"Failed to restart server '{id}' and rollback also failed. Manual intervention required."))
+            raise HTTPException(500, truncate_error(f"Failed to restart server '{id}' after updating env."))
 
     return {
         "message": f"Environment variables updated for server '{id}'",
@@ -1195,7 +1544,7 @@ async def run_tool(
         response = json.loads(response_line.strip())
 
         if "error" in response:
-            raise HTTPException(500, f"Tool execution error: {response['error']}")
+            raise HTTPException(500, truncate_error(f"Tool execution error: {response['error']}"))
 
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
@@ -1229,13 +1578,19 @@ async def list_llm_models(
     Returns:
         List of LLM models with status information
     """
+    from ..services.replicate_client import _replicate_clients
+    from ..services.llm_provider_registry import _registry_lock
+
     llm_processes = get_llm_processes()
 
     models = []
+
+    # Add vLLM/Ollama/LM Studio models (process-based)
     for model_id, process in llm_processes.items():
         is_healthy, health_msg = await process.check_health()
         models.append({
             "id": model_id,
+            "type": "process",  # vLLM, Ollama, etc.
             "is_running": process.is_running(),
             "is_healthy": is_healthy,
             "health_message": health_msg,
@@ -1246,6 +1601,23 @@ async def list_llm_models(
             "uptime_seconds": process.get_uptime(),
             "last_restart_time": process.last_restart_time,
             "last_health_check_time": process.last_health_check_time
+        })
+
+    # Add Replicate models (cloud-based)
+    # CRITICAL: Copy items list under lock, then iterate outside lock to avoid holding lock during I/O
+    with _registry_lock:
+        replicate_items = list(_replicate_clients.items())
+
+    for model_id, client in replicate_items:
+        # Replicate clients don't have process lifecycle
+        models.append({
+            "id": model_id,
+            "type": "replicate",
+            "is_running": True,  # Always "running" (cloud-based)
+            "is_healthy": True,  # Assume healthy (validated on registration)
+            "health_message": "Cloud-based model (Replicate)",
+            "model": client.model_name,
+            "endpoint": "https://api.replicate.com"
         })
 
     return {
@@ -1268,29 +1640,51 @@ async def get_llm_model_status(
     Returns:
         Detailed model status
     """
+    from ..services.replicate_client import _replicate_clients
+    from ..services.llm_provider_registry import _registry_lock
+
     llm_processes = get_llm_processes()
 
-    if model_id not in llm_processes:
-        raise HTTPException(404, f"LLM model '{model_id}' not found")
+    # Check process-based models (vLLM, Ollama, etc.)
+    if model_id in llm_processes:
+        process = llm_processes[model_id]
+        is_healthy, health_msg = await process.check_health()
 
-    process = llm_processes[model_id]
-    is_healthy, health_msg = await process.check_health()
+        return {
+            "id": model_id,
+            "type": "process",
+            "is_running": process.is_running(),
+            "is_healthy": is_healthy,
+            "health_message": health_msg,
+            "restart_policy": process.restart_policy,
+            "restart_count": process.restart_count,
+            "max_restarts": process.max_restarts,
+            "consecutive_health_failures": process.consecutive_health_failures,
+            "uptime_seconds": process.get_uptime(),
+            "last_restart_time": process.last_restart_time,
+            "last_health_check_time": process.last_health_check_time,
+            # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
+            "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
+        }
 
-    return {
-        "id": model_id,
-        "is_running": process.is_running(),
-        "is_healthy": is_healthy,
-        "health_message": health_msg,
-        "restart_policy": process.restart_policy,
-        "restart_count": process.restart_count,
-        "max_restarts": process.max_restarts,
-        "consecutive_health_failures": process.consecutive_health_failures,
-        "uptime_seconds": process.get_uptime(),
-        "last_restart_time": process.last_restart_time,
-        "last_health_check_time": process.last_health_check_time,
-        # Issue #3 fix: Use asyncio.to_thread to avoid blocking event loop with file I/O
-        "has_cuda_oom": await asyncio.to_thread(process.check_for_cuda_oom)
-    }
+    # Check cloud-based models (Replicate)
+    with _registry_lock:
+        if model_id in _replicate_clients:
+            client = _replicate_clients[model_id]
+            return {
+                "id": model_id,
+                "type": "replicate",
+                "is_running": True,  # Always "running" (cloud-based)
+                "is_healthy": True,  # Assume healthy (validated on registration)
+                "health_message": "Cloud-based model (Replicate)",
+                "model": client.model_name,
+                "endpoint": "https://api.replicate.com",
+                "timeout": client.timeout,
+                "max_retries": client.max_retries
+            }
+
+    # Model not found in either registry
+    raise HTTPException(404, f"LLM model '{model_id}' not found")
 
 
 @router.post("/llm/models/{model_id}/restart")
@@ -1349,14 +1743,14 @@ async def stop_llm_model(
     token: str = Depends(get_token)
 ):
     """
-    Stop a specific LLM model.
+    Stop a specific LLM model and persist state to database.
 
     Args:
         model_id: Model identifier
         force: If true, force kill the process (SIGKILL)
 
     Returns:
-        Stop result
+        Stop result with persisted state
     """
     llm_processes = get_llm_processes()
 
@@ -1366,20 +1760,142 @@ async def stop_llm_model(
     process = llm_processes[model_id]
 
     if not process.is_running():
-        return {"message": f"LLM model '{model_id}' is already stopped"}
+        return {"message": f"LLM model '{model_id}' is already stopped", "status": "stopped"}
 
     logger.info(f"Stop requested for LLM model '{model_id}' (force={force})")
 
     try:
+        # Stop the process
         if force:
             process.force_kill()
-            return {"message": f"LLM model '{model_id}' force killed"}
+            stop_method = "force_killed"
         else:
             process.stop()
-            return {"message": f"LLM model '{model_id}' stopped gracefully"}
+            stop_method = "graceful"
+
+        # Update state in persistence backend
+        db = get_db_manager()
+        if db and hasattr(db, 'update_llm_model'):
+            try:
+                from datetime import datetime
+                await db.update_llm_model(model_id, {
+                    "state": "stopped",
+                    "stopped_at": datetime.utcnow().isoformat(),
+                    "stop_method": stop_method
+                })
+                state_persisted = True
+            except Exception as e:
+                logger.warning(f"Failed to persist stopped state for '{model_id}': {e}")
+                state_persisted = False
+        else:
+            state_persisted = False
+
+        return {
+            "message": f"LLM model '{model_id}' stopped ({stop_method})",
+            "status": "stopped",
+            "persisted": state_persisted
+        }
     except Exception as e:
         logger.error(f"Error stopping LLM model '{model_id}': {e}", exc_info=True)
         raise HTTPException(500, "Failed to stop LLM model")
+
+
+@router.post("/llm/models/{model_id}/start")
+async def start_llm_model(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Start a previously stopped LLM model.
+
+    Reads model configuration from database and launches the process.
+
+    Args:
+        model_id: Model identifier
+
+    Returns:
+        Start result with process status
+    """
+    from ..services.llm_launcher import launch_single_llm_model
+    from ..services.run_servers import get_llm_processes, register_llm_process
+    from ..services.llm_provider_registry import _registry_lock, _llm_models_config
+
+    # Check if already running
+    llm_processes = get_llm_processes()
+    if model_id in llm_processes:
+        process = llm_processes[model_id]
+        if process.is_running():
+            return {
+                "message": f"LLM model '{model_id}' is already running",
+                "status": "running"
+            }
+
+    # Get model config from database
+    db = get_db_manager()
+    if not db:
+        raise HTTPException(500, "Database not available")
+
+    try:
+        model_doc = await db.get_llm_model(model_id)
+        if not model_doc:
+            raise HTTPException(404, f"Model '{model_id}' not found in database")
+
+        model_type = model_doc.get("type")
+        if model_type not in ("vllm", "ollama", "lmstudio"):
+            raise HTTPException(400, f"Model type '{model_type}' does not support start operation")
+
+        # Extract config
+        mongo_internal_fields = ["created_at", "updated_at", "_id", "model_id", "type", "state", "stopped_at", "started_at", "stop_method"]
+        model_config = {
+            k: v
+            for k, v in model_doc.items()
+            if k not in mongo_internal_fields
+        }
+
+        # Launch the process
+        logger.info(f"Starting LLM model '{model_id}' (type: {model_type})")
+        process = launch_single_llm_model(model_id, model_config)
+
+        if not process:
+            raise HTTPException(500, f"Failed to start model '{model_id}'")
+
+        # Register in global registry (direct assignment to avoid nested locks)
+        from ..services.run_servers import get_llm_processes
+        with _registry_lock:
+            _llm_processes = get_llm_processes()
+            _llm_processes[model_id] = process
+            _llm_models_config[model_id] = model_config
+
+        # Update state in database
+        state_persisted = False
+        try:
+            from datetime import datetime
+            await db.update_llm_model(model_id, {
+                "state": "running",
+                "started_at": datetime.utcnow().isoformat(),
+                "stopped_at": None,
+                "stop_method": None
+            })
+            state_persisted = True
+        except Exception as e:
+            logger.warning(f"Failed to persist running state for '{model_id}': {e}")
+
+        logger.info(f"Successfully started LLM model '{model_id}'")
+
+        return {
+            "message": f"LLM model '{model_id}' started successfully",
+            "status": "running",
+            "model_id": model_id,
+            "type": model_type,
+            "persisted": state_persisted
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting LLM model '{model_id}': {e}", exc_info=True)
+        raise HTTPException(500, f"Failed to start model: {str(e)}")
 
 
 @router.get("/llm/models/{model_id}/logs")
@@ -1498,6 +2014,7 @@ async def trigger_health_check(
 
 @router.post("/llm/v1/chat/completions")
 async def unified_chat_completions(
+    request: Request,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
@@ -1508,6 +2025,7 @@ async def unified_chat_completions(
     Provider type is determined from config, not from the route.
 
     Args:
+        request: FastAPI Request object for rate limiting
         request_body: OpenAI-format chat request with model, messages, temperature, etc.
 
     Returns:
@@ -1521,6 +2039,12 @@ async def unified_chat_completions(
           "max_tokens": 100
         }
     """
+    # CRITICAL FIX: Add rate limiting to prevent DDoS attacks
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("chat_completions", token or "anonymous", client_ip)
+    max_requests, window_seconds = RATE_LIMIT_CHAT_COMPLETIONS
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
     # Extract model_id from request body (OpenAI-style)
     model_id = request_body.get("model")
     if not model_id:
@@ -1573,19 +2097,19 @@ async def unified_chat_completions(
                 status_code=500
             )
             logger.exception(f"Unexpected error in chat completions for model '{model_id}': {e}")
-            raise HTTPException(500, f"Internal server error while processing request for model '{model_id}'")
+            raise HTTPException(500, truncate_error(f"Internal server error while processing request for model '{model_id}'"))
 
     elif provider_type in ("vllm", "ollama", "lmstudio"):
         # Proxy to OpenAI-compatible endpoint (vLLM, Ollama, LM Studio all use same format)
         # Validate config first (before metrics tracking)
         model_config = get_model_config(model_id)
         if not model_config:
-            raise HTTPException(500, f"Model '{model_id}' config not found")
+            raise HTTPException(500, truncate_error(f"Model '{model_id}' config not found"))
 
         base_url = model_config.get("endpoints", {}).get("base_url")
 
         if not base_url:
-            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
+            raise HTTPException(500, truncate_error(f"{provider_type} model '{model_id}' missing base_url in config"))
 
         # Record request start (after config validation, before any processing)
         start_time = collector.record_request_start(model_id, provider_type)
@@ -1596,6 +2120,7 @@ async def unified_chat_completions(
         if is_streaming:
             # Return streaming response using shared client
             http_client = _get_http_client()
+
             async def stream_generator():
                 try:
                     async with http_client.stream(
@@ -1708,14 +2233,15 @@ async def unified_chat_completions(
                 status_code=502
             )
 
-            raise HTTPException(502, f"Failed to connect to {provider_type} server: {str(e)}")
+            raise HTTPException(502, truncate_error(f"Failed to connect to {provider_type} server: {str(e)}"))
 
     else:
-        raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for chat completions")
+        raise HTTPException(501, truncate_error(f"Provider type '{provider_type}' not yet supported for chat completions"))
 
 
 @router.post("/llm/v1/completions")
 async def unified_completions(
+    request: Request,
     request_body: Dict[str, Any] = Body(...),
     token: str = Depends(get_token)
 ):
@@ -1723,6 +2249,7 @@ async def unified_completions(
     OpenAI-compatible text completions endpoint (currently supports provider types: vllm, ollama, lmstudio).
 
     Args:
+        request: FastAPI Request object for rate limiting
         request_body: OpenAI-format completion request with model and prompt
 
     Returns:
@@ -1735,6 +2262,12 @@ async def unified_completions(
           "max_tokens": 100
         }
     """
+    # CRITICAL FIX: Add rate limiting to prevent DDoS attacks
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("completions", token or "anonymous", client_ip)
+    max_requests, window_seconds = RATE_LIMIT_COMPLETIONS
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
     # Extract model_id from request body (OpenAI-style)
     model_id = request_body.get("model")
     if not model_id:
@@ -1751,12 +2284,12 @@ async def unified_completions(
         # Proxy to OpenAI-compatible completions endpoint (vLLM, Ollama, LM Studio)
         model_config = get_model_config(model_id)
         if not model_config:
-            raise HTTPException(500, f"Model '{model_id}' config not found")
+            raise HTTPException(500, truncate_error(f"Model '{model_id}' config not found"))
 
         base_url = model_config.get("endpoints", {}).get("base_url")
 
         if not base_url:
-            raise HTTPException(500, f"{provider_type} model '{model_id}' missing base_url in config")
+            raise HTTPException(500, truncate_error(f"{provider_type} model '{model_id}' missing base_url in config"))
 
         # Record request start after config validation
         start_time = collector.record_request_start(model_id, provider_type)
@@ -1767,6 +2300,7 @@ async def unified_completions(
         if is_streaming:
             # Return streaming response using shared client
             http_client = _get_http_client()
+
             async def stream_generator():
                 try:
                     async with http_client.stream(
@@ -1875,14 +2409,15 @@ async def unified_completions(
                 status_code=502
             )
 
-            raise HTTPException(502, f"Failed to connect to {provider_type}: {str(e)}")
+            raise HTTPException(502, truncate_error(f"Failed to connect to {provider_type}: {str(e)}"))
 
     else:
-        raise HTTPException(501, f"Provider type '{provider_type}' not yet supported for completions")
+        raise HTTPException(501, truncate_error(f"Provider type '{provider_type}' not yet supported for completions"))
 
 
 @router.get("/llm/v1/models")
 async def unified_list_models(
+    request: Request,
     token: str = Depends(get_token),
     model: str = None
 ):
@@ -1892,11 +2427,18 @@ async def unified_list_models(
     Lists all available models or returns details for a specific model.
 
     Args:
+        request: FastAPI Request object for rate limiting
         model: Optional model ID to get details for specific model
 
     Returns:
         OpenAI-format model list or single model details
     """
+    # CRITICAL FIX: Add rate limiting to prevent DDoS attacks
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("models_list", token or "anonymous", client_ip)
+    max_requests, window_seconds = RATE_LIMIT_MODELS_GET
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
     if model:
         # Return specific model details (single model object, not list)
         config = get_model_config(model)
@@ -1938,6 +2480,7 @@ async def unified_list_models(
 
 @router.get("/llm/v1/models/{model_id}")
 async def unified_get_model(
+    request: Request,
     model_id: str,
     token: str = Depends(get_token)
 ):
@@ -1947,6 +2490,7 @@ async def unified_get_model(
     Returns details for a specific model by ID.
 
     Args:
+        request: FastAPI Request object for rate limiting
         model_id: The model ID to retrieve
 
     Returns:
@@ -1961,6 +2505,12 @@ async def unified_get_model(
             "owned_by": "fluidmcp"
         }
     """
+    # CRITICAL FIX: Add rate limiting to prevent DDoS attacks
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("models_get", token or "anonymous", client_ip)
+    max_requests, window_seconds = RATE_LIMIT_MODELS_GET
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
     config = get_model_config(model_id)
     if not config:
         raise HTTPException(404, f"Model '{model_id}' not found")
@@ -2224,6 +2774,696 @@ async def get_model_metrics(
         },
         "errors_by_status": dict(metrics.errors_by_status),
     }
+
+
+# ==================== LLM Model Registration ====================
+
+@router.post("/llm/models")
+async def register_llm_model(
+    request: Request,
+    config: ReplicateModelConfig,
+    token: str = Depends(get_token)
+):
+    """
+    Register a new LLM model dynamically.
+
+    Rate limit: 10 requests per minute per client.
+
+    Currently supports:
+    - Replicate models (cloud inference)
+
+    Request Body:
+        model_id (str): Unique model identifier
+        type (str): Model provider type ('replicate', 'vllm', 'ollama', etc.)
+        model (str): Provider-specific model name
+        api_key (str): API key (supports ${ENV_VAR} syntax)
+        default_params (dict): Default inference parameters
+        timeout (int): Request timeout in seconds
+        max_retries (int): Maximum retry attempts
+
+    Returns:
+        Success message with model ID
+    """
+    from ..services.replicate_client import ReplicateClient, _replicate_clients
+    from ..services.llm_provider_registry import _llm_models_config, _registry_lock
+
+    # Apply rate limiting
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("register_model", token, client_ip)
+    max_requests, window_seconds = RATE_LIMIT_MODEL_REGISTRATION
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
+    # Pydantic model handles all validation
+    model_id = config.model_id
+    model_type = config.type
+
+    # Handle different model types
+    if model_type == "replicate":
+        # Initialize variables early so they're available in exception handlers
+        db = None
+        saved = False
+
+        try:
+            # Get database manager (may raise HTTPException)
+            db = get_database_manager(request)
+            # Convert Pydantic model to dict (remove model_id as it's passed separately)
+            model_config = config.model_dump(exclude={"model_id"})
+
+            # API key validation now handled by Pydantic field_validator
+
+            # COPILOT COMMENT 6 FIX: Document TOCTOU limitation of early check
+            # CRITICAL FIX: Check for collision BEFORE expensive operations (client init, health check)
+            # This prevents wasted resources from duplicate registrations
+            #
+            # IMPORTANT: This is a best-effort early check with TOCTOU limitation:
+            # - Another thread could register the same model_id between this check and the final check (line 2682)
+            # - This is acceptable because:
+            #   1. The final authoritative check (inside lock after persistence) prevents actual duplicates
+            #   2. This early check only optimizes for the common case (duplicate request for already-registered model)
+            #   3. Worst case: wasted client initialization + health check for a concurrent duplicate
+            # - The lock is released immediately to allow concurrent registrations of different models
+            with _registry_lock:
+                if model_id in _replicate_clients:
+                    raise HTTPException(400, f"Model '{model_id}' already registered as Replicate model")
+                if model_id in _llm_models_config:
+                    raise HTTPException(400, f"Model '{model_id}' already registered in provider registry")
+
+            # Initialize Replicate client and perform health check (outside lock for concurrency)
+            client = ReplicateClient(model_id, model_config)
+            client_created = True  # Track if we need to clean up
+
+            try:
+                if not await client.health_check():
+                    raise HTTPException(500, truncate_error(f"Health check failed for model '{model_id}'"))
+            except Exception:
+                # Clean up client on health check failure
+                try:
+                    await client.close()
+                    client_created = False
+                except Exception as e:
+                    logger.debug(f"Failed to close client during cleanup: {e}")  # Best effort cleanup
+                raise
+
+            # Save to persistence backend (MongoDB or in-memory)
+            # CRITICAL: Do this BEFORE registering in global registries to prevent race conditions
+            try:
+                try:
+                    saved = await db.save_llm_model(config.model_dump())
+                    if not saved:
+                        # Persistence save failed - decide whether to fail based on environment
+                        require_persistence = os.getenv("REQUIRE_MONGODB_PERSISTENCE", "false").lower() == "true"
+
+                        if require_persistence:
+                            raise HTTPException(500, "Persistence required but save failed")
+                        else:
+                            logger.warning(f"Failed to save model '{model_id}' to persistence backend (running in-memory only)")
+
+                except DuplicateKeyError:
+                    # Duplicate key error (concurrent registration)
+                    logger.warning(f"Model '{model_id}' already exists in persistence backend (concurrent registration)")
+                    saved = True
+                except HTTPException:
+                    raise  # Re-raise HTTPException unchanged
+                except Exception as e:
+                    # Unexpected error during persistence save
+                    # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+                    sanitized_error = sanitize_error_message(str(e))
+                    logger.error(f"Error saving model '{model_id}' to persistence backend: {sanitized_error}")
+                    raise HTTPException(500, truncate_error(f"Failed to persist model: {sanitized_error}"))
+
+                # Register in global registries (atomic operation with proper rollback)
+                # CRITICAL FIX: Single authoritative check inside lock eliminates TOCTOU race
+                client_to_close = None
+                with _registry_lock:
+                    # Final authoritative collision check
+                    if model_id in _replicate_clients or model_id in _llm_models_config:
+                        # Concurrent registration detected - treat as idempotent success
+                        client_to_close = client
+                        client_created = False  # Don't clean up in outer except
+                        logger.info(f"Model '{model_id}' concurrently registered; treating as no-op")
+                    else:
+                        # Atomically register both in replicate clients and provider registry
+                        _replicate_clients[model_id] = client
+                        _llm_models_config[model_id] = model_config
+                        client_created = False  # Successfully registered, don't clean up
+
+                # Close outside lock if concurrent registration detected
+                if client_to_close:
+                    await client_to_close.close()
+
+            except Exception as e:
+                # Rollback: Clean up client if it was created but not registered
+                if client_created:
+                    try:
+                        await client.close()
+                        logger.debug(f"Cleaned up client for model '{model_id}' after registration failure")
+                    except Exception as cleanup_error:
+                        logger.debug(f"Failed to clean up client during rollback: {cleanup_error}")
+                raise
+
+            logger.info(f"Successfully registered Replicate model: {model_id}")
+
+            # Audit log successful registration (reuse db variable from above)
+            await log_audit_event(
+                db=db,
+                action="register_model",
+                model_id=model_id,
+                client_ip=client_ip,
+                changes={"type": "replicate", "model": config.model, "persisted": saved},
+                status="success"
+            )
+
+            return {
+                "message": f"Model '{model_id}' registered successfully",
+                "model_id": model_id,
+                "type": "replicate",
+                "status": "active",
+                "persisted": saved
+            }
+
+        except HTTPException as e:
+            # Audit log failed registration (only if db was initialized)
+            if db is not None:
+                try:
+                    await log_audit_event(
+                        db=db,
+                        action="register_model",
+                        model_id=model_id,
+                        client_ip=client_ip,
+                        status="failure",
+                        error_message=str(e.detail)
+                    )
+                except Exception:
+                    pass  # Audit logging failure should not mask original error
+            # Re-raise HTTPException unchanged (preserves status code)
+            raise
+        except ValueError as e:
+            # Client errors (bad parameters)
+            # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+            sanitized_error = sanitize_error_message(str(e))
+            logger.error(f"Invalid configuration for Replicate model '{model_id}': {sanitized_error}")
+            raise HTTPException(400, f"Invalid model configuration: {sanitized_error}")
+        except Exception as e:
+            # Server errors (unexpected failures)
+            # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+            sanitized_error = sanitize_error_message(str(e))
+            logger.error(f"Failed to register Replicate model '{model_id}': {sanitized_error}")
+            raise HTTPException(500, truncate_error(f"Failed to register model: {sanitized_error}"))
+
+    elif model_type in ("vllm", "ollama", "lmstudio"):
+        # Import LLM launcher and registry functions
+        from ..services.llm_launcher import launch_single_llm_model
+        from ..services.run_servers import get_llm_processes, register_llm_process
+        from ..services.llm_provider_registry import _registry_lock, _llm_models_config
+
+        try:
+            # Early check for existing model
+            llm_processes = get_llm_processes()
+            with _registry_lock:
+                if model_id in llm_processes:
+                    raise HTTPException(400, f"Model '{model_id}' already registered as {model_type} model")
+                if model_id in _llm_models_config:
+                    raise HTTPException(400, f"Model '{model_id}' already registered in provider registry")
+
+            # Extract model config from request
+            model_config = config.model_dump()
+            model_config.pop("model_id", None)
+            model_config.pop("type", None)
+
+            # Save to persistence backend FIRST (before launching process)
+            try:
+                saved = await db.save_llm_model(config.model_dump())
+                if not saved:
+                    require_persistence = os.getenv("REQUIRE_MONGODB_PERSISTENCE", "false").lower() == "true"
+                    if require_persistence:
+                        raise HTTPException(500, "Persistence required but save failed")
+                    else:
+                        logger.warning(f"Failed to save model '{model_id}' to persistence backend (running in-memory only)")
+
+            except DuplicateKeyError:
+                logger.warning(f"Model '{model_id}' already exists in persistence backend (concurrent registration)")
+                saved = True
+            except HTTPException:
+                raise
+            except Exception as e:
+                sanitized_error = sanitize_error_message(str(e))
+                logger.error(f"Error saving model '{model_id}' to persistence backend: {sanitized_error}")
+                raise HTTPException(500, truncate_error(f"Failed to persist model: {sanitized_error}"))
+
+            # Launch the LLM process
+            process = launch_single_llm_model(model_id, model_config)
+
+            if not process:
+                raise HTTPException(500, f"Failed to launch {model_type} model '{model_id}'")
+
+            # Register in global registries
+            process_registered = False
+            try:
+                with _registry_lock:
+                    # Final check for concurrent registration
+                    if model_id not in llm_processes and model_id not in _llm_models_config:
+                        # Direct assignment to avoid nested lock acquisition
+                        llm_processes[model_id] = process
+                        _llm_models_config[model_id] = model_config
+                        process_registered = True
+                        logger.info(f"✓ Registered {model_type} model: {model_id}")
+                    else:
+                        logger.info(f"⚠ Model '{model_id}' concurrently registered; stopping duplicate")
+
+                # If concurrent registration detected, stop the process we just launched
+                if not process_registered:
+                    try:
+                        process.stop()
+                    except Exception as stop_error:
+                        logger.debug(f"Failed to stop duplicate process: {stop_error}")
+
+            except Exception as e:
+                # Rollback: Stop process if registration failed
+                try:
+                    process.stop()
+                    logger.debug(f"Cleaned up process for model '{model_id}' after registration failure")
+                except Exception as cleanup_error:
+                    logger.debug(f"Failed to clean up process during rollback: {cleanup_error}")
+                raise
+
+            logger.info(f"Successfully registered {model_type} model: {model_id}")
+
+            # Audit log
+            await log_audit_event(
+                db=db,
+                action="register_model",
+                model_id=model_id,
+                client_ip=client_ip,
+                changes={"type": model_type, "config": model_config, "persisted": saved},
+                status="success"
+            )
+
+            return {
+                "message": f"Model '{model_id}' registered successfully",
+                "model_id": model_id,
+                "type": model_type,
+                "status": "running",
+                "persisted": saved
+            }
+
+        except HTTPException as e:
+            # Audit log failed registration
+            if db is not None:
+                try:
+                    await log_audit_event(
+                        db=db,
+                        action="register_model",
+                        model_id=model_id,
+                        client_ip=client_ip,
+                        status="failure",
+                        error_message=str(e.detail)
+                    )
+                except Exception:
+                    pass
+            raise
+        except Exception as e:
+            sanitized_error = sanitize_error_message(str(e))
+            logger.error(f"Failed to register {model_type} model '{model_id}': {sanitized_error}")
+            raise HTTPException(500, truncate_error(f"Failed to register model: {sanitized_error}"))
+
+    else:
+        raise HTTPException(400, f"Unsupported model type: {model_type}")
+
+
+@router.delete("/llm/models/{model_id}")
+async def unregister_llm_model(
+    request: Request,
+    model_id: str,
+    token: str = Depends(get_token)
+):
+    """
+    Unregister an LLM model.
+
+    Rate limit: 20 requests per minute per client.
+
+    Args:
+        model_id: Model identifier to remove
+
+    Returns:
+        Success message
+    """
+    from ..services.replicate_client import _replicate_clients
+    from ..services.llm_provider_registry import _registry_lock
+    from ..services.llm_provider_registry import _llm_models_config
+
+    # NEW COPILOT COMMENT 2 FIX: Validate model_id path parameter
+    validate_model_id(model_id)
+
+    # Apply rate limiting
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("delete_model", token, client_ip)
+    max_requests, window_seconds = RATE_LIMIT_MODEL_DELETE
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
+    # Attempt to remove model from Replicate clients registry
+    client = None
+    with _registry_lock:
+        client = _replicate_clients.pop(model_id, None)
+
+        # If model is not a Replicate client and not in the LLM provider registry, it's unknown
+        if client is None and model_id not in _llm_models_config:
+            raise HTTPException(404, f"Model '{model_id}' not found")
+
+        # Remove from LLM provider registry (protected by same lock for consistency)
+        _llm_models_config.pop(model_id, None)
+
+    # Stop the Replicate client if it existed
+    if client is not None:
+        try:
+            await client.close()
+        except Exception as exc:
+            logger.error(f"Error while closing client for model '{model_id}': {exc}")
+
+    # Delete from MongoDB for persistence (if supported by the backend)
+    db = get_database_manager(request)
+    deleted = await db.delete_llm_model(model_id)
+    if not deleted:
+        logger.warning(f"Failed to delete model '{model_id}' from persistence backend")
+
+    logger.info(f"Successfully unregistered model: {model_id}")
+
+    # Audit log successful deletion
+    await log_audit_event(
+        db=db,
+        action="delete_model",
+        model_id=model_id,
+        client_ip=client_ip,
+        changes={"persisted": deleted},
+        status="success"
+    )
+
+    return {
+        "message": f"Model '{model_id}' unregistered successfully",
+        "model_id": model_id,
+        "persisted": deleted
+    }
+
+
+@router.patch("/llm/models/{model_id}")
+async def update_llm_model(
+    request: Request,
+    model_id: str,
+    updates: Dict[str, Any] = Body(...),
+    token: str = Depends(get_token)
+):
+    """
+    Update LLM model configuration.
+
+    Only these fields can be updated:
+    - default_params (dict): Default inference parameters
+    - timeout (int): Request timeout in seconds (10-3600)
+    - max_retries (int): Maximum retry attempts (0-10)
+
+    Cannot update: model_id, type, model, api_key (requires re-registration)
+
+    Rate limit: 20 requests per minute per client.
+
+    Args:
+        model_id: Model identifier to update
+        updates: Dictionary of fields to update
+
+    Returns:
+        Success message with updated fields
+    """
+    from ..services.replicate_client import _replicate_clients
+    from ..services.llm_provider_registry import _registry_lock
+    from ..services.llm_provider_registry import _llm_models_config
+
+    # NEW COPILOT COMMENT 2 FIX: Validate model_id path parameter
+    validate_model_id(model_id)
+
+    # Apply rate limiting
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("update_model", token, client_ip)
+    max_requests, window_seconds = RATE_LIMIT_MODEL_UPDATE
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
+    # Check model exists
+    with _registry_lock:
+        if model_id not in _replicate_clients and model_id not in _llm_models_config:
+            raise HTTPException(404, f"Model '{model_id}' not found")
+
+        config = _llm_models_config.get(model_id, {}).copy()
+
+    # Validate updatable fields
+    # CRITICAL SECURITY: Explicitly check for attempts to update sensitive fields
+    sensitive_fields = {'api_key', 'api_token', 'auth_token', 'password', 'secret', 'token', 'bearer_token'}
+    attempted_sensitive = set(updates.keys()) & sensitive_fields
+    if attempted_sensitive:
+        raise HTTPException(
+            400,
+            f"Cannot update sensitive authentication fields: {attempted_sensitive}. "
+            f"To change API keys, please delete and re-register the model."
+        )
+
+    allowed_updates = {'default_params', 'timeout', 'max_retries'}
+    invalid = set(updates.keys()) - allowed_updates
+    if invalid:
+        raise HTTPException(400, f"Cannot update fields: {invalid}. Allowed: {allowed_updates}")
+
+    # Validate field values
+    if 'timeout' in updates:
+        timeout = updates['timeout']
+        if not isinstance(timeout, int) or not (10 <= timeout <= 3600):
+            raise HTTPException(400, f"timeout must be integer between 10 and 3600, got {timeout}")
+
+    if 'max_retries' in updates:
+        max_retries = updates['max_retries']
+        if not isinstance(max_retries, int) or not (0 <= max_retries <= 10):
+            raise HTTPException(400, f"max_retries must be integer between 0 and 10, got {max_retries}")
+
+    if 'default_params' in updates:
+        params = updates['default_params']
+        if not isinstance(params, dict):
+            raise HTTPException(400, "default_params must be a dictionary")
+
+        # Validate parameter keys and values
+        allowed_keys = {'temperature', 'max_tokens', 'top_p', 'top_k', 'stop', 'frequency_penalty', 'presence_penalty'}
+        invalid_keys = set(params.keys()) - allowed_keys
+        if invalid_keys:
+            raise HTTPException(400, f"Invalid parameters: {invalid_keys}. Allowed: {allowed_keys}")
+
+        # Use shared validation functions
+        try:
+            validate_inference_params(params)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    # COPILOT FIX: Save old values for potential rollback
+    old_config = None
+    old_client_state = {}
+    with _registry_lock:
+        # Save current state for rollback
+        old_config = _llm_models_config[model_id].copy()
+
+        client = _replicate_clients.get(model_id)
+        if client is not None:
+            old_client_state = {
+                'default_params': client.default_params.copy() if hasattr(client, 'default_params') and isinstance(client.default_params, dict) else None,
+                'timeout': getattr(client, 'timeout', None),
+                'max_retries': getattr(client, 'max_retries', None)
+            }
+
+        # Update in-memory config AND live client instance (hold lock during attribute updates)
+        _llm_models_config[model_id].update(updates)
+
+        # Update live ReplicateClient instance if it exists
+        # CRITICAL: All client attribute updates must happen inside lock to prevent
+        # race conditions with concurrent requests using the client
+        if client is not None:
+            if 'default_params' in updates:
+                client.default_params = updates['default_params']
+            if 'timeout' in updates:
+                client.timeout = updates['timeout']
+            if 'max_retries' in updates:
+                client.max_retries = updates['max_retries']
+
+    # Update in MongoDB (use update_llm_model, not save_llm_model)
+    db = get_database_manager(request)
+    saved = False
+    saved = await db.update_llm_model(model_id, updates)
+
+    # COPILOT FIX: If persistence fails and REQUIRE_MONGODB_PERSISTENCE is set, rollback in-memory changes
+    require_persistence = os.getenv("REQUIRE_MONGODB_PERSISTENCE", "false").lower() == "true"
+    if not saved:
+        if require_persistence:
+            logger.error(f"Failed to persist model '{model_id}' update to MongoDB - rolling back in-memory changes")
+
+            # Rollback in-memory state
+            with _registry_lock:
+                _llm_models_config[model_id] = old_config
+
+                client = _replicate_clients.get(model_id)
+                if client is not None and old_client_state:
+                    if old_client_state['default_params'] is not None:
+                        client.default_params = old_client_state['default_params']
+                    if old_client_state['timeout'] is not None:
+                        client.timeout = old_client_state['timeout']
+                    if old_client_state['max_retries'] is not None:
+                        client.max_retries = old_client_state['max_retries']
+
+            raise HTTPException(500, f"Failed to persist model '{model_id}' update to MongoDB (REQUIRE_MONGODB_PERSISTENCE=true)")
+        else:
+            logger.warning(f"Failed to update model '{model_id}' in persistence backend (in-memory update succeeded)")
+
+    logger.info(f"Successfully updated model: {model_id}")
+
+    # Audit log successful update (reuse db variable)
+    try:
+        await log_audit_event(
+            db=db,
+            action="update_model",
+            model_id=model_id,
+            client_ip=client_ip,
+            changes={"updated_fields": list(updates.keys()), "values": sanitize_audit_changes(updates), "persisted": saved},
+            status="success"
+        )
+    except Exception:
+        pass  # Audit logging failure should not break operation
+
+    return {
+        "message": f"Model '{model_id}' updated successfully",
+        "model_id": model_id,
+        "updated_fields": list(updates.keys()),
+        "persisted": saved
+    }
+
+
+@router.post("/llm/models/{model_id}/rollback")
+async def rollback_llm_model(
+    request: Request,
+    model_id: str,
+    version: Optional[int] = Query(None, description="Specific version to rollback to (None = most recent)"),
+    token: str = Depends(get_token)
+):
+    """
+    Rollback LLM model to a previous version.
+
+    Requires MongoDB persistence. Retrieves model configuration from version history
+    and restores it to the main collection.
+
+    Rate limit: 10 requests per minute per client.
+
+    Args:
+        model_id: Model identifier to rollback
+        version: Specific version number to rollback to (optional, defaults to most recent)
+
+    Returns:
+        Success message with restored version number
+    """
+    from ..services.replicate_client import _replicate_clients
+    from ..services.llm_provider_registry import _registry_lock
+    from ..services.llm_provider_registry import _llm_models_config
+
+    # NEW COPILOT COMMENT 2 FIX: Validate model_id path parameter
+    validate_model_id(model_id)
+
+    # Apply rate limiting
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("rollback_model", token, client_ip)
+    max_requests, window_seconds = RATE_LIMIT_MODEL_ROLLBACK
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
+    # Get database manager
+    db = get_database_manager(request)
+
+    # Check if rollback is supported
+    if not db.supports_rollback():
+        raise HTTPException(
+            501,
+            "Model rollback requires a persistence backend with versioning support (current backend does not support versioning)"
+        )
+
+    # Perform rollback in database
+    try:
+        rolled_back = await db.rollback_llm_model(model_id, version)
+        if not rolled_back:
+            raise HTTPException(
+                404,
+                f"No version history found for model '{model_id}'"
+                + (f" with version {version}" if version else "")
+            )
+    except Exception as e:
+        # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+        sanitized_error = sanitize_error_message(str(e))
+        logger.error(f"Error rolling back model '{model_id}': {sanitized_error}")
+        raise HTTPException(500, truncate_error(f"Failed to rollback model: {sanitized_error}"))
+
+    # Reload model configuration from database into in-memory registries
+    try:
+        restored_config = await db.get_llm_model(model_id)
+        if not restored_config:
+            raise HTTPException(500, "Model rolled back in database but failed to retrieve config")
+
+        # Update in-memory registries if this is a Replicate model
+        if restored_config.get("type") == "replicate":
+            from ..services.replicate_client import ReplicateClient
+
+            # Close existing client if present (pop from registry first to avoid holding lock during await)
+            client_to_close = None
+            with _registry_lock:
+                if model_id in _replicate_clients:
+                    client_to_close = _replicate_clients.pop(model_id, None)
+
+            if client_to_close is not None:
+                try:
+                    await client_to_close.close()
+                except Exception:
+                    pass  # Best effort cleanup
+
+            # Re-initialize client with restored config
+            model_config = {k: v for k, v in restored_config.items() if k != "model_id"}
+            client = ReplicateClient(model_id, model_config)
+
+            # Verify health
+            if not await client.health_check():
+                logger.warning(f"Health check failed after rollback for model '{model_id}'")
+
+            # Update registries
+            with _registry_lock:
+                _replicate_clients[model_id] = client
+                _llm_models_config[model_id] = model_config
+
+        restored_version = restored_config.get("version", "unknown")
+
+        # Audit log rollback
+        try:
+            await log_audit_event(
+                db=db,
+                action="rollback_model",
+                model_id=model_id,
+                client_ip=client_ip,
+                changes={"target_version": version, "restored_version": restored_version},
+                status="success"
+            )
+        except Exception:
+            pass  # Audit logging failure should not break operation
+
+        return {
+            "message": f"Model '{model_id}' rolled back successfully",
+            "model_id": model_id,
+            "version": restored_version
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        # CRITICAL SECURITY: Sanitize error message to prevent API key exposure
+        sanitized_error = sanitize_error_message(str(e))
+        logger.error(f"Error reloading model '{model_id}' after rollback: {sanitized_error}")
+        # NEW COPILOT COMMENT 4 FIX: Use 500 instead of 206 (Partial Content is for Range requests)
+        # Database operation succeeded but in-memory reload failed = server-side failure
+        raise HTTPException(
+            status_code=500,
+            detail=f"Model '{model_id}' was rolled back in the database but failed to reload into in-memory registries: {sanitized_error}"
+        )
+
+
 # ============================================================================
 # vLLM Omni Multimodal Generation Endpoints
 # Image and video generation via Replicate integration
