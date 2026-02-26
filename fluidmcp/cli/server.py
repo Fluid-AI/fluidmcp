@@ -227,9 +227,14 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     @app.on_event("shutdown")
     async def shutdown_event():
         """Clean up resources on application shutdown."""
+        # Shutdown OpenTelemetry first (flush spans before closing connections)
+        from .otel import shutdown_otel
+        await asyncio.to_thread(shutdown_otel)
+
+        # Then cleanup HTTP client
         from .api.management import cleanup_http_client
         await cleanup_http_client()
-        logger.info("HTTP client cleaned up")
+        logger.info("Application shutdown complete")
 
     logger.info("FastAPI application created (no MCP servers started)")
     return app
