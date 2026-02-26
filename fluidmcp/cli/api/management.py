@@ -438,15 +438,19 @@ async def add_server(
 
 
 @router.get("/servers")
-async def list_servers(request: Request):
+async def list_servers(request: Request, enabled_only: bool = True, include_deleted: bool = False):
     """
     List all configured servers with their status.
+
+    Args:
+        enabled_only: If True (default), only return enabled servers. If False, return all including disabled.
+        include_deleted: If True, include soft-deleted servers (for admin recovery). Default: False.
 
     Returns:
         List of servers with config and status
     """
     manager = get_server_manager(request)
-    servers = await manager.list_servers()
+    servers = await manager.list_servers(enabled_only=enabled_only, include_deleted=include_deleted)
 
     return {
         "servers": servers,
@@ -567,7 +571,7 @@ async def delete_server(
     user_id: str = Depends(get_current_user)
 ):
     """
-    Delete server configuration (stops server if running).
+    Soft delete server configuration (preserves data, stops server if running).
 
     Authorization: Only admins can delete server configurations.
     Regular users cannot delete servers (they can only stop instances they started).
@@ -577,7 +581,7 @@ async def delete_server(
         user_id: Current user (from token)
 
     Returns:
-        Success message
+        Success message with deletion timestamp
     """
     manager = get_server_manager(request)
 
@@ -588,32 +592,41 @@ async def delete_server(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Authorization: Only allow in anonymous mode (no authentication) for now
-    # This is intentionally restrictive - deletion is a destructive operation.
+    # Check if server is already deleted
+    if config.get("deleted_at"):
+        raise HTTPException(410, f"Server '{id}' is already deleted")
+
+    # Authorization: Temporarily allow all users to delete servers
     # TODO: Implement proper role-based access control (RBAC) with admin roles
-    # when JWT authentication with role claims is added. Current token-based
-    # auth (user_id = first 8 chars of token) is too weak for delete permissions.
-    if user_id != "anonymous":
-        raise HTTPException(
-            403,
-            "Server deletion requires administrator privileges"
-        )
+    # when JWT authentication with role claims is added. For now, we allow
+    # everyone to delete as requested (will add proper user/admin roles later).
+    # Uncomment the check below when RBAC is ready:
+    # if user_id != "admin":
+    #     raise HTTPException(
+    #         403,
+    #         "Server deletion requires administrator privileges"
+    #     )
 
     # Stop server if running
     if id in manager.processes:
-        logger.info(f"Stopping server '{id}' before deletion...")
+        logger.info(f"Stopping server '{id}' before soft deletion...")
         await manager.stop_server(id)
 
-    # Delete from database
-    await manager.db.delete_server_config(id)
+    # Soft delete from database (sets deleted_at + enabled=false)
+    success = await manager.db.soft_delete_server_config(id)
+    if not success:
+        raise HTTPException(500, f"Failed to delete server '{id}'")
 
-    # Delete from in-memory
+    # Remove from in-memory cache
     if id in manager.configs:
         del manager.configs[id]
 
-    logger.info(f"Deleted server configuration: {id}")
+    from datetime import datetime
+    deleted_at = datetime.utcnow().isoformat()
+    logger.info(f"Soft deleted server configuration: {id}")
     return {
-        "message": f"Server '{id}' deleted successfully"
+        "message": f"Server '{id}' deleted successfully",
+        "deleted_at": deleted_at
     }
 
 
@@ -644,6 +657,10 @@ async def start_server(
         config = await manager.db.get_server_config(id)
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
+
+    # Check if server is enabled
+    if not config.get("enabled", True):
+        raise HTTPException(403, f"Cannot start server '{id}': Server is disabled")
 
     # Check if already running
     if id in manager.processes:

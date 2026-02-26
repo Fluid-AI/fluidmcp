@@ -549,23 +549,36 @@ class ServerManager:
             "exit_code": None
         }
 
-    async def list_servers(self) -> List[Dict[str, Any]]:
+    async def list_servers(self, enabled_only: bool = True, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all configured servers with their status.
+
+        Args:
+            enabled_only: If True, only return enabled servers. If False, return all servers including disabled ones.
+            include_deleted: If True, include soft-deleted servers (for admin recovery).
 
         Returns:
             List of server info dictionaries with nested config structure
         """
         servers = []
 
-        # Get all configs from database
-        configs = await self.db.list_server_configs()
+        # Get configs from database (filter by enabled_only and include_deleted parameters)
+        configs = await self.db.list_server_configs(enabled_only=enabled_only, include_deleted=include_deleted)
 
         # Merge with in-memory configs (for servers not in DB)
         config_ids = {c.get("id") for c in configs}
         for id, config in self.configs.items():
             if id not in config_ids:
-                configs.append(config)
+                # Apply same filtering logic as database query
+                if enabled_only:
+                    # Only include enabled servers
+                    if config.get("enabled", True):
+                        if include_deleted or not config.get("deleted_at"):
+                            configs.append(config)
+                else:
+                    # Include all servers, optionally including deleted ones
+                    if include_deleted or not config.get("deleted_at"):
+                        configs.append(config)
 
         for config in configs:
             id = config.get("id")

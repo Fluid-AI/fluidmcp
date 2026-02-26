@@ -441,19 +441,30 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error retrieving server config: {e}")
             return None
 
-    async def list_server_configs(self, filter_dict: Optional[Dict] = None) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
-            filter_dict: Optional MongoDB filter
+            enabled_only: If True, only return enabled servers
+            include_deleted: If True, include soft-deleted servers (for admin recovery)
 
         Returns:
             List of server config dicts in flat format (for backend compatibility)
         """
         try:
-            filter_dict = filter_dict or {}
-            cursor = self.db.fluidmcp_servers.find(filter_dict, {"_id": 0})  # Exclude MongoDB _id
+            # Build query filter
+            query = {}
+
+            # Exclude soft-deleted servers unless explicitly requested
+            if not include_deleted:
+                query["deleted_at"] = {"$exists": False}
+
+            # Additionally filter by enabled status if requested
+            if enabled_only:
+                query["enabled"] = True
+
+            cursor = self.db.fluidmcp_servers.find(query, {"_id": 0})  # Exclude MongoDB _id
             configs = await cursor.to_list(length=None)
 
             # Convert all configs from nested to flat format for backend
@@ -479,6 +490,32 @@ class DatabaseManager(PersistenceBackend):
             return result.deleted_count > 0
         except Exception as e:
             logger.error(f"Error deleting server config: {e}")
+            return False
+
+    async def soft_delete_server_config(self, id: str) -> bool:
+        """
+        Soft delete a server configuration by setting deleted_at timestamp.
+
+        Args:
+            id: Server identifier
+
+        Returns:
+            True if soft deleted successfully
+        """
+        try:
+            result = await self.db.fluidmcp_servers.update_one(
+                {"id": id, "deleted_at": {"$exists": False}},
+                {
+                    "$set": {
+                        "deleted_at": datetime.utcnow(),
+                        "enabled": False,  # Also disable on soft delete
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error soft deleting server config: {e}")
             return False
 
     # ==================== Server Instance Operations ====================
