@@ -767,8 +767,7 @@ async def add_server(
             # Store in-memory as fallback
             logger.warning(f"Database save failed for '{name}', storing in-memory only")
     except DuplicateKeyError:
-        # Race condition: another request created the same server concurrently
-        raise HTTPException(409, f"Server with id '{id}' was created concurrently")
+        raise HTTPException(409, f"Server with id '{id}' already exists")
 
     # Always store in configs dict for immediate access
     manager.configs[id] = config
@@ -937,6 +936,15 @@ async def add_server_from_github(
     if env:
         validate_env_variables(env)
 
+    # Pre-flight: fail fast if the base server_id already exists.
+    # This avoids a 60-second clone only to get a 409 at the end.
+    if base_server_id in manager.configs or await manager.db.get_server_config(base_server_id):
+        raise HTTPException(
+            409,
+            f"Server with id '{base_server_id}' already exists. "
+            f"Choose a different Server ID and try again.",
+        )
+
     try:
         # 4. Clone / update and build server config(s)
         logger.info(f"Building server config(s) from {github_repo}@{branch}"
@@ -963,11 +971,12 @@ async def add_server_from_github(
             display_name = server_config.get("name", sid)
 
             # Duplicate check – in-memory and database
-            if sid in manager.configs:
-                raise HTTPException(409, f"Server '{sid}' already exists")
-            existing = await manager.db.get_server_config(sid)
-            if existing:
-                raise HTTPException(409, f"Server '{sid}' already exists in database")
+            if sid in manager.configs or await manager.db.get_server_config(sid):
+                raise HTTPException(
+                    409,
+                    f"Server with id '{sid}' already exists. "
+                    f"Choose a different Server ID and try again.",
+                )
 
             # Validate command and args for security (env is skipped here because
             # metadata.json from GitHub repos may use non-uppercase env key names,
@@ -991,7 +1000,11 @@ async def add_server_from_github(
             try:
                 await manager.db.save_server_config(server_config)
             except DuplicateKeyError:
-                raise HTTPException(409, f"Server '{sid}' was created concurrently")
+                raise HTTPException(
+                    409,
+                    f"Server with id '{sid}' already exists. "
+                    f"Choose a different Server ID and try again.",
+                )
 
             # Register in manager's in-memory configs for immediate availability
             manager.configs[sid] = server_config

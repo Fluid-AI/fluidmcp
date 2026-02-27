@@ -456,7 +456,10 @@ class DatabaseManager(PersistenceBackend):
             Server config dict in flat format (for backend compatibility)
         """
         try:
-            config = await self.db.fluidmcp_servers.find_one({"id": id}, {"_id": 0})  # Exclude MongoDB _id
+            config = await self.db.fluidmcp_servers.find_one(
+                {"id": id, "deleted_at": {"$exists": False}},
+                {"_id": 0},
+            )
 
             # Convert nested MongoDB format to flat format for backend
             if config:
