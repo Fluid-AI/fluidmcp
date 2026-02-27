@@ -221,3 +221,117 @@ class ErrorResponse(BaseModel):
                 "detail": "Server not found"
             }
         }
+
+
+class AddServerFromGitHubRequest(BaseModel):
+    """Request body for POST /api/servers/from-github."""
+
+    github_repo: str = Field(
+        ...,
+        description="GitHub repository path (owner/repo) or full URL",
+        min_length=1,
+        max_length=200,
+        examples=["anthropics/mcp-server-example", "https://github.com/owner/repo"],
+    )
+    branch: str = Field(
+        default="main",
+        description="Branch to clone",
+        max_length=100,
+    )
+    server_id: str = Field(
+        ...,
+        description=(
+            "Base server identifier. Used directly for single-server repos; "
+            "prefixed with the slugified server name for multi-server repos "
+            "(e.g. 'tools' + 'filesystem' -> 'tools-filesystem')."
+        ),
+        min_length=1,
+        max_length=100,
+        pattern="^[a-z0-9-]+$",
+    )
+    server_name: Optional[str] = Field(
+        None,
+        description="Select a specific server from a multi-server repository (optional)",
+    )
+    subdirectory: Optional[str] = Field(
+        None,
+        description=(
+            "Subdirectory within the repository that contains the MCP metadata.json "
+            "(for monorepos). E.g. 'google-sheets-mcp'. "
+            "The server's working directory will be set to this folder."
+        ),
+        max_length=500,
+    )
+    env: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional environment variables merged on top of repository defaults",
+    )
+    enabled: bool = Field(
+        default=True,
+        description="Whether created server(s) should be enabled",
+    )
+    restart_policy: str = Field(
+        default="never",
+        description="Restart policy: never, on-failure, or always",
+        pattern="^(never|on-failure|always)$",
+    )
+    max_restarts: int = Field(
+        default=3,
+        description="Maximum restart attempts",
+        ge=0,
+        le=10,
+    )
+    test_before_save: bool = Field(
+        default=True,
+        description=(
+            "Test-start each server through the manager lifecycle before saving "
+            "to the database.  Recommended: True."
+        ),
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "github_repo": "anthropics/mcp-server-example",
+                "branch": "main",
+                "server_id": "example-server",
+                "env": {"API_KEY": "secret123"},
+                "enabled": True,
+                "restart_policy": "on-failure",
+                "test_before_save": True,
+            }
+        }
+
+
+class GitHubServerResult(BaseModel):
+    """Result entry for a single server created from a GitHub repository."""
+
+    id: str = Field(..., description="Server identifier")
+    name: str = Field(..., description="Server display name")
+    status: str = Field(..., description="'validated' if test-started, 'added' otherwise")
+
+
+class AddServerFromGitHubResponse(BaseModel):
+    """Response body for POST /api/servers/from-github."""
+
+    message: str = Field(..., description="Human-readable success message")
+    servers: List[GitHubServerResult] = Field(
+        ..., description="List of servers that were created"
+    )
+    repository: str = Field(..., description="GitHub repository that was cloned")
+    branch: str = Field(..., description="Branch that was cloned")
+    clone_path: str = Field(..., description="Local filesystem path of the clone")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "Successfully added 2 server(s) from GitHub repository",
+                "servers": [
+                    {"id": "tools-filesystem", "name": "Filesystem Server", "status": "validated"},
+                    {"id": "tools-database", "name": "Database Server", "status": "validated"},
+                ],
+                "repository": "company/mcp-tools",
+                "branch": "main",
+                "clone_path": "/home/user/.fmcp-packages/company/mcp-tools/main",
+            }
+        }
