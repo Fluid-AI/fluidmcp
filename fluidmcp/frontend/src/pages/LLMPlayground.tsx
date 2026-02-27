@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Send, Trash2, Settings, Search } from "lucide-react";
+import { Send, Trash2, Settings, Search, RefreshCw } from "lucide-react";
 import { useLLMModels } from "../hooks/useLLMModels";
 import apiClient from "../services/api";
 import type { ChatMessage } from "../types/llm";
@@ -15,14 +15,28 @@ const presets = {
   precise: { temperature: 0.3, max_tokens: 500 }
 };
 
+// Maximum chat history to prevent memory issues
+const MAX_CHAT_MESSAGES = 100;
+
 export default function LLMPlayground() {
   const [searchParams] = useSearchParams();
   const preselectedModel = searchParams.get("model");
 
-  const { models } = useLLMModels();
+  const { models, refetch } = useLLMModels();
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
   // Filter to only healthy, running models
   const availableModels = models.filter(m => m.is_running && m.is_healthy);
+
+  // Auto-refresh model list every 30s while playground is open
+  useEffect(() => {
+    const refreshInterval = setInterval(async () => {
+      await refetch();
+      setLastRefreshTime(new Date());
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(refreshInterval);
+  }, [refetch]);
 
   const [selectedModel, setSelectedModel] = useState<string | null>(preselectedModel);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -46,11 +60,21 @@ export default function LLMPlayground() {
   // CRITICAL: Ref to avoid stale closure in async operations
   const messagesRef = useRef<ChatMessage[]>([]);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Keep ref in sync with state
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Cleanup abort controller on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   // Auto-scroll to bottom when messages change - scroll within container, not whole page
   useEffect(() => {
@@ -94,8 +118,18 @@ export default function LLMPlayground() {
 
     const userMessage: ChatMessage = { role: 'user', content: input.trim() };
 
+    // Create new abort controller for this request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     // Use functional setState to avoid race conditions
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => {
+      const updated = [...prev, userMessage];
+      // Keep only last MAX_CHAT_MESSAGES to prevent memory issues
+      return updated.slice(-MAX_CHAT_MESSAGES);
+    });
     setInput('');
     setLoading(true);
 
@@ -116,12 +150,18 @@ export default function LLMPlayground() {
         content: data.choices[0].message.content
       };
 
-      // Use functional setState again
-      setMessages(prev => [...prev, assistantMessage]);
+      // Use functional setState again with history limit
+      setMessages(prev => {
+        const updated = [...prev, assistantMessage];
+        return updated.slice(-MAX_CHAT_MESSAGES);
+      });
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Failed to send message');
-      // Remove user message on error
-      setMessages(prev => prev.slice(0, -1));
+      // Don't show error if request was aborted (e.g., user navigated away)
+      if (error instanceof Error && error.name !== 'AbortError') {
+        showError(error instanceof Error ? error.message : 'Failed to send message');
+        // Remove user message on error
+        setMessages(prev => prev.slice(0, -1));
+      }
     } finally {
       setLoading(false);
     }
@@ -320,6 +360,24 @@ export default function LLMPlayground() {
                   </div>
                 </div>
               </div>
+
+              {/* Refresh Models Button */}
+              <button
+                onClick={async () => {
+                  await refetch();
+                  setLastRefreshTime(new Date());
+                }}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-all"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh Models
+              </button>
+
+              {lastRefreshTime && (
+                <div className="text-xs text-zinc-500 text-center">
+                  Last refresh: {lastRefreshTime.toLocaleTimeString()}
+                </div>
+              )}
 
               {/* Clear Chat Button */}
               <button

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, AlertCircle } from "lucide-react";
+import { X, AlertCircle, Loader2 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { ReplicateModelConfig, ReplicateModel } from "../types/llm";
 
@@ -87,7 +87,7 @@ export default function LLMModelForm({
     if (mode === "add") {
       if (!formData.model.trim()) {
         newErrors.model = "Model name is required";
-      } else if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(:[a-zA-Z0-9_.-]+)?$/.test(formData.model)) {
+      } else if (!/^[a-zA-Z0-9][\w.-]{1,}\/[a-zA-Z0-9][\w.-]{1,}(:[a-zA-Z0-9][\w.-]+)?$/.test(formData.model)) {
         newErrors.model = "Model must be in format: owner/model-name or owner/model-name:version";
       }
     }
@@ -386,9 +386,16 @@ export default function LLMModelForm({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
+                className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {isSubmitting ? (mode === "add" ? "Adding..." : "Updating...") : (mode === "add" ? "Add Model" : "Update Model")}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {mode === "add" ? "Adding..." : "Updating..."}
+                  </>
+                ) : (
+                  mode === "add" ? "Add Model" : "Update Model"
+                )}
               </button>
             </div>
           </form>

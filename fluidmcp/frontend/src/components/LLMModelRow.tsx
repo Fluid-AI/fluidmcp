@@ -45,7 +45,7 @@ export default function LLMModelRow({ model, onRestart, onStop, onHealthCheck, o
   }, [isExpanded, logsLoaded, model.id, isProcess]);
 
   const formatUptime = (seconds: number | null) => {
-    if (!seconds) return "N/A";
+    if (seconds === null || seconds === undefined) return "N/A";
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);

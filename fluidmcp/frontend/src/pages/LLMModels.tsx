@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import LLMModelRow from "../components/LLMModelRow";
 import LLMModelForm from "../components/LLMModelForm";
 import { Pagination } from "../components/Pagination";
 import ErrorMessage from "../components/ErrorMessage";
 import { useLLMModels } from "../hooks/useLLMModels";
+import { useDebounce } from "../hooks/useDebounce";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
@@ -21,6 +22,7 @@ export default function LLMModels() {
 
   // Controls state
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const [sortBy, setSortBy] = useState<'name-asc' | 'name-desc' | 'health' | 'uptime'>('name-asc');
   const [filterBy, setFilterBy] = useState<'all' | 'running' | 'stopped' | 'healthy' | 'unhealthy' | 'process' | 'replicate'>('all');
 
@@ -37,18 +39,20 @@ export default function LLMModels() {
     model?: ReplicateModel;
   }>({ open: false, mode: 'add' });
 
-  // Filtering, sorting, searching logic
-  const filteredModels = models
-    .filter(model => {
-      if (filterBy === 'running') return model.is_running;
-      if (filterBy === 'stopped') return !model.is_running;
-      if (filterBy === 'healthy') return model.is_healthy && model.is_running;
-      if (filterBy === 'unhealthy') return !model.is_healthy && model.is_running;
-      if (filterBy === 'process') return model.type === 'process';
-      if (filterBy === 'replicate') return model.type === 'replicate';
-      return true;
-    })
-    .filter(model => model.id.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Filtering, sorting, searching logic (memoized to prevent unnecessary recalculations)
+  const filteredModels = useMemo(() => {
+    return models
+      .filter(model => {
+        if (filterBy === 'running') return model.is_running;
+        if (filterBy === 'stopped') return !model.is_running;
+        if (filterBy === 'healthy') return model.is_healthy && model.is_running;
+        if (filterBy === 'unhealthy') return !model.is_healthy && model.is_running;
+        if (filterBy === 'process') return model.type === 'process';
+        if (filterBy === 'replicate') return model.type === 'replicate';
+        return true;
+      })
+      .filter(model => model.id.toLowerCase().includes(debouncedSearchQuery.toLowerCase()));
+  }, [models, filterBy, debouncedSearchQuery]);
 
   const sortedModels = [...filteredModels].sort((a, b) => {
     if (sortBy === 'name-asc') return a.id.localeCompare(b.id);
