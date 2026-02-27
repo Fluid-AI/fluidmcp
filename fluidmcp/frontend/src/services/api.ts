@@ -9,6 +9,17 @@ import type {
   ServerEnvMetadataResponse,
   UpdateEnvResponse,
 } from '../types/server';
+import type {
+  LLMModelsListResponse,
+  LLMModelDetailsResponse,
+  LLMModelLogsResponse,
+  LLMHealthCheckResponse,
+  LLMModelRestartResponse,
+  LLMModelStopResponse,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ReplicateModelConfig,
+} from '../types/llm';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
@@ -150,6 +161,86 @@ class ApiClient {
         body: JSON.stringify(env),
       }
     );
+  }
+
+  // LLM Model Management APIs
+  async listLLMModels(options?: { signal?: AbortSignal }): Promise<LLMModelsListResponse> {
+    return this.request<LLMModelsListResponse>('/api/llm/models', options);
+  }
+
+  async getLLMModelDetails(modelId: string, options?: { signal?: AbortSignal }): Promise<LLMModelDetailsResponse> {
+    return this.request<LLMModelDetailsResponse>(`/api/llm/models/${modelId}`, options);
+  }
+
+  async restartLLMModel(modelId: string): Promise<LLMModelRestartResponse> {
+    return this.request<LLMModelRestartResponse>(`/api/llm/models/${modelId}/restart`, { method: 'POST' });
+  }
+
+  async stopLLMModel(modelId: string, force = false): Promise<LLMModelStopResponse> {
+    return this.request<LLMModelStopResponse>(
+      `/api/llm/models/${modelId}/stop?force=${force}`,
+      { method: 'POST' }
+    );
+  }
+
+  async getLLMModelLogs(
+    modelId: string,
+    lines = 100,
+    options?: { signal?: AbortSignal }
+  ): Promise<LLMModelLogsResponse> {
+    return this.request<LLMModelLogsResponse>(`/api/llm/models/${modelId}/logs?lines=${lines}`, options);
+  }
+
+  async triggerLLMHealthCheck(modelId: string): Promise<LLMHealthCheckResponse> {
+    return this.request<LLMHealthCheckResponse>(`/api/llm/models/${modelId}/health-check`, { method: 'POST' });
+  }
+
+  async chatCompletion(
+    payload: ChatCompletionRequest,
+    options?: { stream?: boolean; signal?: AbortSignal }
+  ): Promise<ChatCompletionResponse> {
+    const { stream = false, signal } = options || {};
+
+    // Future-proof: structured for both streaming and non-streaming
+    if (stream) {
+      // TODO: Implement streaming with requestRaw when ready
+      // return this.requestRaw('/api/llm/v1/chat/completions', { ... });
+      throw new Error('Streaming not yet implemented');
+    }
+
+    // Non-streaming: use existing request method with full error handling, timeout, AbortController
+    return this.request<ChatCompletionResponse>(
+      '/api/llm/v1/chat/completions',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal,
+      }
+    );
+  }
+
+  // LLM Model Management (CRUD)
+  async createLLMModel(config: ReplicateModelConfig): Promise<{ message: string; model_id: string }> {
+    return this.request('/api/llm/models', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async updateLLMModel(
+    modelId: string,
+    updates: Partial<Pick<ReplicateModelConfig, 'default_params' | 'timeout' | 'max_retries'>>
+  ): Promise<{ message: string; model_id: string; updated_fields: string[] }> {
+    return this.request(`/api/llm/models/${modelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteLLMModel(modelId: string): Promise<{ message: string; model_id: string }> {
+    return this.request(`/api/llm/models/${modelId}`, {
+      method: 'DELETE',
+    });
   }
 
   // Server Configuration Management (CRUD)

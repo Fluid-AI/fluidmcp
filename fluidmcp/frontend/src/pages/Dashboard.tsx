@@ -7,12 +7,12 @@ import { Pagination } from "../components/Pagination";
 import ErrorMessage from "../components/ErrorMessage";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
-import { Footer } from "@/components/Footer";
 import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
-//dummy comment to change file
+//dummy comment to change file1
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
