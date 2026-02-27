@@ -61,6 +61,16 @@ export function Footer() {
                 </Link>
               </li>
               <li>
+                <Link to="/llm/models" className="text-muted-foreground hover:text-foreground transition-colors">
+                  LLM Models
+                </Link>
+              </li>
+              <li>
+                <Link to="/servers/manage" className="text-muted-foreground hover:text-foreground transition-colors">
+                  Manage Servers
+                </Link>
+              </li>
+              <li>
                 <Link to="/servers" className="text-muted-foreground hover:text-foreground transition-colors">
                   Featured Packages
                 </Link>

@@ -3796,4 +3796,3 @@ async def get_generation_status(
         # Ensure the temporary client is closed to avoid resource leaks
         await client.close()
 
-
