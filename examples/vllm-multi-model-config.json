@@ -1,6 +1,7 @@
 {
   "llmModels": {
     "vllm-opt": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",
@@ -18,6 +19,7 @@
       }
     },
     "vllm-gpt2": {
+      "type": "vllm",
       "command": "vllm",
       "args": [
         "serve",
@@ -27,7 +29,7 @@
         "--tensor-parallel-size", "1",
         "--gpu-memory-utilization", "0.45",
         "--max-model-len", "1024",
-        "--dtype": "float16"
+        "--dtype", "float16"
       ],
       "env": {},
       "endpoints": {

@@ -7,22 +7,22 @@
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
         "temperature": 0.7,
-        "max_tokens": 4096,
+        "max_tokens": 2000,
         "top_p": 0.9
       },
-      "timeout": 300,
+      "timeout": 120,
       "max_retries": 3
     },
-    "llama-4-scout": {
+    "llama-3-70b": {
       "type": "replicate",
-      "model": "meta/llama-4-scout-instruct",
+      "model": "meta/meta-llama-3-70b-instruct",
       "api_key": "${REPLICATE_API_TOKEN}",
       "default_params": {
         "temperature": 0.7,
-        "max_tokens": 4096,
+        "max_tokens": 2000,
         "top_p": 0.9
       },
-      "timeout": 300,
+      "timeout": 120,
       "max_retries": 3
     }
   }
