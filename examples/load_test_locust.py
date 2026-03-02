@@ -23,7 +23,7 @@ Configuration:
 """
 
 import os
-from locust import HttpUser, task, between, events
+from locust import HttpUser, task, between, events  # type: ignore
 from loguru import logger
 
 

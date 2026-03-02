@@ -3,6 +3,42 @@ Utility functions for environment variable handling.
 
 Shared utilities used across database, API, and service layers.
 """
+import re
+
+
+def has_env_var_syntax(value: str) -> bool:
+    """
+    Detect if a value uses environment variable placeholder syntax.
+
+    Detects common environment variable syntaxes:
+    - Bash/shell: ${VAR_NAME} or $VAR_NAME
+    - Docker Compose: ${VAR_NAME}
+
+    Note: {VAR_NAME} syntax (without $) is not environment variable syntax and will return
+    False, as os.path.expandvars requires the $ prefix.
+
+    Args:
+        value: The string value to check
+
+    Returns:
+        True if the value contains environment variable syntax, False otherwise
+
+    Examples:
+        >>> has_env_var_syntax("${REPLICATE_API_TOKEN}")
+        True
+        >>> has_env_var_syntax("$API_KEY")
+        True
+        >>> has_env_var_syntax("sk-1234567890abcdef")
+        False
+    """
+    if not isinstance(value, str):
+        return False
+
+    # Match ${VAR_NAME} or $VAR_NAME (NOT {VAR_NAME} without $)
+    # VAR_NAME must start with letter/underscore and contain only alphanumeric/underscore
+    # Both uppercase and lowercase variable names are supported (e.g., $API_KEY, $api_key, ${MY_VAR}, ${my_var})
+    env_var_pattern = r'\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*'
+    return bool(re.search(env_var_pattern, value))
 
 
 def is_placeholder(value: str) -> bool:

@@ -1,0 +1,49 @@
+{
+  "mcpServers": {},
+  "llmModels": {
+    "flux-image-gen": {
+      "type": "replicate",
+      "model": "black-forest-labs/flux-schnell",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "aspect_ratio": "1:1",
+        "output_format": "png"
+      },
+      "capabilities": ["text-to-image"],
+      "timeout": 120
+    },
+    "veo-video": {
+      "type": "replicate",
+      "model": "google/veo-3",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "duration": 5,
+        "aspect_ratio": "16:9"
+      },
+      "capabilities": ["text-to-video"],
+      "timeout": 300
+    },
+    "kling-animate": {
+      "type": "replicate",
+      "model": "kwaivgi/kling-v2.6",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "duration": 5,
+        "aspect_ratio": "16:9"
+      },
+      "capabilities": ["image-to-video", "text-to-video"],
+      "timeout": 300
+    },
+    "nano-banana-pro": {
+      "type": "replicate",
+      "model": "google/nano-banana-pro",
+      "api_key": "${REPLICATE_API_TOKEN}",
+      "default_params": {
+        "aspect_ratio": "1:1",
+        "output_format": "png"
+      },
+      "capabilities": ["text-to-image"],
+      "timeout": 120
+    }
+  }
+}
