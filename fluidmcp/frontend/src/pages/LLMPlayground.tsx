@@ -181,11 +181,11 @@ export default function LLMPlayground() {
       <Navbar />
 
       <div className="flex-1 pt-16">
-        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 h-full">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-4 h-[calc(100vh-4rem)]">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-full">
 
             {/* Left Sidebar: 25% on large screens */}
-            <div className="lg:col-span-3 space-y-6">
+            <div className="lg:col-span-3 space-y-4 overflow-y-auto max-h-[calc(100vh-6rem)] pr-1">
               {/* Model Selector */}
               <div className="bg-zinc-900/90 backdrop-blur-xl border border-zinc-700/50 rounded-2xl p-6">
                 <h3 className="text-lg font-semibold mb-4">Select Model</h3>
@@ -391,7 +391,7 @@ export default function LLMPlayground() {
             </div>
 
             {/* Right Content: 75% on large screens */}
-            <div className="lg:col-span-9 flex flex-col h-[calc(100vh-12rem)]">
+            <div className="lg:col-span-9 flex flex-col h-[calc(100vh-6rem)]">
               {/* Chat Messages Container */}
               <div className="flex-1 bg-zinc-900/90 backdrop-blur-xl border border-zinc-700/50 rounded-2xl overflow-hidden flex flex-col">
                 <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-4">
@@ -458,7 +458,7 @@ export default function LLMPlayground() {
                         }
                       }}
                       placeholder={selectedModel ? "Type your message... (Enter to send, Shift+Enter for new line)" : "Select a model first"}
-                      rows={3}
+                      rows={2}
                       disabled={!selectedModel || loading}
                       className="flex-1 px-4 py-3 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 resize-none disabled:opacity-50"
                     />

@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { ArrowLeft, RefreshCw, Square, Activity, AlertCircle, Clock } from "lucide-react";
+import { ArrowLeft, RefreshCw, Square, Activity, AlertCircle, Clock, MessageSquare } from "lucide-react";
 import apiClient from "../services/api";
 import type { LLMModel, LLMModelLogsResponse } from "../types/llm";
 import { isProcessBasedModel, isReplicateModel } from "../types/llm";
@@ -105,7 +105,7 @@ export default function LLMModelDetails() {
   };
 
   const handleHealthCheck = async () => {
-    if (!modelId || model?.type !== 'process') return;
+    if (!modelId) return;
 
     const toastId = `health-${modelId}`;
     showLoading(`Running health check...`, toastId);
@@ -207,49 +207,56 @@ export default function LLMModelDetails() {
           </div>
 
           {/* Action Buttons */}
-          {isProcess && (
-            <div className="flex items-center gap-2 flex-wrap">
-              {model.is_running && (
-                <>
-                  <button
-                    onClick={handleRestart}
-                    disabled={actionLoading !== null}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${actionLoading === 'restart' ? 'animate-spin' : ''}`} />
-                    Restart
-                  </button>
-                  <button
-                    onClick={handleStop}
-                    disabled={actionLoading !== null}
-                    className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
-                  >
-                    <Square className="w-4 h-4" />
-                    Stop
-                  </button>
-                  <button
-                    onClick={handleHealthCheck}
-                    disabled={actionLoading !== null}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
-                  >
-                    <Activity className="w-4 h-4" />
-                    Health Check
-                  </button>
-                </>
-              )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => navigate(`/llm/playground?model=${modelId}`)}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-all"
+            >
+              <MessageSquare className="w-4 h-4" />
+              Try LLM
+            </button>
+            {model.is_running && (
               <button
-                onClick={() => {
-                  fetchModelDetails();
-                  fetchLogs();
-                }}
-                disabled={loading}
-                className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium transition-all disabled:opacity-50"
+                onClick={handleHealthCheck}
+                disabled={actionLoading !== null}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
               >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                Refresh
+                <Activity className="w-4 h-4" />
+                Health Check
               </button>
-            </div>
-          )}
+            )}
+            {isProcess && model.is_running && (
+              <>
+                <button
+                  onClick={handleRestart}
+                  disabled={actionLoading !== null}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${actionLoading === 'restart' ? 'animate-spin' : ''}`} />
+                  Restart
+                </button>
+                <button
+                  onClick={handleStop}
+                  disabled={actionLoading !== null}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all disabled:opacity-50"
+                >
+                  <Square className="w-4 h-4" />
+                  Stop
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => {
+                fetchModelDetails();
+                fetchLogs();
+              }}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-medium transition-all disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 
