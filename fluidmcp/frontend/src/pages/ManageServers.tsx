@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Navbar } from '../components/Navbar';
 import { ServerForm } from '../components/ServerForm';
+import { CloneFromGithubForm } from '../components/CloneFromGithubForm';
 import { DeleteConfirmationModal } from '../components/DeleteConfirmationModal';
 import { useServerManagement } from '../hooks/useServerManagement';
 import { Pagination } from '../components/Pagination';
 import { Server } from '../types/server';
 
 type FilterMode = 'all' | 'running' | 'stopped' | 'failed';
+type CreateTab = 'manual' | 'github';
 
 export default function ManageServers() {
   const [showDeleted, setShowDeleted] = useState(false);
@@ -14,6 +16,7 @@ export default function ManageServers() {
 
   const [showForm, setShowForm] = useState(false);
   const [editingServer, setEditingServer] = useState<Server | null>(null);
+  const [createTab, setCreateTab] = useState<CreateTab>('manual');
   const [deletingServer, setDeletingServer] = useState<Server | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
@@ -50,6 +53,7 @@ export default function ManageServers() {
 
   const handleCreate = () => {
     setEditingServer(null);
+    setCreateTab('manual');
     setShowForm(true);
   };
 
@@ -166,6 +170,7 @@ export default function ManageServers() {
         {showForm && (
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
             <div className="relative bg-gradient-to-br from-zinc-900 to-zinc-800 border border-zinc-700 rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+              {/* Close button */}
               <button
                 onClick={() => setShowForm(false)}
                 className="absolute top-4 right-4 text-zinc-400 hover:text-white transition-colors"
@@ -174,15 +179,72 @@ export default function ManageServers() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-              <h2 className="text-2xl font-bold text-white mb-6">
-                {editingServer ? 'Edit Server' : 'Create New Server'}
-              </h2>
-              <ServerForm
-                mode={editingServer ? 'edit' : 'create'}
-                initialData={editingServer}
-                onSubmit={handleFormSubmit}
-                onCancel={() => setShowForm(false)}
-              />
+
+              {editingServer ? (
+                /* Edit mode — no tabs, just the form */
+                <>
+                  <h2 className="text-2xl font-bold text-white mb-6">Edit Server</h2>
+                  <ServerForm
+                    mode="edit"
+                    initialData={editingServer}
+                    onSubmit={handleFormSubmit}
+                    onCancel={() => setShowForm(false)}
+                  />
+                </>
+              ) : (
+                /* Create mode — tabbed: Manual Config | Clone from GitHub */
+                <>
+                  <h2 className="text-2xl font-bold text-white mb-5">Add Server</h2>
+
+                  {/* Tab bar */}
+                  <div className="flex space-x-1 bg-zinc-800/60 rounded-lg p-1 mb-6">
+                    <button
+                      onClick={() => setCreateTab('manual')}
+                      className={`flex-1 flex items-center justify-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        createTab === 'manual'
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50'
+                      }`}
+                    >
+                      <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      <span>Manual Config</span>
+                    </button>
+
+                    <button
+                      onClick={() => setCreateTab('github')}
+                      className={`flex-1 flex items-center justify-center space-x-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                        createTab === 'github'
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50'
+                      }`}
+                    >
+                      <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      <span>Clone from GitHub</span>
+                    </button>
+                  </div>
+
+                  {/* Tab content */}
+                  {createTab === 'manual' ? (
+                    <ServerForm
+                      mode="create"
+                      initialData={null}
+                      onSubmit={handleFormSubmit}
+                      onCancel={() => setShowForm(false)}
+                    />
+                  ) : (
+                    <CloneFromGithubForm
+                      onSuccess={() => {
+                        refetch();
+                      }}
+                      onCancel={() => setShowForm(false)}
+                    />
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
