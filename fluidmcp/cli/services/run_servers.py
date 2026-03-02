@@ -34,6 +34,7 @@ from .llm_provider_registry import initialize_llm_registry, update_model_endpoin
 from .frontend_utils import setup_frontend_routes
 from ..auth import verify_token
 from ..otel import init_otel, shutdown_otel
+from ..context import get_trace_id
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -262,6 +263,12 @@ def run_servers(
 
     # Initialize OpenTelemetry (must happen before server starts)
     init_otel()
+
+    # Configure loguru to include trace_id for log-trace correlation
+    def _trace_patcher(record):
+        record["extra"]["trace_id"] = get_trace_id() or ""
+
+    logger.configure(patcher=_trace_patcher)
 
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)

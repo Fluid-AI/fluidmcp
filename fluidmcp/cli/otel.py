@@ -6,6 +6,7 @@ Supports multiple exporters with graceful fallback.
 Works reliably in restricted networks (GitHub Codespaces, containers).
 """
 import os
+import platform
 import threading
 import time
 from loguru import logger
@@ -19,6 +20,40 @@ _otel_shutdown_done = False
 _otel_provider = None  # Store provider reference for shutdown
 
 
+def _build_sampler():
+    """
+    Build trace sampler from environment configuration.
+
+    Environment variables:
+        OTEL_TRACES_SAMPLER_ARG: Sampling rate 0.0-1.0 (default: 1.0)
+            - 1.0 = sample everything (dev/debug)
+            - 0.1 = sample 10% (production)
+
+    Returns:
+        Sampler instance or None (defaults to AlwaysOn)
+    """
+    try:
+        from opentelemetry.sdk.trace.sampling import ParentBasedTraceIdRatio
+
+        rate_str = os.getenv("OTEL_TRACES_SAMPLER_ARG", "1.0")
+        try:
+            rate = float(rate_str)
+            if not 0.0 <= rate <= 1.0:
+                logger.warning(f"Invalid OTEL_TRACES_SAMPLER_ARG '{rate_str}', must be 0.0-1.0, using 1.0")
+                rate = 1.0
+        except ValueError:
+            logger.warning(f"Invalid OTEL_TRACES_SAMPLER_ARG '{rate_str}', using 1.0")
+            rate = 1.0
+
+        if rate < 1.0:
+            logger.info(f"Trace sampling rate: {rate*100:.0f}%")
+        return ParentBasedTraceIdRatio(rate)
+
+    except ImportError:
+        logger.debug("Sampler not available, using default AlwaysOn")
+        return None
+
+
 def init_otel() -> bool:
     """
     Initialize OpenTelemetry with Jaeger and/or Console exporters.
@@ -29,6 +64,11 @@ def init_otel() -> bool:
         OTEL_SERVICE_VERSION: Service version (default: '2.0.0')
         OTEL_EXPORTER: Exporter type - 'jaeger', 'console', 'both' (default: 'jaeger')
         OTEL_EXPORTER_OTLP_ENDPOINT: OTLP endpoint URL (default: 'http://localhost:4318/v1/traces')
+        OTEL_TRACES_SAMPLER_ARG: Sampling rate 0.0-1.0 (default: 1.0)
+        OTEL_DEPLOYMENT_ENVIRONMENT: Deployment environment (e.g., 'production', 'staging')
+        OTEL_BSP_MAX_QUEUE_SIZE: BatchSpanProcessor max queue size (default: 2048)
+        OTEL_BSP_MAX_EXPORT_BATCH_SIZE: BatchSpanProcessor max batch size (default: 512)
+        OTEL_BSP_SCHEDULE_DELAY: BatchSpanProcessor schedule delay in ms (default: 5000)
 
     Returns:
         True if initialized successfully, False if disabled or failed
@@ -62,14 +102,33 @@ def init_otel() -> bool:
         service_name = os.getenv("OTEL_SERVICE_NAME", "fluidmcp")
         service_version = os.getenv("OTEL_SERVICE_VERSION", "2.0.0")
 
-        resource = Resource.create({
+        resource_attrs = {
             "service.name": service_name,
             "service.version": service_version,
-        })
+            "host.name": platform.node(),
+        }
 
-        # Create tracer provider with resource
+        # Optional deployment environment
+        deployment_env = os.getenv("OTEL_DEPLOYMENT_ENVIRONMENT")
+        if deployment_env:
+            resource_attrs["deployment.environment"] = deployment_env
+
+        # Service instance ID (container ID, pod name, etc.)
+        instance_id = os.getenv("OTEL_SERVICE_INSTANCE_ID") or os.getenv("HOSTNAME")
+        if instance_id:
+            resource_attrs["service.instance.id"] = instance_id
+
+        resource = Resource.create(resource_attrs)
+
+        # Build sampler
+        sampler = _build_sampler()
+
+        # Create tracer provider with resource and sampler
         global _otel_provider
-        provider = TracerProvider(resource=resource)
+        provider_kwargs = {"resource": resource}
+        if sampler is not None:
+            provider_kwargs["sampler"] = sampler
+        provider = TracerProvider(**provider_kwargs)
         _otel_provider = provider  # Store for shutdown
 
         # Determine which exporters to use
@@ -88,7 +147,12 @@ def init_otel() -> bool:
                 )
 
                 otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
-                otlp_processor = BatchSpanProcessor(otlp_exporter)
+                otlp_processor = BatchSpanProcessor(
+                    otlp_exporter,
+                    max_queue_size=int(os.getenv("OTEL_BSP_MAX_QUEUE_SIZE", "2048")),
+                    max_export_batch_size=int(os.getenv("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", "512")),
+                    schedule_delay_millis=int(os.getenv("OTEL_BSP_SCHEDULE_DELAY", "5000")),
+                )
                 provider.add_span_processor(otlp_processor)
                 exporters_added.append(f"otlp({otlp_endpoint})")
                 logger.info(f"✓ OTLP exporter configured: {otlp_endpoint}")

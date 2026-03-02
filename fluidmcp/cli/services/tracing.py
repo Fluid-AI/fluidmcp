@@ -4,6 +4,7 @@ OpenTelemetry span helpers for MCP operations.
 Provides utilities to create explicit spans for MCP operations
 beyond the automatic HTTP instrumentation.
 """
+import re
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from contextlib import contextmanager
@@ -12,6 +13,20 @@ from loguru import logger
 
 
 _tracer = None
+
+# Blocklist patterns for sensitive attribute keys (case-insensitive)
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r"(key|token|secret|password|passwd|auth|credential|bearer|cookie|session)",
+    re.IGNORECASE,
+)
+_REDACTED = "***REDACTED***"
+
+
+def _sanitize_attribute(key: str, value: Any) -> Any:
+    """Redact values for attribute keys that match sensitive patterns."""
+    if _SENSITIVE_KEY_PATTERN.search(key):
+        return _REDACTED
+    return value
 
 
 def get_tracer():
@@ -59,38 +74,40 @@ def trace_mcp_operation(
         - Sets error status on span when exception occurs
         - Re-raises exceptions (doesn't swallow them)
     """
+    tracer = None
     try:
         tracer = get_tracer()
-
-        # Build span attributes
-        span_attributes = {
-            "mcp.server_id": server_id,
-            "mcp.operation": operation_name,
-        }
-
-        # Add custom attributes if provided
-        if attributes:
-            span_attributes.update(attributes)
-
-        # Start span
-        with tracer.start_as_current_span(
-            f"mcp.{operation_name}",
-            attributes=span_attributes
-        ) as span:
-            try:
-                yield span
-            except Exception as e:
-                # Record exception details in span
-                span.set_status(Status(StatusCode.ERROR, str(e)))
-                span.record_exception(e)
-                logger.debug(f"MCP operation {operation_name} failed: {e}")
-                raise
-
     except Exception as tracer_error:
-        # If OpenTelemetry itself fails, log but don't crash
-        logger.debug(f"Failed to create trace span for {operation_name}: {tracer_error}")
-        # Yield None so the context manager still works
+        logger.debug(f"Failed to get tracer for {operation_name}: {tracer_error}")
+
+    if tracer is None:
+        # OpenTelemetry not available — yield None so caller still works
         yield None
+        return
+
+    # Start span
+    span_attributes = {
+        "mcp.server_id": server_id,
+        "mcp.operation": operation_name,
+    }
+
+    # Add custom attributes if provided (with sensitive data filtering)
+    if attributes:
+        for k, v in attributes.items():
+            span_attributes[k] = _sanitize_attribute(k, v)
+
+    with tracer.start_as_current_span(
+        f"mcp.{operation_name}",
+        attributes=span_attributes
+    ) as span:
+        try:
+            yield span
+        except Exception as e:
+            # Record exception details in span
+            span.set_status(Status(StatusCode.ERROR, str(e)))
+            span.record_exception(e)
+            logger.debug(f"MCP operation {operation_name} failed: {e}")
+            raise
 
 
 def set_span_attribute(key: str, value: Any) -> None:
@@ -118,7 +135,7 @@ def set_span_attribute(key: str, value: Any) -> None:
     try:
         span = trace.get_current_span()
         if span and span.is_recording():
-            span.set_attribute(key, value)
+            span.set_attribute(key, _sanitize_attribute(key, value))
     except Exception as e:
         logger.debug(f"Failed to set span attribute {key}: {e}")
 
@@ -186,10 +203,10 @@ def enrich_current_span(
             if request_id is not None:
                 span.set_attribute("request.id", str(request_id))
 
-            # Custom attributes
+            # Custom attributes (with sensitive data filtering)
             for key, value in kwargs.items():
                 if value is not None:
-                    span.set_attribute(key, str(value))
+                    span.set_attribute(key, _sanitize_attribute(key, str(value)))
     except Exception as e:
         logger.debug(f"Failed to enrich span: {e}")
 

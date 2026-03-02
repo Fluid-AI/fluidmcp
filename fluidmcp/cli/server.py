@@ -23,7 +23,7 @@ from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .otel import init_otel, instrument_fastapi_app
-from .context import set_trace_id, set_span_id, clear_context
+from .context import set_trace_id, set_span_id, get_trace_id, clear_context
 
 
 class TraceContextMiddleware(BaseHTTPMiddleware):
@@ -92,6 +92,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     """
     # Initialize OpenTelemetry (must happen before FastAPI app creation)
     init_otel()
+
+    # Configure loguru to include trace_id from contextvars for log-trace correlation
+    def _trace_patcher(record):
+        record["extra"]["trace_id"] = get_trace_id() or ""
+
+    logger.configure(patcher=_trace_patcher)
 
     app = FastAPI(
         title="FluidMCP Gateway",
