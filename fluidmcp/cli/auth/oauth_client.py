@@ -59,6 +59,10 @@ class Auth0Client:
             'redirect_uri': redirect_uri,
         }
 
+        # Include audience if configured (critical for JWT validation)
+        if self.config.audience:
+            payload['audience'] = self.config.audience
+
         response = requests.post(token_url, json=payload, timeout=10)
         response.raise_for_status()
 

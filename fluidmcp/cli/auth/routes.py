@@ -127,12 +127,12 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         # Get user info from Auth0
         user_info = oauth_client.get_user_info(tokens['access_token'])
 
-        # Use Auth0's id_token directly (RS256 signed by Auth0)
-        # This allows jwt_validator.py to validate it properly using JWKS
-        access_token = tokens.get('id_token') or tokens.get('access_token')
+        # Use Auth0's access_token for API authentication (not id_token)
+        # Access tokens are for API access, ID tokens are for client identity
+        access_token = tokens.get('access_token')
 
         if not access_token:
-            raise ValueError("No id_token or access_token returned from Auth0")
+            raise ValueError("No access_token returned from Auth0")
 
         logger.info(f"OAuth login successful for user: {user_info.get('email', user_info.get('sub'))}")
 
