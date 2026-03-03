@@ -146,13 +146,31 @@ This means:
 
 ### Model Identifier Format
 
-Replicate models use the format: `owner/model-name`
+**Replicate Model Names** (the `model` field) use the format: `owner/model-name` or `owner/model-name:version`
+
+Validation pattern: `^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+(:[a-zA-Z0-9_.-]+)?$`
 
 Examples:
 - `meta/llama-2-70b-chat` - Meta's Llama 2 70B chat model
 - `mistralai/mistral-7b-instruct-v0.2` - Mistral 7B instruct
-- `meta/codellama-34b-instruct` - Meta's CodeLlama 34B
+- `meta/codellama-34b-instruct:a4a8eb02ca65cb` - Meta's CodeLlama 34B (with specific version hash)
 - `stability-ai/sdxl` - Stable Diffusion XL
+
+**Model IDs** (the `model_id` field in configuration) have stricter restrictions:
+- Pattern: `^[a-zA-Z0-9_-]+$` (alphanumeric, dash, underscore only)
+- Length: 2-100 characters
+- No slashes, dots, or colons allowed
+- Used as keys in internal registries and metrics labels
+
+Valid model_id examples:
+- `llama-2-70b` ✅
+- `llama_chat` ✅
+- `model-123` ✅
+
+Invalid model_id examples:
+- `meta/llama-2-70b` ❌ (contains slash)
+- `llama.2.70b` ❌ (contains dots)
+- `llama:v2` ❌ (contains colon)
 
 Find models at: https://replicate.com/explore
 
