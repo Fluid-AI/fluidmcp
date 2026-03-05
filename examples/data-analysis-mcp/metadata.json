@@ -1,0 +1,27 @@
+{
+  "name": "Data Analysis",
+  "version": "1.0.0",
+  "description": "Advanced Data Analysis MCP server - automatically analyzes datasets and generates interactive dashboards with charts, statistics, and insights",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "data-analysis": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/data-analysis-mcp/server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "visualize_dataset",
+      "description": "Primary tool that accepts a dataset and returns a full interactive dashboard with auto-generated charts, statistics, and insights"
+    },
+    {
+      "name": "explore_dataset",
+      "description": "Returns a paginated searchable data table with column statistics sidebar and CSV export functionality"
+    },
+    {
+      "name": "get_insights",
+      "description": "Returns a styled insights report with dataset summary, statistical findings, correlation matrix, and visualization suggestions"
+    }
+  ]
+}
