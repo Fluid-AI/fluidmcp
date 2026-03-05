@@ -1892,10 +1892,6 @@ async def main_http(port: int):
         ]
     )
     
-    print(f"🚀 Data Analysis MCP Server running on http://localhost:{port}")
-    print(f"   SSE endpoint: http://localhost:{port}/sse")
-    print(f"   Messages endpoint: http://localhost:{port}/messages")
-    
     config = uvicorn.Config(starlette_app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
