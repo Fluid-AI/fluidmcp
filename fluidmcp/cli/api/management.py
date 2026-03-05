@@ -23,6 +23,8 @@ import threading
 from collections import defaultdict
 from time import time as current_time
 from datetime import datetime
+from ..services.replicate_client import get_replicate_client
+from ..services.llm_provider_registry import get_model_type
 
 # Import centralized validators
 from .validators import (
@@ -364,6 +366,13 @@ class ReplicateModelConfig(BaseModel):
             raise ValueError(sanitize_error_message(str(e)))
 
         return v
+
+class ImageEnhanceRequest(BaseModel):
+    """
+    Request schema for image enhancement endpoint.
+    """
+    model: str = Field(..., description="Registered replicate model id")
+    image_url: str = Field(..., description="URL of the image to enhance")
 
 
 # Shared HTTP client for vLLM proxy requests (lazy-initialized for connection pooling)
@@ -2525,6 +2534,58 @@ async def unified_get_model(
         "parent": None
     }
 
+@router.post(
+        "/llm/v1/enhance/image",
+    summary="Enhance an existing image using a Replicate model",
+    description="""
+Create an enhancement prediction for an existing image using a registered Replicate model.
+Example request:
+    {
+        "model": "real-esrgan",
+        "image_url": "https://example.com/image.png"
+    }
+"""
+)
+async def enhance_image(
+    request: Request,
+    body: ImageEnhanceRequest = Body(...),
+    token: str = Depends(get_token)
+):
+
+    # Rate limiting
+    client_ip = get_client_ip(request)
+    rate_limit_key = get_rate_limit_key("enhance_image", token or "anonymous", client_ip)
+
+    max_requests, window_seconds = RATE_LIMIT_COMPLETIONS
+    check_rate_limit(rate_limit_key, max_requests=max_requests, window_seconds=window_seconds)
+
+    # Validate URL
+    if not body.image_url.startswith("http"):
+        raise HTTPException(400, "image_url must be a valid HTTP/HTTPS URL")
+    
+    # Check model provider
+    provider_type = get_model_type(body.model)
+
+    if provider_type != "replicate":
+        raise HTTPException(
+            400,
+            f"Model '{body.model}' is not a Replicate model"
+        )
+
+    # Get replicate client
+    client = get_replicate_client(body.model)
+
+    # Create prediction
+    prediction = await client.predict(
+        input_data={
+            "image": body.image_url
+        }
+    )
+
+    return {
+        "id": prediction.get("id"),
+        "status": prediction.get("status")
+    }
 
 # ============================================================================
 # ============================================================================
@@ -3716,6 +3777,7 @@ async def animate_image(
         # Ensure any temporary client is closed to avoid resource leaks
         if created_temp_client:
             await client.close()
+
 
 
 @router.get("/llm/predictions/{prediction_id}")
