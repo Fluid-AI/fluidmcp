@@ -131,12 +131,22 @@ class ServerBuilder:
             "command": server_config["command"],
             "args": server_config.get("args", []),
             "env": merged_env,
+            # Transport type: "stdio" (default) or "sse"/"http" for HTTP-based servers.
+            # SSE servers are started with uvicorn/starlette and don't use stdin/stdout
+            # for the MCP handshake — they expose an HTTP endpoint instead.
+            "transport": server_config.get("transport", "stdio"),
+            # URL of the SSE/HTTP endpoint (required when transport != "stdio").
+            # Used by _background_mcp_init to poll the server until it's accepting
+            # connections, instead of doing the stdio JSON-RPC handshake.
+            "url": server_config.get("url"),
             # working_dir = repo root so that --directory <subdir> args resolve correctly
             "working_dir": str(clone_path),
             "install_path": str(effective_install_path),
             # Restart configuration
             "restart_policy": restart_policy,
             "max_restarts": max_restarts,
+            # GitHub repos may need dependency install on first start (uv, pip, npm)
+            "init_timeout": 120,
             # GitHub provenance metadata (stored alongside the config in MongoDB)
             "source": "github",
             "github_repo": repo_path,

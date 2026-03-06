@@ -232,6 +232,41 @@ class TestAddServerFromGitHubSingleServer:
 
         db.save_server_config.assert_called_once()
 
+    def test_init_timeout_defaults_to_120(self):
+        db = _make_db_manager()
+        manager = _make_server_manager(db)
+        app = _make_app(db_manager=db, server_manager=manager)
+
+        with _github_service_patch(SINGLE_SERVER_METADATA):
+            with TestClient(app) as client:
+                client.post(
+                    "/api/servers/from-github",
+                    json={"github_repo": "owner/repo", "server_id": "fs", "test_before_save": False},
+                    headers={"X-GitHub-Token": "ghp_testtoken"},
+                )
+
+        assert manager.configs["fs"]["init_timeout"] == 120
+
+    def test_custom_init_timeout_overrides_default(self):
+        db = _make_db_manager()
+        manager = _make_server_manager(db)
+        app = _make_app(db_manager=db, server_manager=manager)
+
+        with _github_service_patch(SINGLE_SERVER_METADATA):
+            with TestClient(app) as client:
+                client.post(
+                    "/api/servers/from-github",
+                    json={
+                        "github_repo": "owner/repo",
+                        "server_id": "fs",
+                        "test_before_save": False,
+                        "init_timeout": 180,
+                    },
+                    headers={"X-GitHub-Token": "ghp_testtoken"},
+                )
+
+        assert manager.configs["fs"]["init_timeout"] == 180
+
 
 class TestAddServerFromGitHubMultiServer:
     def test_adds_all_servers(self):

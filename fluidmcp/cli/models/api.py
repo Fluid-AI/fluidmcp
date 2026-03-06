@@ -288,6 +288,15 @@ class AddServerFromGitHubRequest(BaseModel):
             "to the database.  Recommended: True."
         ),
     )
+    init_timeout: Optional[int] = Field(
+        default=None,
+        description=(
+            "MCP initialization timeout in seconds. Default: 120 for GitHub repos. "
+            "Increase for servers that install dependencies on first start."
+        ),
+        ge=10,
+        le=600,
+    )
 
     class Config:
         json_schema_extra = {

@@ -135,6 +135,10 @@ class TestServerBuilderBuildConfig:
         assert config["github_branch"] == "develop"
         assert config["github_server_name"] == "fs"
 
+    def test_init_timeout_default_for_github(self):
+        config = self._make_config()
+        assert config["init_timeout"] == 120
+
     def test_restart_policy_and_max_restarts(self):
         config = self._make_config(restart_policy="on-failure", max_restarts=5)
         assert config["restart_policy"] == "on-failure"

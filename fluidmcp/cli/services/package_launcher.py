@@ -145,8 +145,9 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
             bufsize=1
         )
 
-        # Initialize MCP server
-        if not initialize_mcp_server(process):
+        # Initialize MCP server (use longer timeout for GitHub repos that may install deps)
+        init_timeout = 120 if is_github_repo else 30
+        if not initialize_mcp_server(process, timeout=init_timeout):
             error_msg = f"Failed to initialize MCP server for {pkg}"
             if placeholders_found:
                 error_msg += (

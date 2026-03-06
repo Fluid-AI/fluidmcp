@@ -20,6 +20,10 @@ from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 
+# Default MCP initialization timeout in seconds.
+# GitHub-cloned servers override this via config["init_timeout"].
+DEFAULT_MCP_INIT_TIMEOUT = 30
+
 
 class ServerManager:
     """Manages MCP server processes and lifecycle."""
@@ -54,6 +58,10 @@ class ServerManager:
         # 30s provides quick feedback (max 30s delay) while preventing excessive writes
         # when repeatedly checking the same stale server
         self._stale_pid_cache_ttl = 30.0  # seconds
+
+        # Track servers undergoing background MCP initialization.
+        # While a server is in this set, get_server_status returns "starting".
+        self._initializing_servers: set = set()
 
         # Register cleanup handlers
         atexit.register(self._cleanup_on_exit)
@@ -175,22 +183,23 @@ class ServerManager:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
                 return False
 
-            # Store process
+            # Store process immediately so status checks see it
             self.processes[id] = process
-            logger.info(f"Server '{name}' started (PID: {process.pid})")
+            logger.info(f"Server '{name}' spawned (PID: {process.pid})")
 
-            # Clear stale PID cache entry (if any) since server is now running
+            # Clear stale PID cache entry (if any) since server is now spawned
             self._stale_pid_updates.pop(id, None)
 
             # Get existing state for optimistic locking
             existing_state = await self.db.get_instance_state(id)
             existing_pid = existing_state.get("pid") if existing_state else None
 
-            # Save state to database with user tracking and optimistic locking
-            # Use optimistic locking to prevent race conditions with stale PID checker
+            # Save state as "starting" — MCP init runs in the background.
+            # This avoids blocking the HTTP request for 60-120s while uv/pip
+            # installs dependencies on first start of GitHub-cloned servers.
             success = await self.db.save_instance_state({
                 "server_id": id,
-                "state": "running",
+                "state": "starting",
                 "pid": process.pid,
                 "start_time": datetime.utcnow(),
                 "stop_time": None,
@@ -203,16 +212,18 @@ class ServerManager:
 
             if not success:
                 logger.warning(f"Optimistic lock failed when starting server '{name}' - PID changed during start operation")
-                # Still return True since the process started successfully
-                # The state mismatch will be reconciled on next status check
 
-            # Update metrics - server is now running (status code: 2)
-            # Note: Metrics update after database save to ensure state consistency
-            collector.set_server_status(2)  # 2 = running
+            # Update metrics
+            collector.set_server_status(2)  # 2 = running (starting)
 
             # Store start time for dynamic uptime calculation
             self.start_times[id] = time.monotonic()
             collector.set_uptime(0.0)  # Just started
+
+            # Launch MCP init + tool discovery as a background task.
+            # The task transitions state from "starting" → "running" (or "failed").
+            self._initializing_servers.add(id)
+            asyncio.create_task(self._background_mcp_init(id, process, config))
 
             return True
 
@@ -705,37 +716,139 @@ class ServerManager:
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 return None
 
-            # Initialize MCP server with handshake (using shared utility)
-            logger.info(f"[{id}] Initializing MCP server...")
-            init_success = await asyncio.to_thread(initialize_mcp_server, process)
-
-            if not init_success:
-                logger.error(f"MCP initialization failed for server '{name}' (id: {id})")
-                # Read stderr for debugging (non-blocking)
-                stderr_output = None
-                if process.stderr:
-                    try:
-                        stderr_output = await asyncio.wait_for(
-                            asyncio.to_thread(process.stderr.read),
-                            timeout=1.0
-                        )
-                    except Exception as exc:
-                        logger.warning(f"Failed to read stderr: {exc}")
-                if stderr_output:
-                    logger.error(f"[{id}] Process stderr: {stderr_output[:500]}")
-                process.kill()
-                return None
-
-            logger.info(f"[{id}] MCP server initialized successfully")
-
-            # Discover and cache tools (PDF spec requirement)
-            await self._discover_and_cache_tools(id, process)
-
+            # Process is alive — return immediately.
+            # MCP init handshake + tool discovery run in a background task
+            # (see _background_mcp_init) so the HTTP request is not blocked.
             return process
 
         except Exception as e:
             logger.exception(f"Error spawning process for server '{name}': {e}")
             return None
+
+    async def _wait_for_http_server(self, id: str, url: str, timeout: int) -> bool:
+        """
+        Poll a TCP endpoint until it accepts connections or timeout expires.
+
+        Used for SSE/HTTP-transport servers (uvicorn/starlette) that don't
+        communicate over stdin/stdout.  A successful TCP handshake is enough
+        to confirm the server is ready — we don't need to speak HTTP.
+
+        Args:
+            id: Server identifier (for logging)
+            url: Full URL of the SSE endpoint, e.g. "http://127.0.0.1:8000/sse"
+            timeout: Maximum seconds to wait
+
+        Returns:
+            True once the port accepts connections, False on timeout
+        """
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 80
+
+        logger.info(f"[{id}] Waiting for SSE server at {host}:{port} (timeout={timeout}s)...")
+        start = time.time()
+        while time.time() - start < timeout:
+            if process := self.processes.get(id):
+                if process.poll() is not None:
+                    logger.error(f"[{id}] Process exited (code {process.returncode}) while waiting for SSE server")
+                    return False
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port), timeout=2.0
+                )
+                writer.close()
+                await writer.wait_closed()
+                logger.info(f"[{id}] SSE server is up at {host}:{port}")
+                return True
+            except (ConnectionRefusedError, OSError, asyncio.TimeoutError):
+                await asyncio.sleep(1.0)
+
+        logger.error(f"[{id}] SSE server did not start within {timeout}s ({host}:{port})")
+        return False
+
+    async def _background_mcp_init(self, id: str, process: subprocess.Popen, config: Dict[str, Any]) -> None:
+        """
+        Run MCP initialization handshake and tool discovery in the background.
+
+        Called as an asyncio task after spawn so the HTTP response returns
+        immediately.  Updates server state to "running" on success or
+        "failed" on error.
+
+        Args:
+            id: Server identifier
+            process: Running subprocess
+            config: Server configuration (for init_timeout)
+        """
+        try:
+            init_timeout = config.get("init_timeout", DEFAULT_MCP_INIT_TIMEOUT)
+            transport = config.get("transport", "stdio")
+            logger.info(f"[{id}] Initializing MCP server in background (transport={transport}, timeout={init_timeout}s)...")
+
+            if transport in ("sse", "http"):
+                # SSE/HTTP server: uvicorn binds a port; skip stdio handshake and
+                # instead wait until the TCP port accepts connections.
+                url = config.get("url", "")
+                if not url:
+                    logger.warning(f"[{id}] transport='{transport}' but no 'url' in config — skipping health check")
+                    init_success = True
+                else:
+                    init_success = await self._wait_for_http_server(id, url, init_timeout)
+            else:
+                # stdio server: standard JSON-RPC handshake over stdin/stdout
+                init_success = await asyncio.to_thread(initialize_mcp_server, process, init_timeout)
+
+            if not init_success:
+                logger.error(f"[{id}] MCP initialization failed")
+                # Read stderr for debugging
+                stderr_output = None
+                if process.stderr:
+                    try:
+                        stderr_output = await asyncio.wait_for(
+                            asyncio.to_thread(process.stderr.read),
+                            timeout=1.0,
+                        )
+                    except Exception:
+                        pass
+                if stderr_output:
+                    logger.error(f"[{id}] Process stderr: {stderr_output[:500]}")
+                process.kill()
+                await self._cleanup_server(id, -1)
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "state": "failed",
+                    "pid": None,
+                    "last_error": "MCP initialization timed out or failed",
+                })
+                return
+
+            logger.info(f"[{id}] MCP server initialized successfully")
+
+            # Discover and cache tools
+            await self._discover_and_cache_tools(id, process)
+
+            # Transition state from "starting" → "running"
+            await self.db.save_instance_state({
+                "server_id": id,
+                "state": "running",
+                "pid": process.pid,
+            })
+            logger.info(f"[{id}] Background init complete — state is now 'running'")
+
+        except Exception as e:
+            logger.exception(f"[{id}] Background MCP init failed: {e}")
+            # Kill process if still alive
+            if process.poll() is None:
+                process.kill()
+            await self._cleanup_server(id, -1)
+            await self.db.save_instance_state({
+                "server_id": id,
+                "state": "failed",
+                "pid": None,
+                "last_error": str(e),
+            })
+        finally:
+            self._initializing_servers.discard(id)
 
     async def _discover_and_cache_tools(self, server_id: str, process: subprocess.Popen) -> None:
         """

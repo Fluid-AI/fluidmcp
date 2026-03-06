@@ -51,14 +51,15 @@ class ApiClient {
 
   private async request<T>(
     endpoint: string,
-    options?: RequestInit & { signal?: AbortSignal }
+    options?: RequestInit & { signal?: AbortSignal; timeout?: number }
   ): Promise<T> {
     // AbortController lifecycle is owned by hooks/components, not apiClient
     // This method accepts optional signal for request cancellation
 
-    // Create timeout controller (30 seconds default)
+    // Create timeout controller (default 30s, callers can override)
+    const timeoutMs = (options as any)?.timeout ?? 30000;
     const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort(), 30000);
+    const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
 
     // Merge external signal with timeout signal (if provided)
     const signal = options?.signal
@@ -114,7 +115,8 @@ class ApiClient {
   }
 
   async startServer(serverId: string): Promise<{ message: string; pid: number }> {
-    return this.request(`/api/servers/${serverId}/start`, { method: 'POST' });
+    // Longer timeout: GitHub-cloned servers may install deps on first start (up to 120s)
+    return this.request(`/api/servers/${serverId}/start`, { method: 'POST', timeout: 150_000 } as any);
   }
 
   async stopServer(serverId: string): Promise<{ message: string; forced: boolean }> {
@@ -122,7 +124,7 @@ class ApiClient {
   }
 
   async restartServer(serverId: string): Promise<{ message: string; pid: number }> {
-    return this.request(`/api/servers/${serverId}/restart`, { method: 'POST' });
+    return this.request(`/api/servers/${serverId}/restart`, { method: 'POST', timeout: 150_000 } as any);
   }
 
   // Tool Discovery & Execution APIs

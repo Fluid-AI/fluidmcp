@@ -931,6 +931,7 @@ async def add_server_from_github(
     max_restarts = int(config.get("max_restarts", 3))
     enabled = bool(config.get("enabled", True))
     test_before_save = bool(config.get("test_before_save", True))
+    init_timeout = config.get("init_timeout")  # None = use builder's default (120s)
 
     # Validate env variables if provided
     if env:
@@ -963,6 +964,12 @@ async def add_server_from_github(
             created_by=user_id,
         )
         logger.info(f"Built {len(server_configs)} server config(s) from {github_repo}")
+
+        # Apply user-specified init_timeout (overrides builder default of 120s)
+        if init_timeout is not None:
+            init_timeout = max(10, min(600, int(init_timeout)))
+            for sc in server_configs:
+                sc["init_timeout"] = init_timeout
 
         # 5. Validate, optionally test-start, and persist each server
         results = []
