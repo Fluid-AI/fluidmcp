@@ -137,3 +137,32 @@ export interface UpdateEnvResponse {
   message: string;
   env_updated: boolean;
 }
+
+// ─── GitHub Clone Types ────────────────────────────────────────────────────
+
+export interface CloneFromGithubRequest {
+  github_repo: string;       // owner/repo or full URL
+  branch: string;            // default: "main"
+  server_id: string;         // base identifier (slug)
+  server_name?: string;      // select one server from multi-server repo
+  subdirectory?: string;     // for monorepos: folder containing metadata.json
+  env?: Record<string, string>;
+  enabled?: boolean;
+  restart_policy?: 'never' | 'on-failure' | 'always';
+  max_restarts?: number;
+  test_before_save?: boolean;
+}
+
+export interface CloneFromGithubServerResult {
+  id: string;
+  name: string;
+  status: 'validated' | 'added';
+}
+
+export interface CloneFromGithubResponse {
+  message: string;
+  servers: CloneFromGithubServerResult[];
+  repository: string;
+  branch: string;
+  clone_path: string;
+}

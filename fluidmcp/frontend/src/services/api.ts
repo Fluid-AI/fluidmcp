@@ -8,9 +8,21 @@ import type {
   ApiError,
   ServerEnvMetadataResponse,
   UpdateEnvResponse,
+  CloneFromGithubRequest,
+  CloneFromGithubResponse,
 } from '../types/server';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
+
+/** Error subclass that preserves the HTTP status code from API responses. */
+export class ApiHttpError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiHttpError';
+    this.status = status;
+  }
+}
 
 /**
  * Merges multiple AbortSignals into one
@@ -171,6 +183,53 @@ class ApiClient {
     return this.request(`/api/servers/${serverId}`, {
       method: 'DELETE',
     });
+  }
+
+  /**
+   * Clone a GitHub repository and register its MCP server(s).
+   *
+   * The GitHub token is sent in the X-GitHub-Token header (never the body)
+   * and a 120-second timeout is used since cloning large repos can be slow.
+   */
+  async cloneFromGithub(
+    payload: CloneFromGithubRequest,
+    githubToken: string
+  ): Promise<CloneFromGithubResponse> {
+    // Override the built-in 30s timeout — cloning can take up to ~60s
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), 120_000);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/servers/from-github`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-GitHub-Token': githubToken,
+        },
+        body: JSON.stringify(payload),
+        signal: timeoutController.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({
+          detail: `HTTP ${response.status}: ${response.statusText}`,
+        }));
+        throw new ApiHttpError(
+          error.detail ?? 'Clone failed',
+          response.status,
+        );
+      }
+
+      return response.json();
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('Request timed out — cloning may still be in progress');
+      }
+      throw err;
+    }
   }
 }
 
