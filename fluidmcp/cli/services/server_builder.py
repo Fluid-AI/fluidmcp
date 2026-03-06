@@ -92,13 +92,16 @@ class ServerBuilder:
         directly with ServerManager._spawn_mcp_process() and
         DatabaseManager.save_server_config().
 
+        Supports both stdio (default) and SSE transport. If the server block
+        in metadata.json contains a ``transport`` field set to ``"sse"``, the
+        produced config will include ``transport`` and ``url`` fields and
+        ServerManager will skip the stdio handshake in favour of HTTP.
+
         Args:
             base_id: User-provided base identifier
             server_name: Server name from metadata.json
             server_config: Individual server block from metadata (command, args, env, ...)
-            clone_path: Repo root — used as ``working_dir`` (cwd for subprocess).
-                For monorepos with ``uv --directory <subdir>`` style args this
-                must be the repo root, not the subdirectory.
+            clone_path: Repo root — used as ``working_dir``
             repo_path: Original GitHub repo path (owner/repo)
             branch: Branch that was cloned
             env: Additional environment variables merged on top of repo defaults
@@ -106,8 +109,7 @@ class ServerBuilder:
             max_restarts: Maximum restart attempts
             enabled: Whether the server should be enabled after creation
             is_multi_server: True when repo has more than one server
-            install_path: Optional override for install_path (e.g. the resolved
-                subdirectory in a monorepo).  Defaults to ``clone_path``.
+            install_path: Optional override for install_path.  Defaults to ``clone_path``.
             created_by: User performing the operation (for audit)
 
         Returns:
@@ -120,7 +122,21 @@ class ServerBuilder:
 
         effective_install_path = install_path if install_path is not None else clone_path
 
-        return {
+        # ── Detect transport type from metadata.json server block ────────────
+        # Repos declare SSE transport by adding "transport": "sse" (and
+        # optionally "url": "http://127.0.0.1:<port>") to their mcpServers block.
+        # Example metadata.json entry:
+        #   "game-hub": {
+        #     "command": "uv",
+        #     "args": ["--directory", "game-hub-mcp/game-hub", "run", "server.py"],
+        #     "env": {},
+        #     "transport": "sse",
+        #     "url": "http://127.0.0.1:8000"
+        #   }
+        transport = server_config.get("transport", "stdio")
+        sse_url = server_config.get("url", "http://127.0.0.1:8000")
+
+        config = {
             "id": server_id,
             "name": server_config.get("name", server_name),
             "description": server_config.get(
@@ -137,12 +153,30 @@ class ServerBuilder:
             # Restart configuration
             "restart_policy": restart_policy,
             "max_restarts": max_restarts,
-            # GitHub provenance metadata (stored alongside the config in MongoDB)
+            # GitHub provenance metadata
             "source": "github",
             "github_repo": repo_path,
             "github_branch": branch,
-            "github_server_name": server_name,  # original key in metadata.json
+            "github_server_name": server_name,
             # Audit fields
             "created_by": created_by,
             "created_at": datetime.now(timezone.utc),
         }
+
+        # ── SSE-specific fields ───────────────────────────────────────────────
+        # Only written when transport is explicitly "sse" so that existing stdio
+        # configs are completely unaffected.
+        if transport == "sse":
+            config["transport"] = "sse"
+            config["url"] = sse_url
+            logger.info(
+                f"Server '{server_id}' configured with SSE transport at {sse_url}"
+            )
+
+        return config
+
+
+# ---------------------------------------------------------------------------
+# Module-level logger (mirrors the pattern used everywhere else in the package)
+# ---------------------------------------------------------------------------
+from loguru import logger  # noqa: E402  (imported after class to keep class self-contained)
