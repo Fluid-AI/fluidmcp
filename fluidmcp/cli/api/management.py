@@ -936,14 +936,19 @@ async def add_server_from_github(
     if env:
         validate_env_variables(env)
 
-    # Pre-flight: fail fast if the base server_id already exists.
+    # Pre-flight: fail fast if the base server_id already exists in the DB.
     # This avoids a 60-second clone only to get a 409 at the end.
-    if base_server_id in manager.configs or await manager.db.get_server_config(base_server_id):
+    # We check DB only (not in-memory) because a previous failed attempt may
+    # have left a stale in-memory entry for the same ID without a DB record.
+    if await manager.db.get_server_config(base_server_id):
         raise HTTPException(
             409,
             f"Server with id '{base_server_id}' already exists. "
             f"Choose a different Server ID and try again.",
         )
+
+    # Track IDs registered in-memory this request so we can roll back on error
+    registered_ids = []
 
     try:
         # 4. Clone / update and build server config(s)
@@ -970,13 +975,18 @@ async def add_server_from_github(
             sid = server_config["id"]
             display_name = server_config.get("name", sid)
 
-            # Duplicate check – in-memory and database
-            if sid in manager.configs or await manager.db.get_server_config(sid):
+            # Duplicate check – DB is the source of truth.
+            # We intentionally skip the in-memory check here because a previous
+            # failed attempt for the same repo may have left a stale entry in
+            # manager.configs without a corresponding DB record, causing a false
+            # 409 on retry. Evict any such stale entry before proceeding.
+            if await manager.db.get_server_config(sid):
                 raise HTTPException(
                     409,
                     f"Server with id '{sid}' already exists. "
                     f"Choose a different Server ID and try again.",
                 )
+            manager.configs.pop(sid, None)  # evict stale in-memory entry if present
 
             # Validate command and args for security (env is skipped here because
             # metadata.json from GitHub repos may use non-uppercase env key names,
@@ -1008,6 +1018,7 @@ async def add_server_from_github(
 
             # Register in manager's in-memory configs for immediate availability
             manager.configs[sid] = server_config
+            registered_ids.append(sid)
 
             results.append({
                 "id": sid,
@@ -1026,15 +1037,24 @@ async def add_server_from_github(
         }
 
     except HTTPException:
+        # Roll back any in-memory registrations from this request so that
+        # a retry with the same ID doesn't false-positive on our own leftovers
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
         raise
     except ValueError as e:
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
         raise HTTPException(400, truncate_error(str(e)))
     except RuntimeError as e:
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
         raise HTTPException(502, truncate_error(str(e)))
     except Exception as e:
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
         logger.exception(f"Unexpected error adding server from GitHub: {e}")
         raise HTTPException(500, f"Internal error: {truncate_error(str(e))}")
-
 
 @router.get("/servers")
 async def list_servers(request: Request, enabled_only: bool = True, include_deleted: bool = False):
