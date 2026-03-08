@@ -863,6 +863,7 @@ async def add_server_from_github(
         },
     ),
     token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user),
 ):
     """
     Clone a GitHub repository and add the MCP server(s) it contains.
@@ -900,7 +901,6 @@ async def add_server_from_github(
     from ..services.validators import validate_command_allowlist  # noqa: F401 – used inside GitHubService
 
     manager = get_server_manager(request)
-    user_id = get_current_user(request)
 
     # 1. Require GitHub token in header (never in request body to avoid logging)
     github_token = request.headers.get("X-GitHub-Token")
@@ -4050,5 +4050,3 @@ async def get_generation_status(
     finally:
         # Ensure the temporary client is closed to avoid resource leaks
         await client.close()
-
-
