@@ -1412,7 +1412,114 @@ async def restart_server(
         "pid": pid
     }
 
+# ==================== SSE Proxy ====================
 
+@router.get("/servers/{id}/sse")
+async def proxy_sse(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+):
+    """
+    Proxy an SSE (Server-Sent Events) connection to an internally running MCP SSE server.
+
+    Railway only exposes one public port, so SSE servers bound to 127.0.0.1:<port>
+    inside the container are not directly reachable from outside. This endpoint
+    forwards the SSE stream through the FastAPI backend so clients can connect via:
+
+        GET https://<your-app>/api/servers/{id}/sse
+
+    Only works for servers configured with transport="sse".
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    if config.get("transport") != "sse":
+        raise HTTPException(400, f"Server '{id}' is not an SSE server (transport={config.get('transport', 'stdio')})")
+
+    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    sse_url = f"{internal_url}/sse"
+
+    async def event_stream():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", sse_url, headers={"Accept": "text/event-stream"}) as response:
+                    if response.status_code != 200:
+                        yield f"event: error\ndata: SSE server returned {response.status_code}\n\n".encode()
+                        return
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+        except httpx.ConnectError:
+            yield b"event: error\ndata: SSE server is not running or not reachable\n\n"
+        except Exception as e:
+            logger.error(f"SSE proxy error for '{id}': {e}")
+            yield f"event: error\ndata: {str(e)}\n\n".encode()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disables nginx/Railway proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/servers/{id}/messages")
+async def proxy_sse_messages(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+):
+    """
+    Proxy POST /messages to an internally running MCP SSE server.
+
+    MCP SSE transport requires two channels:
+    - GET  /sse       → SSE stream (server → client)
+    - POST /messages  → send commands (client → server)
+
+    Both are proxied here so clients never need direct access to the internal port.
+
+        POST https://<your-app>/api/servers/{id}/messages
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    if config.get("transport") != "sse":
+        raise HTTPException(400, f"Server '{id}' is not an SSE server")
+
+    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    body = await request.body()
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{internal_url}/messages",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json",
+        )
+    except httpx.ConnectError:
+        raise HTTPException(502, f"SSE server '{id}' is not running or not reachable")
+    except Exception as e:
+        logger.error(f"SSE messages proxy error for '{id}': {e}")
+        raise HTTPException(502, truncate_error(str(e)))
+    
 @router.post("/servers/start-all")
 async def start_all_servers(request: Request, token: str = Depends(get_token)):
     """
