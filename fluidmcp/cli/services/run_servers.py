@@ -35,6 +35,7 @@ from .frontend_utils import setup_frontend_routes
 from .server_manager import ServerManager
 from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
+from ..otel import init_otel, shutdown_otel
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -273,6 +274,8 @@ def run_servers(
         allow_headers=["*"],
     )
 
+    # Initialize OpenTelemetry (must happen before server starts)
+    init_otel()
     # Initialize database manager and server manager for management API
     db_manager = InMemoryBackend()  # Use in-memory persistence for now
     server_manager = ServerManager(db_manager)
@@ -1332,6 +1335,13 @@ def _cleanup_resources():
                 logger.warning(f"Error stopping health monitor: {e}")
             finally:
                 _llm_health_monitor = None
+
+        # Shutdown OpenTelemetry (flush spans before other cleanup)
+        logger.info("Shutting down OpenTelemetry...")
+        try:
+            shutdown_otel()
+        except Exception as e:
+            logger.warning(f"Error during OpenTelemetry shutdown: {e}")
 
         if _llm_processes:
             logger.info("Shutting down LLM processes...")
