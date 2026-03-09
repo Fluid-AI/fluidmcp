@@ -1,0 +1,48 @@
+FluidMCP MCP Inspector - Architecture Plan
+(Phase 1)
+1. Objective
+• Build a basic MCP Inspector page inside FluidMCP.
+• Use existing MCP servers stored in MongoDB.
+• No agent loop in Phase 1.
+• Focus on tool discovery, tool execution, JSON view, and UI rendering.
+2. New Route & Page Structure
+• Add new route: /mcp/inspector
+• Create new page: frontend/src/pages/MCPInspector.tsx
+• Layout: Left Panel (Servers + Tools), Right Panel (Execution + Output Viewer)
+3. Frontend Components to Add
+• components/InspectorServerList.tsx – Show configured MCP servers.
+• components/InspectorToolList.tsx – Show tools for selected server.
+• components/InspectorExecutionPanel.tsx – Show tool execution form.
+• components/InspectorOutputViewer.tsx – Render JSON or UI output.
+4. API Client Updates (frontend/src/services/api.ts)
+• Add getInspectorServers() – Fetch servers from Mongo.
+• Add getInspectorTools(serverId) – List tools.
+• Add runInspectorTool(serverId, toolName, payload).
+5. Backend Changes (FastAPI Layer)
+• Create new router: api/inspector.py
+• Add endpoint GET /api/inspector/servers
+• Add endpoint GET /api/inspector/{serverId}/tools
+• Add endpoint POST /api/inspector/{serverId}/tools/{toolName}/run
+• Reuse existing MCP execution logic.
+6. MongoDB Layer
+• No schema changes required for Phase 1.
+• Use existing fluidmcp_servers collection.
+• Ensure only enabled servers are shown.
+7. UI Rendering Strategy
+• If tool response contains HTML or UI payload → render inside sandboxed iframe.
+• Otherwise → show JSON pretty viewer.
+• Add toggle: JSON | Rendered UI.
+8. Logging Strategy (Phase 1)
+• Basic execution logs visible to all users.
+• Later: Add admin-only advanced logs toggle.
+• Reuse existing server log APIs.
+9. Phase 2 (Future Enhancements)
+• Add agent loop integration using LLM models.
+• Allow temporary MCP server connections.
+• Add streaming support.
+• Add raw JSON-RPC message inspector.
+10. Debug Strategy
+• Use existing apiClient for all calls.
+• Add clear error boundaries in frontend.
+• Log tool execution time and payloads.
+• Test with both process-based and cloud MCP servers.
