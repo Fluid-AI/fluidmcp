@@ -1180,6 +1180,34 @@ async def update_server(
     # Always update in-memory
     manager.configs[id] = config
 
+    # Check if server is running and env vars changed - restart if needed
+    if id in manager.processes:
+        process = manager.processes[id]
+        if process.poll() is None:  # Server is running
+            # Get current instance state to compare env vars
+            instance = await manager.db.get_instance_state(id)
+            if instance:
+                current_env = instance.get("env", {})
+                new_env = config.get("mcp_config", {}).get("env", {})
+
+                # Compare env vars (simple dict comparison)
+                if current_env != new_env:
+                    logger.info(f"Environment variables changed for running server '{id}', restarting...")
+                    try:
+                        # Stop the server
+                        stop_success = await manager.stop_server(id)
+                        if stop_success:
+                            # Start with new config
+                            start_success = await manager.start_server(id, config)
+                            if start_success:
+                                logger.info(f"Successfully restarted server '{id}' with new environment")
+                            else:
+                                logger.error(f"Failed to restart server '{id}' after env change")
+                        else:
+                            logger.error(f"Failed to stop server '{id}' for env update")
+                    except Exception as e:
+                        logger.error(f"Error restarting server '{id}' for env change: {e}")
+
     logger.info(f"Updated server configuration: {config['name']} (id: {id})")
     return {
         "message": f"Server '{id}' updated successfully",
