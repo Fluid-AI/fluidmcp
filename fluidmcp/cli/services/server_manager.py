@@ -19,6 +19,7 @@ from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
+from .sse_handle import SseSubprocessHandle
 
 
 class ServerManager:
@@ -458,6 +459,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "running",
+                    "transport": "sse" if isinstance(process, SseSubprocessHandle) else "stdio",
+                    "url": process.sse_url if isinstance(process, SseSubprocessHandle) else None,
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
@@ -585,11 +588,21 @@ class ServerManager:
             status = await self.get_server_status(id)
 
             # Separate MCP config fields from metadata fields
-            mcp_config = {
-                "command": config.get("command"),
-                "args": config.get("args", []),
-                "env": config.get("env", {})
-            }
+            transport = config.get("transport", "stdio")
+            if transport == "sse":
+                mcp_config = {
+                    "transport": "sse",
+                    "url": config.get("url"),
+                    "command": config.get("command"),
+                    "args": config.get("args", []),
+                }
+            else:
+                mcp_config = {
+                    "transport": "stdio",
+                    "command": config.get("command"),
+                    "args": config.get("args", []),
+                    "env": config.get("env", {})
+                }
 
             # Build response with nested structure
             server_info = {
@@ -705,6 +718,16 @@ class ServerManager:
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 return None
 
+            # ── SSE transport: skip stdio handshake, wait for HTTP instead ──
+            if config.get("transport") == "sse":
+                handle = await self._handshake_sse_subprocess(id, config, process)
+                if not handle:
+                    logger.error(f"SSE handshake failed for server '{name}' (id: {id})")
+                    return None
+                logger.info(f"[{id}] SSE server connected successfully")
+                return handle  # tool discovery already done inside _handshake_sse_subprocess
+            # ── stdio transport: normal handshake ───────────────────────────
+
             # Initialize MCP server with handshake (using shared utility)
             logger.info(f"[{id}] Initializing MCP server...")
             init_success = await asyncio.to_thread(initialize_mcp_server, process)
@@ -728,7 +751,7 @@ class ServerManager:
 
             logger.info(f"[{id}] MCP server initialized successfully")
 
-            # Discover and cache tools (PDF spec requirement)
+            # Discover and cache tools (stdio only — SSE already handled above)
             await self._discover_and_cache_tools(id, process)
 
             return process
@@ -798,6 +821,134 @@ class ServerManager:
         except Exception as e:
             logger.warning(f"Tool discovery failed for '{server_id}': {e}")
             # Don't fail the server start if tool discovery fails
+
+    async def _handshake_sse_subprocess(
+        self,
+        id: str,
+        config: Dict[str, Any],
+        process: subprocess.Popen,
+    ) -> Optional["SseSubprocessHandle"]:
+        """
+        Complete startup for a subprocess-owned SSE MCP server.
+
+        After the process is spawned we:
+          1. Poll until the HTTP server is accepting connections (max 30 s).
+          2. Discover and cache tools via POST /messages/.
+          3. Return an SseSubprocessHandle wrapping the real Popen.
+
+        Args:
+            id:      Server identifier.
+            config:  Server config dict (must contain 'url').
+            process: The already-spawned subprocess.Popen.
+
+        Returns:
+            SseSubprocessHandle on success, None on failure.
+        """
+        import httpx
+
+        url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+        name = config.get("name", id)
+        health_url = f"{url}/sse"
+
+        logger.info(
+            f"[{id}] SSE server '{name}' spawned (PID {process.pid}), "
+            f"waiting for HTTP readiness at {health_url}..."
+        )
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 30
+
+        while loop.time() < deadline:
+            # Guard: process must still be alive
+            if process.poll() is not None:
+                stderr_out = ""
+                if process.stderr:
+                    try:
+                        stderr_out = process.stderr.read()
+                    except Exception:
+                        pass
+                logger.error(
+                    f"[{id}] SSE server process died before HTTP became ready "
+                    f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                )
+                return None
+
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    async with client.stream("GET", health_url) as resp:
+                        if resp.status_code == 200:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] SSE server is ready at {url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            break
+            except (httpx.ConnectError, httpx.TimeoutException):
+                pass  # Server not up yet — keep polling
+
+            await asyncio.sleep(1.0)
+        else:
+            logger.error(f"[{id}] SSE server did not become ready within 30s")
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return None
+
+        # Discover and cache tools via HTTP
+        await self._discover_and_cache_tools_sse(id, url)
+
+        return SseSubprocessHandle(process=process, sse_url=url)
+
+    async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
+        """
+        Discover tools from an SSE MCP server via HTTP and cache in database.
+
+        SSE MCP servers expose a POST /messages/ endpoint that accepts
+        standard JSON-RPC 2.0 requests.
+
+        Args:
+            server_id: Server identifier.
+            base_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+        """
+        import httpx
+
+        messages_url = f"{base_url.rstrip('/')}/messages/"
+        tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(messages_url, json=tools_request)
+                resp.raise_for_status()
+                response = resp.json()
+
+            if "result" in response and "tools" in response["result"]:
+                tools = response["result"]["tools"]
+                config = await self.db.get_server_config(server_id)
+                if config:
+                    config["tools"] = tools
+                    try:
+                        await self.db.save_server_config(config)
+                        logger.info(
+                            f"[SSE] Discovered and cached {len(tools)} tool(s) "
+                            f"for server '{server_id}'"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[SSE] Failed to save tools for '{server_id}': {e}"
+                        )
+                else:
+                    logger.warning(
+                        f"[SSE] Config not found for '{server_id}', cannot cache tools"
+                    )
+            else:
+                logger.warning(
+                    f"[SSE] No tools in response for server '{server_id}': {response}"
+                )
+
+        except Exception as e:
+            # Tool discovery failure must never abort server startup
+            logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
 
     async def _cleanup_server(self, id: str, exit_code: int) -> None:
         """

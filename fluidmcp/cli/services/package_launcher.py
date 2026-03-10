@@ -15,7 +15,47 @@ import uvicorn
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
+from .sse_handle import SseSubprocessHandle
+
 security = HTTPBearer(auto_error=False)
+
+
+async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.0) -> dict:
+    """
+    Forward a JSON-RPC request to an SSE MCP server via POST /messages/.
+
+    Args:
+        sse_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+        payload:  JSON-RPC 2.0 dict to send.
+        timeout:  HTTP request timeout in seconds.
+
+    Returns:
+        Parsed JSON response dict.
+
+    Raises:
+        HTTPException on any HTTP or connection error.
+    """
+    import httpx
+
+    messages_url = f"{sse_url.rstrip('/')}/messages/"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(messages_url, json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            e.response.status_code,
+            f"SSE server returned HTTP {e.response.status_code}"
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            503,
+            f"Cannot reach SSE server at {sse_url}. Is it still running?"
+        )
+    except Exception as e:
+        logger.error(f"SSE proxy error → {messages_url}: {e}")
+        raise HTTPException(500, f"SSE proxy error: {str(e)}")
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
@@ -593,6 +633,13 @@ def create_dynamic_router(server_manager):
             if process.poll() is not None:
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
+            # ── SSE transport: forward via HTTP ─────────────────────────────
+            if isinstance(process, SseSubprocessHandle):
+                with RequestTimer(collector, request.get("method", "unknown")):
+                    response = await _proxy_to_sse_server(process.sse_url, request)
+                    return JSONResponse(content=response)
+            # ── stdio transport continues below ─────────────────────────────
+
             try:
                 # Send request to MCP server
                 msg = json.dumps(request)
@@ -655,6 +702,35 @@ def create_dynamic_router(server_manager):
             try:
                 # Track streaming session when generator starts executing
                 collector.increment_active_streams()
+
+                # ── SSE transport: forward to external HTTP server ───────────
+                if isinstance(process, SseSubprocessHandle):
+                    import httpx
+                    messages_url = f"{process.sse_url.rstrip('/')}/messages/"
+                    sse_stream_url = f"{process.sse_url.rstrip('/')}/sse"
+                    try:
+                        async with httpx.AsyncClient(
+                            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+                        ) as client:
+                            await client.post(messages_url, json=request)
+                            async with client.stream("GET", sse_stream_url) as resp:
+                                async for line in resp.aiter_lines():
+                                    if line.startswith("data: "):
+                                        data = line[6:]
+                                        yield f"data: {data}\n\n"
+                                        try:
+                                            parsed = json.loads(data)
+                                            if "result" in parsed:
+                                                break
+                                        except json.JSONDecodeError:
+                                            pass
+                    except Exception as e:
+                        completion_status = "error"
+                        collector.record_error("sse_proxy_error")
+                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    return  # done for SSE — don't fall through to stdin path
+                # ── stdio transport continues below ──────────────────────────
+
                 msg = json.dumps(request)
                 try:
                     process.stdin.write(msg + "\n")
@@ -728,6 +804,16 @@ def create_dynamic_router(server_manager):
         if process.poll() is not None:
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
+        # ── SSE transport ────────────────────────────────────────────────────
+        if isinstance(process, SseSubprocessHandle):
+            response = await _proxy_to_sse_server(
+                process.sse_url,
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                timeout=30.0
+            )
+            return JSONResponse(content=response)
+        # ── stdio transport continues below ──────────────────────────────────
+
         try:
             request_payload = {
                 "id": 1,
@@ -776,6 +862,23 @@ def create_dynamic_router(server_manager):
 
         if process.poll() is not None:
             raise HTTPException(503, f"Server '{server_name}' is not running")
+
+        # ── SSE transport ────────────────────────────────────────────────────
+        if isinstance(process, SseSubprocessHandle):
+            if "name" not in request_body:
+                raise HTTPException(400, "Tool name is required")
+            response = await _proxy_to_sse_server(
+                process.sse_url,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": request_body
+                },
+                timeout=60.0
+            )
+            return JSONResponse(content=response)
+        # ── stdio transport continues below ──────────────────────────────────
 
         try:
             if "name" not in request_body:

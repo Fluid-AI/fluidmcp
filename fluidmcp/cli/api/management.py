@@ -8,7 +8,7 @@ Provides REST API for:
 - Listing all configured servers
 - Replicate model inference
 """
-from typing import Dict, Any, Optional, Literal, List
+from typing import Dict, Any, Optional, Literal, List, Tuple
 from fastapi import APIRouter, Request, HTTPException, Body, Query, Depends, Response
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -606,7 +606,7 @@ def validate_server_config(config: Dict[str, Any]) -> None:
         )
 
     # Whitelist of allowed commands (can be extended via environment variable)
-    allowed_commands_default = ["npx", "node", "python", "python3", "uvx", "docker"]
+    allowed_commands_default = ["npx", "node", "python", "python3", "uv", "uvx", "docker", "deno", "bun"]
     allowed_commands_env = os.environ.get("FMCP_ALLOWED_COMMANDS", "").split(",")
     allowed_commands = allowed_commands_default + [cmd.strip() for cmd in allowed_commands_env if cmd.strip()]
 
@@ -767,8 +767,7 @@ async def add_server(
             # Store in-memory as fallback
             logger.warning(f"Database save failed for '{name}', storing in-memory only")
     except DuplicateKeyError:
-        # Race condition: another request created the same server concurrently
-        raise HTTPException(409, f"Server with id '{id}' was created concurrently")
+        raise HTTPException(409, f"Server with id '{id}' already exists")
 
     # Always store in configs dict for immediate access
     manager.configs[id] = config
@@ -780,6 +779,282 @@ async def add_server(
         "name": name
     }
 
+
+# ==================== GitHub Clone Helper ====================
+
+async def _validate_server_with_manager(
+    manager: Any,
+    server_id: str,
+    config: Dict[str, Any],
+    timeout: int = 5,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a server configuration by test-starting it through the manager lifecycle.
+
+    This ensures we exercise the EXACT same runtime path as a real server start
+    (env merging, working_dir resolution, MCP handshake, etc.).
+
+    The server is added temporarily to the manager's in-memory registry, started,
+    waited on for ``timeout`` seconds, then stopped and removed.  It is NOT saved
+    to the database at any point during validation.
+
+    Args:
+        manager: ServerManager instance
+        server_id: Server identifier (used as a temporary key)
+        config: Flat server configuration dict
+        timeout: Seconds to wait before checking if the server is still alive
+
+    Returns:
+        Tuple of (success: bool, error_message: Optional[str])
+    """
+    try:
+        # 1. Register temporarily in manager (NOT in database)
+        manager.configs[server_id] = config
+
+        # 2. Start through manager (uses real lifecycle)
+        logger.info(f"[validate] Test-starting server '{server_id}'...")
+        success = await manager.start_server(server_id, config, user_id="validation")
+        if not success:
+            return False, "Server failed to start during validation"
+
+        # 3. Wait for startup
+        await asyncio.sleep(timeout)
+
+        # 4. Check if still running
+        status = await manager.get_server_status(server_id)
+        is_running = status.get("state") == "running"
+
+        # 5. Stop server
+        logger.info(f"[validate] Stopping test server '{server_id}'...")
+        await manager.stop_server(server_id, force=False)
+
+        # 6. Remove temporary entry
+        manager.configs.pop(server_id, None)
+
+        if not is_running:
+            return False, "Server crashed immediately after startup"
+
+        return True, None
+
+    except Exception as e:
+        logger.error(f"[validate] Validation failed for '{server_id}': {e}")
+        # Best-effort cleanup
+        try:
+            await manager.stop_server(server_id, force=True)
+        except Exception:
+            pass
+        manager.configs.pop(server_id, None)
+        return False, str(e)
+
+
+@router.post("/servers/from-github")
+async def add_server_from_github(
+    request: Request,
+    config: Dict[str, Any] = Body(
+        ...,
+        example={
+            "github_repo": "anthropics/mcp-server-example",
+            "branch": "main",
+            "server_id": "example-server",
+            "env": {},
+            "enabled": True,
+            "restart_policy": "on-failure",
+            "test_before_save": True,
+        },
+    ),
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user),
+):
+    """
+    Clone a GitHub repository and add the MCP server(s) it contains.
+
+    **Authentication**: Requires ``X-GitHub-Token`` header with a valid GitHub PAT
+    in addition to the usual ``Authorization: Bearer`` token.
+
+    **Workflow**:
+    1. Clone / update repository from GitHub
+    2. Extract metadata (``metadata.json`` or README fallback)
+    3. Validate each server's command against the allowlist
+    4. Optionally test-start each server through the manager lifecycle
+    5. Save to database
+
+    **Single-server repos**: the provided ``server_id`` is used directly.
+
+    **Multi-server repos**: IDs are generated as ``{server_id}-{slugified-name}``.
+    Use ``server_name`` to select a single server.
+
+    **Headers**:
+    - ``X-GitHub-Token``: GitHub personal access token (required)
+
+    **Request body fields**:
+    - ``github_repo``: ``owner/repo`` or full URL
+    - ``branch``: branch to clone (default: ``"main"``)
+    - ``server_id``: base server identifier (lowercase alphanumeric + hyphens)
+    - ``server_name``: select a specific server from a multi-server repo
+    - ``env``: additional environment variables
+    - ``enabled``: whether to enable the server(s) (default: ``true``)
+    - ``restart_policy``: ``never`` | ``on-failure`` | ``always``
+    - ``max_restarts``: max restart attempts (0–10)
+    - ``test_before_save``: validate via test-start before persisting (default: ``true``)
+    """
+    from ..services.github_utils import GitHubService
+    from ..services.validators import validate_command_allowlist  # noqa: F401 – used inside GitHubService
+
+    manager = get_server_manager(request)
+
+    # 1. Require GitHub token in header (never in request body to avoid logging)
+    github_token = request.headers.get("X-GitHub-Token")
+    if not github_token:
+        raise HTTPException(
+            400,
+            "X-GitHub-Token header is required. "
+            "Provide your GitHub personal access token in the request header.",
+        )
+
+    # 2. Sanitise input to prevent MongoDB injection
+    config = sanitize_input(config)
+
+    # 3. Validate required fields
+    github_repo = config.get("github_repo")
+    base_server_id = config.get("server_id")
+
+    if not github_repo:
+        raise HTTPException(400, "github_repo is required")
+    if not base_server_id:
+        raise HTTPException(400, "server_id is required")
+
+    branch = config.get("branch", "main")
+    server_name = config.get("server_name")
+    subdirectory = config.get("subdirectory")
+    env = config.get("env", {})
+    restart_policy = config.get("restart_policy", "never")
+    max_restarts = int(config.get("max_restarts", 3))
+    enabled = bool(config.get("enabled", True))
+    test_before_save = bool(config.get("test_before_save", True))
+
+    # Validate env variables if provided
+    if env:
+        validate_env_variables(env)
+
+    # Pre-flight: fail fast if the base server_id already exists in the DB.
+    # This avoids a 60-second clone only to get a 409 at the end.
+    # We check DB only (not in-memory) because a previous failed attempt may
+    # have left a stale in-memory entry for the same ID without a DB record.
+    if await manager.db.get_server_config(base_server_id):
+        raise HTTPException(
+            409,
+            f"Server with id '{base_server_id}' already exists. "
+            f"Choose a different Server ID and try again.",
+        )
+
+    # Track IDs registered in-memory this request so we can roll back on error
+    registered_ids = []
+
+    try:
+        # 4. Clone / update and build server config(s)
+        logger.info(f"Building server config(s) from {github_repo}@{branch}"
+                    + (f" subdirectory={subdirectory}" if subdirectory else ""))
+        server_configs, clone_path = GitHubService.build_server_configs(
+            repo_path=github_repo,
+            token=github_token,
+            base_server_id=base_server_id,
+            branch=branch,
+            server_name=server_name,
+            subdirectory=subdirectory,
+            env=env,
+            restart_policy=restart_policy,
+            max_restarts=max_restarts,
+            enabled=enabled,
+            created_by=user_id,
+        )
+        logger.info(f"Built {len(server_configs)} server config(s) from {github_repo}")
+
+        # 5. Validate, optionally test-start, and persist each server
+        results = []
+        for server_config in server_configs:
+            sid = server_config["id"]
+            display_name = server_config.get("name", sid)
+
+            # Duplicate check – DB is the source of truth.
+            # We intentionally skip the in-memory check here because a previous
+            # failed attempt for the same repo may have left a stale entry in
+            # manager.configs without a corresponding DB record, causing a false
+            # 409 on retry. Evict any such stale entry before proceeding.
+            if await manager.db.get_server_config(sid):
+                raise HTTPException(
+                    409,
+                    f"Server with id '{sid}' already exists. "
+                    f"Choose a different Server ID and try again.",
+                )
+            manager.configs.pop(sid, None)  # evict stale in-memory entry if present
+
+            # Validate command and args for security (env is skipped here because
+            # metadata.json from GitHub repos may use non-uppercase env key names,
+            # e.g. Google service account fields like "type", "project_id").
+            # The command allowlist is already enforced by GitHubService.
+            command_only = {k: v for k, v in server_config.items() if k != "env"}
+            validate_server_config(command_only)
+
+            # Optional test-start through manager lifecycle
+            if test_before_save:
+                logger.info(f"Test-starting '{sid}' for validation...")
+                ok, err = await _validate_server_with_manager(manager, sid, server_config, timeout=5)
+                if not ok:
+                    raise HTTPException(
+                        400,
+                        f"Server '{display_name}' failed validation: {truncate_error(err or 'unknown error')}",
+                    )
+                logger.info(f"Server '{sid}' validated successfully")
+
+            # Persist to database
+            try:
+                await manager.db.save_server_config(server_config)
+            except DuplicateKeyError:
+                raise HTTPException(
+                    409,
+                    f"Server with id '{sid}' already exists. "
+                    f"Choose a different Server ID and try again.",
+                )
+
+            # Register in manager's in-memory configs for immediate availability
+            manager.configs[sid] = server_config
+            registered_ids.append(sid)
+
+            results.append({
+                "id": sid,
+                "name": display_name,
+                "status": "validated" if test_before_save else "added",
+            })
+            logger.info(f"Added GitHub server: {display_name} (id: {sid})")
+
+        # 6. Return response
+        return {
+            "message": f"Successfully added {len(results)} server(s) from GitHub repository",
+            "servers": results,
+            "repository": github_repo,
+            "branch": branch,
+            "clone_path": str(clone_path),
+        }
+
+    except HTTPException:
+        # Roll back any in-memory registrations from this request so that
+        # a retry with the same ID doesn't false-positive on our own leftovers
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
+        raise
+    except ValueError as e:
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
+        raise HTTPException(400, truncate_error(str(e)))
+    except RuntimeError as e:
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
+        raise HTTPException(502, truncate_error(str(e)))
+    except Exception as e:
+        for sid in registered_ids:
+            manager.configs.pop(sid, None)
+        logger.exception(f"Unexpected error adding server from GitHub: {e}")
+        raise HTTPException(500, f"Internal error: {truncate_error(str(e))}")
 
 @router.get("/servers")
 async def list_servers(request: Request, enabled_only: bool = True, include_deleted: bool = False):
@@ -1137,7 +1412,114 @@ async def restart_server(
         "pid": pid
     }
 
+# ==================== SSE Proxy ====================
 
+@router.get("/servers/{id}/sse")
+async def proxy_sse(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+):
+    """
+    Proxy an SSE (Server-Sent Events) connection to an internally running MCP SSE server.
+
+    Railway only exposes one public port, so SSE servers bound to 127.0.0.1:<port>
+    inside the container are not directly reachable from outside. This endpoint
+    forwards the SSE stream through the FastAPI backend so clients can connect via:
+
+        GET https://<your-app>/api/servers/{id}/sse
+
+    Only works for servers configured with transport="sse".
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    if config.get("transport") != "sse":
+        raise HTTPException(400, f"Server '{id}' is not an SSE server (transport={config.get('transport', 'stdio')})")
+
+    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    sse_url = f"{internal_url}/sse"
+
+    async def event_stream():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", sse_url, headers={"Accept": "text/event-stream"}) as response:
+                    if response.status_code != 200:
+                        yield f"event: error\ndata: SSE server returned {response.status_code}\n\n".encode()
+                        return
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+        except httpx.ConnectError:
+            yield b"event: error\ndata: SSE server is not running or not reachable\n\n"
+        except Exception as e:
+            logger.error(f"SSE proxy error for '{id}': {e}")
+            yield f"event: error\ndata: {str(e)}\n\n".encode()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disables nginx/Railway proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/servers/{id}/messages")
+async def proxy_sse_messages(
+    request: Request,
+    id: str,
+    token: str = Depends(get_token),
+):
+    """
+    Proxy POST /messages to an internally running MCP SSE server.
+
+    MCP SSE transport requires two channels:
+    - GET  /sse       → SSE stream (server → client)
+    - POST /messages  → send commands (client → server)
+
+    Both are proxied here so clients never need direct access to the internal port.
+
+        POST https://<your-app>/api/servers/{id}/messages
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    if config.get("transport") != "sse":
+        raise HTTPException(400, f"Server '{id}' is not an SSE server")
+
+    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    body = await request.body()
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{internal_url}/messages",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json",
+        )
+    except httpx.ConnectError:
+        raise HTTPException(502, f"SSE server '{id}' is not running or not reachable")
+    except Exception as e:
+        logger.error(f"SSE messages proxy error for '{id}': {e}")
+        raise HTTPException(502, truncate_error(str(e)))
+    
 @router.post("/servers/start-all")
 async def start_all_servers(request: Request, token: str = Depends(get_token)):
     """
