@@ -184,7 +184,14 @@ class ApiClient {
       method: 'DELETE',
     });
   }
-
+  
+  // Inspector Tools APIs
+  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+    return this.request(`/api/inspector/connect`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
   /**
    * Clone a GitHub repository and register its MCP server(s).
    *
