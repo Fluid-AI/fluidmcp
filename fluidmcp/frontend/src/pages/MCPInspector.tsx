@@ -11,6 +11,7 @@ export default function MCPInspector() {
   const [transport, setTransport] = useState("http");
   const [servers, setServers] = useState<any[]>([]);
   const [connecting, setConnecting] = useState(false);
+  const [selectedServer, setSelectedServer] = useState<any | null>(null);
 
   const handleConnect = async () => {
   if (!url) return;
@@ -24,7 +25,14 @@ export default function MCPInspector() {
     });
 
 
-    setServers((prev) => [...prev, res]);
+    setServers((prev) => [
+      ...prev, 
+      {
+        ...res,
+        url,
+        transport,
+      }
+    ]);
 
     setShowAddModal(false);
     setUrl("");
@@ -36,7 +44,21 @@ export default function MCPInspector() {
   } finally {
     setConnecting(false);
   }
-};
+  };
+
+  const handleDisconnect = async (session_id: string) => {
+    try {
+      await apiClient.disconnectInspectorServer(session_id);
+      setServers((prev) => prev.filter((s) => s.session_id !== session_id));
+
+      if (selectedServer?.session_id === session_id) {
+        setSelectedServer(null);
+      }
+    }catch (err) {
+      console.error("Failed to disconnect", err);
+      alert("Failed to disconnect from MCP server");
+    }
+  };
   return (
     <div
       className="dashboard"
@@ -108,7 +130,7 @@ export default function MCPInspector() {
                   + Add
                 </button>
               </div>
-
+              {/* Connected Servers List or Empty State */}
               <div
                 style={{
                   marginTop: "1rem",
@@ -123,8 +145,107 @@ export default function MCPInspector() {
                   <div> No servers connected </div>
                 ) : (
                   servers.map((server, i) => (
-                    <div key={i} style={{ marginTop: "1rem" }}>
-                      {server.server_info?.name || "Connected Server"}
+                    <div
+                      key={i}
+                      onClick={() => setSelectedServer(server)}
+                      style={{
+                        marginTop: "1rem",
+                        padding: "1rem",
+                        border: "1px solid rgba(63,63,70,0.6)",
+                        borderRadius: "0.6rem",
+                        cursor: "pointer",
+                        background:
+                          selectedServer?.session_id === server.session_id
+                            ? "rgba(255,255,255,0.08)"
+                            : "transparent",
+                      }}
+                    >
+                      {/* HEADER */}
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div style={{ fontWeight: "600" }}>
+                          {server?.server_info?.name || "Connected Server"}
+                        </div>
+
+                        <span
+                          style={{
+                            fontSize: "0.7rem",
+                            padding: "0.2rem 0.5rem",
+                            borderRadius: "0.3rem",
+                            background: "rgba(16,185,129,0.2)",
+                            color: "#10b981",
+                          }}
+                        >
+                          connected
+                        </span>
+                      </div>
+
+                      {/* URL */}
+                      <div
+                        style={{
+                          marginTop: "0.3rem",
+                          fontSize: "0.8rem",
+                          color: "rgba(255,255,255,0.6)",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {server.url}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "rgba(255,255,255,0.5)",
+                        }}
+                      >
+                        transport: {server.transport}
+                      </div>
+                      {/* DISCONNECT */}
+                      <div
+                        style={{
+                          marginTop: "0.6rem",
+                          display: "flex",
+                          justifyContent: "flex-end",
+                        }}
+                      >
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDisconnect(server.session_id);
+                          }}
+                          style={{
+                            fontSize: "0.75rem",
+                            padding: "0.25rem 0.6rem",
+                            borderRadius: "0.35rem",
+                            border: "1px solid rgba(63,63,70,0.6)",
+                            background: "transparent",
+                            color: "#fff",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+
+                      {/* TOOLS */}
+                      {selectedServer?.session_id === server.session_id &&
+                        server?.tools?.map((tool: any) => (
+                          <div
+                            key={tool.name}
+                            style={{
+                              marginLeft: "0.8rem",
+                              marginTop: "0.4rem",
+                              fontSize: "0.85rem",
+                              color: "rgba(255,255,255,0.7)",
+                            }}
+                          >
+                            • {tool.name}
+                          </div>
+                        ))}
                     </div>
                   ))
                 )}
