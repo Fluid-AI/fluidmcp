@@ -1,0 +1,33 @@
+{
+  "name": "html-ui-mcp-server",
+  "version": "1.0.0",
+  "description": "AI-powered MCP server for generating and modifying HTML UI using natural language",
+  "main": "server.py",
+  "scripts": {
+    "start": "python3 server.py",
+    "test": "python3 test_server.py"
+  },
+  "keywords": [
+    "mcp",
+    "html",
+    "ui",
+    "generator",
+    "ai",
+    "css",
+    "tailwind",
+    "responsive",
+    "web-design",
+    "model-context-protocol"
+  ],
+  "author": "FluidMCP",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fluid-AI/fluidmcp.git",
+    "directory": "examples/html-ui-mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/Fluid-AI/fluidmcp/issues"
+  },
+  "homepage": "https://github.com/Fluid-AI/fluidmcp/tree/main/examples/html-ui-mcp"
+}

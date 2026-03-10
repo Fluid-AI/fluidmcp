@@ -1,0 +1,25 @@
+{
+  "name": "html-ui-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server that generates and modifies HTML UI using natural language instructions with AI",
+  "author": "FluidMCP",
+  "license": "MIT",
+  "mcp": {
+    "command": "python3",
+    "args": ["server.py"],
+    "env": {
+      "GOOGLE_API_KEY": ""
+    }
+  },
+  "tools": [
+    {
+      "name": "modify_ui_or_html",
+      "description": "Generate or modify HTML UI using natural language instructions. Creates modern, responsive UIs with Tailwind CSS."
+    }
+  ],
+  "categories": ["web-development", "ui-generation", "html", "ai"],
+  "tags": ["html", "ui", "css", "tailwind", "responsive", "web-design", "ai-powered"],
+  "requirements": {
+    "python": ">=3.8"
+  }
+}
