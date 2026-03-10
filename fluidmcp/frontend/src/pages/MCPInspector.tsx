@@ -1,8 +1,10 @@
 // import React from "react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { apiClient } from "@/services/api";
+import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
+import { ToolResult } from '../components/result/ToolResult';
 
 export default function MCPInspector() {
 
@@ -12,6 +14,12 @@ export default function MCPInspector() {
   const [servers, setServers] = useState<any[]>([]);
   const [connecting, setConnecting] = useState(false);
   const [selectedServer, setSelectedServer] = useState<any | null>(null);
+
+  const [selectedTool, setSelectedTool] = useState<any | null>(null)
+  const [toolResult, setToolResult] = useState<any | null>(null)
+  const [toolError, setToolError] = useState<string | null>(null)
+  const [executing, setExecuting] = useState(false)
+  const [executionTime, setExecutionTime] = useState<number | null>(null)
 
   const handleConnect = async () => {
   if (!url) return;
@@ -25,14 +33,10 @@ export default function MCPInspector() {
     });
 
 
-    setServers((prev) => [
-      ...prev, 
-      {
-        ...res,
-        url,
-        transport,
-      }
-    ]);
+    setServers((prev) => {
+      if (prev.some(s => s.session_id === res.session_id)) return prev; 
+      return [...prev, { ...res, url, transport, }]
+    });
 
     setShowAddModal(false);
     setUrl("");
@@ -59,6 +63,41 @@ export default function MCPInspector() {
       alert("Failed to disconnect from MCP server");
     }
   };
+
+  const runTool = async (params: any) => {
+    if (!selectedServer || !selectedTool || executing) return
+
+    try {
+      setExecuting(true)
+      setToolError(null)
+
+      const start = performance.now()
+
+      const res = await apiClient.runInspectorTool(
+        selectedServer.session_id,
+        selectedTool.name,
+        params
+      )
+
+      const end = performance.now()
+
+      setToolResult(res)
+      setExecutionTime((end - start) / 1000)
+
+    } catch (err: any) {
+      console.error(err)
+      setToolError(err?.message || "Tool execution failed")
+    } finally {
+      setExecuting(false)
+    }
+  }
+
+  useEffect(() => {
+    setToolResult(null)
+    setToolError(null)
+    setExecutionTime(null)
+  }, [selectedTool])
+
   return (
     <div
       className="dashboard"
@@ -147,7 +186,11 @@ export default function MCPInspector() {
                   servers.map((server, i) => (
                     <div
                       key={i}
-                      onClick={() => setSelectedServer(server)}
+                      onClick={() => {
+                        setSelectedServer(server)
+                        setSelectedTool(null)
+                        setToolResult(null)
+                      }}
                       style={{
                         marginTop: "1rem",
                         padding: "1rem",
@@ -236,11 +279,21 @@ export default function MCPInspector() {
                         server?.tools?.map((tool: any) => (
                           <div
                             key={tool.name}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setSelectedTool(tool)
+                              setToolResult(null)
+                              setToolError(null)
+                            }}
                             style={{
                               marginLeft: "0.8rem",
                               marginTop: "0.4rem",
                               fontSize: "0.85rem",
-                              color: "rgba(255,255,255,0.7)",
+                              cursor: "pointer",
+                              color:
+                                selectedTool?.name === tool.name
+                                  ? "#fff"
+                                  : "rgba(255,255,255,0.7)"
                             }}
                           >
                             • {tool.name}
@@ -266,22 +319,48 @@ export default function MCPInspector() {
                 Tool Execution
               </h2>
 
-              <div
-                style={{
-                  marginTop: "1rem",
-                  padding: "1rem",
-                  border: "1px dashed rgba(63,63,70,0.6)",
-                  borderRadius: "0.5rem",
-                  textAlign: "center",
-                  color: "rgba(255,255,255,0.6)",
-                }}
-              >
-                Connect a server to start inspecting tools
-              </div>
+              {selectedServer && selectedTool ? (
+                <div style={{ marginTop: "1rem" }}>
+                  <h3 style={{ marginBottom: "1rem" }}>
+                    {selectedTool.name}
+                  </h3>
+
+                  <JsonSchemaForm
+                    schema={selectedTool.inputSchema}
+                    onSubmit={runTool}
+                    submitLabel="Run Tool"
+                    loading={executing}
+                  />
+
+                  {(toolResult || toolError) && (
+                    <div style={{ marginTop: "2rem" }}>
+                      <ToolResult
+                        result={toolResult}
+                        error={toolError || undefined}
+                        executionTime={executionTime}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    marginTop: "1rem",
+                    padding: "1rem",
+                    border: "1px dashed rgba(63,63,70,0.6)",
+                    borderRadius: "0.5rem",
+                    textAlign: "center",
+                    color: "rgba(255,255,255,0.6)",
+                  }}
+                >
+                  Select a tool to execute
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
+
       {showAddModal && (
         <div
           style={{

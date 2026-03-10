@@ -198,6 +198,18 @@ class ApiClient {
       method: "DELETE",
     });
   }
+
+  async runInspectorTool(
+    sessionId: string,
+    toolName: string,
+    params: Record<string, any>
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/tools/${toolName}/run`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+  
   /**
    * Clone a GitHub repository and register its MCP server(s).
    *
