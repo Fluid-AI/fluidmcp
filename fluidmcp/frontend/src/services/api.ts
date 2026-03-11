@@ -185,6 +185,40 @@ class ApiClient {
     });
   }
 
+  // Inspector Tools APIs
+  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+    return this.request(`/api/inspector/connect`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async disconnectInspectorServer(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async runInspectorTool(
+    sessionId: string,
+    toolName: string,
+    params: Record<string, any>
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/tools/${toolName}/run`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+  
+  async runInspectorChat(
+    sessionId: string,
+    message: string
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+  }
   /**
    * Clone a GitHub repository and register its MCP server(s).
    *
