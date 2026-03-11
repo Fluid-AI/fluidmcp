@@ -21,7 +21,7 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
-
+from .api.inspector import router as inspector_router,cleanup_sessions
 
 def save_token_to_file(token: str) -> Path:
     """
@@ -184,6 +184,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
     logger.info("Management API mounted at /api")
 
+    # Include Inspector API
+    app.include_router(inspector_router, prefix="/api", tags=["inspector"])
+    logger.info("Inspector API mounted at /api")
+
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
     app.include_router(mcp_router, tags=["mcp"])
@@ -302,6 +306,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             }
         }
 
+    # Start Inspector session cleanup task
+    @app.on_event("startup")
+    async def start_inspector_cleanup():
+        asyncio.create_task(cleanup_sessions())
+        logger.info("Inspector session cleanup task started")
+
     # Register cleanup handler for HTTP client and Redis connections
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -316,7 +326,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             await close_redis_client()
         except Exception as e:
             logger.warning(f"Error during Redis cleanup: {e}")
-
+  
     logger.info("FastAPI application created (no MCP servers started)")
     return app
 
