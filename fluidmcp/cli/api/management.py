@@ -860,6 +860,7 @@ async def add_server_from_github(
             "enabled": True,
             "restart_policy": "on-failure",
             "test_before_save": True,
+            "upsert": False,
         },
     ),
     token: str = Depends(get_token),
@@ -883,6 +884,9 @@ async def add_server_from_github(
     **Multi-server repos**: IDs are generated as ``{server_id}-{slugified-name}``.
     Use ``server_name`` to select a single server.
 
+    **Updating existing servers**: Set ``upsert=true`` to update servers with the same ID
+    instead of receiving a 409 conflict. Useful for re-importing or pulling latest changes.
+
     **Headers**:
     - ``X-GitHub-Token``: GitHub personal access token (required)
 
@@ -896,6 +900,7 @@ async def add_server_from_github(
     - ``restart_policy``: ``never`` | ``on-failure`` | ``always``
     - ``max_restarts``: max restart attempts (0–10)
     - ``test_before_save``: validate via test-start before persisting (default: ``true``)
+    - ``upsert``: update existing servers instead of rejecting with 409 (default: ``false``)
     """
     from ..services.github_utils import GitHubService
     from ..services.validators import validate_command_allowlist  # noqa: F401 – used inside GitHubService
@@ -931,6 +936,7 @@ async def add_server_from_github(
     max_restarts = int(config.get("max_restarts", 3))
     enabled = bool(config.get("enabled", True))
     test_before_save = bool(config.get("test_before_save", True))
+    upsert = bool(config.get("upsert", False))
 
     # Validate env variables if provided
     if env:
@@ -940,11 +946,12 @@ async def add_server_from_github(
     # This avoids a 60-second clone only to get a 409 at the end.
     # We check DB only (not in-memory) because a previous failed attempt may
     # have left a stale in-memory entry for the same ID without a DB record.
-    if await manager.db.get_server_config(base_server_id):
+    # Skip this check if upsert=True (user wants to update existing servers).
+    if not upsert and await manager.db.get_server_config(base_server_id):
         raise HTTPException(
             409,
             f"Server with id '{base_server_id}' already exists. "
-            f"Choose a different Server ID and try again.",
+            f"Choose a different Server ID and try again, or set upsert=True to update.",
         )
 
     # Track IDs registered in-memory this request so we can roll back on error
@@ -980,11 +987,12 @@ async def add_server_from_github(
             # failed attempt for the same repo may have left a stale entry in
             # manager.configs without a corresponding DB record, causing a false
             # 409 on retry. Evict any such stale entry before proceeding.
-            if await manager.db.get_server_config(sid):
+            existing_config = await manager.db.get_server_config(sid)
+            if existing_config and not upsert:
                 raise HTTPException(
                     409,
                     f"Server with id '{sid}' already exists. "
-                    f"Choose a different Server ID and try again.",
+                    f"Choose a different Server ID and try again, or set upsert=True to update.",
                 )
             manager.configs.pop(sid, None)  # evict stale in-memory entry if present
 

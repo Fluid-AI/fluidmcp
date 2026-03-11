@@ -151,6 +151,7 @@ export interface CloneFromGithubRequest {
   restart_policy?: 'never' | 'on-failure' | 'always';
   max_restarts?: number;
   test_before_save?: boolean;
+  upsert?: boolean;          // update existing servers instead of rejecting with 409
 }
 
 export interface CloneFromGithubServerResult {

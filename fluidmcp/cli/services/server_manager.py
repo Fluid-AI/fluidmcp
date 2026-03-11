@@ -687,7 +687,60 @@ class ServerManager:
             env_vars = config.get("env", {})
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
+            working_dir_path = Path(working_dir)
 
+            # 🔹 Auto-reclone if directory missing (Railway ephemeral container fix)
+            if not working_dir_path.exists():
+                logger.warning(f"Working directory missing for server '{id}': {working_dir}")
+
+                if config.get("source") == "github":
+                    from .github_utils import clone_github_repo
+                    
+                    repo = config.get("github_repo")
+                    branch = config.get("github_branch", "main")
+
+                    logger.info(f"Auto-recloning repository {repo}@{branch} to {working_dir}")
+
+                    try:
+                        # Get GitHub token from environment
+                        github_token = os.getenv("FMCP_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+                        if not github_token:
+                            logger.error(
+                                "GitHub token not found in environment. "
+                                "Available env vars: FMCP_GITHUB_TOKEN={}, GITHUB_TOKEN={}".format(
+                                    "SET" if os.getenv("FMCP_GITHUB_TOKEN") else "NOT SET",
+                                    "SET" if os.getenv("GITHUB_TOKEN") else "NOT SET"
+                                )
+                            )
+                            raise RuntimeError(
+                                "GitHub token required for auto-reclone. "
+                                "Set FMCP_GITHUB_TOKEN or GITHUB_TOKEN environment variable."
+                            )
+                        
+                        # Determine install_dir from the working_dir path structure
+                        # e.g., /app/.fmcp-packages/Fluid-AI/fluid-ai-mcp-servers/main
+                        # install_dir = /app/.fmcp-packages
+                        parent_path = working_dir_path.parent.parent.parent
+                        
+                        # Re-clone to the original path using the proper function
+                        clone_github_repo(
+                            repo_path=repo,
+                            branch=branch,
+                            github_token=github_token,
+                            install_dir=parent_path
+                        )
+
+                        # Persist config to database after successful reclone
+                        await self.db.save_server_config(config)
+                        logger.info(f"Repository auto-recloned successfully to {working_dir}")
+
+                    except Exception as e:
+                        logger.error(f"Failed to auto-reclone repository: {e}")
+                        return None
+                else:
+                    logger.error(f"Working directory missing and source is not GitHub")
+                    return None
+                
             # Load instance-specific env vars (user's API keys, etc.)
             # These override config env vars
             instance_env = await self.db.get_instance_env(id)
@@ -873,7 +926,9 @@ class ServerManager:
 
         url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
         name = config.get("name", id)
-        health_url = f"{url}/sse"
+        # Use custom health endpoint if specified, otherwise default to /sse
+        health_endpoint = config.get("health_endpoint", "/sse")
+        health_url = f"{url}{health_endpoint}"
 
         logger.info(
             f"[{id}] SSE server '{name}' spawned (PID {process.pid}), "
