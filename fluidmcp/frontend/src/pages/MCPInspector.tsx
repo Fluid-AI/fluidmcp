@@ -20,6 +20,13 @@ export default function MCPInspector() {
   const [toolError, setToolError] = useState<string | null>(null)
   const [executing, setExecuting] = useState(false)
   const [executionTime, setExecutionTime] = useState<number | null>(null)
+  const [executionHistory, setExecutionHistory] = useState<any[]>([])
+
+  const [mode, setMode] = useState<"manual" | "chat">("manual")
+
+  const [chatInput, setChatInput] = useState("")
+  const [chatHistory, setChatHistory] = useState<any[]>([])
+  const [chatLoading, setChatLoading] = useState(false)
 
   const handleConnect = async () => {
   if (!url) return;
@@ -83,12 +90,72 @@ export default function MCPInspector() {
 
       setToolResult(res)
       setExecutionTime((end - start) / 1000)
-
+      setExecutionHistory(prev => [
+        {
+          id: Date.now(),
+          tool: selectedTool,
+          params,
+          result: res,
+          time: new Date().toLocaleTimeString()
+        },
+        ...prev
+      ])
     } catch (err: any) {
       console.error(err)
       setToolError(err?.message || "Tool execution failed")
     } finally {
       setExecuting(false)
+    }
+  }
+
+  const runChatTool = async () => {
+    if (!chatInput || !selectedServer) return
+
+    try {
+      setChatLoading(true)
+
+      const message = chatInput
+
+      setChatHistory(prev => [
+        ...prev,
+        { role: "user", content: message }
+      ])
+
+      // simple heuristic: use first tool
+      // const messageLower = message.toLowerCase()
+
+      // let tool =
+      //   selectedServer.tools.find((t:any) =>
+      //     messageLower.includes(t.name.replace("_", " "))
+      //   ) ||
+      //   selectedServer.tools.find((t:any) =>
+      //     messageLower.includes("details")
+      //   ) ||
+      //   selectedServer.tools[0]
+      const tool = selectedTool || selectedServer.tools?.[0]
+
+      if (!tool) throw new Error("No tools available")
+
+      const res = await apiClient.runInspectorTool(
+        selectedServer.session_id,
+        tool.name,
+        { location: message} 
+      )
+
+      setChatHistory(prev => [
+        ...prev,
+        { role: "assistant", content: JSON.stringify(res, null, 2) }
+      ])
+
+      setChatInput("")
+
+    } catch (err: any) {
+      setChatHistory(prev => [
+        ...prev,
+        { role: "assistant", content: "Error running tool" }
+      ])
+    } finally {
+      setChatLoading(false)
     }
   }
 
@@ -303,6 +370,47 @@ export default function MCPInspector() {
                   ))
                 )}
               </div>
+
+              {/* Execution History */}
+              <div style={{ marginTop: "1.5rem" }}>
+                <h3 style={{ marginBottom: "0.5rem" }}>Execution History</h3>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.5rem",
+                    maxHeight: "200px",
+                    overflowY: "auto"
+                  }}
+                >
+                  {executionHistory.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => {
+                        setToolResult(item.result)
+                        setSelectedTool( item.tool )
+                        setToolError(null)
+                      }}
+                      style={{
+                        padding: "0.5rem",
+                        borderRadius: "0.35rem",
+                        border: "1px solid rgba(63,63,70,0.6)",
+                        cursor: "pointer",
+                        background: "rgba(255,255,255,0.05)"
+                      }}
+                    >
+                      <div style={{ fontWeight: 600 }}>{item.tool.name}</div>
+                      <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+                        {item.time}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => setExecutionHistory([])}>
+                Clear
+              </button>
             </div>
 
             {/* RIGHT PANEL */}
@@ -318,8 +426,36 @@ export default function MCPInspector() {
               <h2 style={{ fontSize: "1.1rem", fontWeight: "600" }}>
                 Tool Execution
               </h2>
+              <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
+                <button
+                  onClick={() => setMode("manual")}
+                  style={{
+                    padding: "0.35rem 0.75rem",
+                    borderRadius: "0.35rem",
+                    border: "1px solid rgba(63,63,70,0.6)",
+                    background: mode === "manual" ? "#fff" : "transparent",
+                    color: mode === "manual" ? "#000" : "#fff",
+                    cursor: "pointer"
+                  }}
+                >
+                  Manual
+                </button>
 
-              {selectedServer && selectedTool ? (
+                <button
+                  onClick={() => setMode("chat")}
+                  style={{
+                    padding: "0.35rem 0.75rem",
+                    borderRadius: "0.35rem",
+                    border: "1px solid rgba(63,63,70,0.6)",
+                    background: mode === "chat" ? "#fff" : "transparent",
+                    color: mode === "chat" ? "#000" : "#fff",
+                    cursor: "pointer"
+                  }}
+                >
+                  Chat
+                </button>
+              </div>
+              {mode === "manual" && selectedServer && selectedTool && (
                 <div style={{ marginTop: "1rem" }}>
                   <h3 style={{ marginBottom: "1rem" }}>
                     {selectedTool.name}
@@ -342,7 +478,80 @@ export default function MCPInspector() {
                     </div>
                   )}
                 </div>
-              ) : (
+              )}
+              {mode === "chat" && selectedServer && (
+                <div style={{ marginTop: "1rem", width: "100%" }}>
+                  
+                  {/* Chat History */}
+                  <div
+                    style={{
+                      maxHeight: "400px",
+                      overflow: "auto",
+                      marginBottom: "1rem",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.5rem"
+                    }}
+                  >
+                    {chatHistory.map((msg, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          padding: "0.5rem",
+                          borderRadius: "0.35rem",
+                          background:
+                            msg.role === "user"
+                              ? "rgba(255,255,255,0.1)"
+                              : "rgba(99,102,241,0.2)"
+                        }}
+                      >
+                        <strong>{msg.role}</strong>
+                        <pre style={{ margin: 0,whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                          {msg.content}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Chat Input Row */}
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <input
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Ask something..."
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") runChatTool()
+                      }}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        padding: "0.5rem",
+                        borderRadius: "0.35rem",
+                        border: "1px solid rgba(63,63,70,0.6)",
+                        background: "#09090b",
+                        color: "#fff"
+                      }}
+                    />
+
+                    <button
+                      onClick={runChatTool}
+                      disabled={chatLoading}
+                      style={{
+                        padding: "0.5rem 0.75rem",
+                        borderRadius: "0.35rem",
+                        background: "#fff",
+                        color: "#000",
+                        fontWeight: "600",
+                        flexShrink: 0
+                      }}
+                    >
+                      Send
+                    </button>
+                  </div>
+
+                </div>
+              )}
+              {mode === "manual" && (!selectedServer || !selectedTool) && (
                 <div
                   style={{
                     marginTop: "1rem",
@@ -355,7 +564,7 @@ export default function MCPInspector() {
                 >
                   Select a tool to execute
                 </div>
-              )}
+              )}     
             </div>
           </div>
         </div>
