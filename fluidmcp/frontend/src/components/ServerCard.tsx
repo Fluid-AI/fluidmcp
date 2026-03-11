@@ -62,6 +62,7 @@ function ServerCard({
             <h3 className="text-xl font-bold text-white truncate">
               {server.name}
             </h3>
+            <p className="text-xs text-zinc-400 font-mono mt-1">{server.id}</p>
           </div>
 
           {/* Status indicator */}

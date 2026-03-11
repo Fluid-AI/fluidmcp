@@ -559,8 +559,17 @@ def main():
     Main function to handle command line arguments and execute the appropriate action.
     '''
     # Load environment variables from .env file
-    env_path = Path(__file__).parent / '.env'
-    load_dotenv(dotenv_path=env_path)
+    # Try root .env first, then fall back to cli/.env for backward compatibility
+    # Use override=True to ensure .env values take precedence over shell environment
+    root_env_path = Path(__file__).parent.parent.parent / '.env'
+    cli_env_path = Path(__file__).parent / '.env'
+    
+    if root_env_path.exists():
+        load_dotenv(dotenv_path=root_env_path, override=True)
+        logger.debug(f"Loaded environment from {root_env_path}")
+    elif cli_env_path.exists():
+        load_dotenv(dotenv_path=cli_env_path, override=True)
+        logger.debug(f"Loaded environment from {cli_env_path}")
 
     # Parse command line arguments with the commands given in setup.py
     parser = argparse.ArgumentParser(description="FluidAI MCP CLI")
