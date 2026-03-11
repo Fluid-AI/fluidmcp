@@ -540,7 +540,11 @@ async def main(args):
     logger.info("Creating ServerManager...")
     server_manager = ServerManager(persistence)
 
-    # 3. Create FastAPI app (without MCP servers)
+    # 3. Start background tasks
+    logger.info("Starting background tasks...")
+    server_manager.start_idle_cleanup_task()
+
+    # 4. Create FastAPI app (without MCP servers)
     app = await create_app(
         db_manager=persistence,
         server_manager=server_manager,
@@ -608,6 +612,13 @@ async def main(args):
 
     # Graceful cleanup
     logger.info("Initiating graceful shutdown...")
+
+    try:
+        # Stop idle cleanup task
+        logger.info("Stopping idle cleanup task...")
+        await server_manager.stop_idle_cleanup_task()
+    except Exception as e:
+        logger.error(f"Error stopping idle cleanup task: {e}")
 
     try:
         # Stop all MCP servers with timeout
