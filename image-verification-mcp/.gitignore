@@ -1,0 +1,20 @@
+# uv
+.venv/
+uv.lock
+__pycache__/
+*.pyc
+.python-version
+
+# Temporary files
+*.tmp
+temp_*
+test_output/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
