@@ -183,7 +183,8 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
                 if skip_env:
                     # Do not prompt for API keys in master mode
                     return
-                env_vars = process_env_variables(metadata['mcpServers'][pkg["package_name"]]["env"])                
+                # Pass the server config (which contains "env"), not just the env dict
+                env_vars = process_env_variables(metadata['mcpServers'][pkg["package_name"]])                
                 if env_vars:
                     print(":key: Saving API key(s) to metadata.json")
                     
@@ -207,54 +208,28 @@ def write_keys_during_install(dest_dir: Union[str, Path], pkg: Dict[str, str], s
         except Exception as e:
             logger.info(f":x: Error processing metadata.json: {e}")
 
-def process_env_variables(env_config: Dict[str, Any]) -> Dict[str, str]:
+def process_env_variables(metadata: Dict[str, Any]) -> Dict[str, str]:
     """
-    Process environment variables configuration and prompt for API keys if needed.
-    
-    Args:
-        env_config (Dict): The environment configuration from metadata.json
-        
-    Returns:
-        Dict[str, str]: Processed environment variables with user-provided API keys
+    Extract and prompt for environment variables only if the 'env' field exists.
     """
+
     processed_env = {}
-    
-    # If env_config is None or not a dictionary, return empty dict
+
+    # Check if metadata contains "env"
+    env_config = metadata.get("env")
     if not env_config or not isinstance(env_config, dict):
-        return processed_env
-    
-    # Check each environment variable
-    for key, value in env_config.items():
-        # Handle structured environment variables (with required flag)
-        if isinstance(value, dict) and "required" in value:
-            if value.get("required") is True:
-                # Get description if available
-                description = value.get("description", f"API key for {key}")
-                # Prompt the user for the API key
-                print(f":key: This server requires authentication.")
-                api_key = input(f"Enter {description}: ")
-                
-                # Only add non-empty values to the environment
-                if api_key.strip():
-                    processed_env[key] = api_key
-                else:
-                    print(f":warning: No value provided for required API key: {key}")
-            # For non-required keys, use the default value if available
-            elif "value" in value and value["value"]:
-                processed_env[key] = value["value"]
-        # Handle simple key-value pairs (legacy format)
-        elif isinstance(value, str):
-            if value == "YOUR_API_KEY_HERE":
-                # Legacy format that requires user input
-                api_key = input(f"Enter API key for {key}: ")
-                if api_key.strip():
-                    processed_env[key] = api_key
-            else:
-                # Just use the provided value
-                processed_env[key] = value
-                
-    # Return the processed environment variables
+        return processed_env  # Nothing to process
+
+    # Prompt user for each environment variable
+    for key in env_config.keys():
+        value = input(f"Enter value for environment variable '{key}': ").strip()
+        if value:
+            processed_env[key] = value
+        else:
+            print(f"⚠️ No value entered for {key}, skipping.")
+
     return processed_env
+
 
 def update_env_from_config(metadata_path: Path, package: str, config: Dict[str, Any],pkg : Dict[str, str]):
     '''
