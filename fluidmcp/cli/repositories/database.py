@@ -180,9 +180,29 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  This is a SECURITY RISK - vulnerable to man-in-the-middle attacks!")
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
             
-            # Get connection pool settings from environment or use production defaults
-            max_pool_size = int(os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", "50"))
-            min_pool_size = int(os.getenv("FMCP_MONGODB_MIN_POOL_SIZE", "10"))
+            # Get connection pool settings from environment with safe parsing
+            default_max_pool_size = 50
+            default_min_pool_size = 10
+            
+            raw_max_pool_size = os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", str(default_max_pool_size))
+            try:
+                max_pool_size = int(raw_max_pool_size)
+            except ValueError:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={raw_max_pool_size!r}; "
+                    f"using default max pool size of {default_max_pool_size}."
+                )
+                max_pool_size = default_max_pool_size
+            
+            raw_min_pool_size = os.getenv("FMCP_MONGODB_MIN_POOL_SIZE", str(default_min_pool_size))
+            try:
+                min_pool_size = int(raw_min_pool_size)
+            except ValueError:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MIN_POOL_SIZE={raw_min_pool_size!r}; "
+                    f"using default min pool size of {default_min_pool_size}."
+                )
+                min_pool_size = default_min_pool_size
 
     
             # Validate and clamp connection pool sizes to avoid invalid Motor/PyMongo configuration

@@ -345,6 +345,12 @@ class MetricsRegistry:
         ))
 
         self.register(Gauge(
+            "fluidmcp_system_cpu_percent",
+            "System-wide CPU utilization percentage (average across all cores)",
+            labels=[]
+        ))
+
+        self.register(Gauge(
             "fluidmcp_process_cpu_percent",
             "FluidMCP process CPU utilization percentage relative to a single CPU core (may exceed 100 on multi-core systems)",
             labels=[]
@@ -439,7 +445,7 @@ class MetricsRegistry:
             return
 
         try:
-            # System-wide CPU percentage (non-blocking, 0.1s interval)
+             # System-wide CPU percentage (non-blocking, uses last computed interval; primed once)
             if not hasattr(self, "_system_cpu_primed"):
                 # First call primes psutil's internal counters; it usually
                 # returns 0.0 and may be misleading, so we don't record it.
