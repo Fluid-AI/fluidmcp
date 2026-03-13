@@ -4,15 +4,16 @@ Standalone FluidMCP backend server.
 This module provides a persistent API server that can run independently
 and manage MCP servers dynamically via HTTP API.
 """
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 import argparse
 import asyncio
 import os
 import signal
 import secrets
 from pathlib import Path
-from loguru import logger
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -46,6 +47,29 @@ def save_token_to_file(token: str) -> Path:
     return token_file
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan context for startup/shutdown.
+    
+    Ensures graceful cleanup of resources including database connections.
+    """
+    # Startup phase
+    logger.info("FastAPI application starting up...")
+    yield
+    
+    # Shutdown phase - FIX #2: Graceful MongoDB disconnect
+    logger.info("FastAPI application shutting down...")
+    
+    if hasattr(app.state, "persistence") and app.state.persistence:
+        try:
+            logger.info("Disconnecting from database...")
+            await app.state.persistence.disconnect()
+            logger.info("Database disconnected successfully")
+        except Exception as e:
+            logger.error(f"Error during database disconnect: {e}")
+
+
 async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
@@ -63,8 +87,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app = FastAPI(
         title="FluidMCP Gateway",
         description="Unified gateway for MCP servers with dynamic management",
-        version="2.0.0"
+        version="2.0.0",
+        lifespan=lifespan
     )
+
+    # Store persistence backend for cleanup - ADD THIS LINE
+    app.state.persistence = db_manager
 
     # CORS setup - secure by default
     if allowed_origins is None:

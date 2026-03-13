@@ -179,21 +179,39 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  WARNING: TLS certificate validation DISABLED for MongoDB!")
                 logger.warning("⚠️  This is a SECURITY RISK - vulnerable to man-in-the-middle attacks!")
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
+            
+            # Get connection pool settings from environment or use production defaults
+            max_pool_size = int(os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", "50"))
+            min_pool_size = int(os.getenv("FMCP_MONGODB_MIN_POOL_SIZE", "10"))
 
             self.client = AsyncIOMotorClient(
                 self.mongodb_uri,
+                # Timeout settings
                 serverSelectionTimeoutMS=server_timeout,
                 connectTimeoutMS=connect_timeout,
                 socketTimeoutMS=socket_timeout,
-                tlsAllowInvalidCertificates=allow_invalid_certs
+                # TLS settings
+                tlsAllowInvalidCertificates=allow_invalid_certs,
+                # Connection pool settings (production-grade)
+                maxPoolSize=max_pool_size,       # Maximum connections in pool
+                minPoolSize=min_pool_size,       # Minimum connections to maintain
+                retryWrites=True,                 # Automatic retry for write operations
+                w="majority"                      # Write concern: majority of replica set nodes
             )
 
-            logger.debug(f"MongoDB timeouts: server={server_timeout}ms, connect={connect_timeout}ms, socket={socket_timeout}ms")
-            self.db = self.client[self.database_name]
+            logger.debug(
+                f"MongoDB connection pool: min={min_pool_size}, max={max_pool_size}, "
+                f"timeouts: server={server_timeout}ms, connect={connect_timeout}ms, socket={socket_timeout}ms"
+            )
 
             # Test connection
             await self.client.admin.command('ping')
             logger.info(f"Connected to MongoDB at {mask_mongodb_uri(self.mongodb_uri)}")
+
+            # CRITICAL FIX #1: Assign database reference
+            self.db = self.client[self.database_name]
+            logger.debug(f"Database '{self.database_name}' assigned successfully")
+
 
             # Check if change streams are supported (requires replica set)
             try:
@@ -1097,9 +1115,23 @@ class DatabaseManager(PersistenceBackend):
 
     async def disconnect(self):
         """Disconnect from MongoDB and cleanup resources."""
+        # FIX #3: Cancel log retry task if running
+        if self._retry_task and not self._retry_task.done():
+            logger.debug("Cancelling log retry task...")
+            self._retry_task.cancel()
+            try:
+                await self._retry_task
+            except asyncio.CancelledError:
+                logger.debug("Log retry task cancelled successfully")
+            except Exception as e:
+                logger.warning(f"Error while cancelling retry task: {e}")
+
+        # Close MongoDB connection
         if self.client:
             self.client.close()
             logger.info("Closed MongoDB connection")
+            self.client = None
+            self.db = None
 
     async def close(self):
         """Close MongoDB connection (alias for disconnect)."""
