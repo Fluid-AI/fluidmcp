@@ -251,7 +251,7 @@ class DatabaseManager(PersistenceBackend):
             await self.client.admin.command('ping')
             logger.info(f"Connected to MongoDB at {mask_mongodb_uri(self.mongodb_uri)}")
 
-            # CRITICAL FIX #1: Assign database reference
+
             self.db = self.client[self.database_name]
             logger.debug(f"Database '{self.database_name}' assigned successfully")
 
@@ -351,7 +351,7 @@ class DatabaseManager(PersistenceBackend):
             await self.db.fluidmcp_llm_models.create_index("model_id", unique=True)
             logger.info("Created unique index on fluidmcp_llm_models.model_id")
 
-            # MEDIUM PRIORITY FIX #7: Create compound index on version history for efficient rollback queries
+            
             await self.db.fluidmcp_llm_model_versions.create_index([
                 ("model_id", 1),
                 ("archived_at", -1)  # Descending for most recent first
@@ -985,7 +985,6 @@ class DatabaseManager(PersistenceBackend):
                 # Sanitize input values
                 filter_dict = self._sanitize_mongodb_input(filter_dict)
 
-                # COPILOT FIX: Recursively reject MongoDB operator keys to prevent injection
                 def _reject_mongo_operators(value, path="filter_dict"):
                     """
                     Recursively walk a filter structure and reject any dict key
@@ -1046,7 +1045,6 @@ class DatabaseManager(PersistenceBackend):
             True if updated successfully, False if not found
         """
         try:
-            # COPILOT COMMENT 5 FIX: Validate updates dict to prevent MongoDB operator injection
             # Allowed fields for updating LLM models
             allowed_fields = ["type", "model", "api_key", "default_params", "timeout", "max_retries", "endpoints"]
             self._validate_field_names(updates, allowed_fields)
@@ -1080,7 +1078,7 @@ class DatabaseManager(PersistenceBackend):
                 "version": old_version
             }
 
-            # COPILOT FIX: Try to save version history, but don't fail update if history save fails
+    
             try:
                 await self.db.fluidmcp_llm_model_versions.insert_one(version_doc)
                 logger.debug(f"Saved version {old_version} of model '{model_id}' to history")
@@ -1108,7 +1106,6 @@ class DatabaseManager(PersistenceBackend):
             True if rolled back successfully, False if not found
         """
         try:
-            # HIGH PRIORITY FIX #4: Defense-in-depth validation at database layer
             # Even though API layer validates, database layer should validate too
             if not isinstance(model_id, str) or not model_id.strip():
                 raise ValueError("Invalid model_id: must be non-empty string")
@@ -1158,7 +1155,6 @@ class DatabaseManager(PersistenceBackend):
 
     async def disconnect(self):
         """Disconnect from MongoDB and cleanup resources."""
-        # FIX #3: Cancel log retry task if running
         if self._retry_task and not self._retry_task.done():
             logger.debug("Cancelling log retry task...")
             self._retry_task.cancel()
