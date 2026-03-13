@@ -4,15 +4,16 @@ Standalone FluidMCP backend server.
 This module provides a persistent API server that can run independently
 and manage MCP servers dynamically via HTTP API.
 """
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, HTTPException, status, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 import argparse
 import asyncio
 import os
 import signal
 import secrets
 from pathlib import Path
-from loguru import logger
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -21,6 +22,51 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .auth import verify_token
+
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.asyncio import AsyncioIntegration
+
+# Initialize Sentry for production error tracking (opt-in via SENTRY_DSN env var)
+def init_sentry() -> None:
+    """
+    Initialize Sentry for production error tracking.
+    This function is intended to be called explicitly during server startup
+    (e.g., from main()/run()/create_app()) rather than at module import time,
+    to avoid import-time side effects.
+    """
+    sentry_dsn = os.getenv("SENTRY_DSN")
+    if not sentry_dsn:
+        logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
+        return
+    
+    try:
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            environment=os.getenv("ENVIRONMENT", "production"),
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            integrations=[
+                FastApiIntegration(),
+                AsyncioIntegration(),
+            ],
+            # Filter out health check and metrics noise from error tracking
+            before_send=lambda event, hint: (
+                None
+                if any(
+                    path in event.get("request", {}).get("url", "")
+                    for path in ["/health", "/metrics"]
+                )
+                else event
+            ),
+        )
+        logger.info(
+            f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})"
+        )
+    except Exception as e:
+        logger.error(f"❌ Sentry initialization failed: {e}")
+
 
 
 def save_token_to_file(token: str) -> Path:
@@ -46,6 +92,29 @@ def save_token_to_file(token: str) -> Path:
     return token_file
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan context for startup/shutdown.
+    
+    Ensures graceful cleanup of resources including database connections.
+    """
+    # Startup phase
+    logger.info("FastAPI application starting up...")
+    yield
+    
+    # Shutdown phase - FIX #2: Graceful MongoDB disconnect
+    logger.info("FastAPI application shutting down...")
+    
+    if hasattr(app.state, "persistence") and app.state.persistence:
+        try:
+            logger.info("Disconnecting from database...")
+            await app.state.persistence.disconnect()
+            logger.info("Database disconnected successfully")
+        except Exception as e:
+            logger.error(f"Error during database disconnect: {e}")
+
+
 async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
@@ -63,8 +132,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app = FastAPI(
         title="FluidMCP Gateway",
         description="Unified gateway for MCP servers with dynamic management",
-        version="2.0.0"
+        version="2.0.0",
+        lifespan=lifespan
     )
+
+    # Store persistence backend for cleanup
+    app.state.persistence = db_manager
 
     # CORS setup - secure by default
     if allowed_origins is None:
@@ -258,14 +331,16 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "version": getattr(app, "version", "2.0.0")
         }
 
+
     @app.get("/metrics")
-    async def metrics():
+    async def metrics(request: Request, _=Depends(verify_token)):
         """
         Prometheus-compatible metrics endpoint.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
         - Server status and uptime (dynamically calculated)
+        - System resource metrics (CPU, memory, file descriptors)
         - GPU memory utilization
         - Tool execution metrics
         - Streaming request metrics
@@ -274,9 +349,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         from .services.metrics import MetricsCollector
 
         # Update uptime for all running servers before rendering metrics
-        # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
-        # Creating N instances per scrape is acceptable given low overhead.
-        # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
         for server_id in server_manager.processes.keys():
             uptime = server_manager.get_uptime(server_id)
             if uptime is not None:
@@ -284,8 +356,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 collector.set_uptime(uptime)
 
         registry = get_registry()
+        # System metrics are automatically updated inside render_all() via update_system_metrics()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
-        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4; charset=utf-8")
+        return PlainTextResponse(
+            content=registry.render_all(),
+            media_type="text/plain; version=0.0.4; charset=utf-8"
+        )
 
     @app.get("/")
     async def root():
@@ -310,12 +386,16 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         await cleanup_http_client()
         logger.info("HTTP client cleaned up")
 
-        # CRITICAL FIX #2: Close Redis connection pool gracefully
-        try:
-            from .utils.rate_limiter import close_redis_client
-            await close_redis_client()
-        except Exception as e:
-            logger.warning(f"Error during Redis cleanup: {e}")
+        # Clean up Redis connection (if rate limiting is enabled)
+        if os.getenv("FMCP_ENABLE_RATE_LIMITING", "false").lower() == "true":
+            try:
+                from .utils.rate_limiter import close_redis_client
+                await close_redis_client()
+                logger.info("✅ Redis client closed")
+            except ImportError:
+                logger.debug("Rate limiter not installed, skipping Redis cleanup")
+            except Exception as e:
+                logger.debug(f"Redis cleanup skipped: {e}")
 
     logger.info("FastAPI application created (no MCP servers started)")
     return app
@@ -522,6 +602,7 @@ async def main(args):
         logger.info("Using in-memory persistence backend")
         persistence: PersistenceBackend = InMemoryBackend()
         db_connected = await persistence.connect()
+    
     else:  # mongodb (default)
         logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
         persistence: PersistenceBackend = DatabaseManager(
@@ -535,6 +616,9 @@ async def main(args):
             max_retries=3,
             require_persistence=require_persistence
         )
+
+    # Initialize Sentry (after persistence is set up)
+    init_sentry()
 
     # 2. Create ServerManager
     logger.info("Creating ServerManager...")
@@ -554,7 +638,6 @@ async def main(args):
         port=args.port
     )
 
-    # 4. Load models from MongoDB (if persistence is enabled)
     if db_connected:
         loaded_models = await load_models_from_persistence(persistence)
         if loaded_models > 0:
