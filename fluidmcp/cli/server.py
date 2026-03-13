@@ -23,6 +23,38 @@ from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 
+# INSERT after line 18 (after "from .services.frontend_utils import setup_frontend_routes")
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.asyncio import AsyncioIntegration
+
+# Initialize Sentry for production error tracking (opt-in via SENTRY_DSN env var)
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    try:
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=os.getenv("ENVIRONMENT", "production"),
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            integrations=[
+                FastApiIntegration(),
+                AsyncioIntegration(),
+            ],
+            # Filter out health check and metrics noise from error tracking
+            before_send=lambda event, hint: (
+                None if any(
+                    path in event.get("request", {}).get("url", "")
+                    for path in ["/health", "/metrics"]
+                ) else event
+            ),
+        )
+        logger.info(f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})")
+    except Exception as e:
+        logger.error(f"❌ Sentry initialization failed: {e}")
+else:
+    logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
+
 
 def save_token_to_file(token: str) -> Path:
     """
@@ -286,6 +318,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "version": getattr(app, "version", "2.0.0")
         }
 
+    # REPLACE lines 337-356 (the entire @app.get("/metrics") function)
+
     @app.get("/metrics")
     async def metrics():
         """
@@ -294,6 +328,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
         - Server status and uptime (dynamically calculated)
+        - System resource metrics (CPU, memory, file descriptors)
         - GPU memory utilization
         - Tool execution metrics
         - Streaming request metrics
@@ -302,9 +337,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         from .services.metrics import MetricsCollector
 
         # Update uptime for all running servers before rendering metrics
-        # Note: MetricsCollector is lightweight (just holds server_id + registry ref).
-        # Creating N instances per scrape is acceptable given low overhead.
-        # Alternative optimization: Add batch method like registry.set_uptimes(Dict[str, float])
         for server_id in server_manager.processes.keys():
             uptime = server_manager.get_uptime(server_id)
             if uptime is not None:
@@ -312,8 +344,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 collector.set_uptime(uptime)
 
         registry = get_registry()
+        # System metrics are automatically updated inside render_all() via update_system_metrics()
         # Prometheus text exposition format v0.0.4 (not OpenMetrics)
-        return PlainTextResponse(content=registry.render_all(), media_type="text/plain; version=0.0.4; charset=utf-8")
+        return PlainTextResponse(
+            content=registry.render_all(),
+            media_type="text/plain; version=0.0.4; charset=utf-8"
+        )
 
     @app.get("/")
     async def root():
@@ -338,12 +374,18 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         await cleanup_http_client()
         logger.info("HTTP client cleaned up")
 
-        # CRITICAL FIX #2: Close Redis connection pool gracefully
-        try:
-            from .utils.rate_limiter import close_redis_client
-            await close_redis_client()
-        except Exception as e:
-            logger.warning(f"Error during Redis cleanup: {e}")
+        # REPLACE lines 362-368
+
+        # Clean up Redis connection (if rate limiting is enabled)
+        if os.getenv("FMCP_ENABLE_RATE_LIMITING", "false").lower() == "true":
+            try:
+                from .utils.rate_limiter import close_redis_client
+                await close_redis_client()
+                logger.info("✅ Redis client closed")
+            except ImportError:
+                logger.debug("Rate limiter not installed, skipping Redis cleanup")
+            except Exception as e:
+                logger.debug(f"Redis cleanup skipped: {e}")
 
     logger.info("FastAPI application created (no MCP servers started)")
     return app

@@ -9,7 +9,7 @@ click==8.1.8
 distro==1.9.0
 dnspython==2.4.2
 exceptiongroup==1.2.2
-fastapi==0.115.12
+fastapi==0.115.5
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -22,7 +22,10 @@ mcp==1.7.1
 motor==3.7.1
 openai==1.77.0
 pathlib==1.0.1
+prometheus-client==0.21.0
 psutil==7.0.0
+redis==5.0.0
+sentry-sdk[fastapi]==2.19.2 
 pydantic==2.11.4
 pydantic-settings==2.9.1
 pydantic_core==2.33.2
