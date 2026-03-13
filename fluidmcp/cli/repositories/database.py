@@ -184,6 +184,29 @@ class DatabaseManager(PersistenceBackend):
             max_pool_size = int(os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", "50"))
             min_pool_size = int(os.getenv("FMCP_MONGODB_MIN_POOL_SIZE", "10"))
 
+    
+            # Validate and clamp connection pool sizes to avoid invalid Motor/PyMongo configuration
+            if max_pool_size <= 0:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={max_pool_size!r}; "
+                    "using default max pool size of 50."
+                )
+                max_pool_size = 50
+            if min_pool_size <= 0:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MIN_POOL_SIZE={min_pool_size!r}; "
+                    "using minimum pool size of 1."
+                )
+                min_pool_size = 1
+            if min_pool_size > max_pool_size:
+                logger.warning(
+                    f"FMCP_MONGODB_MIN_POOL_SIZE ({min_pool_size}) is greater than "
+                    f"FMCP_MONGODB_MAX_POOL_SIZE ({max_pool_size}); "
+                    "clamping min pool size to max pool size."
+                )
+                min_pool_size = max_pool_size
+        
+
             self.client = AsyncIOMotorClient(
                 self.mongodb_uri,
                 # Timeout settings

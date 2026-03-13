@@ -345,10 +345,10 @@ class MetricsRegistry:
         ))
 
         self.register(Gauge(
-            "fluidmcp_system_cpu_percent",
-            "System-wide CPU utilization percentage (0-100)",
+            "fluidmcp_process_cpu_percent",
+            "FluidMCP process CPU utilization percentage relative to a single CPU core (may exceed 100 on multi-core systems)",
             labels=[]
-        ))
+       ))
 
         self.register(Gauge(
             "fluidmcp_system_memory_bytes",
@@ -356,11 +356,6 @@ class MetricsRegistry:
             labels=["type"]  # type: used, available, total
         ))
 
-        self.register(Gauge(
-            "fluidmcp_process_cpu_percent",
-            "FluidMCP process CPU utilization percentage (0-100)",
-            labels=[]
-        ))
 
         self.register(Gauge(
             "fluidmcp_process_memory_bytes",
@@ -445,9 +440,17 @@ class MetricsRegistry:
 
         try:
             # System-wide CPU percentage (non-blocking, 0.1s interval)
-            cpu_percent = psutil.cpu_percent(interval=0.1)
+            if not hasattr(self, "_system_cpu_primed"):
+                # First call primes psutil's internal counters; it usually
+                # returns 0.0 and may be misleading, so we don't record it.
+                psutil.cpu_percent(interval=None)
+                self._system_cpu_primed = True
+                cpu_percent = None
+            else:
+                cpu_percent = psutil.cpu_percent(interval=None)
+            
             cpu_metric = self.get_metric("fluidmcp_system_cpu_percent")
-            if cpu_metric:
+            if cpu_metric and cpu_percent is not None:
                 cpu_metric.set(cpu_percent)
 
             # System memory stats
@@ -461,10 +464,17 @@ class MetricsRegistry:
             # Process-specific metrics
             process = psutil.Process()
 
-            # Process CPU percentage (non-blocking, 0.1s interval)
-            process_cpu = process.cpu_percent(interval=0.1)
+            # Process CPU percentage.
+            # Use non-blocking mode (interval=None) and prime once.
+            if not hasattr(self, "_process_cpu_primed"):
+                process.cpu_percent(interval=None)
+                self._process_cpu_primed = True
+                process_cpu = None
+            else:
+                process_cpu = process.cpu_percent(interval=None)
+            
             process_cpu_metric = self.get_metric("fluidmcp_process_cpu_percent")
-            if process_cpu_metric:
+            if process_cpu_metric and process_cpu is not None:
                 process_cpu_metric.set(process_cpu)
 
             # Process memory (RSS - Resident Set Size)

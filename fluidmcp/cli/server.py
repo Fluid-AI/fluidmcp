@@ -5,7 +5,7 @@ This module provides a persistent API server that can run independently
 and manage MCP servers dynamically via HTTP API.
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, status
+from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 import argparse
@@ -22,19 +22,29 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .auth import verify_token
 
-# INSERT after line 18 (after "from .services.frontend_utils import setup_frontend_routes")
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.asyncio import AsyncioIntegration
 
 # Initialize Sentry for production error tracking (opt-in via SENTRY_DSN env var)
-SENTRY_DSN = os.getenv("SENTRY_DSN")
-if SENTRY_DSN:
+def init_sentry() -> None:
+    """
+    Initialize Sentry for production error tracking.
+    This function is intended to be called explicitly during server startup
+    (e.g., from main()/run()/create_app()) rather than at module import time,
+    to avoid import-time side effects.
+    """
+    sentry_dsn = os.getenv("SENTRY_DSN")
+    if not sentry_dsn:
+        logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
+        return
+    
     try:
         sentry_sdk.init(
-            dsn=SENTRY_DSN,
+            dsn=sentry_dsn,
             environment=os.getenv("ENVIRONMENT", "production"),
             traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
             integrations=[
@@ -43,17 +53,20 @@ if SENTRY_DSN:
             ],
             # Filter out health check and metrics noise from error tracking
             before_send=lambda event, hint: (
-                None if any(
+                None
+                if any(
                     path in event.get("request", {}).get("url", "")
                     for path in ["/health", "/metrics"]
-                ) else event
+                )
+                else event
             ),
         )
-        logger.info(f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})")
+        logger.info(
+            f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})"
+        )
     except Exception as e:
         logger.error(f"❌ Sentry initialization failed: {e}")
-else:
-    logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
+
 
 
 def save_token_to_file(token: str) -> Path:
@@ -123,7 +136,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         lifespan=lifespan
     )
 
-    # Store persistence backend for cleanup - ADD THIS LINE
+    # Store persistence backend for cleanup
     app.state.persistence = db_manager
 
     # CORS setup - secure by default
@@ -318,10 +331,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "version": getattr(app, "version", "2.0.0")
         }
 
-    # REPLACE lines 337-356 (the entire @app.get("/metrics") function)
 
     @app.get("/metrics")
-    async def metrics():
+    async def metrics(request: Request, _=Depends(verify_token)):
         """
         Prometheus-compatible metrics endpoint.
 
@@ -373,8 +385,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         from .api.management import cleanup_http_client
         await cleanup_http_client()
         logger.info("HTTP client cleaned up")
-
-        # REPLACE lines 362-368
 
         # Clean up Redis connection (if rate limiting is enabled)
         if os.getenv("FMCP_ENABLE_RATE_LIMITING", "false").lower() == "true":
@@ -592,6 +602,7 @@ async def main(args):
         logger.info("Using in-memory persistence backend")
         persistence: PersistenceBackend = InMemoryBackend()
         db_connected = await persistence.connect()
+    
     else:  # mongodb (default)
         logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
         persistence: PersistenceBackend = DatabaseManager(
@@ -605,6 +616,9 @@ async def main(args):
             max_retries=3,
             require_persistence=require_persistence
         )
+
+    # Initialize Sentry (after persistence is set up)
+    init_sentry()
 
     # 2. Create ServerManager
     logger.info("Creating ServerManager...")
@@ -624,7 +638,6 @@ async def main(args):
         port=args.port
     )
 
-    # 4. Load models from MongoDB (if persistence is enabled)
     if db_connected:
         loaded_models = await load_models_from_persistence(persistence)
         if loaded_models > 0:
