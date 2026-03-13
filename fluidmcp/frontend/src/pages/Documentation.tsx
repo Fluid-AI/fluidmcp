@@ -293,7 +293,7 @@ export default function Documentation() {
  
   return (
     <div className="min-h-screen bg-background flex flex-col text-sm" style={{ backgroundColor: 'hsl(240, 10%, 3.9%)' }}>
-      {/* Mobile menu button - fixed position to not affect header layout */}
+      {/* Mobile menu button for documentation sidebar - fixed position to not affect header layout */}
       <button
         onClick={toggleMobileSidebar}
         className="fixed left-4 top-4 md:hidden h-8 w-8 flex items-center justify-center rounded-md hover:bg-zinc-800 text-white z-[60]"
