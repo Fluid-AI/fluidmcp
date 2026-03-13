@@ -2,7 +2,8 @@ import time
 import json
 import asyncio
 import ipaddress
-from typing import Optional, Dict, Any
+from datetime import datetime
+from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 import httpx
 from loguru import logger
@@ -61,6 +62,9 @@ class InspectorSession:
         self.created_at = time.time()
         self.last_used = time.time()
 
+        # Execution logs for this session
+        self.logs: List[Dict[str, Any]] = []
+
         # For SSE: the endpoint to POST messages to (received during SSE handshake)
         self._sse_post_url: Optional[str] = None
         self._sse_session_id: Optional[str] = None
@@ -91,6 +95,20 @@ class InspectorSession:
         headers.update(self.extra_headers)
         return headers
 
+    MAX_LOGS = 250
+
+    def add_log(self, log_type: str, message: str) -> None:
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": log_type,
+            "message": message
+        }
+        self.logs.append(log_entry)
+        if len(self.logs) > self.MAX_LOGS:
+            self.logs.pop(0)
+        logger.debug(f"Inspector log [{log_type}]: {message}")
+
+
     async def initialize(self) -> Dict[str, Any]:
         """
         Perform the MCP initialize handshake to verify the server is reachable
@@ -102,10 +120,14 @@ class InspectorSession:
         self.last_used = time.time()
 
         if self.transport == "sse":
-            return await self._initialize_sse()
+            server_info = await self._initialize_sse()
         else:
             # HTTP and stdio both use JSON-RPC POST
-            return await self._initialize_http()
+            server_info = await self._initialize_http()
+
+        # Log successful connection
+        self.add_log("connect", f"Connected to {server_info.get('name', 'Unknown Server')} ({self.transport.upper()})")
+        return server_info
 
     async def _initialize_http(self) -> Dict[str, Any]:
         """Send MCP initialize JSON-RPC request over HTTP POST."""
@@ -271,6 +293,9 @@ class InspectorSession:
         headers = self._build_headers()
         post_url = self._get_post_url()
 
+        # Log tool call
+        self.add_log("tool_call", f"Running tool: {name}")
+
         request = {
             "jsonrpc": "2.0",
             "id": 3,
@@ -281,17 +306,27 @@ class InspectorSession:
             }
         }
 
-        response = await client.post(post_url, json=request, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response = await client.post(post_url, json=request, headers=headers)
+            response.raise_for_status()
+            data = response.json()
 
-        if "error" in data:
-            raise Exception(f"tools/call error: {data['error'].get('message', 'Unknown error')}")
+            if "error" in data:
+                error_msg = data['error'].get('message', 'Unknown error')
+                self.add_log("tool_error", f"Tool '{name}' failed: {error_msg}")
+                raise Exception(f"tools/call error: {error_msg}")
 
-        return data.get("result", {})
+            self.add_log("tool_result", f"Tool '{name}' executed successfully")
+            return data.get("result", {})
+        except Exception as e:
+            # Log unexpected errors
+            if not self.logs or self.logs[-1]["type"] != "tool_error":  # Only log if not already logged above
+                self.add_log("tool_error", f"Tool '{name}' error: {str(e)}")
+            raise
 
     async def close(self):
         """Close the httpx client."""
+        self.add_log("disconnect", "Session closed")
         if self._client is not None:
             try:
                 await self._client.aclose()
