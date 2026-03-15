@@ -53,6 +53,7 @@ class ServerInstanceDocument:
     started_by: str = "system"               # User who started instance
     updated_at: Optional[datetime] = None    # Last state update
     env: Optional[Dict[str, str]] = None     # Instance-specific environment variables
+    last_used_at: Optional[datetime] = None  # Last activity timestamp for idle cleanup
 
 
 @dataclass
