@@ -316,6 +316,10 @@ class InspectorSession:
                 self.add_log("tool_error", f"Tool '{name}' failed: {error_msg}")
                 raise Exception(f"tools/call error: {error_msg}")
 
+            # NOTE: MCP servers sometimes return isError: true inside a successful result.
+            # We log tool_result here because the JSON-RPC call succeeded at transport level.
+            # The frontend ToolResult component handles isError display separately.
+            # Future improvement: check result body for isError and log tool_error instead.
             self.add_log("tool_result", f"Tool '{name}' executed successfully")
             return data.get("result", {})
         except Exception as e:
