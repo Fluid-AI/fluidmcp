@@ -382,9 +382,9 @@ export default function MCPInspector() {
     if (saved) setPanelSizes(JSON.parse(saved))
   }, [])
 
-  // Auto-scroll logs to top when new entries arrive (logs rendered newest-first)
+  // Auto-scroll logs to bottom when new entries arrive
   useEffect(() => {
-    logsRef.current?.scrollTo({ top: 0 });
+    logsRef.current?.scrollTo({ top: logsRef.current.scrollHeight });
   }, [logs]);
 
   // Auto-scroll chat to bottom when new messages arrive
@@ -394,26 +394,34 @@ export default function MCPInspector() {
     }
   }, [chatHistory]);
 
-  // Poll for logs every 2 seconds when a session is active.
-  // Inlined to avoid stale-closure issues with fetchLogs in the dependency array.
+  // Fetch logs from the server
+  const fetchLogs = async () => {
+    if (!selectedServer?.session_id) return;
+    try {
+      const res = await apiClient.getInspectorLogs(selectedServer.session_id);
+      setLogs(res.logs || []);
+    } catch (err) {
+      console.error("Failed to fetch logs", err);
+    }
+  };
+
+  // Poll for logs every 2 seconds when a session is active
   useEffect(() => {
     if (!selectedServer?.session_id) {
-      setLogs([]);   // clear stale logs when no session is active
       return;
     }
-    const sessionId = selectedServer.session_id;
+    // NOTE FOR REVIEW: When a new server connects, its logs replace the previous server's logs.
+    // Decision needed: Should we accumulate logs across all servers (keyed by session_id)?
+    // Or is replacing on new connection acceptable?
+    // Options:
+    //   A) Current behaviour — replace logs on new connection (simple, clean)
+    //   B) Accumulate all logs — merge new logs into existing, tag each entry with server name
+    //   C) Per-server log history — store logs[serverId] map, show logs for selected server
+    // Leaning towards C if inspector gets heavy usage, but A is fine for now.
+    fetchLogs();     // Fetch immediately
 
-    const poll = async () => {
-      try {
-        const res = await apiClient.getInspectorLogs(sessionId);
-        setLogs(res.logs || []);
-      } catch (err) {
-        console.error("Failed to fetch logs", err);
-      }
-    };
+    const interval = setInterval(fetchLogs, 2000);     // Set up polling interval
 
-    poll();
-    const interval = setInterval(poll, 2000);
     return () => clearInterval(interval);
   }, [selectedServer?.session_id]);
 
@@ -834,12 +842,11 @@ export default function MCPInspector() {
                         </div>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                          {[...logs].reverse().map((log) => {
+                          {[...logs].reverse().map((log, i) => {
                             const color = logColors[log.type] || "#9ca3af";
-                            const logKey = `${log.timestamp}-${log.type}-${log.message}`;
                             return (
                               <div
-                                key={logKey}
+                                key={i}
                                 style={{
                                   display: "grid",
                                   // Fixed columns: time | type | message
