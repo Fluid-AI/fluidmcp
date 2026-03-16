@@ -645,9 +645,9 @@ export default function MCPInspector() {
     if (saved) setPanelSizes(JSON.parse(saved))
   }, [])
 
-  // Auto-scroll logs to top when new entries arrive (logs rendered newest-first)
+  // Auto-scroll logs to bottom when new entries arrive
   useEffect(() => {
-    logsRef.current?.scrollTo({ top: 0 });
+    logsRef.current?.scrollTo({ top: logsRef.current.scrollHeight });
   }, [logs]);
 
   // Auto-scroll chat to bottom when new messages arrive
@@ -1123,12 +1123,11 @@ export default function MCPInspector() {
                         </div>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                          {[...logs].reverse().map((log) => {
+                          {[...logs].reverse().map((log, i) => {
                             const color = logColors[log.type] || "#9ca3af";
-                            const logKey = `${log.timestamp}-${log.type}-${log.message}`;
                             return (
                               <div
-                                key={logKey}
+                                key={i}
                                 style={{
                                   display: "grid",
                                   // Fixed columns: time | type | message
