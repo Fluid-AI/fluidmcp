@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..services.inspector_session import InspectorSession
 from ..auth import verify_token
+from ..services.inspector_agent import choose_tool_with_llm
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
