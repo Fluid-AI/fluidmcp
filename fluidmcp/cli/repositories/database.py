@@ -179,21 +179,82 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  WARNING: TLS certificate validation DISABLED for MongoDB!")
                 logger.warning("⚠️  This is a SECURITY RISK - vulnerable to man-in-the-middle attacks!")
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
+            
+            # Get connection pool settings from environment with safe parsing
+            default_max_pool_size = 50
+            default_min_pool_size = 10
+            
+            raw_max_pool_size = os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", str(default_max_pool_size))
+            try:
+                max_pool_size = int(raw_max_pool_size)
+            except ValueError:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={raw_max_pool_size!r}; "
+                    f"using default max pool size of {default_max_pool_size}."
+                )
+                max_pool_size = default_max_pool_size
+            
+            raw_min_pool_size = os.getenv("FMCP_MONGODB_MIN_POOL_SIZE", str(default_min_pool_size))
+            try:
+                min_pool_size = int(raw_min_pool_size)
+            except ValueError:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MIN_POOL_SIZE={raw_min_pool_size!r}; "
+                    f"using default min pool size of {default_min_pool_size}."
+                )
+                min_pool_size = default_min_pool_size
+
+    
+            # Validate and clamp connection pool sizes to avoid invalid Motor/PyMongo configuration
+            if max_pool_size <= 0:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={max_pool_size!r}; "
+                    "using default max pool size of 50."
+                )
+                max_pool_size = 50
+            if min_pool_size <= 0:
+                logger.warning(
+                    f"Invalid FMCP_MONGODB_MIN_POOL_SIZE={min_pool_size!r}; "
+                    "using minimum pool size of 1."
+                )
+                min_pool_size = 1
+            if min_pool_size > max_pool_size:
+                logger.warning(
+                    f"FMCP_MONGODB_MIN_POOL_SIZE ({min_pool_size}) is greater than "
+                    f"FMCP_MONGODB_MAX_POOL_SIZE ({max_pool_size}); "
+                    "clamping min pool size to max pool size."
+                )
+                min_pool_size = max_pool_size
+        
 
             self.client = AsyncIOMotorClient(
                 self.mongodb_uri,
+                # Timeout settings
                 serverSelectionTimeoutMS=server_timeout,
                 connectTimeoutMS=connect_timeout,
                 socketTimeoutMS=socket_timeout,
-                tlsAllowInvalidCertificates=allow_invalid_certs
+                # TLS settings
+                tlsAllowInvalidCertificates=allow_invalid_certs,
+                # Connection pool settings (production-grade)
+                maxPoolSize=max_pool_size,       # Maximum connections in pool
+                minPoolSize=min_pool_size,       # Minimum connections to maintain
+                retryWrites=True,                 # Automatic retry for write operations
+                w="majority"                      # Write concern: majority of replica set nodes
             )
 
-            logger.debug(f"MongoDB timeouts: server={server_timeout}ms, connect={connect_timeout}ms, socket={socket_timeout}ms")
-            self.db = self.client[self.database_name]
+            logger.debug(
+                f"MongoDB connection pool: min={min_pool_size}, max={max_pool_size}, "
+                f"timeouts: server={server_timeout}ms, connect={connect_timeout}ms, socket={socket_timeout}ms"
+            )
 
             # Test connection
             await self.client.admin.command('ping')
             logger.info(f"Connected to MongoDB at {mask_mongodb_uri(self.mongodb_uri)}")
+
+
+            self.db = self.client[self.database_name]
+            logger.debug(f"Database '{self.database_name}' assigned successfully")
+
 
             # Check if change streams are supported (requires replica set)
             try:
@@ -290,7 +351,7 @@ class DatabaseManager(PersistenceBackend):
             await self.db.fluidmcp_llm_models.create_index("model_id", unique=True)
             logger.info("Created unique index on fluidmcp_llm_models.model_id")
 
-            # MEDIUM PRIORITY FIX #7: Create compound index on version history for efficient rollback queries
+            
             await self.db.fluidmcp_llm_model_versions.create_index([
                 ("model_id", 1),
                 ("archived_at", -1)  # Descending for most recent first
@@ -456,7 +517,10 @@ class DatabaseManager(PersistenceBackend):
             Server config dict in flat format (for backend compatibility)
         """
         try:
-            config = await self.db.fluidmcp_servers.find_one({"id": id}, {"_id": 0})  # Exclude MongoDB _id
+            config = await self.db.fluidmcp_servers.find_one(
+                {"id": id, "deleted_at": {"$exists": False}},
+                {"_id": 0},
+            )
 
             # Convert nested MongoDB format to flat format for backend
             if config:
@@ -921,7 +985,6 @@ class DatabaseManager(PersistenceBackend):
                 # Sanitize input values
                 filter_dict = self._sanitize_mongodb_input(filter_dict)
 
-                # COPILOT FIX: Recursively reject MongoDB operator keys to prevent injection
                 def _reject_mongo_operators(value, path="filter_dict"):
                     """
                     Recursively walk a filter structure and reject any dict key
@@ -982,7 +1045,6 @@ class DatabaseManager(PersistenceBackend):
             True if updated successfully, False if not found
         """
         try:
-            # COPILOT COMMENT 5 FIX: Validate updates dict to prevent MongoDB operator injection
             # Allowed fields for updating LLM models
             allowed_fields = ["type", "model", "api_key", "default_params", "timeout", "max_retries", "endpoints"]
             self._validate_field_names(updates, allowed_fields)
@@ -1016,7 +1078,7 @@ class DatabaseManager(PersistenceBackend):
                 "version": old_version
             }
 
-            # COPILOT FIX: Try to save version history, but don't fail update if history save fails
+    
             try:
                 await self.db.fluidmcp_llm_model_versions.insert_one(version_doc)
                 logger.debug(f"Saved version {old_version} of model '{model_id}' to history")
@@ -1044,7 +1106,6 @@ class DatabaseManager(PersistenceBackend):
             True if rolled back successfully, False if not found
         """
         try:
-            # HIGH PRIORITY FIX #4: Defense-in-depth validation at database layer
             # Even though API layer validates, database layer should validate too
             if not isinstance(model_id, str) or not model_id.strip():
                 raise ValueError("Invalid model_id: must be non-empty string")
@@ -1094,9 +1155,22 @@ class DatabaseManager(PersistenceBackend):
 
     async def disconnect(self):
         """Disconnect from MongoDB and cleanup resources."""
+        if self._retry_task and not self._retry_task.done():
+            logger.debug("Cancelling log retry task...")
+            self._retry_task.cancel()
+            try:
+                await self._retry_task
+            except asyncio.CancelledError:
+                logger.debug("Log retry task cancelled successfully")
+            except Exception as e:
+                logger.warning(f"Error while cancelling retry task: {e}")
+
+        # Close MongoDB connection
         if self.client:
             self.client.close()
             logger.info("Closed MongoDB connection")
+            self.client = None
+            self.db = None
 
     async def close(self):
         """Close MongoDB connection (alias for disconnect)."""

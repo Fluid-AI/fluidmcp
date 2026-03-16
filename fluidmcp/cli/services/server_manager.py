@@ -12,13 +12,14 @@ import time
 import atexit
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
+from .sse_handle import SseSubprocessHandle
 
 
 class ServerManager:
@@ -54,6 +55,11 @@ class ServerManager:
         # 30s provides quick feedback (max 30s delay) while preventing excessive writes
         # when repeatedly checking the same stale server
         self._stale_pid_cache_ttl = 30.0  # seconds
+
+        # Idle cleanup configuration
+        self.idle_timeout_seconds = int(os.getenv("FMCP_IDLE_TIMEOUT", "3600"))  # Default 1 hour
+        self.cleanup_interval_seconds = 300  # Run cleanup every 5 minutes
+        self._cleanup_task: Optional[asyncio.Task] = None
 
         # Register cleanup handlers
         atexit.register(self._cleanup_on_exit)
@@ -167,9 +173,25 @@ class ServerManager:
             # Get display name from config
             name = config.get("name", id)
 
-            # Spawn the MCP process
+            # Spawn the MCP process with timeout
             logger.info(f"Starting server '{name}' (id: {id})...")
-            process = await self._spawn_mcp_process(id, config)
+            try:
+                process = await asyncio.wait_for(
+                    self._spawn_mcp_process(id, config),
+                    timeout=30.0  # 30 second startup timeout
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Server '{name}' (id: {id}) startup timed out after 30 seconds")
+                # Update metrics - server failed to start (status code: 3)
+                collector.set_server_status(3)  # 3 = error
+                collector.record_error("startup_timeout")
+                # Save error to instance state
+                await self.db.save_instance_state({
+                    "server_id": id,
+                    "state": "failed",
+                    "last_error": "Server startup timed out after 30 seconds"
+                })
+                return False
 
             if not process:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
@@ -198,7 +220,8 @@ class ServerManager:
                 "restart_count": 0,
                 "last_health_check": datetime.utcnow(),
                 "health_check_failures": 0,
-                "started_by": user_id  # Track who started this instance
+                "started_by": user_id,  # Track who started this instance
+                "last_used_at": datetime.utcnow()  # Initialize last_used_at when server starts
             }, expected_pid=existing_pid)
 
             if not success:
@@ -458,6 +481,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "running",
+                    "transport": "sse" if isinstance(process, SseSubprocessHandle) else "stdio",
+                    "url": process.sse_url if isinstance(process, SseSubprocessHandle) else None,
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
@@ -515,6 +540,9 @@ class ServerManager:
                     if not success:
                         logger.debug(f"Server {id} PID changed during stale check, re-fetching status")
                         return await self.get_server_status(id)
+
+                    # Check for auto-restart on crash
+                    await self._check_auto_restart_on_crash(id, instance)
 
                     # Cache the update timestamp
                     self._stale_pid_updates[id] = current_time
@@ -585,11 +613,21 @@ class ServerManager:
             status = await self.get_server_status(id)
 
             # Separate MCP config fields from metadata fields
-            mcp_config = {
-                "command": config.get("command"),
-                "args": config.get("args", []),
-                "env": config.get("env", {})
-            }
+            transport = config.get("transport", "stdio")
+            if transport == "sse":
+                mcp_config = {
+                    "transport": "sse",
+                    "url": config.get("url"),
+                    "command": config.get("command"),
+                    "args": config.get("args", []),
+                }
+            else:
+                mcp_config = {
+                    "transport": "stdio",
+                    "command": config.get("command"),
+                    "args": config.get("args", []),
+                    "env": config.get("env", {})
+                }
 
             # Build response with nested structure
             server_info = {
@@ -649,7 +687,60 @@ class ServerManager:
             env_vars = config.get("env", {})
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
+            working_dir_path = Path(working_dir)
 
+            # 🔹 Auto-reclone if directory missing (Railway ephemeral container fix)
+            if not working_dir_path.exists():
+                logger.warning(f"Working directory missing for server '{id}': {working_dir}")
+
+                if config.get("source") == "github":
+                    from .github_utils import clone_github_repo
+                    
+                    repo = config.get("github_repo")
+                    branch = config.get("github_branch", "main")
+
+                    logger.info(f"Auto-recloning repository {repo}@{branch} to {working_dir}")
+
+                    try:
+                        # Get GitHub token from environment
+                        github_token = os.getenv("FMCP_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN")
+                        if not github_token:
+                            logger.error(
+                                "GitHub token not found in environment. "
+                                "Available env vars: FMCP_GITHUB_TOKEN={}, GITHUB_TOKEN={}".format(
+                                    "SET" if os.getenv("FMCP_GITHUB_TOKEN") else "NOT SET",
+                                    "SET" if os.getenv("GITHUB_TOKEN") else "NOT SET"
+                                )
+                            )
+                            raise RuntimeError(
+                                "GitHub token required for auto-reclone. "
+                                "Set FMCP_GITHUB_TOKEN or GITHUB_TOKEN environment variable."
+                            )
+                        
+                        # Determine install_dir from the working_dir path structure
+                        # e.g., /app/.fmcp-packages/Fluid-AI/fluid-ai-mcp-servers/main
+                        # install_dir = /app/.fmcp-packages
+                        parent_path = working_dir_path.parent.parent.parent
+                        
+                        # Re-clone to the original path using the proper function
+                        clone_github_repo(
+                            repo_path=repo,
+                            branch=branch,
+                            github_token=github_token,
+                            install_dir=parent_path
+                        )
+
+                        # Persist config to database after successful reclone
+                        await self.db.save_server_config(config)
+                        logger.info(f"Repository auto-recloned successfully to {working_dir}")
+
+                    except Exception as e:
+                        logger.error(f"Failed to auto-reclone repository: {e}")
+                        return None
+                else:
+                    logger.error(f"Working directory missing and source is not GitHub")
+                    return None
+                
             # Load instance-specific env vars (user's API keys, etc.)
             # These override config env vars
             instance_env = await self.db.get_instance_env(id)
@@ -705,6 +796,16 @@ class ServerManager:
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 return None
 
+            # ── SSE transport: skip stdio handshake, wait for HTTP instead ──
+            if config.get("transport") == "sse":
+                handle = await self._handshake_sse_subprocess(id, config, process)
+                if not handle:
+                    logger.error(f"SSE handshake failed for server '{name}' (id: {id})")
+                    return None
+                logger.info(f"[{id}] SSE server connected successfully")
+                return handle  # tool discovery already done inside _handshake_sse_subprocess
+            # ── stdio transport: normal handshake ───────────────────────────
+
             # Initialize MCP server with handshake (using shared utility)
             logger.info(f"[{id}] Initializing MCP server...")
             init_success = await asyncio.to_thread(initialize_mcp_server, process)
@@ -728,7 +829,7 @@ class ServerManager:
 
             logger.info(f"[{id}] MCP server initialized successfully")
 
-            # Discover and cache tools (PDF spec requirement)
+            # Discover and cache tools (stdio only — SSE already handled above)
             await self._discover_and_cache_tools(id, process)
 
             return process
@@ -799,6 +900,136 @@ class ServerManager:
             logger.warning(f"Tool discovery failed for '{server_id}': {e}")
             # Don't fail the server start if tool discovery fails
 
+    async def _handshake_sse_subprocess(
+        self,
+        id: str,
+        config: Dict[str, Any],
+        process: subprocess.Popen,
+    ) -> Optional["SseSubprocessHandle"]:
+        """
+        Complete startup for a subprocess-owned SSE MCP server.
+
+        After the process is spawned we:
+          1. Poll until the HTTP server is accepting connections (max 30 s).
+          2. Discover and cache tools via POST /messages/.
+          3. Return an SseSubprocessHandle wrapping the real Popen.
+
+        Args:
+            id:      Server identifier.
+            config:  Server config dict (must contain 'url').
+            process: The already-spawned subprocess.Popen.
+
+        Returns:
+            SseSubprocessHandle on success, None on failure.
+        """
+        import httpx
+
+        url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+        name = config.get("name", id)
+        # Use custom health endpoint if specified, otherwise default to /sse
+        health_endpoint = config.get("health_endpoint", "/sse")
+        health_url = f"{url}{health_endpoint}"
+
+        logger.info(
+            f"[{id}] SSE server '{name}' spawned (PID {process.pid}), "
+            f"waiting for HTTP readiness at {health_url}..."
+        )
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 30
+
+        while loop.time() < deadline:
+            # Guard: process must still be alive
+            if process.poll() is not None:
+                stderr_out = ""
+                if process.stderr:
+                    try:
+                        stderr_out = process.stderr.read()
+                    except Exception:
+                        pass
+                logger.error(
+                    f"[{id}] SSE server process died before HTTP became ready "
+                    f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                )
+                return None
+
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    async with client.stream("GET", health_url) as resp:
+                        if resp.status_code == 200:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] SSE server is ready at {url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            break
+            except (httpx.ConnectError, httpx.TimeoutException):
+                pass  # Server not up yet — keep polling
+
+            await asyncio.sleep(1.0)
+        else:
+            logger.error(f"[{id}] SSE server did not become ready within 30s")
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return None
+
+        # Discover and cache tools via HTTP
+        await self._discover_and_cache_tools_sse(id, url)
+
+        return SseSubprocessHandle(process=process, sse_url=url)
+
+    async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
+        """
+        Discover tools from an SSE MCP server via HTTP and cache in database.
+
+        SSE MCP servers expose a POST /messages/ endpoint that accepts
+        standard JSON-RPC 2.0 requests.
+
+        Args:
+            server_id: Server identifier.
+            base_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+        """
+        import httpx
+
+        messages_url = f"{base_url.rstrip('/')}/messages/"
+        tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(messages_url, json=tools_request)
+                resp.raise_for_status()
+                response = resp.json()
+
+            if "result" in response and "tools" in response["result"]:
+                tools = response["result"]["tools"]
+                config = await self.db.get_server_config(server_id)
+                if config:
+                    config["tools"] = tools
+                    try:
+                        await self.db.save_server_config(config)
+                        logger.info(
+                            f"[SSE] Discovered and cached {len(tools)} tool(s) "
+                            f"for server '{server_id}'"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[SSE] Failed to save tools for '{server_id}': {e}"
+                        )
+                else:
+                    logger.warning(
+                        f"[SSE] Config not found for '{server_id}', cannot cache tools"
+                    )
+            else:
+                logger.warning(
+                    f"[SSE] No tools in response for server '{server_id}': {response}"
+                )
+
+        except Exception as e:
+            # Tool discovery failure must never abort server startup
+            logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
+
     async def _cleanup_server(self, id: str, exit_code: int) -> None:
         """
         Clean up after server stops.
@@ -854,3 +1085,157 @@ class ServerManager:
         ]
 
         return any(placeholder_indicators)
+
+    # ==================== Idle Cleanup Methods ====================
+
+    def start_idle_cleanup_task(self) -> None:
+        """
+        Start the background idle cleanup task.
+        Should be called when the server starts.
+        """
+        if self._cleanup_task is not None:
+            logger.warning("Idle cleanup task already running")
+            return
+
+        self._cleanup_task = asyncio.create_task(self._idle_cleanup_loop())
+        logger.info(f"Started idle cleanup task (interval: {self.cleanup_interval_seconds}s, timeout: {self.idle_timeout_seconds}s)")
+
+    async def stop_idle_cleanup_task(self) -> None:
+        """
+        Stop the background idle cleanup task.
+        Should be called when the server shuts down.
+        """
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+            logger.info("Stopped idle cleanup task")
+
+    async def _idle_cleanup_loop(self) -> None:
+        """
+        Background task that periodically checks for and stops idle servers.
+        """
+        while True:
+            try:
+                await asyncio.sleep(self.cleanup_interval_seconds)
+                await self._perform_idle_cleanup()
+            except asyncio.CancelledError:
+                logger.info("Idle cleanup loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in idle cleanup loop: {e}")
+                # Continue running despite errors
+
+    async def _perform_idle_cleanup(self) -> None:
+        """
+        Check for idle servers and stop them if they exceed the idle timeout.
+        """
+        try:
+            # Get all running instances from database
+            running_instances = await self.db.list_instances_by_state("running")
+
+            if not running_instances:
+                return
+
+            current_time = datetime.utcnow()
+            idle_cutoff = current_time - timedelta(seconds=self.idle_timeout_seconds)
+
+            stopped_count = 0
+
+            for instance in running_instances:
+                server_id = instance.get("server_id")
+                last_used_at = instance.get("last_used_at")
+
+                if last_used_at is None:
+                    # Server has never been used, skip for now
+                    # Could add a separate grace period for newly started servers
+                    continue
+
+                if isinstance(last_used_at, str):
+                    last_used_at = datetime.fromisoformat(last_used_at.replace('Z', '+00:00'))
+
+                if last_used_at < idle_cutoff:
+                    logger.info(f"Stopping idle server '{server_id}' (last used: {last_used_at}, idle for {self.idle_timeout_seconds}s)")
+                    await self.stop_server(server_id)
+                    stopped_count += 1
+
+            if stopped_count > 0:
+                logger.info(f"Idle cleanup: stopped {stopped_count} server(s)")
+
+        except Exception as e:
+            logger.error(f"Error during idle cleanup: {e}")
+
+    async def update_last_used(self, server_id: str) -> None:
+        """
+        Update the last_used_at timestamp for a server.
+        Called when the server is actively used.
+
+        Args:
+            server_id: Server identifier
+        """
+        try:
+            await self.db.save_instance_state({
+                "server_id": server_id,
+                "last_used_at": datetime.utcnow()
+            })
+        except Exception as e:
+            logger.warning(f"Failed to update last_used_at for server '{server_id}': {e}")
+
+    async def _check_auto_restart_on_crash(self, server_id: str, instance: Dict[str, Any]) -> None:
+        """
+        Check if a crashed server should be automatically restarted based on restart policy.
+
+        Args:
+            server_id: Server identifier
+            instance: Current instance state from database
+        """
+        try:
+            # Get server configuration
+            config = await self.db.get_server_config(server_id)
+            if not config:
+                logger.debug(f"No config found for server '{server_id}', skipping auto-restart")
+                return
+
+            restart_policy = config.get("restart_policy", "never")
+            max_restarts = config.get("max_restarts", 3)
+            restart_window_sec = config.get("restart_window_sec", 300)
+
+            # Check if restart policy allows auto-restart
+            if restart_policy not in ["on-failure", "always"]:
+                logger.debug(f"Server '{server_id}' restart policy '{restart_policy}' does not allow auto-restart")
+                return
+
+            current_restart_count = instance.get("restart_count", 0)
+            last_start_time = instance.get("start_time")
+
+            # Check restart count limit
+            if current_restart_count >= max_restarts:
+                logger.warning(f"Server '{server_id}' has reached max restarts ({max_restarts}), not auto-restarting")
+                return
+
+            # Check restart window
+            if last_start_time and restart_window_sec > 0:
+                if isinstance(last_start_time, str):
+                    last_start_time = datetime.fromisoformat(last_start_time.replace('Z', '+00:00'))
+
+                time_since_start = (datetime.utcnow() - last_start_time).total_seconds()
+                if time_since_start < restart_window_sec:
+                    logger.debug(f"Server '{server_id}' still within restart window ({time_since_start:.1f}s < {restart_window_sec}s)")
+                    return
+
+            # Attempt auto-restart
+            logger.info(f"Auto-restarting crashed server '{server_id}' (restart {current_restart_count + 1}/{max_restarts})")
+
+            # Use internal method to avoid lock contention since we're already in a status check
+            success = await self._start_server_unlocked(server_id, config)
+
+            if success:
+                logger.info(f"Successfully auto-restarted server '{server_id}'")
+            else:
+                logger.error(f"Failed to auto-restart server '{server_id}'")
+
+        except Exception as e:
+            logger.error(f"Error during auto-restart check for server '{server_id}': {e}")

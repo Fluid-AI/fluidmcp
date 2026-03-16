@@ -259,6 +259,7 @@ export default function ServerDetails() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
               <h1>{serverDetails.name}</h1>
+              <p style={{ margin: '4px 0 8px 0', fontSize: '0.875rem', fontFamily: 'monospace', color: '#a1a1a1' }}>{serverId}</p>
               <p className="subtitle">
                 {serverDetails.description || "No description available"}
               </p>

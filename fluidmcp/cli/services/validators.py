@@ -11,8 +11,9 @@ This module provides validation utilities for:
 - Package versions (semantic version string format)
 """
 
+import os
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
 
 
 # Compiled regex patterns for performance
@@ -379,6 +380,47 @@ def validate_mcpservers_config(config: Dict[str, Any]) -> List[str]:
             errors.append(f"Server '{server_name}': {error}")
 
     return errors
+
+
+def validate_command_allowlist(command: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate a command against the allowed-command list.
+
+    Prevents malicious GitHub repos from executing dangerous commands
+    (e.g., ``rm``, ``curl``, ``bash``).
+
+    Allowed commands can be extended via the ``FMCP_ALLOWED_COMMANDS``
+    environment variable (comma-separated).
+
+    Args:
+        command: Command to validate (e.g. "npx", "python3")
+
+    Returns:
+        Tuple of (is_valid, error_message).
+        error_message is None when is_valid is True.
+
+    Examples:
+        >>> validate_command_allowlist("npx")
+        (True, None)
+        >>> validate_command_allowlist("rm")
+        (False, "Command 'rm' is not in the allowed list...")
+    """
+    DEFAULT_ALLOWLIST = [
+        "npx", "node", "python", "python3",
+        "uv", "uvx", "docker", "deno", "bun",
+    ]
+
+    env_commands = os.environ.get("FMCP_ALLOWED_COMMANDS", "").split(",")
+    allowed = DEFAULT_ALLOWLIST + [c.strip() for c in env_commands if c.strip()]
+
+    if command not in allowed:
+        return False, (
+            f"Command '{command}' is not in the allowed list. "
+            f"Allowed commands: {', '.join(DEFAULT_ALLOWLIST)}. "
+            f"Extend the list with the FMCP_ALLOWED_COMMANDS environment variable."
+        )
+
+    return True, None
 
 
 def is_valid_package_version(version: str) -> bool:

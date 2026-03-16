@@ -12,7 +12,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 from loguru import logger
 
 
@@ -393,6 +393,201 @@ def is_github_repo(directory: Path) -> bool:
         True if directory contains .git folder
     """
     return (directory / ".git").exists()
+
+
+def clone_or_update_repo(
+    repo_path: str,
+    token: str,
+    branch: Optional[str] = None,
+    install_dir: Optional[Path] = None,
+) -> Path:
+    """
+    Clone repository or pull latest changes if an existing clone is found.
+
+    Treats the local clone as a cache: if the destination directory already
+    exists, a ``git pull --rebase`` is attempted to fetch the latest commits.
+    If the pull fails (e.g. no network, merge conflict), the existing files
+    are used as-is so callers are not blocked.
+
+    Args:
+        repo_path: GitHub repository path (owner/repo or full URL)
+        token: GitHub personal access token
+        branch: Branch to clone/update (defaults to DEFAULT_GITHUB_BRANCH)
+        install_dir: Base installation directory (defaults to .fmcp-packages)
+
+    Returns:
+        Path to the (possibly updated) local repository
+
+    Raises:
+        ValueError: If github_token is missing
+        RuntimeError: If an initial (fresh) clone fails
+    """
+    owner, repo = normalize_github_repo(repo_path)
+    target_branch = branch or DEFAULT_GITHUB_BRANCH
+
+    if install_dir is None:
+        from .config_resolver import INSTALLATION_DIR
+        install_dir = Path(INSTALLATION_DIR)
+
+    dest_dir = install_dir / owner / repo / target_branch
+
+    if dest_dir.exists() and any(dest_dir.iterdir()):
+        logger.info(f"Repository already cloned at {dest_dir}, pulling latest changes...")
+        try:
+            subprocess.run(
+                ["git", "pull", "--rebase"],
+                cwd=dest_dir,
+                check=True,
+                capture_output=True,
+                timeout=30,
+                text=True,
+            )
+            logger.info(f"Successfully pulled latest changes for {owner}/{repo}@{target_branch}")
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.strip() if e.stderr else "unknown error"
+            logger.warning(f"git pull --rebase failed (using existing clone): {stderr}")
+        except subprocess.TimeoutExpired:
+            logger.warning("git pull --rebase timed out (using existing clone)")
+        return dest_dir
+
+    logger.info(f"No existing clone found, cloning {owner}/{repo}@{target_branch}...")
+    return clone_github_repo(repo_path, token, target_branch, install_dir)
+
+
+class GitHubService:
+    """
+    Orchestrates GitHub repository cloning and MCP server config extraction.
+
+    This class is the primary entry point for the ``POST /api/servers/from-github``
+    endpoint.  It coordinates:
+    - Cloning / updating the repository
+    - Extracting metadata (metadata.json or README fallback)
+    - Validating each server's command against the allowlist
+    - Building flat server config dicts via ServerBuilder
+    """
+
+    @staticmethod
+    def build_server_configs(
+        repo_path: str,
+        token: str,
+        base_server_id: str,
+        branch: str = DEFAULT_GITHUB_BRANCH,
+        server_name: Optional[str] = None,
+        subdirectory: Optional[str] = None,
+        env: Optional[Dict] = None,
+        restart_policy: str = "never",
+        max_restarts: int = 3,
+        enabled: bool = True,
+        created_by: Optional[str] = None,
+    ) -> Tuple[List[Dict], Path]:
+        """
+        Clone/update a GitHub repository and build MCP server configuration(s).
+
+        Workflow:
+        1. Clone or update the repository
+        2. Optionally resolve a subdirectory (for monorepos)
+        3. Extract metadata (metadata.json or README)
+        3. Validate each server's command against the allowlist
+        4. Build flat server config(s) via ServerBuilder
+
+        Args:
+            repo_path: GitHub repo (owner/repo or full URL)
+            token: GitHub personal access token
+            base_server_id: Base ID for the generated server(s)
+            branch: Branch to clone (default: DEFAULT_GITHUB_BRANCH)
+            server_name: Select a specific server from a multi-server repo (optional)
+            subdirectory: Subdirectory within the repo that contains metadata.json
+                (for monorepos, e.g. "google-sheets-mcp").  The working_dir of the
+                produced configs will be set to this subdirectory, not the repo root.
+            env: Additional environment variables merged on top of repo defaults
+            restart_policy: "never", "on-failure", or "always"
+            max_restarts: Maximum restart attempts
+            enabled: Whether created servers are enabled
+            created_by: User performing the operation (for audit)
+
+        Returns:
+            Tuple of (list of flat server config dicts, clone path)
+
+        Raises:
+            ValueError: Invalid input, unsupported command, bad metadata, or missing subdirectory
+            RuntimeError: Clone failure
+        """
+        from .server_builder import ServerBuilder
+        from .validators import validate_command_allowlist
+
+        # 1. Clone or update repository
+        clone_path = clone_or_update_repo(repo_path, token, branch)
+
+        # 2. Resolve the directory to look for metadata in
+        #    For monorepos, ``subdirectory`` points to the specific MCP folder.
+        if subdirectory:
+            metadata_dir = clone_path / subdirectory
+            if not metadata_dir.is_dir():
+                raise ValueError(
+                    f"Subdirectory '{subdirectory}' not found in cloned repository. "
+                    f"Clone path: {clone_path}"
+                )
+            logger.info(f"Using subdirectory '{subdirectory}' for metadata lookup")
+        else:
+            metadata_dir = clone_path
+
+        # 3. Extract metadata (metadata.json or README fallback)
+        metadata_path = extract_or_create_metadata(metadata_dir)
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        validate_mcp_metadata(metadata)
+        mcp_servers = metadata.get("mcpServers", {})
+
+        # 4. Optionally filter to a single named server
+        if server_name:
+            if server_name not in mcp_servers:
+                available = ", ".join(mcp_servers.keys()) or "none"
+                raise ValueError(
+                    f"Server '{server_name}' not found in repository metadata. "
+                    f"Available servers: {available}"
+                )
+            mcp_servers = {server_name: mcp_servers[server_name]}
+
+        is_multi = len(mcp_servers) > 1
+
+        # 5. Build configs
+        #
+        # working_dir = clone_path (repo root) — always the root of the clone.
+        #
+        # Why not metadata_dir?  When a subdirectory is used, the metadata args
+        # commonly reference the subdir via `--directory <subdir>` (e.g.
+        # `uv --directory google-sheets-mcp run server.py`).  That pattern is
+        # designed to be executed from the repo root, not from inside the subdir.
+        # Setting working_dir to the repo root keeps those args correct.
+        #
+        # install_path = metadata_dir (the resolved lookup dir, subdir or root).
+        configs: List[Dict] = []
+        for name, srv_config in mcp_servers.items():
+            # Validate command against allowlist before building the config
+            command = srv_config.get("command", "")
+            is_valid, error = validate_command_allowlist(command)
+            if not is_valid:
+                raise ValueError(f"Server '{name}': {error}")
+
+            config = ServerBuilder.build_config(
+                base_id=base_server_id,
+                server_name=name,
+                server_config=srv_config,
+                clone_path=clone_path,     # working_dir = repo root
+                install_path=metadata_dir, # install_path = subdir (or root)
+                repo_path=repo_path,
+                branch=branch,
+                env=env,
+                restart_policy=restart_policy,
+                max_restarts=max_restarts,
+                enabled=enabled,
+                is_multi_server=is_multi,
+                created_by=created_by,
+            )
+            configs.append(config)
+
+        return configs, clone_path
 
 
 def apply_env_to_metadata(metadata_path: Path, server_name: str, env_config: Dict) -> None:
