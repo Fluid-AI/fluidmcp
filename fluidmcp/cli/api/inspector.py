@@ -33,6 +33,9 @@ class ConnectRequest(BaseModel):
     env_vars: Optional[Dict[str, str]] = None
     timeout: Optional[int] = 10000  # ms
 
+class ChatRequest(BaseModel):
+    message: str
+    chat_history: Optional[list] = []
 
 # ─── TTL Cleanup ───────────────────────────────────────────────────────────────
 
@@ -195,3 +198,69 @@ async def get_logs(session_id: str):
 
     session.last_used = time.time()
     return {"logs": session.logs}
+
+@router.post("/inspector/{session_id}/chat")
+async def chat_with_tools(session_id: str, body: ChatRequest):
+    """
+    Chat endpoint that selects which tool to run.
+    It DOES NOT execute the tool — frontend does that.
+    """
+
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    try:
+        tools = await session.list_tools()
+
+        if not tools:
+            return {
+                "clarification_needed": True,
+                "message": "No tools available on this server."
+            }
+
+        message = body.message.lower()
+
+        # Simple heuristic: choose tool whose name appears in message
+        chosen_tool = None
+        for tool in tools:
+            if tool["name"].lower() in message:
+                chosen_tool = tool
+                break
+
+        # fallback to first tool
+        if not chosen_tool:
+            chosen_tool = tools[0]
+
+        params = {}
+
+        # Example heuristic for time tools
+        if "timezone" in str(chosen_tool.get("inputSchema", {})).lower():
+
+            # naive extraction
+            if "tokyo" in message:
+                params["timezone"] = "Asia/Tokyo"
+            elif "london" in message:
+                params["timezone"] = "Europe/London"
+            elif "new york" in message:
+                params["timezone"] = "America/New_York"
+
+        session.add_log(
+            "chat",
+            f"User: {body.message} → tool selected: {chosen_tool['name']}"
+        )
+
+        return {
+            "tool_name": chosen_tool["name"],
+            "params": params
+        }
+
+    except Exception as e:
+        logger.error(f"Inspector chat error: {e}")
+
+        return {
+            "clarification_needed": True,
+            "message": "Unable to determine which tool to run."
+        }

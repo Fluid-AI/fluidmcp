@@ -26,6 +26,15 @@ interface LogEntry {
   message: string;
 }
 
+type ChatMessage = {
+  id: string
+  type: "user" | "thinking" | "tool_call" | "tool_result" | "assistant" | "error"
+  content?: string
+  toolName?: string
+  params?: any
+  result?: any
+  timestamp: number
+}
 // Helper to generate unique server IDs
 const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -51,7 +60,8 @@ export default function MCPInspector() {
   const [mode, setMode] = useState<"manual" | "chat">("manual")
 
   const [chatInput, setChatInput] = useState("")
-  const [chatHistory, setChatHistory] = useState<any[]>([])
+  // const [chatHistory, setChatHistory] = useState<any[]>([])
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
   const [panelSizes, setPanelSizes] = useState({
     left: 25,     // percentage (right auto-calculated as 100-left)
@@ -264,41 +274,102 @@ export default function MCPInspector() {
     }
   };
 
-  const runChatTool = async () => {
-    if (!chatInput || !selectedServer?.session_id) return;
+ const runChatTool = async () => {
+  if (!chatInput || !selectedServer?.session_id) return
 
-    try {
-      setChatLoading(true);
+  const message = chatInput
+  setChatInput("")
 
-      const message = chatInput;
+  const userMsg: ChatMessage = {
+    id: crypto.randomUUID(),
+    type: "user",
+    content: message,
+    timestamp: Date.now()
+  }
 
-      setChatHistory((prev) => [...prev, { role: "user", content: message }]);
+  setChatHistory(prev => [...prev, userMsg])
 
-      const tool = selectedTool || selectedServer.tools?.[0];
+  try {
+    setChatLoading(true)
 
-      if (!tool) throw new Error("No tools available");
-
-      const res = await apiClient.runInspectorTool(
-        selectedServer.session_id,
-        tool.name,
-        { location: message }
-      );
-
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: JSON.stringify(res, null, 2) },
-      ]);
-
-      setChatInput("");
-    } catch (err: any) {
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: "Error running tool" },
-      ]);
-    } finally {
-      setChatLoading(false);
+    // Show thinking
+    const thinkingMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      type: "thinking",
+      content: "Deciding which tool to use...",
+      timestamp: Date.now()
     }
-  };
+
+    setChatHistory(prev => [...prev, thinkingMsg])
+
+    // Call backend chat endpoint
+    const res = await apiClient.chatWithInspector(
+      selectedServer.session_id,
+      {
+        message,
+        chat_history: chatHistory.slice(-8).map(m => ({
+          type: m.type,
+          content: m.content
+        }))
+      }
+    )
+
+    // Remove thinking message
+    setChatHistory(prev => prev.filter(m => m.id !== thinkingMsg.id))
+
+    if (res.clarification_needed) {
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        type: "assistant",
+        content: res.message,
+        timestamp: Date.now()
+      }
+
+      setChatHistory(prev => [...prev, assistantMsg])
+      return
+    }
+
+    // Tool call message
+    const toolCallMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      type: "tool_call",
+      toolName: res.tool_name,
+      params: res.params,
+      timestamp: Date.now()
+    }
+
+    setChatHistory(prev => [...prev, toolCallMsg])
+
+    // Execute tool
+    const result = await apiClient.runInspectorTool(
+      selectedServer.session_id,
+      res.tool_name,
+      res.params
+    )
+
+    const resultMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      type: "tool_result",
+      result,
+      timestamp: Date.now()
+    }
+
+    setChatHistory(prev => [...prev, resultMsg])
+
+  } catch (err: any) {
+
+    const errorMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      type: "error",
+      content: err?.message || "Chat error",
+      timestamp: Date.now()
+    }
+
+    setChatHistory(prev => [...prev, errorMsg])
+  } finally {
+    setChatLoading(false)
+  }
+}
 
   useEffect(() => {
     setToolResult(null)
@@ -929,21 +1000,58 @@ export default function MCPInspector() {
                               gap: "0.5rem",
                             }}
                           >
-                            {chatHistory.map((msg, i) => (
-                              <div
-                                key={i}
-                                style={{
-                                  padding: "0.5rem",
-                                  borderRadius: "0.35rem",
-                                  background: msg.role === "user" ? "rgba(255,255,255,0.1)" : "rgba(99,102,241,0.2)",
-                                }}
-                              >
-                                <strong style={{ fontSize: "0.8rem" }}>{msg.role}</strong>
-                                <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.85rem" }}>
-                                  {msg.content}
-                                </pre>
-                              </div>
-                            ))}
+                            {chatHistory.map((msg) => {
+
+                              if (msg.type === "user") {
+                                return (
+                                  <div key={msg.id} style={{ alignSelf: "flex-end", background: "rgba(255,255,255,0.1)", padding: "0.5rem", borderRadius: "6px" }}>
+                                    {msg.content}
+                                  </div>
+                                )
+                              }
+
+                              if (msg.type === "thinking") {
+                                return (
+                                  <div key={msg.id} style={{ opacity: 0.6 }}>
+                                    {msg.content}
+                                  </div>
+                                )
+                              }
+
+                              if (msg.type === "tool_call") {
+                                return (
+                                  <div key={msg.id} style={{ background: "rgba(59,130,246,0.15)", padding: "0.5rem", borderRadius: "6px" }}>
+                                    <strong>Calling tool:</strong> {msg.toolName}
+                                    <pre>{JSON.stringify(msg.params, null, 2)}</pre>
+                                  </div>
+                                )
+                              }
+
+                              if (msg.type === "tool_result") {
+                                return (
+                                  <div key={msg.id}>
+                                    <ToolResult result={msg.result} />
+                                  </div>
+                                )
+                              }
+
+                              if (msg.type === "assistant") {
+                                return (
+                                  <div key={msg.id} style={{ background: "rgba(99,102,241,0.2)", padding: "0.5rem", borderRadius: "6px" }}>
+                                    {msg.content}
+                                  </div>
+                                )
+                              }
+
+                              if (msg.type === "error") {
+                                return (
+                                  <div key={msg.id} style={{ background: "rgba(239,68,68,0.15)", padding: "0.5rem", borderRadius: "6px" }}>
+                                    {msg.content}
+                                  </div>
+                                )
+                              }
+
+                            })}
                           </div>
 
                           {/* Chat Input */}
