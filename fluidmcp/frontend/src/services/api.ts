@@ -321,6 +321,19 @@ class ApiClient {
       method: "GET",
     });
   }
+  async chatWithInspector(sessionId: string, data: any) {
+    const res = await fetch(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data)
+    })
+
+    if (!res.ok) {
+      throw new Error("Chat request failed")
+    }
+
+    return res.json()
+  }
 
   /**
    * Clone a GitHub repository and register its MCP server(s).
