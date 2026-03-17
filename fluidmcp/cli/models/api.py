@@ -288,6 +288,13 @@ class AddServerFromGitHubRequest(BaseModel):
             "to the database.  Recommended: True."
         ),
     )
+    upsert: bool = Field(
+        default=False,
+        description=(
+            "If True, update existing servers with the same ID instead of rejecting "
+            "with a 409 conflict. Useful for re-importing or updating GitHub servers."
+        ),
+    )
 
     class Config:
         json_schema_extra = {

@@ -67,6 +67,7 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
   const [subdirectory, setSubdirectory] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [envText, setEnvText] = useState('');
+  const [upsert, setUpsert] = useState(false);
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -177,6 +178,7 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
           subdirectory: subdirectory.trim() || undefined,
           env: Object.keys(env).length > 0 ? env : undefined,
           test_before_save: false,
+          upsert: upsert,
         },
         token.trim()
       );
@@ -198,13 +200,13 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
       progressRunning.current = false;
 
       if (err instanceof ApiHttpError && err.status === 409) {
-        // Server ID already taken — bump the suffix and let the user retry
+        // Server ID already taken — offer two solutions
         const suggested = bumpServerId(serverId.trim());
         setServerId(suggested);
         setServerIdTouched(true);
         setApiError(
-          `Server ID "${serverId.trim()}" is already taken. ` +
-          `We've suggested "${suggested}" — hit Clone & Register to try again.`,
+          `Server ID "${serverId.trim()}" already exists. ` +
+          `Either use a different ID like "${suggested}", or enable "Update existing servers" to overwrite it.`,
         );
       } else {
         setApiError(err instanceof Error ? err.message : 'Clone failed');
@@ -490,6 +492,22 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
               />
               <p className="mt-1 text-xs text-zinc-500">
                 KEY=value, one per line. These merge on top of the repo's own defaults.
+              </p>
+            </div>
+
+            <div className="border-t border-zinc-700 pt-4">
+              <label className="flex items-center space-x-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={upsert}
+                  onChange={(e) => setUpsert(e.target.checked)}
+                  className="w-4 h-4 bg-zinc-800 border border-zinc-700 rounded checked:bg-blue-600 checked:border-blue-600 cursor-pointer"
+                />
+                <span className="text-sm font-medium text-zinc-300">Update existing servers</span>
+              </label>
+              <p className="mt-2 text-xs text-zinc-500">
+                If checked, servers with the same ID will be updated instead of being rejected. 
+                Useful for re-importing repositories or pulling latest changes.
               </p>
             </div>
           </div>
