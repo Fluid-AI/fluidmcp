@@ -1,6 +1,6 @@
 # HTML UI MCP Server
 
-An AI-powered Model Context Protocol (MCP) server that generates and modifies HTML user interfaces using natural language instructions.
+An AI-powered Model Context Protocol (MCP) server that generates and modifies HTML user interfaces using natural language instructions with **progressive streaming** for real-time UI building.
 
 ## Overview
 
@@ -11,14 +11,50 @@ This MCP server acts as an intelligent HTML/CSS/JavaScript generator that can:
 - 📱 Create responsive, mobile-friendly layouts
 - 🌓 Support dark and light themes
 - ⚡ Use plain HTML with inline CSS (no external frameworks)
+- 🚀 **Smart chunking with parent-first, then children streaming**
+- 🌊 **HTTP streaming endpoint with Server-Sent Events (SSE)**
 - ♿ Follow accessibility best practices
-- 🚀 Produce simple, clean, production-ready code
+- 🏭 Produce simple, clean, production-ready code
 
 ## Features
 
+### Progressive HTML Streaming
+
+This server implements **intelligent HTML chunking** for progressive rendering:
+
+- 🏗️ **Parent-First Architecture**: Streams complete parent structure first (`<!DOCTYPE html><html><head>...</head><body><div class="container">`)
+- 🧩 **Child Injection**: Then progressively streams each child element (form fields, buttons, etc.)
+- 🎯 **Logical Boundaries**: Chunks at semantic HTML boundaries, not arbitrary character positions
+- 📦 **Renderable Blocks**: Each chunk is a complete, valid HTML fragment that can render progressively
+
+**Example Streaming Pattern:**
+```
+Chunk 1: <!DOCTYPE html><html><head>...styles...</head><body><div class="container">
+Chunk 2:   <div class="form-group">username field</div>
+Chunk 3:   <div class="form-group">password field</div>
+Chunk 4:   <button>Log In</button>
+Chunk 5: </div></body></html>
+```
+
+### Two Access Modes
+
+#### 1. MCP Protocol (Stdio)
+Standard MCP tool interface for Claude Desktop and other MCP clients.
+
+#### 2. HTTP Streaming Endpoint (NEW!)
+Direct HTTP access with Server-Sent Events for true progressive rendering.
+
+**Endpoint:** `POST /stream-html`
+
+**Benefits:**
+- ✅ True streaming to browser/client
+- ✅ Progressive rendering as HTML generates
+- ✅ Real-time feedback
+- ✅ No MCP client required
+
 ### Single Tool: `modify_ui_or_html`
 
-**Purpose:** Generate or modify HTML UI using natural language instructions. Creates simple, clean HTML pages with inline CSS styling.
+**Purpose:** Generate or modify HTML UI using natural language instructions. Creates simple, clean HTML pages with inline CSS styling. Supports both standard and streaming modes.
 
 **Parameters:**
 - `user_prompt` (required): Natural language instruction describing the desired UI (e.g., "Create a login page", "Add a navigation menu", "Make this responsive")
@@ -161,6 +197,180 @@ curl -X POST http://localhost:8099/html-ui/mcp \
   }'
 ```
 
+### HTTP Streaming Endpoint (Server-Sent Events)
+
+🌊 **NEW**: Direct HTTP streaming for progressive HTML rendering!
+
+#### Start the Streaming Server
+
+```bash
+# Option 1: Using the start script
+cd examples/html-ui-mcp
+export GOOGLE_API_KEY="your-api-key-here"
+./start-streaming-server.sh
+
+# Option 2: Direct python command
+cd examples/html-ui-mcp
+export GOOGLE_API_KEY="your-api-key-here"
+python3 server.py --http-only
+```
+
+Server starts on **http://localhost:8090**
+
+#### Test with curl
+
+```bash
+# Stream HTML generation (parent-first, then children)
+curl -X POST http://localhost:8090/stream-html \
+  -H "Content-Type: application/json" \
+  -d '{"user_prompt": "Create a registration form with username, email, and password fields"}' \
+  -N
+```
+
+**Expected Output (SSE format):**
+```
+data: {"chunk_id": 1, "html": "<!DOCTYPE html>\n<html>...<div class=\"container\">", "done": false}
+
+data: {"chunk_id": 2, "html": "  <div class=\"form-group\">username field</div>", "done": false}
+
+data: {"chunk_id": 3, "html": "  <div class=\"form-group\">email field</div>", "done": false}
+
+data: {"chunk_id": 4, "html": "  <div class=\"form-group\">password field</div>", "done": false}
+
+data: {"chunk_id": 5, "html": "  <button>Register</button>", "done": false}
+
+data: {"chunk_id": 6, "html": "</div></body></html>", "done": false}
+
+data: {"chunk_id": 7, "html": "", "done": true, "total_chunks": 6}
+```
+
+#### Interactive Demo
+
+Open the included demo page in your browser:
+
+```bash
+# Start the server first
+cd examples/html-ui-mcp
+export GOOGLE_API_KEY="your-api-key-here"
+./start-streaming-server.sh
+
+# In another terminal or browser, open:
+open streaming-demo.html
+# or: file:///path/to/fluidmcp/examples/html-ui-mcp/streaming-demo.html
+```
+
+**Demo Features:**
+- 🎨 Live preview of HTML as it streams
+- 📦 Visual chunk breakdown showing logical blocks
+- ⚡ Real-time progress indicators
+- 🎯 Interactive prompt editor
+- 🏗️ Parent-first, then-children rendering
+
+#### Streaming Architecture
+
+The chunking algorithm delivers HTML in logical, renderable blocks:
+
+1. **Chunk 1** (Parent Structure):  
+   ```html
+   <!DOCTYPE html><html><head>...complete styles...</head>
+   <body><div class="container">
+   ```
+
+2. **Chunks 2-N** (Child Elements):  
+   Each form field, button, or component as a complete unit:
+   ```html
+   <div class="form-group">
+     <label>Username</label>
+     <input type="text" name="username">
+   </div>
+   ```
+
+3. **Final Chunk** (Closing Tags):  
+   ```html
+   </div></body></html>
+   ```
+
+This ensures **progressive rendering** - the browser can paint the parent structure immediately, then inject children as they arrive!
+
+#### JavaScript/Fetch Example
+
+```javascript
+async function streamHTML(prompt) {
+  const response = await fetch('http://localhost:8099/stream-html', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_prompt: prompt })
+  });
+  
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let accumulatedHTML = '';
+  
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+    
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = JSON.parse(line.slice(6));
+        
+        if (data.done) {
+          console.log('✓ Complete:', data.total_chunks, 'chunks');
+          break;
+        }
+        
+        // Progressive rendering
+        accumulatedHTML += data.html;
+        document.getElementById('preview').srcdoc = accumulatedHTML;
+        console.log(`Chunk ${data.chunk_id}:`, data.html.length, 'chars');
+      }
+    }
+  }
+}
+```
+
+### How Progressive Streaming Works
+
+This server uses Gemini's streaming API internally to generate HTML faster:
+
+#### Technical Details
+
+1. **Gemini Streaming**: Calls `generate_content_stream()` to receive HTML tokens as they're generated
+2. **Chunk Collection**: Server collects all chunks internally
+3. **Complete Response**: Returns full HTML via standard MCP `tools/call` response
+
+#### Benefits
+
+- **Faster Time-to-First-Token**: Gemini starts generating immediately
+- **Reduced Latency**: Overall generation time is faster than non-streaming
+- **Better Resource Usage**: Server can process HTML progressively
+- **No Client Changes Needed**: Works with any MCP client (Claude Desktop, etc.)
+
+#### Example Request (Standard MCP)
+
+```bash
+curl -X POST http://localhost:8099/html-ui/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "modify_ui_or_html",
+      "arguments": {
+        "user_prompt": "Create a modern dashboard"
+      }
+    }
+  }'
+```
+
+The server internally streams from Gemini, but you receive the complete HTML in the response.
+
+**Note**: MCP over stdio doesn't support streaming responses to the client. The streaming benefit is at the LLM API level (Gemini), which makes generation faster overall.
+
 ## Claude Desktop Configuration
 
 Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
@@ -237,6 +447,78 @@ The HTML can be:
 - Rendered in an MCP client that supports HTML display
 - Further modified with additional prompts
 
+## Building an HTML Preview Client
+
+To display the generated HTML in a web application, use a secure sandbox:
+
+### Secure Iframe Pattern
+
+```html
+<iframe 
+  sandbox="allow-scripts"
+  id="html-preview"
+  style="width: 100%; height: 100%; border: none;"
+></iframe>
+
+<script>
+async function generateAndPreview(prompt) {
+  // Call the MCP server
+  const response = await fetch('http://localhost:8099/html-ui/mcp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: {
+        name: 'modify_ui_or_html',
+        arguments: { user_prompt: prompt }
+      }
+    })
+  });
+  
+  const data = await response.json();
+  const html = data.result.content[0].text;
+  
+  // Render in sandboxed iframe
+  const iframe = document.getElementById('html-preview');
+  const doc = iframe.contentDocument;
+  doc.open();
+  doc.write(html);
+  doc.close();
+}
+</script>
+```
+
+### Security Best Practices
+
+1. **Iframe Sandboxing**:
+   - ✅ `allow-scripts` - Enable JavaScript for interactivity
+   - ❌ **NO** `allow-same-origin` - Prevents access to parent window's cookies/localStorage
+   - ❌ **NO** `allow-forms` - Prevents form submission
+   - ❌ **NO** `allow-popups` - Blocks popup windows
+
+2. **Content Security Policy**:
+   ```html
+   <meta http-equiv="Content-Security-Policy" 
+     content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: https:;">
+   ```
+
+3. **PostMessage Communication**: Use `window.postMessage()` to safely pass data between parent and iframe.
+
+### Example: Chat UI with Preview
+
+See [demo.html](demo.html) for a complete example showing:
+- Split-panel layout (chat + preview)
+- Secure iframe rendering
+- Simple UI for sending prompts
+- Visual demonstration of the concept
+
+```bash
+# Open the demo
+open examples/html-ui-mcp/demo.html
+```
+
 ## Generated UI Characteristics
 
 ### HTML Structure
@@ -267,15 +549,121 @@ The HTML can be:
 - Color contrast compliance
 - Screen reader friendly
 
+## Testing & Demo
+
+### Interactive Demo
+
+Open [demo.html](demo.html) in your browser to see a visual demonstration of streaming HTML generation:
+
+```bash
+# Open the demo
+open examples/html-ui-mcp/demo.html
+# or
+firefox examples/html-ui-mcp/demo.html
+```
+
+The demo shows:
+- Split-panel UI (chat + preview)
+- Simulated streaming HTML chunks
+- Real-time iframe rendering
+- Artifact-style live preview
+
+**Note**: This is a UI mockup. For actual streaming, run the MCP server and connect via a compatible client.
+
+### Test Streaming Functionality
+
+Run the included test script to verify streaming works with your Gemini API key:
+
+```bash
+cd examples/html-ui-mcp
+
+# Set your API key
+export GOOGLE_API_KEY="your-api-key-here"
+
+# Run streaming test
+python3 test_streaming.py
+```
+
+**Expected Output:**
+```
+============================================================
+HTML UI MCP Server - Streaming Test
+============================================================
+✓ Gemini API configured
+
+🚀 Testing HTML streaming generation...
+
+Streaming HTML chunks:
+------------------------------------------------------------
+Chunk  1 [  48 chars]: <!DOCTYPE html>\n<html lang="en">\n<head>\n    ...
+Chunk  2 [  52 chars]:     <meta charset="UTF-8">\n    <meta name="v...
+Chunk  3 [  65 chars]: iewport" content="width=device-width, initial...
+...
+------------------------------------------------------------
+
+✓ Streaming complete!
+  - Total chunks: 15
+  - Total characters: 1247
+  - Final HTML length: 1247
+  - HTML structure: Valid ✓
+
+First 200 characters of generated HTML:
+------------------------------------------------------------
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello World</title>
+...
+------------------------------------------------------------
+
+🔄 Testing non-streaming generation (for comparison)...
+
+✓ Non-streaming complete!
+  - HTML length: 1247
+  - Valid HTML: Yes
+
+============================================================
+✅ All tests passed!
+============================================================
+```
+
+### Manual Testing via FluidMCP
+
+```bash
+# Start the server
+fluidmcp run examples/html-ui-mcp-config.json --file --start-server
+
+# In another terminal, test the tool
+curl -X POST http://localhost:8099/html-ui/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "modify_ui_or_html",
+      "arguments": {
+        "user_prompt": "Create a colorful landing page"
+      }
+    }
+  }' | jq '.result.content[0].text' -r > output.html
+
+# Open the generated HTML
+open output.html
+```
+
 ## Architecture
 
 ### MCP Protocol Compliance
 
 The server strictly follows the Model Context Protocol:
 
-- ✅ Uses official `mcp` package
+- ✅ Uses official `mcp` package (v1.26.0+)
 - ✅ Tools registered via `@app.list_tools()`
 - ✅ Tool execution via `@app.call_tool()`
+- ✅ Streaming via `@app.create_message()` (sampling/create_message)
 - ✅ Returns standard MCP `TextContent`
 - ✅ Runs on stdio transport
 - ✅ No custom API endpoints
@@ -285,15 +673,17 @@ The server strictly follows the Model Context Protocol:
 
 1. **No Static Templates:** Server dynamically generates all HTML using AI
 2. **LLM-Powered:** Uses Google Gemini with automatic model fallback for reliability
-3. **Simple & Clean:** Plain HTML/CSS without external frameworks or dependencies
-4. **Error Handling:** Returns styled error pages as HTML
-5. **Production Ready:** Generated code works immediately in any browser
+3. **Streaming Support:** Real-time HTML generation via Gemini's streaming API
+4. **Simple & Clean:** Plain HTML/CSS without external frameworks or dependencies
+5. **Error Handling:** Returns styled error pages as HTML
+6. **Production Ready:** Generated code works immediately in any browser
 
 ### Generation Parameters
 
 - **Temperature:** 0.3 (balanced between creativity and consistency)
 - **Max Output Tokens:** 6144 (supports large, complex pages)
 - **Model Fallback:** Automatic retry with alternative models if primary fails
+- **Streaming:** Chunks generated progressively via `generate_content_stream()`
 
 ### Helper Function: `create_ui_resource`
 

@@ -4,7 +4,7 @@
       "command": "python3",
       "args": ["/workspaces/fluidmcp/examples/html-ui-mcp/server.py"],
       "env": {
-        "GOOGLE_API_KEY": "AIzaSyB7oeDqiVvH80aHrwItkiM1M_QL3z1P_ic"
+        "GOOGLE_API_KEY": "AIzaSyAv-JMA6zJiQfuTbvYrP41ChvCR4hvPLN8"
       }
     }
   }

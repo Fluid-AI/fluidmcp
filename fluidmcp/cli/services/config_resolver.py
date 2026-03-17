@@ -463,6 +463,9 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
 def _create_temp_server_dir(server_name: str, server_cfg: dict) -> Path:
     """
     Create a temporary directory with metadata.json for a direct server configuration.
+    
+    If the server script has a metadata.json in the same directory, use that.
+    Otherwise, create a minimal metadata.json.
 
     Args:
         server_name: Name of the server
@@ -482,16 +485,49 @@ def _create_temp_server_dir(server_name: str, server_cfg: dict) -> Path:
     server_dir = temp_base / server_name
     server_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create metadata.json
-    metadata = {
-        "mcpServers": {
-            server_name: {
-                "command": server_cfg.get("command"),
-                "args": server_cfg.get("args", []),
-                "env": server_cfg.get("env", {})
+    # Try to find existing metadata.json in the server's directory
+    existing_metadata = None
+    args = server_cfg.get("args", [])
+    if args:
+        # Get the first arg (usually the server script path)
+        server_script = Path(args[0])
+        if server_script.is_absolute() and server_script.exists():
+            # Look for metadata.json in the same directory
+            possible_metadata = server_script.parent / "metadata.json"
+            if possible_metadata.exists():
+                try:
+                    with open(possible_metadata, 'r') as f:
+                        existing_metadata = json.load(f)
+                    logger.info(f"Using existing metadata.json from {possible_metadata}")
+                except Exception as e:
+                    logger.warning(f"Could not read metadata.json from {possible_metadata}: {e}")
+
+    # If we found existing metadata, merge it with the server config
+    if existing_metadata:
+        # Start with existing metadata
+        metadata = existing_metadata.copy()
+        
+        # Ensure mcpServers section exists and update with config values
+        if "mcpServers" not in metadata:
+            metadata["mcpServers"] = {}
+        
+        # Merge the server configuration
+        metadata["mcpServers"][server_name] = {
+            "command": server_cfg.get("command"),
+            "args": server_cfg.get("args", []),
+            "env": server_cfg.get("env", {})
+        }
+    else:
+        # Create minimal metadata.json
+        metadata = {
+            "mcpServers": {
+                server_name: {
+                    "command": server_cfg.get("command"),
+                    "args": server_cfg.get("args", []),
+                    "env": server_cfg.get("env", {})
+                }
             }
         }
-    }
 
     metadata_path = server_dir / "metadata.json"
     with open(metadata_path, 'w') as f:
