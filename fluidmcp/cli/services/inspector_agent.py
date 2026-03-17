@@ -21,24 +21,35 @@ client = OpenAI(
 
 def format_tools_for_prompt(tools):
     """
-    Convert MCP tool schemas into a simple prompt-friendly format.
+    Convert MCP tools into a detailed prompt format.
     """
-    tool_lines = []
+
+    formatted = []
 
     for tool in tools:
         name = tool.get("name")
-        desc = tool.get("description", "")
+        description = tool.get("description", "No description")
+
         schema = tool.get("inputSchema", {})
         props = schema.get("properties", {})
 
-        params = ", ".join(props.keys())
+        params = []
+        for param_name, param_info in props.items():
+            param_type = param_info.get("type", "string")
+            params.append(f"- {param_name} ({param_type})")
 
-        tool_lines.append(
-            f"{name}({params}) - {desc}"
+        param_text = "\n".join(params) if params else "None"
+
+        formatted.append(
+            f"""
+            Tool: {name}
+            Description: {description}
+            Parameters:
+            {param_text}
+            """
         )
 
-    return "\n".join(tool_lines)
-
+    return "\n".join(formatted)
 
 async def choose_tool_with_llm(message: str, tools: list):
     """
@@ -53,19 +64,29 @@ async def choose_tool_with_llm(message: str, tools: list):
     tool_description = format_tools_for_prompt(tools)
 
     prompt = f"""
-You are an AI agent that selects which MCP tool to run.
+    You are an AI agent that selects which MCP tool should be executed.
 
-Available tools:
-{tool_description}
+    Available tools:
+    {tool_description}
 
-User request:
-{message}
+    User request:
+    {message}
 
-Respond ONLY with JSON.
+    Instructions:
+    1. Choose the BEST tool to fulfill the request.
+    2. Extract parameters from the request.
+    3. Return ONLY JSON.
 
-Example:
-{{"tool_name": "get_current_time", "params": {{"timezone": "Asia/Tokyo"}}}}
-"""
+    Example response:
+
+    {{"tool_name": "convert_time",
+        "params": {{
+            "time": "16:00",
+            "source_timezone": "Asia/Tokyo",
+            "target_timezone": "Europe/London"
+        }}
+    }}
+    """
 
     try:
 

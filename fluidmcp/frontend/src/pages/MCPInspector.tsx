@@ -900,7 +900,7 @@ export default function MCPInspector() {
             <Panel 
               defaultSize={100 - panelSizes.left} 
               minSize={50}
-              style={{ overflow: "auto", display: "flex", flexDirection: "column" }}
+              style={{ overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}
             >
               <div
                 style={{
@@ -913,6 +913,7 @@ export default function MCPInspector() {
                   display: "flex",
                   flexDirection: "column",
                   overflow: "hidden",
+                  minHeight: 0,
                 }}
               >
                 <h2 style={{ fontSize: "1.1rem", fontWeight: "600", flexShrink: 0 }}>
@@ -948,7 +949,7 @@ export default function MCPInspector() {
                 </div>
 
                 {/* ── MANUAL MODE ─── */}
-                <div style={{ flex: 1, overflow: "auto", marginTop: "1rem" }}>
+                <div style={{ flex: 1, overflow: "hidden", marginTop: "1rem", minHeight: 0 }}>
                   {mode === "manual" && selectedServer && selectedTool && (
                     <div>
                       <h3 style={{ marginBottom: "1rem" }}>{selectedTool.name}</h3>
@@ -985,7 +986,7 @@ export default function MCPInspector() {
 
                   {/* ── CHAT MODE ─── */}
                   {mode === "chat" && selectedServer && (
-                    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "300px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "0", overflow: "hidden" }}>
                       {selectedServer.status === "connected" ? (
                         <>
                           {/* Chat History */}
@@ -993,18 +994,21 @@ export default function MCPInspector() {
                             ref={chatRef}
                             style={{
                               flex: 1,
-                              overflow: "auto",
+                              minHeight: 0,        
+                              overflowY: "auto",
+                              overflowX: "hidden",
                               marginBottom: "1rem",
                               display: "flex",
                               flexDirection: "column",
                               gap: "0.5rem",
+                              paddingRight: "4px"
                             }}
                           >
                             {chatHistory.map((msg) => {
 
                               if (msg.type === "user") {
                                 return (
-                                  <div key={msg.id} style={{ alignSelf: "flex-end", background: "rgba(255,255,255,0.1)", padding: "0.5rem", borderRadius: "6px" }}>
+                                  <div key={msg.id} style={{ alignSelf: "flex-end", background: "rgba(255,255,255,0.1)", padding: "0.5rem", borderRadius: "6px", maxWidth: "75%", wordBreak: "break-word" }}>
                                     {msg.content}
                                   </div>
                                 )
@@ -1029,7 +1033,7 @@ export default function MCPInspector() {
 
                               if (msg.type === "tool_result") {
                                 return (
-                                  <div key={msg.id}>
+                                  <div key={msg.id} style={{ maxWidth: "100%", overflowX: "auto" }}>
                                     <ToolResult result={msg.result} />
                                   </div>
                                 )
