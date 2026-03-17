@@ -74,8 +74,8 @@ async def choose_tool_with_llm(message: str, tools: list, chat_history: list = [
 Available tools:
 {tool_description}
 
-User request:
-{message}
+    User request:
+    {message}
 
 Instructions:
 1. Choose the BEST tool to fulfill the request.
