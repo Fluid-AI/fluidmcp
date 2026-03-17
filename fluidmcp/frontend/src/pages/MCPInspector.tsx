@@ -72,12 +72,30 @@ export default function MCPInspector() {
   const chatRef = useRef<HTMLDivElement>(null);
 
   const handleConnect = async () => {
+
     if (!url) return;
 
-    // Prevent duplicate servers
     if (servers.some(s => s.url === url)) {
       alert("Server already added");
       return;
+    }
+
+    // ✅ Disconnect any currently connected server before adding a new one
+    const activeServer = servers.find(s => s.status === "connected" && s.session_id);
+    if (activeServer) {
+      try {
+        await apiClient.disconnectInspectorServer(activeServer.session_id!);
+        setServers(prev =>
+          prev.map(s =>
+            s.id === activeServer.id
+              ? { ...s, session_id: null, tools: [], status: "disconnected" as const, error: undefined }
+              : s
+          )
+        );
+      } catch (err) {
+        console.warn("Could not disconnect old server:", err);
+        // Non-fatal — continue connecting the new one
+      }
     }
 
     const serverId = generateServerId();
@@ -85,57 +103,44 @@ export default function MCPInspector() {
     try {
       setConnecting(true);
 
-      // Add optimistic "connecting" state
-      setServers((prev) => [
+      setServers(prev => [
         ...prev,
-        {
-          id: serverId,
-          session_id: null,
-          url,
-          transport,
-          tools: [],
-          status: 'connecting' as const,
-        },
+        { id: serverId, session_id: null, url, transport, tools: [], status: "connecting" as const },
       ]);
 
-      const res = await apiClient.connectInspectorServer({
-        url,
-        transport,
-      });
+      const res = await apiClient.connectInspectorServer({ url, transport });
 
-      // Update server with connected state and fetched data
-      setServers((prev) =>
-        prev.map((s) =>
+      setServers(prev =>
+        prev.map(s =>
           s.id === serverId
-            ? {
-                ...s,
-                session_id: res.session_id,
-                server_info: res.server_info,
-                tools: res.tools || [],
-                status: 'connected' as const,
-              }
+            ? { ...s, session_id: res.session_id, server_info: res.server_info, tools: res.tools || [], status: "connected" as const }
             : s
         )
       );
 
-      // Auto-select the newly connected server
       setSelectedServerId(serverId);
+      setSelectedTool(null);
+      setToolResult(null);
+      setToolError(null);
+
+      // ✅ Clear chat and show a welcome message for the new server
+      setChatHistory([{
+        id: crypto.randomUUID(),
+        type: "assistant",
+        content: `Connected to ${res.server_info?.name || "new server"}. Chat cleared — ready to go!`,
+        timestamp: Date.now(),
+      }]);
 
       setShowAddModal(false);
       setUrl("");
       setTransport("http");
+
     } catch (err: any) {
       console.error("Failed to connect", err);
-
-      // Update server with failed state
-      setServers((prev) =>
-        prev.map((s) =>
+      setServers(prev =>
+        prev.map(s =>
           s.id === serverId
-            ? {
-                ...s,
-                status: 'failed' as const,
-                error: err?.message || 'Failed to connect to MCP server',
-              }
+            ? { ...s, status: "failed" as const, error: err?.message || "Failed to connect to MCP server" }
             : s
         )
       );
@@ -580,9 +585,22 @@ export default function MCPInspector() {
                             <div
                               key={server.id}
                               onClick={() => {
+                                if (selectedServerId === server.id) return;
+
                                 setSelectedServerId(server.id);
                                 setSelectedTool(null);
                                 setToolResult(null);
+                                setToolError(null);
+                                // Reset chat
+                                setChatHistory([
+                                  {
+                                    id: crypto.randomUUID(),
+                                    type: "assistant",
+                                    content: `Switched to ${server?.server_info?.name || "server"}. Chat cleared.`,
+                                    timestamp: Date.now()
+                                  }
+                                ]);
+                                
                               }}
                               style={{
                                 marginTop: "0.75rem",
@@ -996,61 +1014,122 @@ export default function MCPInspector() {
                               flex: 1,
                               minHeight: 0,        
                               overflowY: "auto",
-                              overflowX: "hidden",
                               marginBottom: "1rem",
                               display: "flex",
                               flexDirection: "column",
                               gap: "0.5rem",
-                              paddingRight: "4px"
+                              padding: "0.5rem 0.5rem 0.5rem 0.25rem"
                             }}
                           >
                             {chatHistory.map((msg) => {
 
                               if (msg.type === "user") {
                                 return (
-                                  <div key={msg.id} style={{ alignSelf: "flex-end", background: "rgba(255,255,255,0.1)", padding: "0.5rem", borderRadius: "6px", maxWidth: "75%", wordBreak: "break-word" }}>
-                                    {msg.content}
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-end" }}>
+                                    <div style={{
+                                      background: "#2563eb",
+                                      color: "#fff",
+                                      padding: "0.6rem 0.75rem",
+                                      borderRadius: "12px 12px 4px 12px",
+                                      maxWidth: "70%",
+                                      fontSize: "0.9rem",
+                                      lineHeight: 1.4
+                                    }}>
+                                      {msg.content}
+                                    </div>
                                   </div>
                                 )
                               }
 
                               if (msg.type === "thinking") {
                                 return (
-                                  <div key={msg.id} style={{ opacity: 0.6 }}>
-                                    {msg.content}
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                    <div style={{
+                                      fontSize: "0.8rem",
+                                      opacity: 0.7,
+                                      fontStyle: "italic",
+                                      padding: "0.3rem 0.5rem"
+                                    }}>
+                                      🤖 {msg.content}...
+                                    </div>
                                   </div>
                                 )
                               }
 
                               if (msg.type === "tool_call") {
                                 return (
-                                  <div key={msg.id} style={{ background: "rgba(59,130,246,0.15)", padding: "0.5rem", borderRadius: "6px" }}>
-                                    <strong>Calling tool:</strong> {msg.toolName}
-                                    <pre>{JSON.stringify(msg.params, null, 2)}</pre>
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                    <div style={{
+                                      background: "rgba(59,130,246,0.12)",
+                                      border: "1px solid rgba(59,130,246,0.35)",
+                                      borderRadius: "8px",
+                                      padding: "0.6rem",
+                                      maxWidth: "80%",
+                                      fontSize: "0.8rem"
+                                    }}>
+                                      <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>
+                                        🔧 Tool: {msg.toolName}
+                                      </div>
+
+                                      <div style={{
+                                        fontFamily: "monospace",
+                                        fontSize: "0.75rem",
+                                        background: "rgba(0,0,0,0.3)",
+                                        padding: "0.4rem",
+                                        borderRadius: "6px",
+                                        overflowX: "auto"
+                                      }}>
+                                        {JSON.stringify(msg.params, null, 2)}
+                                      </div>
+                                    </div>
                                   </div>
                                 )
                               }
 
                               if (msg.type === "tool_result") {
                                 return (
-                                  <div key={msg.id} style={{ maxWidth: "100%", overflowX: "auto" }}>
-                                    <ToolResult result={msg.result} />
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                    <div style={{
+                                      borderLeft: "3px solid #22c55e",
+                                      paddingLeft: "0.5rem",
+                                      maxWidth: "85%"
+                                    }}>
+                                      <ToolResult result={msg.result} />
+                                    </div>
                                   </div>
                                 )
                               }
 
                               if (msg.type === "assistant") {
                                 return (
-                                  <div key={msg.id} style={{ background: "rgba(99,102,241,0.2)", padding: "0.5rem", borderRadius: "6px" }}>
-                                    {msg.content}
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                    <div style={{
+                                      background: "rgba(99,102,241,0.15)",
+                                      border: "1px solid rgba(99,102,241,0.3)",
+                                      padding: "0.6rem 0.75rem",
+                                      borderRadius: "12px 12px 12px 4px",
+                                      maxWidth: "70%",
+                                      fontSize: "0.9rem"
+                                    }}>
+                                      {msg.content}
+                                    </div>
                                   </div>
                                 )
                               }
 
                               if (msg.type === "error") {
                                 return (
-                                  <div key={msg.id} style={{ background: "rgba(239,68,68,0.15)", padding: "0.5rem", borderRadius: "6px" }}>
-                                    {msg.content}
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                    <div style={{
+                                      background: "rgba(239,68,68,0.15)",
+                                      border: "1px solid rgba(239,68,68,0.4)",
+                                      padding: "0.6rem",
+                                      borderRadius: "8px",
+                                      color: "#fca5a5",
+                                      maxWidth: "70%"
+                                    }}>
+                                      ❌ {msg.content}
+                                    </div>
                                   </div>
                                 )
                               }
@@ -1062,24 +1141,34 @@ export default function MCPInspector() {
                           <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
                             <input
                               value={chatInput}
+                              disabled={chatLoading}
                               onChange={(e) => setChatInput(e.target.value)}
                               placeholder="Ask something..."
-                              onKeyDown={(e) => { if (e.key === "Enter") runChatTool(); }}
+                              onKeyDown={(e) => { 
+                                if (e.key === "Enter" && !e.shiftKey && chatInput.trim()) {
+                                  e.preventDefault(); 
+                                  runChatTool();
+                                } 
+                              }}
                               style={{
                                 flex: 1, minWidth: 0, padding: "0.5rem",
                                 borderRadius: "0.35rem", border: "1px solid rgba(63,63,70,0.6)",
-                                background: "#09090b", color: "#fff",
+                                background: "#09090b", color: "#fff", opacity: chatLoading ? 0.6 : 1,
                               }}
                             />
                             <button
-                              onClick={runChatTool}
-                              disabled={chatLoading}
+                              onClick={()=>{
+                                if (chatInput.trim()) runChatTool();
+                              }}
+                              disabled={chatLoading || !chatInput.trim()}
                               style={{
                                 padding: "0.5rem 0.75rem", borderRadius: "0.35rem",
                                 background: "#fff", color: "#000", fontWeight: "600", flexShrink: 0,
+                                opacity: chatLoading || !chatInput.trim() ? 0.6 : 1,
+                                cursor: chatLoading || !chatInput.trim() ? "not-allowed" : "pointer"
                               }}
                             >
-                              {chatLoading ? "..." : "Send"}
+                              {chatLoading ? "Thinking..." : "Send"}
                             </button>
                           </div>
                         </>
