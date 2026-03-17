@@ -1,0 +1,53 @@
+{
+  "name": "html-ui-mcp-server",
+  "version": "1.6.0",
+  "description": "MCP server that generates and modifies HTML UI using natural language instructions with AI. Uses Gemini's streaming API internally for faster generation. Includes HTTP streaming endpoint for progressive rendering.",
+  "author": "FluidMCP",
+  "license": "MIT",
+  "mcp": {
+    "command": "python3",
+    "args": ["server.py"],
+    "env": {
+      "GOOGLE_API_KEY": ""
+    }
+  },
+  "http_endpoints": {
+    "enabled": true,
+    "app_module": "server",
+    "app_variable": "http_app",
+    "endpoints": [
+      {
+        "path": "/stream-html",
+        "method": "POST",
+        "description": "Stream HTML generation chunks for progressive rendering"
+      },
+      {
+        "path": "/health",
+        "method": "GET",
+        "description": "Health check endpoint"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "name": "modify_ui_or_html",
+      "description": "Generate or modify HTML UI using natural language instructions. Uses Gemini streaming internally for faster generation. Creates modern, responsive UIs with inline CSS."
+    }
+  ],
+  "categories": ["web-development", "ui-generation", "html", "ai"],
+  "tags": ["html", "ui", "css", "responsive", "web-design", "ai-powered", "gemini", "fast-generation", "streaming", "sse"],
+  "requirements": {
+    "python": ">=3.8"
+  },
+  "features": [
+    "Fast HTML generation using Gemini streaming API",
+    "HTTP streaming endpoint with Server-Sent Events (SSE)",
+    "Progressive HTML rendering (parent-first, then children)",
+    "Gemini-powered AI generation",
+    "Automatic model fallback",
+    "Plain HTML with inline CSS (no frameworks)",
+    "Mobile responsive layouts",
+    "Modify existing HTML code",
+    "Production-ready code output"
+  ]
+}

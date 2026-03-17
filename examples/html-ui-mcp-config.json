@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "html-ui": {
+      "command": "python3",
+      "args": ["/workspaces/fluidmcp/examples/html-ui-mcp/server.py"],
+      "env": {
+        "GOOGLE_API_KEY": "AIzaSyAv-JMA6zJiQfuTbvYrP41ChvCR4hvPLN8"
+      }
+    }
+  }
+}
