@@ -32,11 +32,14 @@ from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
 from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
+<<<<<<< HEAD
 from .server_manager import ServerManager
 from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
 from ..otel import init_otel, shutdown_otel
 from ..context import get_trace_id
+=======
+>>>>>>> FluidMCP_V1_AUTH_backend
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -1142,13 +1145,12 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
     from fastapi.responses import PlainTextResponse
     from .metrics import get_registry, MetricsCollector
 
-    @app.get("/metrics", tags=["monitoring"], dependencies=[Depends(verify_token)])
+    @app.get("/metrics", tags=["monitoring"])
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
 
-        Requires bearer token authentication when FMCP_SECURE_MODE=true.
-        Public access when secure mode is disabled.
+        Public access for monitoring purposes.
 
         Exposes metrics in Prometheus exposition format:
         - Request counters and histograms
