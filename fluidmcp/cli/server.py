@@ -27,6 +27,7 @@ from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .auth import verify_token
+from .services.opentelemetry_manager import init_opentelemetry, shutdown_opentelemetry
 
 
 import sentry_sdk
@@ -101,16 +102,37 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context for startup/shutdown.
-    
-    Ensures graceful cleanup of resources including database connections.
+
+    Ensures graceful cleanup of resources including database connections and OpenTelemetry.
     """
     # Startup phase
     logger.info("FastAPI application starting up...")
+
+    # Initialize OpenTelemetry (do this early in startup)
+    try:
+        init_opentelemetry(
+            service_name="fluidmcp",
+            service_version="2.0.0",
+            enable_tracing=os.getenv("OTEL_TRACING_ENABLED", "true").lower() == "true",
+            enable_metrics=os.getenv("OTEL_METRICS_ENABLED", "true").lower() == "true",
+            enable_logs=os.getenv("OTEL_LOGS_ENABLED", "true").lower() == "true",
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenTelemetry: {e}")
+        # Continue startup even if telemetry fails
+
     yield
-    
-    # Shutdown phase - FIX #2: Graceful MongoDB disconnect
+
+    # Shutdown phase
     logger.info("FastAPI application shutting down...")
-    
+
+    # Shutdown OpenTelemetry first
+    try:
+        shutdown_opentelemetry()
+    except Exception as e:
+        logger.error(f"Error during OpenTelemetry shutdown: {e}")
+
+    # Then disconnect database
     if hasattr(app.state, "persistence") and app.state.persistence:
         try:
             logger.info("Disconnecting from database...")
