@@ -21,7 +21,8 @@ client = OpenAI(
 
 def format_tools_for_prompt(tools):
     """
-    Convert MCP tools into a detailed prompt format.
+    Convert MCP tools into a readable prompt format.
+    This remains dynamic → supports ANY MCP.
     """
 
     formatted = []
@@ -42,18 +43,20 @@ def format_tools_for_prompt(tools):
 
         formatted.append(
             f"""
-            Tool: {name}
-            Description: {description}
-            Parameters:
-            {param_text}
-            """
+Tool: {name}
+Description: {description}
+Parameters:
+{param_text}
+"""
         )
 
     return "\n".join(formatted)
 
+
 async def choose_tool_with_llm(message: str, tools: list):
     """
     Universal MCP agent powered by Groq.
+    Works with ANY MCP tool schema.
     """
 
     if not tools:
@@ -64,60 +67,93 @@ async def choose_tool_with_llm(message: str, tools: list):
     tool_description = format_tools_for_prompt(tools)
 
     prompt = f"""
-    You are an AI agent that selects which MCP tool should be executed.
+Available tools:
+{tool_description}
 
-    Available tools:
-    {tool_description}
+User request:
+{message}
 
-    User request:
-    {message}
+Instructions:
+1. Choose the BEST tool to fulfill the request.
+2. Extract parameters from the request.
+3. If parameters are missing:
+   - Infer reasonable defaults OR leave them empty
+   - DO NOT explain anything
 
-    Instructions:
-    1. Choose the BEST tool to fulfill the request.
-    2. Extract parameters from the request.
-    3. Return ONLY JSON.
-
-    Example response:
-
-    {{"tool_name": "convert_time",
-        "params": {{
-            "time": "16:00",
-            "source_timezone": "Asia/Tokyo",
-            "target_timezone": "Europe/London"
-        }}
-    }}
-    """
+Return ONLY JSON.
+"""
 
     try:
-
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role": "system", "content": "You select MCP tools."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": """
+You are a strict JSON API for MCP tool selection.
+
+You MUST return ONLY valid JSON.
+
+Format:
+{
+  "tool_name": string,
+  "params": object
+}
+
+Rules:
+- No explanation
+- No markdown
+- No extra text
+- Always return JSON
+"""
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
             temperature=0,
-            max_tokens=120
+            max_tokens=200,
+            stop=["\n\n"]
         )
 
         content = response.choices[0].message.content.strip()
 
-        logger.info(f"LLM raw response: {content}")
+        logger.info(f"LLM raw response: {repr(content)}")
 
-        # Try parsing JSON safely
+        # ✅ First attempt: direct parse
         try:
             result = json.loads(content)
-        except json.JSONDecodeError:
+            logger.info(f"LLM parsed result (direct): {result}")
+            return result
 
-            # Attempt JSON extraction
+        except json.JSONDecodeError:
+            logger.warning("Direct JSON parse failed, attempting extraction...")
+
+            # ✅ Fallback: extract JSON block
             start = content.find("{")
             end = content.rfind("}") + 1
-            result = json.loads(content[start:end])
 
-        logger.info(f"LLM parsed result: {result}")
+            if start == -1 or end == 0:
+                raise ValueError(f"No JSON found in LLM response: {content}")
 
-        return result
+            json_str = content[start:end]
+            
+            # 🔥 Attempt auto-fix for truncated JSON
+            open_braces = json_str.count("{")
+            close_braces = json_str.count("}")
+
+            try:
+                result = json.loads(json_str)
+                logger.info(f"LLM parsed result (extracted): {result}")
+                return result
+
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to parse extracted JSON.\nRaw response: {content}\nExtracted: {json_str}"
+                ) from e
 
     except Exception as e:
         logger.error(f"Groq agent error: {e}")
         raise
+
