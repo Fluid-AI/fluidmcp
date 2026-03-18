@@ -756,7 +756,25 @@ class ServerManager:
                 return None
 
             # Build command list
-            cmd_list = [command] + args
+            # Normalize --directory paths relative to install_path
+            cleaned_args = []
+            i = 0
+            while i < len(args):
+                if args[i] == "--directory" and i + 1 < len(args):
+                    dir_path = args[i + 1]
+
+                    # Remove redundant prefix like "embed_weather_mcp_app/"
+                    install_name = Path(install_path).name
+                    if dir_path.startswith(f"{install_name}/"):
+                        dir_path = dir_path[len(install_name) + 1:]
+
+                    cleaned_args.extend(["--directory", dir_path])
+                    i += 2
+                else:
+                    cleaned_args.append(args[i])
+                    i += 1
+
+            cmd_list = [command] + cleaned_args
 
             # Merge environment variables (shell env takes precedence)
             env = dict(os.environ)
@@ -765,10 +783,13 @@ class ServerManager:
                     env[key] = value
 
             # Determine working directory
-            working_dir = Path(working_dir).resolve() if working_dir else Path(install_path).resolve()
+            working_dir = Path(install_path).resolve()
 
             logger.debug(f"Spawning process: {cmd_list}")
             logger.debug(f"Working directory: {working_dir}")
+            logger.info(f"COMMAND: {cmd_list}")
+            logger.info(f"CWD: {working_dir}")
+            logger.info(f"INSTALL_PATH: {install_path}")
 
             # Spawn subprocess
             process = subprocess.Popen(

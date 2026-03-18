@@ -111,7 +111,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         logger.exception("Error reading metadata.json")
         return None, None, None
 
-    def replace_path_placeholders(arg: str, dest_dir: Path) -> str:
+    def replace_path_placeholders(arg: str, base_path: Path) -> str:
         """Replace common path placeholder patterns with actual directory"""
         placeholders = [
             "<path to mcp-servers>",
@@ -123,7 +123,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         ]
         result = arg
         for placeholder in placeholders:
-            result = result.replace(placeholder, str(dest_dir))
+            result = result.replace(placeholder, str(base_path))
         return result
 
     try:
@@ -189,27 +189,9 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         #     # Registry package or direct config: use package directory
         #     working_dir = dest_dir
 
-        # Step 1: Start from metadata location
+        # Simple and predictable: run from metadata location
         working_dir = metadata_path.parent
-        logger.info(f"Initial working directory (metadata location): {working_dir}")
-
-        # Step 2: Check if args reference a subfolder (like 'zoho_mcp_server')
-        for arg in raw_args:
-            potential_path = working_dir / arg
-            if potential_path.exists() and potential_path.is_dir():
-                working_dir = potential_path
-                logger.info(f"Detected implementation folder from args: {working_dir}")
-                break
-
-        # Step 3 (fallback): Try to locate server.py automatically
-        server_file = working_dir / "server.py"
-        if not server_file.exists():
-            for path in working_dir.rglob("server.py"):
-                working_dir = path.parent
-                logger.info(f"Auto-detected server.py at: {working_dir}")
-                break
-
-        logger.info(f"Final working directory: {working_dir}")
+        logger.info(f"Using working directory: {working_dir}")
         
         process = subprocess.Popen(
             stdio_command,
