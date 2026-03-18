@@ -19,6 +19,21 @@ from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
+def find_metadata_file(base_dir: Path) -> Path:
+    """
+    Find metadata.json in repo.
+    Supports both root-level and nested MCP structures.
+    """
+    # 1. Check root first
+    root_meta = base_dir / "metadata.json"
+    if root_meta.exists():
+        return root_meta
+
+    # 2. Search inside repo (1–2 levels deep is enough)
+    for path in base_dir.rglob("metadata.json"):
+        return path
+
+    raise FileNotFoundError(f"metadata.json not found in {base_dir}")
 
 async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.0) -> dict:
     """
@@ -80,7 +95,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         Tuple of (package_name, router, process) or (None, None, None) on failure
     """
     dest_dir = Path(dest_dir)
-    metadata_path = dest_dir / "metadata.json"
+    metadata_path = find_metadata_file(dest_dir)
 
     try:
         if not metadata_path.exists():
@@ -157,23 +172,45 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
                 f"{', '.join([k for k, v in placeholders_found])}"
             )
 
-        # Determine working directory based on package type
-        is_github_repo = (dest_dir / ".git").exists()
+        # # Determine working directory based on package type
+        # is_github_repo = (dest_dir / ".git").exists()
 
-        if is_github_repo:
-            # GitHub repository
-            if base_command in ["npx", str(shutil.which("npx"))] and "-y" in args:
-                # npx -y: run from parent to avoid package.json conflicts
-                working_dir = dest_dir.parent
-                logger.info(f"GitHub repo with npx -y: using parent directory {working_dir}")
-            else:
-                # Source code or local installation: use repo directory
-                working_dir = dest_dir
-                logger.info(f"GitHub repo with source: using repo directory {working_dir}")
-        else:
-            # Registry package or direct config: use package directory
-            working_dir = dest_dir
+        # if is_github_repo:
+        #     # GitHub repository
+        #     if base_command in ["npx", str(shutil.which("npx"))] and "-y" in args:
+        #         # npx -y: run from parent to avoid package.json conflicts
+        #         working_dir = dest_dir.parent
+        #         logger.info(f"GitHub repo with npx -y: using parent directory {working_dir}")
+        #     else:
+        #         # Source code or local installation: use repo directory
+        #         working_dir = dest_dir
+        #         logger.info(f"GitHub repo with source: using repo directory {working_dir}")
+        # else:
+        #     # Registry package or direct config: use package directory
+        #     working_dir = dest_dir
 
+        # Step 1: Start from metadata location
+        working_dir = metadata_path.parent
+        logger.info(f"Initial working directory (metadata location): {working_dir}")
+
+        # Step 2: Check if args reference a subfolder (like 'zoho_mcp_server')
+        for arg in raw_args:
+            potential_path = working_dir / arg
+            if potential_path.exists() and potential_path.is_dir():
+                working_dir = potential_path
+                logger.info(f"Detected implementation folder from args: {working_dir}")
+                break
+
+        # Step 3 (fallback): Try to locate server.py automatically
+        server_file = working_dir / "server.py"
+        if not server_file.exists():
+            for path in working_dir.rglob("server.py"):
+                working_dir = path.parent
+                logger.info(f"Auto-detected server.py at: {working_dir}")
+                break
+
+        logger.info(f"Final working directory: {working_dir}")
+        
         process = subprocess.Popen(
             stdio_command,
             cwd=working_dir,
