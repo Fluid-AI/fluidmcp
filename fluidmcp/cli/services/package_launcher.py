@@ -27,11 +27,31 @@ def find_metadata_file(base_dir: Path) -> Path:
     # 1. Check root first
     root_meta = base_dir / "metadata.json"
     if root_meta.exists():
-        return root_meta
+        try:
+            with root_meta.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "mcpServers" in data:
+                return root_meta
+        except Exception:
+            pass
+    excluded_dirs = {
+        "node_modules", ".git", ".hg", ".svn",
+        "venv", ".venv", "__pycache__", ".mypy_cache"
+    }
 
-    # 2. Search inside repo (1–2 levels deep is enough)
-    for path in base_dir.rglob("metadata.json"):
-        return path
+    # 2. Search inside repo (up to 2 levels deep)
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in excluded_dirs]
+        # Determine depth relative to base_dir
+        rel = Path(root).relative_to(base_dir)
+        depth = len(rel.parts)
+        # Stop descending beyond 2 levels
+        if depth > 2:
+            dirs[:] = []
+            continue
+
+        if "metadata.json" in files and depth > 0:
+            return Path(root) / "metadata.json"
 
     raise FileNotFoundError(f"metadata.json not found in {base_dir}")
 
@@ -95,18 +115,20 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         Tuple of (package_name, router, process) or (None, None, None) on failure
     """
     dest_dir = Path(dest_dir)
-    metadata_path = find_metadata_file(dest_dir)
+    
 
     try:
-        if not metadata_path.exists():
-            logger.warning(f"No metadata.json found at {metadata_path}")
-            return None, None, None
+        metadata_path = find_metadata_file(dest_dir)
+        
         logger.info(f"Reading metadata.json from {metadata_path}")
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
         logger.debug(f"Package: {pkg}, Servers: {servers}")
+    except FileNotFoundError:
+        logger.warning(f"No metadata.json found in {dest_dir}")
+        return None, None, None
     except Exception:
         logger.exception("Error reading metadata.json")
         return None, None, None
@@ -171,23 +193,6 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
                 f"Server may fail to start. Use 'fmcp edit-env {pkg}' to configure: "
                 f"{', '.join([k for k, v in placeholders_found])}"
             )
-
-        # # Determine working directory based on package type
-        # is_github_repo = (dest_dir / ".git").exists()
-
-        # if is_github_repo:
-        #     # GitHub repository
-        #     if base_command in ["npx", str(shutil.which("npx"))] and "-y" in args:
-        #         # npx -y: run from parent to avoid package.json conflicts
-        #         working_dir = dest_dir.parent
-        #         logger.info(f"GitHub repo with npx -y: using parent directory {working_dir}")
-        #     else:
-        #         # Source code or local installation: use repo directory
-        #         working_dir = dest_dir
-        #         logger.info(f"GitHub repo with source: using repo directory {working_dir}")
-        # else:
-        #     # Registry package or direct config: use package directory
-        #     working_dir = dest_dir
 
         # Simple and predictable: run from metadata location
         working_dir = metadata_path.parent

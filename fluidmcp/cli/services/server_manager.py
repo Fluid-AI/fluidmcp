@@ -783,13 +783,27 @@ class ServerManager:
                     env[key] = value
 
             # Determine working directory
-            working_dir = Path(install_path).resolve()
+            working_dir = Path(config.get("working_dir") or install_path).resolve()
 
+            if not working_dir.exists() or not working_dir.is_dir():
+                logger.error(
+                    f"Install path for server '{name}' (id: {id}) does not exist or is not a directory: {working_dir}"
+                )
+                return None
+
+            # 🔥 SAFETY: ensure working_dir is not above install_path
+            install_path_resolved = Path(install_path).resolve()
+            if install_path_resolved not in working_dir.parents and working_dir != install_path_resolved:
+                logger.warning(
+                    f"Overriding working_dir {working_dir} → using install_path {install_path}"
+                )
+                working_dir = install_path_resolved
+                
             logger.debug(f"Spawning process: {cmd_list}")
             logger.debug(f"Working directory: {working_dir}")
-            logger.info(f"COMMAND: {cmd_list}")
-            logger.info(f"CWD: {working_dir}")
-            logger.info(f"INSTALL_PATH: {install_path}")
+            logger.debug(f"COMMAND: {cmd_list}")
+            logger.debug(f"INSTALL_PATH: {install_path}")
+            logger.info("Starting MCP server subprocess")
 
             # Spawn subprocess
             process = subprocess.Popen(
