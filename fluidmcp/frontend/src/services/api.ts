@@ -55,6 +55,7 @@ function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
 
 class ApiClient {
   private baseUrl: string;
+  private token: string | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -80,6 +81,7 @@ class ApiClient {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         headers: {
           'Content-Type': 'application/json',
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           ...options?.headers,
         },
         ...options,
@@ -116,6 +118,9 @@ class ApiClient {
     return this.request<ServersListResponse>(url, options);
   }
 
+  setToken(token: string | null) {
+    this.token = token;
+  }
   async getServerDetails(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerDetailsResponse> {
     return this.request<ServerDetailsResponse>(`/api/servers/${serverId}`, options);
   }
