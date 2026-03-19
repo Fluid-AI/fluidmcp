@@ -17,6 +17,12 @@ interface MCPServer {
   transport: string;
   status: 'connecting' | 'connected' | 'disconnected' | 'failed';
   error?: string;
+  auth?: {
+    type: "none" | "bearer" | "header"
+    token?: string
+    headerKey?: string
+    headerValue?: string
+  };
 }
 
 // Type for log entry
@@ -39,6 +45,12 @@ type ChatMessage = {
 const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
 export default function MCPInspector() {
+
+  const [authType, setAuthType] = useState<"none" | "bearer" | "header">("none")
+
+  const [token, setToken] = useState("")
+  const [headerKey, setHeaderKey] = useState("")
+  const [headerValue, setHeaderValue] = useState("")
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [url, setUrl] = useState("");
@@ -74,13 +86,21 @@ export default function MCPInspector() {
   const handleConnect = async () => {
 
     if (!url) return;
+    if (authType === "bearer" && !token) {
+      alert("Please enter bearer token")
+      return
+    }
 
-    if (servers.some(s => s.url === url)) {
+    if (authType === "header" && (!headerKey || !headerValue)) {
+      alert("Please enter header key and value")
+      return
+    }
+    if (servers.some(s => s.url === url && s.status !== "failed")) {
       alert("Server already added");
       return;
     }
 
-    // ✅ Disconnect any currently connected server before adding a new one
+    // Disconnect any currently connected server before adding a new one
     const activeServer = servers.find(s => s.status === "connected" && s.session_id);
     if (activeServer) {
       try {
@@ -100,16 +120,37 @@ export default function MCPInspector() {
 
     const serverId = generateServerId();
 
+    const authConfig = {
+      type: authType,
+      token: token,
+      headerKey: headerKey,
+      headerValue: headerValue
+    };
+
     try {
       setConnecting(true);
 
       setServers(prev => [
-        ...prev,
-        { id: serverId, session_id: null, url, transport, tools: [], status: "connecting" as const },
+        ...prev.filter(s => !(s.url === url && s.status === "failed")),
+        { id: serverId, session_id: null, url, transport, tools: [], status: "connecting" as const, auth : authConfig
+        },
       ]);
 
-      const res = await apiClient.connectInspectorServer({ url, transport });
+      const payload: any = { url, transport }
 
+      // Bearer Token
+      if (authType === "bearer" && token) {
+        payload.auth = {type: "bearer", token: token }
+      }
+
+      // Header Token
+      if (authType === "header" && headerKey && headerValue) {
+        payload.headers = { [headerKey]: headerValue }
+      }
+
+      const res = await apiClient.connectInspectorServer(payload)
+
+      // Update server after connect
       setServers(prev =>
         prev.map(s =>
           s.id === serverId
@@ -123,7 +164,7 @@ export default function MCPInspector() {
       setToolResult(null);
       setToolError(null);
 
-      // ✅ Clear chat and show a welcome message for the new server
+      // Clear chat and show a welcome message for the new server
       setChatHistory([{
         id: crypto.randomUUID(),
         type: "assistant",
@@ -131,6 +172,10 @@ export default function MCPInspector() {
         timestamp: Date.now(),
       }]);
 
+      setAuthType("none")
+      setToken("")
+      setHeaderKey("")
+      setHeaderValue("")
       setShowAddModal(false);
       setUrl("");
       setTransport("http");
@@ -196,12 +241,33 @@ export default function MCPInspector() {
             : s
         )
       );
-
-      const res = await apiClient.connectInspectorServer({
+      // Build payload with auth
+      const payload: any = {
         url: server.url,
         transport: server.transport,
-      });
+      };
 
+      // Bearer
+      if (server.auth?.type === "bearer" && server.auth.token) {
+        payload.auth = {
+          type: "bearer",
+          token: server.auth.token,
+        };
+      }
+
+      // Header
+      if (
+        server.auth?.type === "header" &&
+        server.auth.headerKey &&
+        server.auth.headerValue
+      ) {
+        payload.headers = {
+          [server.auth.headerKey]: server.auth.headerValue,
+        };
+      }
+      
+      const res = await apiClient.connectInspectorServer(payload);
+      console.log("Reconnect auth:", server.auth)
       // Update with connected state and new session
       setServers((prev) =>
         prev.map((s) =>
@@ -450,6 +516,12 @@ export default function MCPInspector() {
     tool_error: "#ef4444",
     chat: "#6366f1",
   };
+
+  useEffect(() => {
+    setToken("")
+    setHeaderKey("")
+    setHeaderValue("")
+  }, [authType])
 
   return (
     <div
@@ -1261,6 +1333,95 @@ export default function MCPInspector() {
                 <option value="sse">SSE</option>
               </select>
 
+              {/* Auth Type */}
+              <div style={{ marginTop: "1rem" }}>
+                <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                  Auth Type
+                </label>
+
+                <select
+                  value={authType}
+                  onChange={(e) => setAuthType(e.target.value as any)}
+                  style={{
+                    width: "100%",
+                    marginTop: "0.3rem",
+                    padding: "0.5rem",
+                    borderRadius: "0.4rem",
+                    background: "#18181b",
+                    color: "#fff",
+                    border: "1px solid rgba(63,63,70,0.6)"
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="bearer">Bearer Token</option>
+                  <option value="header">Header Token</option>
+                </select>
+              </div>
+
+              {authType === "bearer" && (
+                <div style={{ marginTop: "0.8rem" }}>
+                  <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                    Token
+                  </label>
+                  <input
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="Enter bearer token"
+                    style={{
+                      width: "100%",
+                      marginTop: "0.3rem",
+                      padding: "0.5rem",
+                      borderRadius: "0.4rem",
+                      background: "#18181b",
+                      color: "#fff",
+                      border: "1px solid rgba(63,63,70,0.6)"
+                    }}
+                  />
+                </div>
+              )}
+
+              {authType === "header" && (
+                <div style={{ marginTop: "0.8rem" }}>
+                  
+                  <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                    Header Key
+                  </label>
+                  <input
+                    value={headerKey}
+                    onChange={(e) => setHeaderKey(e.target.value)}
+                    placeholder="X-Api-Key"
+                    style={{
+                      width: "100%",
+                      marginTop: "0.3rem",
+                      padding: "0.5rem",
+                      borderRadius: "0.4rem",
+                      background: "#18181b",
+                      color: "#fff",
+                      border: "1px solid rgba(63,63,70,0.6)"
+                    }}
+                  />
+
+                  <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)", marginTop: "0.5rem", display: "block" }}>
+                    Header Value
+                  </label>
+                  <input
+                    type="password"
+                    value={headerValue}
+                    onChange={(e) => setHeaderValue(e.target.value)}
+                    placeholder="Enter token"
+                    style={{
+                      width: "100%",
+                      marginTop: "0.3rem",
+                      padding: "0.5rem",
+                      borderRadius: "0.4rem",
+                      background: "#18181b",
+                      color: "#fff",
+                      border: "1px solid rgba(63,63,70,0.6)"
+                    }}
+                  />
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
                 <button
                   onClick={() => setShowAddModal(false)}
