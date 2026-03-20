@@ -181,8 +181,8 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
             
             # Get connection pool settings from environment with safe parsing
-            default_max_pool_size = 50
-            default_min_pool_size = 10
+            default_max_pool_size = 6
+            default_min_pool_size = 1
             
             raw_max_pool_size = os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", str(default_max_pool_size))
             try:

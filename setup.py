@@ -27,14 +27,13 @@ setup(
     install_requires=[
         "requests",
         "loguru",
-        "pathlib",
         "psutil",
         "boto3",  # Added boto3 for S3 operations
         "fastapi",
         "uvicorn",
-        "httpx==0.28.1",  # Required for Replicate client (pinned to match requirements.txt)
-        "motor==3.7.1",  # MongoDB async driver (required for fmcp serve)
-        "pymongo==4.11.0"  # MongoDB driver (required for fmcp serve)
+        "httpx>=0.28.1",  # Required for Replicate client (pinned to match requirements.txt)
+        "motor>=3.7.1",  # MongoDB async driver (required for fmcp serve)
+        "pymongo>=4.11.0"  # MongoDB driver (required for fmcp serve)
     ],
     entry_points={
         'console_scripts': [
@@ -51,6 +50,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-    python_requires=">=3.6",
+    python_requires=">=3.10",
     keywords="mcp, model context protocol, llm, ai, fluidai",
 )
