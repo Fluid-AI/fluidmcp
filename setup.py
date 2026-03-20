@@ -31,9 +31,13 @@ setup(
         "boto3",  # Added boto3 for S3 operations
         "fastapi",
         "uvicorn",
-        "httpx>=0.28.1",  # Required for Replicate client (pinned to match requirements.txt)
+        "httpx>=0.28.1",  # Required for Replicate client
         "motor>=3.7.1",  # MongoDB async driver (required for fmcp serve)
-        "pymongo>=4.11.0"  # MongoDB driver (required for fmcp serve)
+        "pymongo>=4.11.0",  # MongoDB driver (required for fmcp serve)
+        "python-dotenv>=1.1.0",  # Environment variable loading
+        "pydantic>=2.12.0",  # Data validation
+        "pydantic-settings>=2.9.1",  # Settings management
+        "prometheus-client>=0.21.0"  # Metrics/monitoring
     ],
     entry_points={
         'console_scripts': [
