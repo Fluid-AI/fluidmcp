@@ -209,7 +209,7 @@ class DatabaseManager(PersistenceBackend):
             if max_pool_size <= 0:
                 logger.warning(
                     f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={max_pool_size!r}; "
-                    f"using default max pool size of {default_max_pool_size}. "
+                    f"using default max pool size of {default_max_pool_size}."
                 )
                 max_pool_size = default_max_pool_size
             if min_pool_size <= 0:

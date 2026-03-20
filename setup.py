@@ -36,8 +36,7 @@ setup(
         "pymongo>=4.11.0",  # MongoDB driver (required for fmcp serve)
         "python-dotenv>=1.1.0",  # Environment variable loading
         "pydantic>=2.12.0",  # Data validation
-        "pydantic-settings>=2.9.1",  # Settings management
-        "prometheus-client>=0.21.0"  # Metrics/monitoring
+        "pydantic-settings>=2.9.1"  # Settings management
     ],
     entry_points={
         'console_scripts': [
