@@ -344,6 +344,37 @@ class MetricsRegistry:
             labels=["server_id"]
         ))
 
+        self.register(Gauge(
+            "fluidmcp_system_cpu_percent",
+            "System-wide CPU utilization percentage (average across all cores)",
+            labels=[]
+        ))
+
+        self.register(Gauge(
+            "fluidmcp_process_cpu_percent",
+            "FluidMCP process CPU utilization percentage relative to a single CPU core (may exceed 100 on multi-core systems)",
+            labels=[]
+       ))
+
+        self.register(Gauge(
+            "fluidmcp_system_memory_bytes",
+            "System memory usage in bytes",
+            labels=["type"]  # type: used, available, total
+        ))
+
+
+        self.register(Gauge(
+            "fluidmcp_process_memory_bytes",
+            "FluidMCP process memory usage in bytes (RSS)",
+            labels=[]
+        ))
+
+        self.register(Gauge(
+            "fluidmcp_open_file_descriptors",
+            "Number of open file descriptors (Unix-like systems only)",
+            labels=[]
+        ))
+
     def register(self, metric: Metric):
         """Register a metric."""
         with self._lock:
@@ -357,7 +388,18 @@ class MetricsRegistry:
             return self.metrics.get(name)
 
     def render_all(self) -> str:
-        """Render all metrics in Prometheus exposition format."""
+        """
+        Render all metrics in Prometheus exposition format.
+
+        Automatically updates system resource metrics before rendering to ensure
+        real-time accuracy in Prometheus scrapes.
+
+        Returns:
+            Prometheus text exposition format string (v0.0.4)
+        """
+        # Update system metrics before rendering (real-time data for Prometheus)
+        self.update_system_metrics()
+
         lines = []
 
         # Take a snapshot of metrics under lock to avoid holding the registry lock
@@ -371,6 +413,92 @@ class MetricsRegistry:
             lines.append("")  # Blank line between metrics
 
         return "\n".join(lines)
+    
+    def update_system_metrics(self):
+        """
+        Update system resource metrics (CPU, memory, file descriptors).
+
+        Called automatically during render_all() to provide real-time system metrics.
+        Uses psutil for cross-platform resource monitoring.
+
+        Metrics updated:
+        - fluidmcp_system_cpu_percent: System-wide CPU usage
+        - fluidmcp_system_memory_bytes{type="used|available|total"}: System memory
+        - fluidmcp_process_cpu_percent: FluidMCP process CPU usage
+        - fluidmcp_process_memory_bytes: FluidMCP process memory (RSS)
+        - fluidmcp_open_file_descriptors: Open file descriptors (Unix only)
+
+        Note:
+            Gracefully handles missing psutil dependency (logs warning once).
+            On error, metrics remain at last known values (or 0 if never updated).
+        """
+        try:
+            import psutil
+        except ImportError:
+            # Only warn once to avoid log spam on every /metrics request
+            if not hasattr(self, '_psutil_warning_logged'):
+                logger.warning(
+                    "psutil not installed - system metrics disabled. "
+                    "Install with: pip install psutil"
+                )
+                self._psutil_warning_logged = True
+            return
+
+        try:
+             # System-wide CPU percentage (non-blocking, uses last computed interval; primed once)
+            if not hasattr(self, "_system_cpu_primed"):
+                # First call primes psutil's internal counters; it usually
+                # returns 0.0 and may be misleading, so we don't record it.
+                psutil.cpu_percent(interval=None)
+                self._system_cpu_primed = True
+                cpu_percent = None
+            else:
+                cpu_percent = psutil.cpu_percent(interval=None)
+            
+            cpu_metric = self.get_metric("fluidmcp_system_cpu_percent")
+            if cpu_metric and cpu_percent is not None:
+                cpu_metric.set(cpu_percent)
+
+            # System memory stats
+            mem = psutil.virtual_memory()
+            mem_metric = self.get_metric("fluidmcp_system_memory_bytes")
+            if mem_metric:
+                mem_metric.set(mem.used, {"type": "used"})
+                mem_metric.set(mem.available, {"type": "available"})
+                mem_metric.set(mem.total, {"type": "total"})
+
+            # Process-specific metrics
+            process = psutil.Process()
+
+            # Process CPU percentage.
+            # Use non-blocking mode (interval=None) and prime once.
+            if not hasattr(self, "_process_cpu_primed"):
+                process.cpu_percent(interval=None)
+                self._process_cpu_primed = True
+                process_cpu = None
+            else:
+                process_cpu = process.cpu_percent(interval=None)
+            
+            process_cpu_metric = self.get_metric("fluidmcp_process_cpu_percent")
+            if process_cpu_metric and process_cpu is not None:
+                process_cpu_metric.set(process_cpu)
+
+            # Process memory (RSS - Resident Set Size)
+            process_mem = process.memory_info().rss
+            process_mem_metric = self.get_metric("fluidmcp_process_memory_bytes")
+            if process_mem_metric:
+                process_mem_metric.set(process_mem)
+
+            # File descriptors (Unix-like systems only)
+            if hasattr(process, 'num_fds'):
+                num_fds = process.num_fds()
+                fd_metric = self.get_metric("fluidmcp_open_file_descriptors")
+                if fd_metric:
+                    fd_metric.set(num_fds)
+
+        except Exception as e:
+            # Log error but don't crash metrics export
+            logger.debug(f"Error updating system metrics: {e}")
 
 
 # Global registry instance

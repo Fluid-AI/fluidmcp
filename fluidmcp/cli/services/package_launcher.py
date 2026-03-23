@@ -651,7 +651,12 @@ def create_dynamic_router(server_manager):
 
                 # Read response (non-blocking with asyncio.to_thread)
                 response_line = await asyncio.to_thread(process.stdout.readline)
-                return JSONResponse(content=json.loads(response_line))
+                response_data = json.loads(response_line)
+
+                # Update last_used_at for idle cleanup
+                await server_manager.update_last_used(server_name)
+
+                return JSONResponse(content=response_data)
 
             except HTTPException:
                 raise
@@ -668,6 +673,9 @@ def create_dynamic_router(server_manager):
         """
         Server-Sent Events streaming endpoint for long-running MCP operations.
         """
+        # Update last_used_at for idle cleanup when SSE connection is opened
+        await server_manager.update_last_used(server_name)
+
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
@@ -898,9 +906,25 @@ def create_dynamic_router(server_manager):
             except (BrokenPipeError, OSError) as e:
                 raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Non-blocking I/O with asyncio.to_thread
-            response_line = await asyncio.to_thread(process.stdout.readline)
+            # Tool execution with timeout
+            try:
+                response_line = await asyncio.wait_for(
+                    asyncio.to_thread(process.stdout.readline),
+                    timeout=60.0  # 60 second tool execution timeout
+                )
+            except asyncio.TimeoutError:
+                # Log timeout failure
+                await server_manager.db.save_log_entry({
+                    "server_name": server_name,
+                    "stream": "error",
+                    "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
+                })
+                raise HTTPException(504, "Tool execution timed out")
+
             response_data = json.loads(response_line)
+
+            # Update last_used_at for idle cleanup
+            await server_manager.update_last_used(server_name)
 
             return JSONResponse(content=response_data)
 
