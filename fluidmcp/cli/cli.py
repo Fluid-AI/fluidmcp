@@ -24,7 +24,7 @@ from .services.config_resolver import INSTALLATION_DIR
 
 def configure_logger(verbose: bool = False) -> None:
     """
-    Configure loguru logger based on verbosity flag.
+    Configure loguru logger with trace correlation.
 
     Args:
         verbose: If True, set level to DEBUG; otherwise INFO
@@ -35,12 +35,32 @@ def configure_logger(verbose: bool = False) -> None:
     # Set level based on verbose flag
     log_level = "DEBUG" if verbose else "INFO"
 
-    # Add new handler with specified level and simple format
+    # Filter to inject trace context into log records
+    def trace_context_filter(record):
+        """Inject trace_id and span_id into log records."""
+        try:
+            from .context import get_trace_id, get_span_id
+            record["extra"]["trace_id"] = get_trace_id() or ""
+            record["extra"]["span_id"] = get_span_id() or ""
+        except Exception:
+            record["extra"]["trace_id"] = ""
+            record["extra"]["span_id"] = ""
+        return True
+
+    # Format with conditional trace display
+    log_format = (
+        "<level>{message}</level>"
+        "{extra[trace_id]:s| trace_id={extra[trace_id]}}"
+        "{extra[span_id]:s| span_id={extra[span_id]}}"
+    )
+
+    # Add new handler with trace correlation
     logger.add(
         sys.stderr,
         level=log_level,
-        format="<level>{message}</level>",
-        colorize=True
+        format=log_format,
+        colorize=True,
+        filter=trace_context_filter
     )
 
 

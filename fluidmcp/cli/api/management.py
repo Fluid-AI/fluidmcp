@@ -719,7 +719,8 @@ async def add_server(
             "max_restarts": 3
         }
     ),
-    token: str = Depends(get_token)
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user)
 ):
     """
     Add a new server configuration.
@@ -735,6 +736,9 @@ async def add_server(
         restart_policy (str): 'no', 'on-failure', or 'always'
         max_restarts (int): Maximum restart attempts
     """
+    from ..services.tracing import enrich_current_span, enrich_span_with_error
+    from ..context import set_user_id, set_server_id
+
     manager = get_server_manager(request)
 
     # Sanitize input to prevent MongoDB injection
@@ -751,6 +755,11 @@ async def add_server(
 
     id = config["id"]
     name = config["name"]
+
+    # Enrich span with business context
+    enrich_current_span(user_id=user_id, server_id=id)
+    set_user_id(user_id)
+    set_server_id(id)
 
     # Check if server already exists (check both DB and in-memory)
     if id in manager.configs:
@@ -1243,6 +1252,14 @@ async def delete_server(
     Returns:
         Success message with deletion timestamp
     """
+    from ..services.tracing import enrich_current_span, enrich_span_with_error
+    from ..context import set_user_id, set_server_id
+
+    # Enrich span and context
+    enrich_current_span(user_id=user_id, server_id=id)
+    set_user_id(user_id)
+    set_server_id(id)
+
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -1309,6 +1326,14 @@ async def start_server(
     Returns:
         Success message with PID
     """
+    from ..services.tracing import enrich_current_span, enrich_span_with_error
+    from ..context import set_user_id, set_server_id
+
+    # Enrich span and context
+    enrich_current_span(user_id=user_id, server_id=id)
+    set_user_id(user_id)
+    set_server_id(id)
+
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -1329,6 +1354,17 @@ async def start_server(
             raise HTTPException(400, f"Server '{id}' is already running (PID: {process.pid})")
 
     # Start server with user tracking
+    try:
+        success = await manager.start_server(id, config, user_id=user_id)
+        if not success:
+            error = Exception(f"Failed to start server '{id}'")
+            enrich_span_with_error(error, user_id=user_id, server_id=id)
+            raise HTTPException(500, str(error))
+    except HTTPException:
+        raise
+    except Exception as e:
+        enrich_span_with_error(e, user_id=user_id, server_id=id)
+        raise
     success = await manager.start_server(id, config, user_id=user_id)
     if not success:
         raise HTTPException(500, truncate_error(f"Failed to start server '{id}'"))
@@ -1365,6 +1401,14 @@ async def stop_server(
     Returns:
         Success message with exit code
     """
+    from ..services.tracing import enrich_current_span, enrich_span_with_error
+    from ..context import set_user_id, set_server_id
+
+    # Enrich span and context
+    enrich_current_span(user_id=user_id, server_id=id)
+    set_user_id(user_id)
+    set_server_id(id)
+
     manager = get_server_manager(request)
 
     # Check if server is running
@@ -1413,6 +1457,14 @@ async def restart_server(
     Returns:
         Success message with new PID
     """
+    from ..services.tracing import enrich_current_span, enrich_span_with_error
+    from ..context import set_user_id, set_server_id
+
+    # Enrich span and context
+    enrich_current_span(user_id=user_id, server_id=id)
+    set_user_id(user_id)
+    set_server_id(id)
+
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -1434,6 +1486,17 @@ async def restart_server(
             )
 
     # Restart server
+    try:
+        success = await manager.restart_server(id)
+        if not success:
+            error = Exception(f"Failed to restart server '{id}'")
+            enrich_span_with_error(error, user_id=user_id, server_id=id)
+            raise HTTPException(500, str(error))
+    except HTTPException:
+        raise
+    except Exception as e:
+        enrich_span_with_error(e, user_id=user_id, server_id=id)
+        raise
     success = await manager.restart_server(id)
     if not success:
         raise HTTPException(500, truncate_error(f"Failed to restart server '{id}'"))

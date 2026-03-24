@@ -14,6 +14,10 @@ import os
 import signal
 import secrets
 from pathlib import Path
+from loguru import logger
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -22,6 +26,35 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .otel import init_otel, instrument_fastapi_app
+from .context import set_trace_id, set_span_id, clear_context
+
+
+class TraceContextMiddleware(BaseHTTPMiddleware):
+    """Extract OTEL trace context and store in contextvars for log correlation."""
+
+    async def dispatch(self, request, call_next):
+        """Extract trace context from active OTEL span and store in contextvars."""
+        clear_context()  # Clean slate per request
+
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+
+            if span and span.is_recording():
+                ctx = span.get_span_context()
+                if ctx.is_valid:
+                    # Format as hex (standard OTEL format)
+                    trace_id = format(ctx.trace_id, '032x')
+                    span_id = format(ctx.span_id, '016x')
+
+                    set_trace_id(trace_id)
+                    set_span_id(span_id)
+        except Exception as e:
+            logger.debug(f"Failed to extract trace context: {e}")
+
+        response = await call_next(request)
+        return response
 from .auth import verify_token
 
 
@@ -129,6 +162,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     Returns:
         FastAPI application
     """
+    # Initialize OpenTelemetry (must happen before FastAPI app creation)
+    init_otel()
+
     app = FastAPI(
         title="FluidMCP Gateway",
         description="Unified gateway for MCP servers with dynamic management",
@@ -163,6 +199,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_headers=["*"],
     )
 
+    # Add trace context extraction middleware
+    app.add_middleware(TraceContextMiddleware)
+    logger.info("Trace context middleware added")
     # Add request size limiting middleware for security (prevent DoS via large payloads)
     # Max 10MB request body size (configurable via MAX_REQUEST_SIZE_MB env var)
     # Uses Starlette's exception to ensure proper handling and prevent bypassing
@@ -264,6 +303,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
+
+    # Instrument FastAPI with OpenTelemetry (captures HTTP request spans)
+    instrument_fastapi_app(app)
 
     # Add a health check endpoint with actual connection verification
     # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
@@ -382,9 +424,14 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     @app.on_event("shutdown")
     async def shutdown_event():
         """Clean up resources on application shutdown."""
+        # Shutdown OpenTelemetry first (flush spans before closing connections)
+        from .otel import shutdown_otel
+        await asyncio.to_thread(shutdown_otel)
+
+        # Then cleanup HTTP client
         from .api.management import cleanup_http_client
         await cleanup_http_client()
-        logger.info("HTTP client cleaned up")
+        logger.info("Application shutdown complete")
 
         # Clean up Redis connection (if rate limiting is enabled)
         if os.getenv("FMCP_ENABLE_RATE_LIMITING", "false").lower() == "true":
