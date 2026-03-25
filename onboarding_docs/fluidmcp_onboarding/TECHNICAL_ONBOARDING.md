@@ -1664,16 +1664,19 @@ curl -X POST http://localhost:8099/api/servers/filesystem/start \
 #### Option C: Frontend Development
 
 ```bash
-# Terminal 1: Start backend
-fmcp serve --port 8099
-
-# Terminal 2: Start frontend dev server
+# Build frontend first
 cd fluidmcp/frontend
 npm install
-npm run dev
+npm run build
 
-# Frontend runs on http://localhost:5173
-# Proxies API requests to http://localhost:8099
+# Start FluidMCP server (serves both backend & frontend)
+cd ../..
+fmcp serve --port 8099
+
+# Access in browser:
+# - Codespaces: https://<codespace-name>.github.dev/ui
+# - Localhost: http://localhost:8099
+# - API Docs: https://<codespace-name>.github.dev/docs or http://localhost:8099/docs
 ```
 
 ### 9.3 How to Add a New MCP Server

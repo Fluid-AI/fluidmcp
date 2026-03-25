@@ -12,7 +12,7 @@ Visual reference for understanding FluidMCP's architecture.
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐ │
 │  │                  FRONTEND (React SPA)                         │ │
-│  │  Port: 5173 (dev) / served by FastAPI (prod)                 │ │
+│  │  Port: 8099 (served by FastAPI in both dev & prod)           │ │
 │  │                                                               │ │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │ │
 │  │  │Dashboard │ │ Tool     │ │   LLM    │ │  Server  │       │ │
@@ -72,7 +72,8 @@ Visual reference for understanding FluidMCP's architecture.
 │                                                                  │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │              MongoDB (Persistence Layer)                  │  │
-│  │              Port: 27017                                  │  │
+│  │              Port: 27017 (localhost only)                 │  │
+│  │              Railway: uses MONGODB_URI env var            │  │
 │  │                                                           │  │
 │  │  Collections:                                             │  │
 │  │  - servers        (MCP server configs & state)           │  │
@@ -886,11 +887,10 @@ App.tsx (Router)
 | Port | Service | Mode | Configurable |
 |------|---------|------|--------------|
 | `8090` | Single package server | `fmcp run author/pkg` | Via `MCP_CLIENT_SERVER_PORT` |
-| `8099` | Unified gateway | `fmcp run all` / `fmcp serve` | Via `MCP_CLIENT_SERVER_ALL_PORT` / `--port` |
+| `8099` | Unified gateway + frontend | `fmcp run all` / `fmcp serve` (dev & prod) | Via `MCP_CLIENT_SERVER_ALL_PORT` / `--port` |
 | `8001` | vLLM server (example) | LLM inference | Via `--port` in vLLM args |
 | `11434` | Ollama server | LLM inference | Ollama default |
-| `5173` | Vite dev server | Frontend development | Via `vite.config.ts` |
-| `27017` | MongoDB | Persistence | MongoDB default |
+| `27017` | MongoDB | Persistence (localhost only) | MongoDB default / `MONGODB_URI` in Railway |
 
 ---
 

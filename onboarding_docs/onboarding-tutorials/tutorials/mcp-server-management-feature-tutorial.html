@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FluidMCP - MCP Server Management Tutorial</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:rgba(210,168,255,0.15);--accent:#d2a8ff;--accent2:#58a6ff;--accent3:#3fb950;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+  .sidebar{width:280px;min-height:100vh;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100}
+  .sidebar-header{padding:24px 20px 16px;border-bottom:1px solid var(--border)}
+  .sidebar-logo{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+  .sidebar-title{font-size:15px;font-weight:700;color:var(--text);line-height:1.3}
+  .sidebar-progress{padding:12px 20px;border-bottom:1px solid var(--border)}
+  .progress-label{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;justify-content:space-between}
+  .progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s}
+  .nav-list{flex:1;overflow-y:auto;padding:12px 0}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;transition:all 0.2s;border-left:3px solid transparent}
+  .nav-item:hover{background:rgba(210,168,255,0.06)}
+  .nav-item.active{background:rgba(210,168,255,0.1);border-left-color:var(--accent)}
+  .nav-item.done .nav-badge{background:var(--accent3)}
+  .nav-badge{width:22px;height:22px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--text2);flex-shrink:0}
+  .nav-label{font-size:13px;color:var(--text2);line-height:1.3}
+  .nav-item.active .nav-label{color:var(--text);font-weight:500}
+  .main{margin-left:280px;flex:1;min-height:100vh}
+  .lesson{display:none;padding:48px 56px;max-width:900px;animation:slideInUp 0.4s ease both}
+  .lesson.active{display:block}
+  @keyframes slideInUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+  .lesson-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(210,168,255,0.1);border:1px solid rgba(210,168,255,0.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+  .lesson-title{font-size:32px;font-weight:700;color:var(--text);margin-bottom:8px;line-height:1.2}
+  .lesson-subtitle{font-size:15px;color:var(--text2);margin-bottom:36px;line-height:1.6}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-bottom:28px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;transition:all 0.25s}
+  .card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,0.4);border-color:rgba(210,168,255,0.3)}
+  .card-icon{font-size:24px;margin-bottom:10px}
+  .card-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .card-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .code-block{background:#010409;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
+  .code-header{background:var(--bg3);padding:8px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .code-lang{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
+  .code-copy{background:transparent;border:1px solid var(--border);color:var(--text2);padding:4px 12px;border-radius:6px;font-size:11px;cursor:pointer;transition:all 0.2s}
+  .code-copy:hover{background:var(--bg2);border-color:var(--accent)}
+  .code-copy.copied{background:var(--accent3);border-color:var(--accent3);color:#000}
+  .code-body{padding:18px 20px;overflow-x:auto}
+  .code-body pre{font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;color:#c9d1d9;white-space:pre}
+  .kw{color:#ff7b72}.str{color:#a5d6ff}.cm{color:#8b949e;font-style:italic}
+  .info-box{background:rgba(210,168,255,0.07);border:1px solid rgba(210,168,255,0.25);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .box-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+  .box-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .box-text strong{color:var(--text)}
+  h3{font-size:16px;font-weight:600;color:var(--text);margin:24px 0 12px}
+  p{font-size:14px;color:var(--text2);line-height:1.7;margin-bottom:14px}
+  ul{margin:0 0 14px 20px;color:var(--text2);font-size:14px;line-height:1.7}
+  code{background:var(--bg3);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent)}
+  .complete-btn{display:inline-flex;align-items:center;gap:8px;margin-top:32px;padding:12px 24px;background:linear-gradient(135deg,var(--accent),#8b5cf6);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s}
+  .complete-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(210,168,255,0.3)}
+  .complete-btn.done{background:linear-gradient(135deg,var(--accent3),#238636)}
+  table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px}
+  th,td{padding:10px 12px;text-align:left;border:1px solid var(--border)}
+  th{background:var(--bg3);color:var(--text);font-weight:600}
+  td{color:var(--text2)}
+  @media (max-width: 768px){.sidebar{width:100%;position:relative;min-height:auto}.main{margin-left:0}}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">&#x1F4E6; FluidMCP</div>
+    <div class="sidebar-title">MCP Server Management</div>
+  </div>
+  <div class="sidebar-progress">
+    <div class="progress-label"><span>Progress</span><span id="prog-txt">0 / 4</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
+  </div>
+  <nav class="nav-list" id="nav"></nav>
+</aside>
+<main class="main" id="main"></main>
+<script>
+const lessons = [
+  {
+    id:1,title:"Introduction",sub:"Dynamic MCP server orchestration",
+    content:`
+      <p><strong>MCP Server Management</strong> is FluidMCP's core feature that lets you dynamically add, configure, start, stop, and monitor multiple Model Context Protocol servers through a REST API.</p>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F5A5;</div><div class="card-title">Dynamic Lifecycle</div><div class="card-text">Add, start, stop, and restart servers without redeploying.</div></div>
+        <div class="card"><div class="card-icon">&#x1F4CA;</div><div class="card-title">State Persistence</div><div class="card-text">Configs stored in MongoDB survive restarts.</div></div>
+        <div class="card"><div class="card-icon">&#x1F527;</div><div class="card-title">GitHub Integration</div><div class="card-text">Clone and run MCP servers from GitHub repos.</div></div>
+      </div>
+      <h3>Key Capabilities</h3>
+      <ul>
+        <li><strong>REST API:</strong> Full CRUD operations via /api/servers</li>
+        <li><strong>Process Management:</strong> Start/stop/restart with health checks</li>
+        <li><strong>Multiple Formats:</strong> Direct config, GitHub repos, or registry packages</li>
+        <li><strong>SSE/HTTP Support:</strong> Automatic transport detection</li>
+      </ul>
+    `
+  },
+  {
+    id:2,title:"Configuration",sub:"How to configure MCP servers",
+    content:`
+      <h3>Direct Config Format</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>{
+  <span class="str">"server_id"</span>: <span class="str">"filesystem"</span>,
+  <span class="str">"config"</span>: {
+    <span class="str">"command"</span>: <span class="str">"npx"</span>,
+    <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@modelcontextprotocol/server-filesystem"</span>, <span class="str">"/tmp"</span>],
+    <span class="str">"env"</span>: {}
+  }
+}</pre></div>
+      </div>
+      <h3>Key Configuration Fields</h3>
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Description</th><th>Required</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>command</td><td>Executable (npx, python, docker)</td><td>Yes</td></tr>
+          <tr><td>args</td><td>Command arguments</td><td>Yes</td></tr>
+          <tr><td>env</td><td>Environment variables</td><td>No</td></tr>
+          <tr><td>transport</td><td>stdio, sse, or http</td><td>No (default: stdio)</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Tip:</strong> Use environment variables for API keys. Example: <code>"API_KEY": "\${MY_API_KEY}"</code></div></div>
+    `
+  },
+  {
+    id:3,title:"REST API",sub:"Managing servers via HTTP",
+    content:`
+      <h3>Key Endpoints</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Add a server</span>
+curl -X POST http://localhost:8099/api/servers \\
+  -H <span class="str">"Content-Type: application/json"</span> \\
+  -d <span class="str">'{
+    "server_id": "filesystem",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    }
+  }'</span>
+
+<span class="cm"># Start the server</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/start
+
+<span class="cm"># Check status</span>
+curl http://localhost:8099/api/servers
+
+<span class="cm"># Stop the server</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/stop</pre></div>
+      </div>
+      <h3>Common Operations</h3>
+      <table>
+        <thead>
+          <tr><th>Endpoint</th><th>Method</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>/api/servers</td><td>POST</td><td>Add new server</td></tr>
+          <tr><td>/api/servers/{id}/start</td><td>POST</td><td>Start server</td></tr>
+          <tr><td>/api/servers/{id}/stop</td><td>POST</td><td>Stop server</td></tr>
+          <tr><td>/api/servers</td><td>GET</td><td>List all servers</td></tr>
+          <tr><td>/api/servers/{id}</td><td>DELETE</td><td>Remove server</td></tr>
+        </tbody>
+      </table>
+    `
+  },
+  {
+    id:4,title:"GitHub Integration",sub:"Clone and run from GitHub",
+    content:`
+      <h3>Clone from GitHub</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>curl -X POST http://localhost:8099/api/servers/from-github \\
+  -H <span class="str">"Content-Type: application/json"</span> \\
+  -H <span class="str">"X-GitHub-Token: ghp_your_token"</span> \\
+  -d <span class="str">'{
+    "repo": "owner/mcp-server-repo",
+    "branch": "main",
+    "autostart": true
+  }'</span></pre></div>
+      </div>
+      <h3>What Happens</h3>
+      <ul>
+        <li>Clones repo to <code>.fmcp-packages/owner/repo/branch/</code></li>
+        <li>Extracts metadata from metadata.json or README</li>
+        <li>Validates command against security allowlist</li>
+        <li>Saves config to MongoDB</li>
+        <li>Optionally starts the server (if autostart=true)</li>
+      </ul>
+      <h3>Security Allowlist</h3>
+      <p>Only these commands are allowed for GitHub-sourced servers:</p>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Use Case</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>npx, node</td><td>JavaScript/TypeScript servers</td></tr>
+          <tr><td>python, python3</td><td>Python servers</td></tr>
+          <tr><td>uvx</td><td>UV-based Python</td></tr>
+          <tr><td>docker</td><td>Containerized servers</td></tr>
+          <tr><td>deno, bun</td><td>Alternative JS runtimes</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Next:</strong> Check the complete documentation in <code>docs/RAILWAY_DEPLOYMENT.md</code> for production deployment guides.</div></div>
+    `
+  }
+];
+
+const nav=document.getElementById('nav'),main=document.getElementById('main');
+const progFill=document.getElementById('prog-fill'),progTxt=document.getElementById('prog-txt');
+const DONE_KEY='fmcp_mcp_done';let done=JSON.parse(localStorage.getItem(DONE_KEY)||'[]');
+function updateProgress(){const p=Math.round(done.length/lessons.length*100);progFill.style.width=p+'%';progTxt.textContent=done.length+' / '+lessons.length}
+lessons.forEach((l,i)=>{
+  const ni=document.createElement('div');
+  ni.className='nav-item'+(i===0?' active':'')+(done.includes(l.id)?' done':'');
+  ni.innerHTML=`<div class="nav-badge">${done.includes(l.id)?'&#x2713;':l.id}</div><div class="nav-label">${l.title}</div>`;
+  ni.addEventListener('click',()=>showLesson(i));nav.appendChild(ni);
+  const sec=document.createElement('section');
+  sec.className='lesson'+(i===0?' active':'');
+  sec.innerHTML=`<div class="lesson-badge">&#x1F4E6; Lesson ${l.id}</div><h1 class="lesson-title">${l.title}</h1><p class="lesson-subtitle">${l.sub}</p>${l.content}
+    <button class="complete-btn ${done.includes(l.id)?'done':''}" onclick="markDone(${l.id},this)">${done.includes(l.id)?'&#x2713; Completed':'&#x2713; Mark Complete'}</button>
+    <div style="margin-top:20px;display:flex;gap:12px">
+      ${i>0?'<button onclick="showLesson('+(i-1)+')" style="padding:10px 18px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:13px">&#x2190; Prev</button>':''}\
+      ${i<lessons.length-1?'<button onclick="showLesson('+(i+1)+')" style="padding:10px 18px;background:var(--accent);border:none;border-radius:8px;color:#000;cursor:pointer;font-size:13px;font-weight:600">Next &#x2192;</button>':''}
+    </div>`;
+  main.appendChild(sec);
+});
+function showLesson(idx){document.querySelectorAll('.lesson').forEach((s,i)=>s.classList.toggle('active',i===idx));document.querySelectorAll('.nav-item').forEach((n,i)=>n.classList.toggle('active',i===idx));window.scrollTo(0,0)}
+function markDone(id,btn){if(!done.includes(id))done.push(id);localStorage.setItem(DONE_KEY,JSON.stringify(done));btn.textContent='✓ Completed';btn.classList.add('done');const ni=nav.querySelectorAll('.nav-item')[id-1];ni.classList.add('done');ni.querySelector('.nav-badge').innerHTML='&#x2713;';updateProgress()}
+function copyCode(btn){const code=btn.closest('.code-block').querySelector('pre').textContent;navigator.clipboard.writeText(code);btn.innerHTML='&#x2705; Copied!';btn.classList.add('copied');setTimeout(()=>{btn.innerHTML='&#x1F4CB; Copy';btn.classList.remove('copied')},2000)}
+updateProgress();
+</script>
+</body>
+</html>

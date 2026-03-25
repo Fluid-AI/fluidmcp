@@ -13,8 +13,13 @@ pip install -r requirements.txt && pip install -e .
 # Run sample config (no install needed)
 fmcp run examples/sample-config.json --file --start-server
 
-# Access UI
-open http://localhost:8099
+# Access Swagger UI (API docs)
+# Development (Codespaces): https://<codespace-name>.github.dev/docs
+# Production (Railway): https://<your-app>.railway.app/docs
+
+# Access UI (Frontend)
+# Development (Codespaces): https://<codespace-name>.github.dev/ui
+# Production (Railway): https://<your-app>.railway.app
 ```
 
 ---
@@ -133,14 +138,12 @@ curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
 ### Frontend Development
 
 ```bash
-# Start backend
+# Start FluidMCP server (serves both backend & frontend)
 fmcp serve --port 8099
 
-# Start frontend dev server (separate terminal)
-cd fluidmcp/frontend
-npm install
-npm run dev
-# Opens http://localhost:5173
+# Access in browser
+# Codespaces: https://<codespace-name>.github.dev/ui
+# Localhost: http://localhost:8099
 ```
 
 ---
@@ -160,9 +163,8 @@ MCP Server (subprocess via stdio) → Response → UI Update
 | Port | Purpose |
 |------|---------|
 | `8090` | Single package mode (legacy) |
-| `8099` | Unified gateway / serve mode (production) |
-| `5173` | Frontend dev server (Vite) |
-| `27017` | MongoDB (if using persistence) |
+| `8099` | Unified gateway + frontend (dev & prod) |
+| `27017` | MongoDB (localhost only, Railway uses MONGODB_URI) |
 
 ### File Structure Quick Map
 
