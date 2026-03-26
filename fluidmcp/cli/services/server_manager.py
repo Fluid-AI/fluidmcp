@@ -325,7 +325,7 @@ class ServerManager:
             config = self.configs.get(id, {})
             name = config.get("name", id)
 
-            # Check if already dead
+            # Check if already dead — cancel watchdog first to prevent double-cleanup
             if process.poll() is not None:
                 logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
                 await self._cleanup_server(id, process.returncode, intentional=True)
@@ -414,9 +414,7 @@ class ServerManager:
         Returns:
             Asyncio lock for the server
         """
-        if server_id not in self._operation_locks:
-            self._operation_locks[server_id] = asyncio.Lock()
-        return self._operation_locks[server_id]
+        return self._operation_locks.setdefault(server_id, asyncio.Lock())
 
     async def restart_server(self, id: str) -> bool:
         """
@@ -893,6 +891,7 @@ class ServerManager:
                 else:
                     stderr_output = self._read_crash_stderr(id)
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
+                clear_stderr_buffer(id)
                 return None
 
             # ── SSE transport: skip stdio handshake, wait for HTTP instead ──
@@ -901,6 +900,7 @@ class ServerManager:
                 if not handle:
                     self._close_stderr_log(id)
                     logger.error(f"SSE handshake failed for server '{name}' (id: {id})")
+                    clear_stderr_buffer(id)
                     return None
                 logger.info(f"[{id}] SSE server connected successfully")
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
@@ -943,6 +943,7 @@ class ServerManager:
         except Exception as e:
             self._close_stderr_log(id)
             logger.exception(f"Error spawning process for server '{name}': {e}")
+            clear_stderr_buffer(id)
             return None
 
     async def _watch_process(self, server_id: str, process: subprocess.Popen) -> None:
@@ -966,6 +967,9 @@ class ServerManager:
             await self._cleanup_server(server_id, exit_code, stderr_tail=crash_log)
             if instance:
                 await self._check_auto_restart_on_crash(server_id, instance)
+        except asyncio.CancelledError:
+            # Watchdog was intentionally cancelled (e.g. during stop) — not an error.
+            return
         except Exception:
             logger.exception(f"[{server_id}] Error in process watchdog")
 
@@ -1107,6 +1111,7 @@ class ServerManager:
                 process.kill()
             except Exception:
                 pass
+            clear_stderr_buffer(id)
             return None
 
         # Discover and cache tools via HTTP

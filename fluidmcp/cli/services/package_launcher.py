@@ -44,7 +44,7 @@ def _start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
         except (OSError, ValueError):
             pass  # Expected: pipe closed when process exits
         except Exception:
-            logger.warning(f"[{key}] Unexpected error in stderr drainer", exc_info=True)
+            logger.exception(f"[{key}] Unexpected error in stderr drainer")
 
     t = threading.Thread(target=_drain, name=f"stderr-drainer-{key}", daemon=True)
     t.start()
@@ -55,7 +55,10 @@ def get_stderr_tail(key: str, lines: int = 50) -> str:
     buf = _stderr_buffers.get(key)
     if not buf:
         return ""
-    return "\n".join(list(buf)[-lines:])
+    # Copy into a list atomically relative to the deque's internal lock so
+    # concurrent drainer thread appends don't cause RuntimeError mid-iteration.
+    snapshot = list(buf)
+    return "\n".join(snapshot[-lines:])
 
 
 def clear_stderr_buffer(key: str) -> None:
@@ -304,19 +307,23 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
 
 def create_fastapi_jsonrpc_proxy(package_name: str, process: subprocess.Popen) -> FastAPI:
     app = FastAPI()
+    process_lock = threading.Lock()
     @app.post(f"/{package_name}/mcp")
     async def proxy_jsonrpc(request: Request):
         try:
             jsonrpc_request = await request.body()
             jsonrpc_str = jsonrpc_request.decode() if isinstance(jsonrpc_request, bytes) else jsonrpc_request
-            # Send to MCP server via stdin
-            try:
-                process.stdin.write(jsonrpc_str + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                return JSONResponse(status_code=503, content={"error": f"Process pipe broken: {e}"})
-            # Read from MCP server stdout with timeout
-            response_line = _readline_with_timeout(process, timeout=30.0)
+            # Thread-safe communication with MCP server
+            with process_lock:
+                try:
+                    process.stdin.write(jsonrpc_str + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    return JSONResponse(status_code=503, content={"error": f"Process pipe broken: {e}"})
+                # Read from MCP server stdout with timeout
+                response_line = _readline_with_timeout(process, timeout=30.0)
+            if not response_line:
+                return JSONResponse(status_code=504, content={"error": "MCP server did not respond within timeout"})
             return JSONResponse(content=json.loads(response_line))
         except Exception as e:
             return JSONResponse(status_code=500, content={"error": str(e)})
@@ -491,6 +498,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                     response_line = _readline_with_timeout(process, timeout=30.0)
                     logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
 
+                if not response_line:
+                    return JSONResponse(status_code=504, content={"error": f"[{package_name}] MCP server did not respond within timeout"})
                 return JSONResponse(content=json.loads(response_line))
             except Exception as e:
                 logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
@@ -599,6 +608,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                     process.stdin.flush()
                     response_line = _readline_with_timeout(process, timeout=30.0)
 
+                if not response_line:
+                    return JSONResponse(status_code=504, content={"error": "MCP server did not respond within timeout"})
                 response_data = json.loads(response_line)
                 return JSONResponse(content=response_data)
 
@@ -657,6 +668,8 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                     process.stdin.flush()
                     response_line = _readline_with_timeout(process, timeout=30.0)
 
+                if not response_line:
+                    return JSONResponse(status_code=504, content={"error": "MCP server did not respond within timeout"})
                 response_data = json.loads(response_line)
                 return JSONResponse(content=response_data)
 
@@ -742,13 +755,10 @@ def create_dynamic_router(server_manager):
                 except (BrokenPipeError, OSError) as e:
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Read response with timeout — prevents indefinite hang if process hangs
-                try:
-                    response_line = await asyncio.wait_for(
-                        asyncio.to_thread(process.stdout.readline),
-                        timeout=30.0
-                    )
-                except asyncio.TimeoutError:
+                # Read response with timeout — _readline_with_timeout uses select() so the
+                # thread returns after 30s instead of blocking forever (no stuck threads).
+                response_line = await asyncio.to_thread(_readline_with_timeout, process, 30.0)
+                if not response_line:
                     raise HTTPException(504, f"Server '{server_name}' timed out responding")
                 response_data = json.loads(response_line)
 
@@ -864,16 +874,11 @@ def create_dynamic_router(server_manager):
                     return
 
                 while True:
-                    # Non-blocking I/O with timeout — prevents hang if process freezes
-                    try:
-                        response_line = await asyncio.wait_for(
-                            asyncio.to_thread(process.stdout.readline),
-                            timeout=30.0
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(f"[{server_name}] SSE readline timed out, closing stream")
-                        break
+                    # _readline_with_timeout uses select() — thread returns after 30s
+                    # instead of blocking forever (avoids stuck thread pool workers).
+                    response_line = await asyncio.to_thread(_readline_with_timeout, process, 30.0)
                     if not response_line:
+                        logger.warning(f"[{server_name}] SSE readline timed out or EOF, closing stream")
                         break
 
                     logger.debug(f"Received from MCP: {response_line.strip()}")
@@ -942,8 +947,11 @@ def create_dynamic_router(server_manager):
             except (BrokenPipeError, OSError) as e:
                 raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Non-blocking I/O with asyncio.to_thread
-            response_line = await asyncio.to_thread(process.stdout.readline)
+            # Non-blocking I/O — _readline_with_timeout uses select() so the thread
+            # returns after 30s instead of blocking forever (no stuck threads).
+            response_line = await asyncio.to_thread(_readline_with_timeout, process, 30.0)
+            if not response_line:
+                raise HTTPException(504, f"Server '{server_name}' timed out responding")
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
@@ -1012,13 +1020,10 @@ def create_dynamic_router(server_manager):
             except (BrokenPipeError, OSError) as e:
                 raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Tool execution with timeout
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=60.0  # 60 second tool execution timeout
-                )
-            except asyncio.TimeoutError:
+            # Tool execution with timeout — _readline_with_timeout uses select() so the
+            # thread returns after 60s instead of blocking forever (no stuck threads).
+            response_line = await asyncio.to_thread(_readline_with_timeout, process, 60.0)
+            if not response_line:
                 # Log timeout failure
                 await server_manager.db.save_log_entry({
                     "server_name": server_name,
