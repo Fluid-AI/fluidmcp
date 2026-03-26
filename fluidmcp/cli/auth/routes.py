@@ -228,9 +228,12 @@ async def logout(request: Request):
     if not oauth_client:
         raise HTTPException(status_code=500, detail="OAuth not configured")
 
-    # Generate Auth0 logout URL
-    base_url = str(request.base_url).rstrip('/')
-    logout_url = oauth_client.logout_url(base_url)
+    # Generate Auth0 logout URL - redirect to /ui after logout
+    # Use the same URL detection as callback (supports Codespaces, etc.)
+    from .url_utils import get_base_url
+    base_url = get_base_url(config.port)
+    return_to_url = f"{base_url}/ui"
+    logout_url = oauth_client.logout_url(return_to_url)
 
     # Create response that clears the cookie
     response = JSONResponse(content={

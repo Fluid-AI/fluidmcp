@@ -1,4 +1,4 @@
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { useServerDetails } from "../hooks/useServerDetails";
 import { useServerEnv } from "../hooks/useServerEnv";
@@ -8,6 +8,7 @@ import ErrorMessage from "../components/ErrorMessage";
 import { ServerEnvForm } from "../components/ServerEnvForm";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Footer } from "@/components/Footer";
+import { Navbar } from "@/components/Navbar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "../contexts/AuthContext";
 

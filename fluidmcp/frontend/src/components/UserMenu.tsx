@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import {
@@ -13,19 +13,31 @@ import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 
 export function UserMenu() {
   const { user, loading, checkAuth, logout, isAuthenticated } = useAuth();
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // Check auth on mount (only for user menu display)
+  // Check auth only once on mount
   useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
+    if (!authChecked) {
+      checkAuth().finally(() => setAuthChecked(true));
+    }
+  }, [authChecked, checkAuth]);
 
-  if (loading) {
+  // Don't show anything until auth check is complete
+  if (!authChecked || loading) {
     return <div className="animate-pulse h-8 w-8 rounded-full bg-muted" />;
   }
 
-  // Not authenticated or OAuth not enabled - don't show anything
+  // Not authenticated - show login button
   if (!isAuthenticated) {
-    return null;
+    return (
+      <Button
+        onClick={() => window.location.href = '/auth/login'}
+        variant="outline"
+        size="sm"
+      >
+        Sign In
+      </Button>
+    );
   }
 
   // Authenticated - show user menu

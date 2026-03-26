@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import ServerCard from "../components/ServerCard";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ServerListControls } from "../components/ServerListControls";
@@ -93,34 +93,6 @@ export default function Dashboard() {
     });
   }, []);
 
-  // Listen for action replay events after OAuth authentication
-  useEffect(() => {
-    const handleReplayAction = async (event: Event) => {
-      const customEvent = event as CustomEvent;
-      const action = customEvent.detail;
-
-      if (action.action === 'start' && action.serverId) {
-        // Wait a bit for the UI to settle
-        setTimeout(async () => {
-          // Find the server and start it
-          const server = servers.find(s => s.id === action.serverId);
-          if (server && server.status?.state !== 'running') {
-            // Call the start handler directly
-            await handleStartServer(action.serverId);
-          }
-        }, 500);
-      }
-    };
-
-    // Add event listener
-    window.addEventListener('replay-action', handleReplayAction);
-
-    // Cleanup
-    return () => {
-      window.removeEventListener('replay-action', handleReplayAction);
-    };
-  }, [servers]);
-
   const [actionState, setActionState] = useState<{
     serverId: string | null;
     type: 'starting' | 'stopping' | 'restarting' | null;
@@ -134,6 +106,7 @@ export default function Dashboard() {
     const actionContext = {
       action: 'start',
       serverId: serverId,
+      serverName: serverName,
       timestamp: Date.now()
     };
     sessionStorage.setItem('auth_pending_action', JSON.stringify(actionContext));
@@ -149,8 +122,6 @@ export default function Dashboard() {
     // Clear the pending action since we're authenticated
     sessionStorage.removeItem('auth_pending_action');
 
-    const server = servers.find(s => s.id === serverId);
-    const serverName = server?.name || serverId;
     const toastId = `server-${serverId}`;
 
     setActionState({ serverId, type: 'starting' });
@@ -164,7 +135,42 @@ export default function Dashboard() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  }, [actionState.type, startServer]);
+  }, [actionState.type, requireAuth, startServer]);
+
+  // Listen for action replay events after OAuth authentication
+  useEffect(() => {
+    const handleReplayAction = async (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const action = customEvent.detail;
+      console.log('[Dashboard] Received replay-action event:', action);
+
+      if (action.action === 'start' && action.serverId && action.serverName) {
+        console.log('[Dashboard] Starting server:', action.serverId, action.serverName);
+        // Wait a bit for the UI to settle
+        setTimeout(async () => {
+          // Use stored server name instead of looking it up
+          // This works even if servers array hasn't loaded yet
+          await handleStartServer(action.serverId, action.serverName);
+        }, 500);
+      } else {
+        console.log('[Dashboard] Action does not meet criteria:', {
+          hasAction: !!action.action,
+          hasServerId: !!action.serverId,
+          hasServerName: !!action.serverName
+        });
+      }
+    };
+
+    console.log('[Dashboard] Registering replay-action listener');
+    // Add event listener
+    window.addEventListener('replay-action', handleReplayAction);
+
+    // Cleanup
+    return () => {
+      console.log('[Dashboard] Removing replay-action listener');
+      window.removeEventListener('replay-action', handleReplayAction);
+    };
+  }, [handleStartServer]);
 
   if (loading) {
     return (

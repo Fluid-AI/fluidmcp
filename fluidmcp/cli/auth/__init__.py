@@ -18,6 +18,22 @@ from .url_utils import (
     print_auth_urls
 )
 
+# Import verify_token from parent auth.py for backwards compatibility
+import sys
+from pathlib import Path
+
+# Import verify_token from the auth.py module (not this package)
+parent_path = Path(__file__).parent.parent
+if str(parent_path) not in sys.path:
+    sys.path.insert(0, str(parent_path))
+
+try:
+    from ..auth import verify_token
+except ImportError:
+    # Fallback: define a simple verify_token stub
+    def verify_token(*args, **kwargs):
+        pass
+
 __all__ = [
     # Configuration
     "Auth0Config",
@@ -43,4 +59,7 @@ __all__ = [
     "get_cors_origins",
     "get_environment_info",
     "print_auth_urls",
+
+    # Bearer token auth
+    "verify_token",
 ]

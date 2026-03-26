@@ -6,6 +6,7 @@ import Status from "./pages/Status";
 import ServerDetails from "./pages/ServerDetails";
 import { ToolRunner } from "./pages/ToolRunner";
 import Documentation from "./pages/Documentation";
+import ManageServers from "./pages/ManageServers";
 import { useAuth } from "./contexts/AuthContext";
 
 function App() {
@@ -35,13 +36,16 @@ function App() {
     else if (pendingAction) {
       try {
         const action = JSON.parse(pendingAction);
+        console.log('[Auth] Found pending action:', action);
 
         // Clear the pending action to prevent infinite loops
         sessionStorage.removeItem('auth_pending_action');
 
         // Verify authentication before replaying action
         checkAuth().then((isAuth) => {
-          if (isAuth && action.action === 'start' && action.serverId) {
+          console.log('[Auth] Auth status:', isAuth, 'Action:', action);
+          if (isAuth && action.action === 'start' && action.serverId && action.serverName) {
+            console.log('[Auth] Dispatching replay-action event');
             // Trigger a custom event that the Dashboard can listen to
             window.dispatchEvent(new CustomEvent('replay-action', {
               detail: action
