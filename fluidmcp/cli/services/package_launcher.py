@@ -20,10 +20,10 @@ from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
-# Per-process stderr buffers: key -> deque of last 200 lines
+# Per-process stderr buffers: key -> (lock, deque of last 200 lines)
 # Continuously drained by a daemon thread to prevent the 64 KB OS pipe
 # buffer from filling up and silently freezing the subprocess.
-_stderr_buffers: Dict[str, deque] = {}
+_stderr_buffers: Dict[str, tuple] = {}  # key -> (threading.Lock, deque)
 
 
 def _start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
@@ -33,13 +33,15 @@ def _start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
     64 KB OS pipe buffer and freeze — stopping stdout communication too.
     The buffer stores the last 200 lines for crash diagnosis.
     """
+    lock = threading.Lock()
     buf: deque = deque(maxlen=200)
-    _stderr_buffers[key] = buf
+    _stderr_buffers[key] = (lock, buf)
 
     def _drain() -> None:
         try:
             for line in process.stderr:
-                buf.append(line.rstrip())
+                with lock:
+                    buf.append(line.rstrip())
                 logger.debug(f"[{key}] stderr: {line.rstrip()}")
         except (OSError, ValueError):
             pass  # Expected: pipe closed when process exits
@@ -52,12 +54,12 @@ def _start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
 
 def get_stderr_tail(key: str, lines: int = 50) -> str:
     """Return the last N stderr lines for a given key (for crash diagnosis)."""
-    buf = _stderr_buffers.get(key)
-    if not buf:
+    entry = _stderr_buffers.get(key)
+    if not entry:
         return ""
-    # Copy into a list atomically relative to the deque's internal lock so
-    # concurrent drainer thread appends don't cause RuntimeError mid-iteration.
-    snapshot = list(buf)
+    lock, buf = entry
+    with lock:
+        snapshot = list(buf)
     return "\n".join(snapshot[-lines:])
 
 
@@ -69,9 +71,29 @@ def clear_stderr_buffer(key: str) -> None:
 def _readline_with_timeout(process: subprocess.Popen, timeout: float = 30.0) -> str:
     """Read one line from process stdout with a timeout.
 
-    Uses select() so the calling thread is not blocked indefinitely if the
-    subprocess hangs (alive but not responding). Returns "" on timeout or EOF.
+    Uses select() on Unix so the calling thread is not blocked indefinitely if the
+    subprocess hangs. On Windows (where select() doesn't support pipes), falls back
+    to a dedicated reader thread with a join timeout. Returns "" on timeout or EOF.
     """
+    if os.name == "nt":
+        # Windows: select() doesn't work on pipes — use a thread with join timeout
+        result: list = []
+
+        def _read() -> None:
+            try:
+                result.append(process.stdout.readline())
+            except (OSError, ValueError):
+                result.append("")
+
+        t = threading.Thread(target=_read, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+        if result:
+            return result[0]
+        logger.warning(f"readline timed out after {timeout}s (process pid={process.pid})")
+        return ""
+
+    # Unix: select() for non-blocking readiness check
     import select
     try:
         ready, _, _ = select.select([process.stdout], [], [], timeout)
@@ -388,7 +410,10 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30, stderr_k
                 logger.error(f"Process died during initialization (exit code: {process.returncode}). stderr: {stderr_output}")
                 return False
 
-            response_line = _readline_with_timeout(process, timeout=30.0).strip()
+            # Cap per-read timeout to remaining time so the overall deadline is respected
+            remaining = max(timeout - (time.time() - start_time), 0.5)
+            read_timeout = min(remaining, 30.0)
+            response_line = _readline_with_timeout(process, timeout=read_timeout).strip()
             if response_line:
                 lines_received.append(response_line)
                 logger.debug(f"Received line: {response_line[:200]}")
