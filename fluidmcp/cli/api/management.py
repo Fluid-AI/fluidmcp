@@ -61,6 +61,10 @@ from ..services import omni_adapter
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
 from ..services.package_launcher import readline_with_timeout
 
+# Per-server stdio locks — prevents concurrent requests from interleaving
+# stdin writes and stdout reads on the same JSON-RPC channel.
+_stdio_locks: Dict[str, threading.Lock] = {}
+
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
@@ -1951,11 +1955,18 @@ async def run_tool(
         }
 
         logger.info(f"Executing tool '{tool_name}' on server '{id}'")
-        await asyncio.to_thread(process.stdin.write, json.dumps(tool_request) + "\n")
-        await asyncio.to_thread(process.stdin.flush)
 
-        # Read response — readline_with_timeout uses select()/thread-join, no stuck workers
-        response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+        # Acquire per-server stdio lock to prevent interleaved write/read
+        stdio_lock = _stdio_locks.setdefault(id, threading.Lock())
+        msg = json.dumps(tool_request)
+
+        def _communicate_tool(payload: str) -> str:
+            with stdio_lock:
+                process.stdin.write(payload + "\n")
+                process.stdin.flush()
+                return readline_with_timeout(process, timeout=30.0)
+
+        response_line = await asyncio.to_thread(_communicate_tool, msg)
         if not response_line:
             raise HTTPException(504, "Tool execution timeout (>30s)")
 

@@ -77,7 +77,9 @@ def readline_with_timeout(process: subprocess.Popen, timeout: float = 30.0) -> s
     to a dedicated reader thread with a join timeout. Returns "" on timeout or EOF.
     """
     if os.name == "nt":
-        # Windows: select() doesn't work on pipes — use a thread with join timeout
+        # Windows: select() doesn't work on pipes — use a thread with join timeout.
+        # Note: on timeout the reader thread stays alive (daemon, cleaned up at exit).
+        # Production runs on Linux where the select() path is used instead.
         result: list = []
 
         def _read() -> None:

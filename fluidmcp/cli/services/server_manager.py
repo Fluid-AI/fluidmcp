@@ -285,7 +285,7 @@ class ServerManager:
         # locked()==False and both proceed. acquire() with a zero timeout is atomic.
         lock = self._get_operation_lock(id)
         try:
-            acquired = await asyncio.wait_for(lock.acquire(), timeout=0)
+            acquired = await asyncio.wait_for(lock.acquire(), timeout=0.01)
         except asyncio.TimeoutError:
             logger.warning(f"Server '{id}' is already being modified by another operation")
             return False
@@ -392,7 +392,7 @@ class ServerManager:
         """
         lock = self._get_operation_lock(id)
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=0)
+            await asyncio.wait_for(lock.acquire(), timeout=0.01)
         except asyncio.TimeoutError:
             logger.warning(f"Server '{id}' is already being modified by another operation")
             return False
@@ -431,7 +431,7 @@ class ServerManager:
         """
         lock = self._get_operation_lock(id)
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=0)
+            await asyncio.wait_for(lock.acquire(), timeout=0.01)
         except asyncio.TimeoutError:
             logger.warning(f"Server '{id}' is already being modified by another operation")
             return False
