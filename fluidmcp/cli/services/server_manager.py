@@ -317,9 +317,12 @@ class ServerManager:
             config = self.configs.get(id, {})
             name = config.get("name", id)
 
-            # Check if already dead
+            # Check if already dead — cancel watchdog first to prevent double-cleanup
             if process.poll() is not None:
                 logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
+                task = self._watchdog_tasks.pop(id, None)
+                if task and not task.done():
+                    task.cancel()
                 await self._cleanup_server(id, process.returncode)
                 return True
 
@@ -406,9 +409,7 @@ class ServerManager:
         Returns:
             Asyncio lock for the server
         """
-        if server_id not in self._operation_locks:
-            self._operation_locks[server_id] = asyncio.Lock()
-        return self._operation_locks[server_id]
+        return self._operation_locks.setdefault(server_id, asyncio.Lock())
 
     async def restart_server(self, id: str) -> bool:
         """
@@ -848,12 +849,8 @@ class ServerManager:
             # Check if process is still alive
             if process.poll() is not None:
                 stderr_output = get_stderr_tail(id, 50) or "No stderr available"
-                if not stderr_output and process.stderr:
-                    try:
-                        stderr_output = await asyncio.to_thread(process.stderr.read)
-                    except Exception as exc:
-                        logger.exception(f"Failed to read stderr: {exc}")
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
+                clear_stderr_buffer(id)
                 return None
 
             # ── SSE transport: skip stdio handshake, wait for HTTP instead ──
@@ -861,6 +858,7 @@ class ServerManager:
                 handle = await self._handshake_sse_subprocess(id, config, process)
                 if not handle:
                     logger.error(f"SSE handshake failed for server '{name}' (id: {id})")
+                    clear_stderr_buffer(id)
                     return None
                 logger.info(f"[{id}] SSE server connected successfully")
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
@@ -876,6 +874,7 @@ class ServerManager:
                 if stderr_output:
                     logger.error(f"[{id}] Process stderr: {stderr_output}")
                 process.kill()
+                clear_stderr_buffer(id)
                 return None
 
             logger.info(f"[{id}] MCP server initialized successfully")
@@ -892,6 +891,7 @@ class ServerManager:
 
         except Exception as e:
             logger.exception(f"Error spawning process for server '{name}': {e}")
+            clear_stderr_buffer(id)
             return None
 
     async def _watch_process(self, server_id: str, process: subprocess.Popen) -> None:
@@ -915,6 +915,9 @@ class ServerManager:
             await self._cleanup_server(server_id, exit_code, crash_log=crash_log)
             if instance:
                 await self._check_auto_restart_on_crash(server_id, instance)
+        except asyncio.CancelledError:
+            # Watchdog was intentionally cancelled (e.g. during stop) — not an error.
+            return
         except Exception:
             logger.exception(f"[{server_id}] Error in process watchdog")
 
@@ -1055,6 +1058,7 @@ class ServerManager:
                 process.kill()
             except Exception:
                 pass
+            clear_stderr_buffer(id)
             return None
 
         # Discover and cache tools via HTTP
@@ -1127,16 +1131,28 @@ class ServerManager:
         if id in self.start_times:
             del self.start_times[id]
 
-        # Cancel and drop watchdog task reference
+        # Cancel and drop watchdog task reference.
+        # Guard against cancelling ourselves when cleanup is called from inside
+        # the watchdog (e.g. on crash) — cancelling the current task would raise
+        # CancelledError before state/crash_log persistence completes.
         task = self._watchdog_tasks.pop(id, None)
-        if task and not task.done():
+        if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
 
         # Free the stderr ring buffer — it's only needed while the process runs
         clear_stderr_buffer(id)
 
-        # Determine state — only a non-zero exit code means failure
-        state = "failed" if exit_code != 0 else "stopped"
+        # Determine state:
+        # - exit 0 → "stopped" (clean exit)
+        # - non-zero + crash_log → "failed" (unexpected crash)
+        # - non-zero without crash_log → "stopped" (SIGTERM/SIGKILL from intentional stop
+        #   produces non-zero but is not a failure)
+        if exit_code == 0:
+            state = "stopped"
+        elif crash_log:
+            state = "failed"
+        else:
+            state = "stopped"
 
         # Update database — persist crash reason so it survives container restarts
         update = {

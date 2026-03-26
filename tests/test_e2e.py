@@ -255,8 +255,10 @@ class TestE2EGitHubServerFlow:
             from packaging.version import Version
             if Version(uv_ver) < Version("0.9.5"):
                 pytest.skip(f"uv {uv_ver} too old - python-sdk requires >= 0.9.5")
+        except ImportError:
+            pytest.skip("Cannot determine uv version: 'packaging' not installed — skipping to avoid running with unsupported uv")
         except Exception:
-            pass  # If version check fails, let the test proceed
+            pytest.skip("Cannot determine uv version — skipping to avoid running with unsupported uv")
 
         install_dir = tmp_path / ".fmcp-packages"
         install_dir.mkdir(parents=True)
