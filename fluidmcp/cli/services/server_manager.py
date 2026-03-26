@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
-from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer
+from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, _readline_with_timeout
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
@@ -323,7 +323,8 @@ class ServerManager:
                 task = self._watchdog_tasks.pop(id, None)
                 if task and not task.done():
                     task.cancel()
-                await self._cleanup_server(id, process.returncode)
+                crash_log = get_stderr_tail(id, 50)
+                await self._cleanup_server(id, process.returncode, crash_log=crash_log)
                 return True
 
             # Cancel watchdog BEFORE signalling the process — this prevents the
@@ -939,20 +940,21 @@ class ServerManager:
 
             logger.debug(f"Discovering tools for server '{server_id}'...")
             try:
-                process.stdin.write(json.dumps(tools_request) + "\n")
-                process.stdin.flush()
+                await asyncio.to_thread(process.stdin.write, json.dumps(tools_request) + "\n")
+                await asyncio.to_thread(process.stdin.flush)
             except (BrokenPipeError, OSError) as e:
                 logger.warning(f"Failed to send tools/list request: {e}")
                 return
 
-            # Read response with timeout
+            # Read response with timeout — uses select()/thread-join so no stuck workers
             try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=5.0
-                )
+                response_line = await asyncio.to_thread(_readline_with_timeout, process, 5.0)
 
                 response_line = response_line.strip()
+                if not response_line:
+                    logger.warning(f"Tool discovery timeout for server '{server_id}'")
+                    return
+
                 logger.debug(f"Tools discovery response: {response_line}")
 
                 response = json.loads(response_line)
@@ -974,8 +976,6 @@ class ServerManager:
                 else:
                     logger.warning(f"No tools found in response for server '{server_id}'")
 
-            except asyncio.TimeoutError:
-                logger.warning(f"Tool discovery timeout for server '{server_id}'")
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse tools response for '{server_id}': {e}")
 
@@ -1024,14 +1024,7 @@ class ServerManager:
         while loop.time() < deadline:
             # Guard: process must still be alive
             if process.poll() is not None:
-                stderr_out = get_stderr_tail(id, 50)
-                if not stderr_out and process.stderr:
-                    try:
-                        stderr_out = await asyncio.wait_for(
-                            asyncio.to_thread(process.stderr.read), timeout=2.0
-                        )
-                    except Exception:
-                        pass
+                stderr_out = get_stderr_tail(id, 50) or "(no stderr captured)"
                 logger.error(
                     f"[{id}] SSE server process died before HTTP became ready "
                     f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
