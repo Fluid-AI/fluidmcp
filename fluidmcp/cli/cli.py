@@ -501,7 +501,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
 
         # Launch the MCP server
         logger.info("Launching MCP server")
-        package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
+        package_name, router, _process = launch_mcp_using_fastapi_proxy(dest_dir)
 
         if not router:
             logger.error("Failed to launch MCP server")

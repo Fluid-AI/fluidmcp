@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
-from .package_launcher import initialize_mcp_server
+from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
@@ -41,6 +41,9 @@ class ServerManager:
 
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
+
+        # Keep strong references to watchdog tasks so GC doesn't collect them
+        self._watchdog_tasks: Dict[str, asyncio.Task] = {}
 
         # Event loop for async operations
         self._loop = None
@@ -277,15 +280,20 @@ class ServerManager:
         Returns:
             True if started successfully, False otherwise
         """
-        # Check for concurrent operations - fail fast
+        # Atomically try to acquire without waiting — lock.locked() followed by
+        # async with lock: has a TOCTOU race where two coroutines both see
+        # locked()==False and both proceed. acquire() with a zero timeout is atomic.
         lock = self._get_operation_lock(id)
-        if lock.locked():
+        try:
+            acquired = await asyncio.wait_for(lock.acquire(), timeout=0)
+        except asyncio.TimeoutError:
             logger.warning(f"Server '{id}' is already being modified by another operation")
             return False
 
-        # Acquire lock for this operation
-        async with lock:
+        try:
             return await self._start_server_unlocked(id, config, user_id)
+        finally:
+            lock.release()
 
     async def _stop_server_unlocked(self, id: str, force: bool = False) -> bool:
         """
@@ -323,6 +331,13 @@ class ServerManager:
                 await self._cleanup_server(id, process.returncode, intentional=True)
                 return True
 
+            # Cancel watchdog BEFORE signalling the process — this prevents the
+            # watchdog from racing with our intentional stop and triggering
+            # double-cleanup or a spurious auto-restart.
+            task = self._watchdog_tasks.pop(id, None)
+            if task and not task.done():
+                task.cancel()
+
             # Terminate process
             logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
 
@@ -343,7 +358,11 @@ class ServerManager:
             except asyncio.TimeoutError:
                 logger.warning(f"Server '{name}' (id: {id}) did not stop gracefully, forcing kill...")
                 process.kill()
-                exit_code = await asyncio.to_thread(process.wait)
+                try:
+                    exit_code = await asyncio.wait_for(asyncio.to_thread(process.wait), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.error(f"Server '{name}' (id: {id}) did not die after SIGKILL — kernel may be stuck")
+                    exit_code = -9
 
             # Cleanup
             await self._cleanup_server(id, exit_code, intentional=True)
@@ -371,15 +390,17 @@ class ServerManager:
         Returns:
             True if stopped successfully, False otherwise
         """
-        # Check for concurrent operations - fail fast
         lock = self._get_operation_lock(id)
-        if lock.locked():
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=0)
+        except asyncio.TimeoutError:
             logger.warning(f"Server '{id}' is already being modified by another operation")
             return False
 
-        # Acquire lock for this operation
-        async with lock:
+        try:
             return await self._stop_server_unlocked(id, force)
+        finally:
+            lock.release()
 
     def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
         """
@@ -410,15 +431,14 @@ class ServerManager:
         Returns:
             True if restarted successfully
         """
-        # Acquire lock to prevent concurrent operations
         lock = self._get_operation_lock(id)
-
-        # Try to acquire lock without waiting - fail fast if operation in progress
-        if lock.locked():
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=0)
+        except asyncio.TimeoutError:
             logger.warning(f"Server '{id}' is already being modified by another operation")
             return False
 
-        async with lock:
+        try:
             # Get current config before stopping
             config = self.configs.get(id)
             if not config:
@@ -459,6 +479,8 @@ class ServerManager:
                 # Note: Status already set to 2 (running) by start_server() - no need to override
 
             return success
+        finally:
+            lock.release()
 
     async def get_server_status(self, id: str) -> Dict[str, Any]:
         """
@@ -851,6 +873,9 @@ class ServerManager:
                 preexec_fn=preexec_fn
             )
 
+            # Drain stderr continuously so the 64 KB pipe buffer never fills
+            _start_stderr_drainer(process, id)
+
             # Give process a moment to start
             await asyncio.sleep(0.5)
 
@@ -883,7 +908,7 @@ class ServerManager:
 
             # Initialize MCP server with handshake (using shared utility)
             logger.info(f"[{id}] Initializing MCP server...")
-            init_success = await asyncio.to_thread(initialize_mcp_server, process)
+            init_success = await asyncio.to_thread(initialize_mcp_server, process, 30, id)
 
             if not init_success:
                 logger.error(f"MCP initialization failed for server '{name}' (id: {id})")
@@ -905,6 +930,11 @@ class ServerManager:
             # Discover and cache tools (stdio only — SSE already handled above)
             await self._discover_and_cache_tools(id, process)
 
+            # Start watchdog — detects crash instantly instead of waiting for status poll.
+            # Store reference to prevent GC from collecting the task before it finishes.
+            task = asyncio.create_task(self._watch_process(id, process))
+            self._watchdog_tasks[id] = task
+
             return process
 
         except asyncio.CancelledError:
@@ -914,6 +944,30 @@ class ServerManager:
             self._close_stderr_log(id)
             logger.exception(f"Error spawning process for server '{name}': {e}")
             return None
+
+    async def _watch_process(self, server_id: str, process: subprocess.Popen) -> None:
+        """Background watchdog that detects subprocess crash immediately.
+
+        Without this, a crashed server is only detected when someone queries
+        its status. This watchdog waits on process exit and updates state the
+        moment it happens, enabling instant auto-restart.
+        """
+        try:
+            exit_code = await asyncio.to_thread(process.wait)
+            # Only act if server is still in our registry (not intentionally stopped)
+            if server_id not in self.processes:
+                return
+            crash_log = get_stderr_tail(server_id, 50)
+            logger.error(
+                f"[{server_id}] Process exited unexpectedly (code {exit_code}). "
+                f"stderr tail:\n{crash_log or '(none)'}"
+            )
+            instance = await self.db.get_instance_state(server_id)
+            await self._cleanup_server(server_id, exit_code, stderr_tail=crash_log)
+            if instance:
+                await self._check_auto_restart_on_crash(server_id, instance)
+        except Exception:
+            logger.exception(f"[{server_id}] Error in process watchdog")
 
     async def _discover_and_cache_tools(self, server_id: str, process: subprocess.Popen) -> None:
         """
@@ -1019,6 +1073,14 @@ class ServerManager:
             # Guard: process must still be alive
             if process.poll() is not None:
                 stderr_out = self._read_crash_stderr(id) or ""
+                # If no rotated log available, fall back to the subprocess pipe
+                if not stderr_out and getattr(process, "stderr", None) is not None:
+                    try:
+                        _, stderr_data = process.communicate(timeout=0.5)
+                        if stderr_data:
+                            stderr_out = stderr_data.decode(errors="replace") if isinstance(stderr_data, (bytes, bytearray)) else str(stderr_data)
+                    except Exception:
+                        pass
                 logger.error(
                     f"[{id}] SSE server process died before HTTP became ready "
                     f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
@@ -1102,7 +1164,7 @@ class ServerManager:
             # Tool discovery failure must never abort server startup
             logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
 
-    async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
+    async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False, stderr_tail: str = "") -> None:
         """
         Clean up after server stops.
 
@@ -1110,6 +1172,7 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
             intentional: True if this was a deliberate stop (not a crash)
+            stderr_tail: Pre-captured stderr (e.g. from PIPE); falls back to log file if empty
         """
         uptime = self.get_uptime(id)
 
@@ -1134,12 +1197,13 @@ class ServerManager:
             "state": state,
             "pid": None,
             "stop_time": datetime.utcnow(),
-            "exit_code": exit_code
+            "exit_code": exit_code,
         })
 
         # Persist crash event for non-intentional failures
         if state == "failed":
-            stderr_tail = self._read_crash_stderr(id)
+            if not stderr_tail:
+                stderr_tail = self._read_crash_stderr(id)
             try:
                 await self.db.save_crash_event({
                     "server_id": id,
@@ -1426,8 +1490,14 @@ class ServerManager:
                     logger.debug(f"Server '{server_id}' still within restart window ({time_since_start:.1f}s < {restart_window_sec}s)")
                     return
 
-            # Attempt auto-restart
-            logger.info(f"Auto-restarting crashed server '{server_id}' (restart {current_restart_count + 1}/{max_restarts})")
+            # Backoff before restart — gives transient issues (port conflicts, OOM) time to clear
+            # Delay grows with each restart: 2s, 4s, 8s (capped at 30s)
+            backoff = min(2 ** current_restart_count * 2, 30)
+            logger.info(
+                f"Auto-restarting crashed server '{server_id}' "
+                f"(restart {current_restart_count + 1}/{max_restarts}) after {backoff}s backoff"
+            )
+            await asyncio.sleep(backoff)
 
             # Use internal method to avoid lock contention since we're already in a status check
             success = await self._start_server_unlocked(server_id, config)
