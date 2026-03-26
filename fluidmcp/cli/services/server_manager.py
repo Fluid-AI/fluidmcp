@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
-from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, _readline_with_timeout
+from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, readline_with_timeout
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
@@ -364,7 +364,7 @@ class ServerManager:
                     logger.error(f"Server '{name}' (id: {id}) did not die after SIGKILL — kernel may be stuck")
                     exit_code = -9
 
-            # Cleanup
+            # Cleanup — this is a user-initiated stop, not a crash
             await self._cleanup_server(id, exit_code, intentional=True)
 
             # Update metrics - server is now stopped (status code: 0)
@@ -903,6 +903,11 @@ class ServerManager:
                     clear_stderr_buffer(id)
                     return None
                 logger.info(f"[{id}] SSE server connected successfully")
+
+                # Start watchdog for SSE server too — detects crash instantly
+                task = asyncio.create_task(self._watch_process(id, process))
+                self._watchdog_tasks[id] = task
+
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
             # ── stdio transport: normal handshake ───────────────────────────
 
@@ -999,7 +1004,7 @@ class ServerManager:
 
             # Read response with timeout — uses select()/thread-join so no stuck workers
             try:
-                response_line = await asyncio.to_thread(_readline_with_timeout, process, 5.0)
+                response_line = await asyncio.to_thread(readline_with_timeout, process, 5.0)
 
                 response_line = response_line.strip()
                 if not response_line:
@@ -1175,7 +1180,7 @@ class ServerManager:
         Args:
             id: Server identifier
             exit_code: Process exit code
-            intentional: True if this was a deliberate stop (not a crash)
+            intentional: True when the stop was user-initiated (stop/restart command)
             stderr_tail: Pre-captured stderr (e.g. from PIPE); falls back to log file if empty
         """
         uptime = self.get_uptime(id)
@@ -1189,7 +1194,10 @@ class ServerManager:
         # Close stderr log file handle
         self._close_stderr_log(id)
 
-        # Determine state
+        # Determine state:
+        # - intentional stop → always "stopped" (SIGTERM/SIGKILL exit codes are expected)
+        # - exit 0 → "stopped" (clean exit)
+        # - non-zero unexpected exit → "failed" (real crash)
         if intentional or exit_code == 0:
             state = "stopped"
         else:

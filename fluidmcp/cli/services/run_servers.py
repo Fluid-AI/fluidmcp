@@ -24,7 +24,7 @@ import threading
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
-from .package_launcher import launch_mcp_using_fastapi_proxy, _readline_with_timeout
+from .package_launcher import launch_mcp_using_fastapi_proxy, readline_with_timeout
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
@@ -560,7 +560,7 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
             await asyncio.to_thread(process.stdin.flush)
 
             # Read with select()-based timeout — no stuck thread pool workers
-            response_line = await asyncio.to_thread(_readline_with_timeout, process, 5.0)
+            response_line = await asyncio.to_thread(readline_with_timeout, process, 5.0)
             if not response_line:
                 logger.warning(f"Timeout waiting for response from server: {server_name}")
                 return (server_name, [], "Timeout waiting for response")

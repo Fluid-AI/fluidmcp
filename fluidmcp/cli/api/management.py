@@ -59,7 +59,7 @@ from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
-from ..services.package_launcher import _readline_with_timeout
+from ..services.package_launcher import readline_with_timeout
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1954,8 +1954,8 @@ async def run_tool(
         await asyncio.to_thread(process.stdin.write, json.dumps(tool_request) + "\n")
         await asyncio.to_thread(process.stdin.flush)
 
-        # Read response — _readline_with_timeout uses select()/thread-join, no stuck workers
-        response_line = await asyncio.to_thread(_readline_with_timeout, process, 30.0)
+        # Read response — readline_with_timeout uses select()/thread-join, no stuck workers
+        response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
         if not response_line:
             raise HTTPException(504, "Tool execution timeout (>30s)")
 
