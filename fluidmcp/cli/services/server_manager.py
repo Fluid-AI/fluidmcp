@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
-from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, _readline_with_timeout
+from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, readline_with_timeout
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
@@ -323,8 +323,7 @@ class ServerManager:
                 task = self._watchdog_tasks.pop(id, None)
                 if task and not task.done():
                     task.cancel()
-                crash_log = get_stderr_tail(id, 50)
-                await self._cleanup_server(id, process.returncode, crash_log=crash_log)
+                await self._cleanup_server(id, process.returncode, intentional=True)
                 return True
 
             # Cancel watchdog BEFORE signalling the process — this prevents the
@@ -360,8 +359,8 @@ class ServerManager:
                     logger.error(f"Server '{name}' (id: {id}) did not die after SIGKILL — kernel may be stuck")
                     exit_code = -9
 
-            # Cleanup
-            await self._cleanup_server(id, exit_code)
+            # Cleanup — this is a user-initiated stop, not a crash
+            await self._cleanup_server(id, exit_code, intentional=True)
 
             # Update metrics - server is now stopped (status code: 0)
             collector.set_server_status(0)  # 0 = stopped
@@ -862,6 +861,11 @@ class ServerManager:
                     clear_stderr_buffer(id)
                     return None
                 logger.info(f"[{id}] SSE server connected successfully")
+
+                # Start watchdog for SSE server too — detects crash instantly
+                task = asyncio.create_task(self._watch_process(id, process))
+                self._watchdog_tasks[id] = task
+
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
             # ── stdio transport: normal handshake ───────────────────────────
 
@@ -948,7 +952,7 @@ class ServerManager:
 
             # Read response with timeout — uses select()/thread-join so no stuck workers
             try:
-                response_line = await asyncio.to_thread(_readline_with_timeout, process, 5.0)
+                response_line = await asyncio.to_thread(readline_with_timeout, process, 5.0)
 
                 response_line = response_line.strip()
                 if not response_line:
@@ -1109,7 +1113,7 @@ class ServerManager:
             # Tool discovery failure must never abort server startup
             logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
 
-    async def _cleanup_server(self, id: str, exit_code: int, crash_log: str = "") -> None:
+    async def _cleanup_server(self, id: str, exit_code: int, crash_log: str = "", intentional: bool = False) -> None:
         """
         Clean up after server stops.
 
@@ -1117,6 +1121,7 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
             crash_log: Last stderr lines captured before crash (for diagnosis)
+            intentional: True when the stop was user-initiated (stop/restart command)
         """
         # Remove from registry
         if id in self.processes:
@@ -1136,16 +1141,13 @@ class ServerManager:
         clear_stderr_buffer(id)
 
         # Determine state:
+        # - intentional stop → always "stopped" (SIGTERM/SIGKILL exit codes are expected)
         # - exit 0 → "stopped" (clean exit)
-        # - non-zero + crash_log → "failed" (unexpected crash)
-        # - non-zero without crash_log → "stopped" (SIGTERM/SIGKILL from intentional stop
-        #   produces non-zero but is not a failure)
-        if exit_code == 0:
+        # - non-zero unexpected exit → "failed" (real crash)
+        if intentional or exit_code == 0:
             state = "stopped"
-        elif crash_log:
-            state = "failed"
         else:
-            state = "stopped"
+            state = "failed"
 
         # Update database — persist crash reason so it survives container restarts
         update = {
