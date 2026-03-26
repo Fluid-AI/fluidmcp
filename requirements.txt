@@ -37,6 +37,7 @@ pytest-xdist==3.6.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
 python-multipart==0.0.20
+redis==5.2.1  # Optional: for distributed rate limiting (not required for local dev)
 replicate==0.25.1
 requests==2.32.3
 s3transfer==0.12.0

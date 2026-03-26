@@ -809,14 +809,26 @@ class DatabaseManager(PersistenceBackend):
             if self._retry_task is None or self._retry_task.done():
                 self._retry_task = asyncio.create_task(self._retry_failed_logs())
 
-    async def _retry_failed_logs(self):
-        """Periodic retry of buffered log entries."""
-        await asyncio.sleep(30)  # Wait 30 seconds before retry
+    async def _retry_failed_logs(self, attempt: int = 1) -> None:
+        """Periodic retry of buffered log entries.
+
+        Capped at 10 attempts with exponential backoff to prevent unbounded
+        task chaining when MongoDB is persistently unavailable.
+        """
+        MAX_RETRY_ATTEMPTS = 10
+        if attempt > MAX_RETRY_ATTEMPTS:
+            logger.warning(f"Log retry gave up after {MAX_RETRY_ATTEMPTS} attempts — dropping buffered logs")
+            self._log_buffer.get_all()  # clear the buffer
+            return
+
+        # Exponential backoff: 30s, 60s, 120s … capped at 300s
+        delay = min(30 * (2 ** (attempt - 1)), 300)
+        await asyncio.sleep(delay)
 
         if self._log_buffer.size() == 0:
             return
 
-        logger.info(f"Retrying {self._log_buffer.size()} buffered log entries...")
+        logger.info(f"Retrying {self._log_buffer.size()} buffered log entries (attempt {attempt}/{MAX_RETRY_ATTEMPTS})...")
 
         entries = self._log_buffer.get_all()
         retry_failed = []
@@ -836,9 +848,9 @@ class DatabaseManager(PersistenceBackend):
         success_count = len(entries) - len(retry_failed)
         logger.info(f"Retry complete: {success_count}/{len(entries)} succeeded")
 
-        # Schedule another retry if there are still failures
+        # Schedule next attempt only if still failing — bounded by MAX_RETRY_ATTEMPTS
         if len(retry_failed) > 0:
-            self._retry_task = asyncio.create_task(self._retry_failed_logs())
+            self._retry_task = asyncio.create_task(self._retry_failed_logs(attempt + 1))
 
     def get_log_stats(self) -> Dict[str, Any]:
         """Get logging statistics including buffer status."""
