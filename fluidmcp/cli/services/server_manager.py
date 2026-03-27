@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
-from .package_launcher import initialize_mcp_server, _start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, readline_with_timeout
+from .package_launcher import initialize_mcp_server, start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, readline_with_timeout
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
@@ -872,7 +872,7 @@ class ServerManager:
             )
 
             # Drain stderr continuously so the 64 KB pipe buffer never fills
-            _start_stderr_drainer(process, id)
+            start_stderr_drainer(process, id)
 
             # Give process a moment to start
             await asyncio.sleep(0.5)

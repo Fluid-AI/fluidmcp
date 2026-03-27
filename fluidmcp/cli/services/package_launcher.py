@@ -26,7 +26,7 @@ security = HTTPBearer(auto_error=False)
 _stderr_buffers: Dict[str, tuple] = {}  # key -> (threading.Lock, deque)
 
 
-def _start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
+def start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
     """Start a daemon thread that continuously drains stderr for a subprocess.
 
     Without this, any MCP server that writes enough to stderr will fill the
@@ -93,16 +93,21 @@ def readline_with_timeout(process: subprocess.Popen, timeout: float = 30.0) -> s
         t.join(timeout=timeout)
         if result:
             return result[0]
-        logger.warning(f"readline timed out after {timeout}s (process pid={process.pid})")
+        logger.warning("readline timed out after {}s (process pid={})", timeout, process.pid)
         return ""
 
-    # Unix: select() for non-blocking readiness check
+    # Unix: select() confirms data is available, then readline() reads it.
+    # Theoretical risk: readline() could block on a partial line without \n.
+    # In practice this is safe because MCP JSON-RPC messages are always
+    # newline-terminated, and the subprocess is opened with bufsize=1
+    # (line-buffered). Using os.read() directly would bypass TextIOWrapper's
+    # internal buffer and risk data loss, so we stay with readline().
     import select
     try:
         ready, _, _ = select.select([process.stdout], [], [], timeout)
         if ready:
             return process.stdout.readline()
-        logger.warning(f"readline timed out after {timeout}s (process pid={process.pid})")
+        logger.warning("readline timed out after {}s (process pid={})", timeout, process.pid)
         return ""
     except (OSError, ValueError):
         return ""
@@ -297,7 +302,7 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
             bufsize=1
         )
         # Drain stderr continuously so the 64 KB pipe buffer never fills
-        _start_stderr_drainer(process, pkg)
+        start_stderr_drainer(process, pkg)
 
         # Initialize MCP server — if this fails the process is dead/unusable,
         # kill it and return None so the caller skips registering a broken router.
@@ -371,7 +376,7 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30, stderr_k
     Args:
         process: Subprocess.Popen instance
         timeout: Timeout in seconds (default: 30, increased for npx -y downloads)
-        stderr_key: Key used by _start_stderr_drainer for crash log lookup
+        stderr_key: Key used by start_stderr_drainer for crash log lookup
 
     Returns:
         True if initialization successful
@@ -910,12 +915,16 @@ def create_dynamic_router(server_manager):
                     return
 
                 while True:
-                    # readline_with_timeout uses select() — thread returns after 30s
-                    # instead of blocking forever (avoids stuck thread pool workers).
                     response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
                     if not response_line:
-                        logger.warning(f"[{server_name}] SSE readline timed out or EOF, closing stream")
-                        break
+                        # Distinguish real EOF (process exited) from a timeout
+                        if process.poll() is not None:
+                            logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
+                            break
+                        # Timeout with process still alive — send SSE keep-alive and continue
+                        logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
+                        yield ": keep-alive\n\n"
+                        continue
 
                     logger.debug(f"Received from MCP: {response_line.strip()}")
                     yield f"data: {response_line.strip()}\n\n"
