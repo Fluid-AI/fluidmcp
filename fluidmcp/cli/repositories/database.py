@@ -1151,6 +1151,34 @@ class DatabaseManager(PersistenceBackend):
         """
         return True
 
+    # ==================== Crash Event Persistence ====================
+
+    async def save_crash_event(self, event: Dict[str, Any]) -> bool:
+        """Save a server crash event to MongoDB."""
+        try:
+            doc = dict(event)
+            doc["timestamp"] = doc.get("timestamp", datetime.utcnow())
+            await self.db.fluidmcp_crash_events.insert_one(doc)
+            logger.info(f"Saved crash event for server '{event.get('server_id')}' (exit_code={event.get('exit_code')})")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving crash event: {e}")
+            return False
+
+    async def list_crash_events(self, server_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """List recent crash events for a server from MongoDB."""
+        try:
+            cursor = self.db.fluidmcp_crash_events.find(
+                {"server_id": server_id}
+            ).sort("timestamp", -1).limit(limit)
+            events = await cursor.to_list(length=limit)
+            for event in events:
+                event.pop("_id", None)
+            return events
+        except Exception as e:
+            logger.error(f"Error listing crash events for '{server_id}': {e}")
+            return []
+
     # ==================== Connection Management ====================
 
     async def disconnect(self):
