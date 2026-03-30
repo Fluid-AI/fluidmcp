@@ -820,7 +820,7 @@ class ServerManager:
                 logger.warning(f"Failed to open stderr log for '{name}' (id: {id}), falling back to pipe: {e}")
                 stderr_fh = subprocess.PIPE
 
-            # Set subprocess memory limit
+            # Set subprocess memory limit (default 0 = disabled; set FMCP_DEFAULT_MEMORY_LIMIT_MB to enable)
             memory_limit_mb = config.get("memory_limit_mb",
                 int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
             preexec_fn = self._create_preexec_fn(memory_limit_mb) if memory_limit_mb > 0 else None
@@ -844,7 +844,16 @@ class ServerManager:
             # Check if process is still alive
             if process.poll() is not None:
                 self._close_stderr_log(id)
-                stderr_output = self._read_crash_stderr(id)
+                if stderr_fh is subprocess.PIPE and process.stderr:
+                    try:
+                        _, stderr_output = await asyncio.wait_for(
+                            asyncio.to_thread(process.communicate),
+                            timeout=2.0
+                        )
+                    except Exception:
+                        stderr_output = ""
+                else:
+                    stderr_output = self._read_crash_stderr(id)
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 return None
 
@@ -866,6 +875,10 @@ class ServerManager:
             if not init_success:
                 logger.error(f"MCP initialization failed for server '{name}' (id: {id})")
                 process.kill()
+                try:
+                    await asyncio.to_thread(lambda: process.wait(timeout=2))
+                except Exception:
+                    pass
                 self._close_stderr_log(id)
                 stderr_output = self._read_crash_stderr(id)
                 if stderr_output:
@@ -987,12 +1000,7 @@ class ServerManager:
         while loop.time() < deadline:
             # Guard: process must still be alive
             if process.poll() is not None:
-                stderr_out = ""
-                if process.stderr:
-                    try:
-                        stderr_out = process.stderr.read()
-                    except Exception:
-                        pass
+                stderr_out = self._read_crash_stderr(id) or ""
                 logger.error(
                     f"[{id}] SSE server process died before HTTP became ready "
                     f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
@@ -1485,7 +1493,10 @@ class MCPHealthMonitor:
                     self._restart_counts.pop(server_id, None)
             return
 
-        # Process is dead — attempt restart if policy allows
+        # Process is dead — always clean up DB state
+        rc = getattr(process, "returncode", None)
+        exit_code = rc if rc is not None else -1
+
         if server_id in self._restarts_in_progress:
             return
 
@@ -1497,23 +1508,29 @@ class MCPHealthMonitor:
         restart_policy = config.get("restart_policy", "on-failure")
         max_restarts = config.get("max_restarts", 3)
 
-        if restart_policy not in ("on-failure", "always"):
-            return
+        should_restart = restart_policy in ("on-failure", "always")
 
         # on-failure: only restart on non-zero exit codes
-        rc = getattr(process, "returncode", None)
-        exit_code = rc if rc is not None else -1
         if restart_policy == "on-failure" and exit_code == 0:
             logger.info(f"MCP server '{server_id}' exited cleanly (code=0), not restarting")
+            should_restart = False
+
+        if should_restart and self._restart_counts.get(server_id, 0) >= max_restarts:
+            logger.warning(f"MCP server '{server_id}' reached max restarts ({max_restarts})")
+            should_restart = False
+
+        if not should_restart:
+            # Still clean up DB state even if not restarting
+            op_lock = self._sm._get_operation_lock(server_id)
+            async with op_lock:
+                if self._sm.processes.get(server_id) is process:
+                    await self._sm._cleanup_server(server_id, exit_code)
             return
 
         count = self._restart_counts.get(server_id, 0)
-        if count >= max_restarts:
-            logger.warning(f"MCP server '{server_id}' reached max restarts ({max_restarts})")
-            return
 
         # Mark in-progress BEFORE first await to prevent a concurrent monitor cycle
-        # from triggering a second restart while _cleanup_server is awaited
+        # from triggering a second restart while sleeping/restarting
         self._restarts_in_progress.add(server_id)
         try:
             # Exponential backoff before acquiring lock
@@ -1523,6 +1540,11 @@ class MCPHealthMonitor:
 
             op_lock = self._sm._get_operation_lock(server_id)
             async with op_lock:
+                # Re-check under lock — a manual restart during backoff may have replaced the process
+                current = self._sm.processes.get(server_id)
+                if current is not None and current is not process:
+                    logger.info(f"MCP server '{server_id}' was restarted manually during backoff, skipping")
+                    return
                 await self._sm._cleanup_server(server_id, exit_code)
                 success = await self._sm._start_server_unlocked(server_id, config)
             self._restart_counts[server_id] = count + 1

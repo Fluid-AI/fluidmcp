@@ -226,7 +226,8 @@ class PersistenceBackend(ABC):
                    uptime_seconds, timestamp
 
         Returns:
-            True if saved successfully
+            True if the event was handled. For backends that don't persist
+            crash events, True means the event was intentionally ignored (no-op).
         """
         return True  # Default no-op for backends that don't persist
 
