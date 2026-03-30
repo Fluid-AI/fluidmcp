@@ -358,6 +358,10 @@ class DatabaseManager(PersistenceBackend):
             ])
             logger.info("Created compound index on fluidmcp_llm_model_versions for rollback queries")
 
+            # Create indexes on fluidmcp_crash_events collection
+            await self.db.fluidmcp_crash_events.create_index([("server_id", 1), ("timestamp", -1)])
+            logger.info("Created compound index on fluidmcp_crash_events")
+
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:
                 # Check if collection exists

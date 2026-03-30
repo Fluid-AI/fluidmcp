@@ -814,7 +814,11 @@ class ServerManager:
             logger.info("Starting MCP server subprocess")
 
             # Open stderr log file for persistent crash diagnostics
-            stderr_fh = self._open_stderr_log(id)
+            try:
+                stderr_fh = self._open_stderr_log(id)
+            except Exception as e:
+                logger.warning(f"Failed to open stderr log for '{name}' (id: {id}), falling back to pipe: {e}")
+                stderr_fh = subprocess.PIPE
 
             # Set subprocess memory limit
             memory_limit_mb = config.get("memory_limit_mb",
@@ -1110,13 +1114,16 @@ class ServerManager:
         # Persist crash event for non-intentional failures
         if state == "failed":
             stderr_tail = self._read_crash_stderr(id)
-            await self.db.save_crash_event({
-                "server_id": id,
-                "exit_code": exit_code,
-                "stderr_tail": stderr_tail,
-                "uptime_seconds": uptime,
-                "timestamp": datetime.utcnow()
-            })
+            try:
+                await self.db.save_crash_event({
+                    "server_id": id,
+                    "exit_code": exit_code,
+                    "stderr_tail": stderr_tail,
+                    "uptime_seconds": uptime,
+                    "timestamp": datetime.utcnow()
+                })
+            except Exception as e:
+                logger.error(f"Failed to save crash event for server '{id}': {e}")
             uptime_str = f"{uptime:.1f}s" if uptime is not None else "unknown"
             logger.warning(f"Server '{id}' crashed (exit_code={exit_code}, uptime={uptime_str})")
         else:
@@ -1175,8 +1182,8 @@ class ServerManager:
                 src = f"{log_path}.{i}"
                 dst = f"{log_path}.{i + 1}"
                 if os.path.exists(src):
-                    os.rename(src, dst)
-            os.rename(log_path, f"{log_path}.1")
+                    os.replace(src, dst)
+            os.replace(log_path, f"{log_path}.1")
 
         fh = open(log_path, "a", encoding="utf-8")
         try:
@@ -1218,7 +1225,8 @@ class ServerManager:
     def _create_preexec_fn(memory_limit_mb: int):
         """Create a preexec_fn that sets memory limits for the subprocess."""
         if os.name == "nt":
-            return None  # Not supported on Windows
+            logger.warning("Subprocess memory limits (RLIMIT_AS) are not supported on Windows — skipping")
+            return None
 
         def _set_limits():
             try:
@@ -1508,15 +1516,15 @@ class MCPHealthMonitor:
         # from triggering a second restart while _cleanup_server is awaited
         self._restarts_in_progress.add(server_id)
         try:
-            # Cleanup dead server state before restart
-            await self._sm._cleanup_server(server_id, exit_code)
-
-            # Exponential backoff
+            # Exponential backoff before acquiring lock
             delay = self._calculate_restart_delay(server_id)
             logger.info(f"Restarting MCP server '{server_id}' in {delay:.0f}s (attempt {count + 1}/{max_restarts})")
-
             await asyncio.sleep(delay)
-            success = await self._sm._start_server_unlocked(server_id, config)
+
+            op_lock = self._sm._get_operation_lock(server_id)
+            async with op_lock:
+                await self._sm._cleanup_server(server_id, exit_code)
+                success = await self._sm._start_server_unlocked(server_id, config)
             self._restart_counts[server_id] = count + 1
             if success:
                 logger.info(f"MCP server '{server_id}' restarted successfully")

@@ -42,6 +42,7 @@ class InMemoryBackend(PersistenceBackend):
         self._instances.clear()
         self._logs.clear()
         self._llm_models.clear()
+        self._crash_events.clear()
         self._connected = False
         logger.info("Disconnected in-memory backend")
 
