@@ -844,7 +844,7 @@ class ServerManager:
             # Check if process is still alive
             if process.poll() is not None:
                 self._close_stderr_log(id)
-                if stderr_fh is subprocess.PIPE and process.stderr:
+                if stderr_fh == subprocess.PIPE and process.stderr:
                     try:
                         _, stderr_output = await asyncio.wait_for(
                             asyncio.to_thread(process.communicate),
@@ -1184,7 +1184,8 @@ class ServerManager:
         os.makedirs(self.STDERR_LOG_DIR, exist_ok=True)
         log_path = self._get_stderr_log_path(server_id)
 
-        # Rotate if file exceeds max size
+        # Rotate if file exceeds max size (rotation happens at spawn time only;
+        # a long-running noisy process can exceed STDERR_MAX_BYTES mid-run)
         if os.path.exists(log_path) and os.path.getsize(log_path) > self.STDERR_MAX_BYTES:
             for i in range(self.STDERR_BACKUP_COUNT - 1, 0, -1):
                 src = f"{log_path}.{i}"
@@ -1478,6 +1479,11 @@ class MCPHealthMonitor:
             alive, reason = self._sm.health_checker.check_process_alive(process.pid)
             if not alive:
                 is_alive = False
+                # Refresh returncode so exit_code is accurate for restart policy
+                try:
+                    process.poll()
+                except Exception:
+                    pass
                 logger.warning(f"MCP server '{server_id}' SSE process dead: {reason}")
         else:
             if process.poll() is not None:
@@ -1503,6 +1509,11 @@ class MCPHealthMonitor:
         # Get config to check restart policy
         config = await self._sm.db.get_server_config(server_id)
         if not config:
+            # Config deleted — clean up stale state but don't restart
+            op_lock = self._sm._get_operation_lock(server_id)
+            async with op_lock:
+                if self._sm.processes.get(server_id) is process:
+                    await self._sm._cleanup_server(server_id, exit_code)
             return
 
         restart_policy = config.get("restart_policy", "on-failure")
