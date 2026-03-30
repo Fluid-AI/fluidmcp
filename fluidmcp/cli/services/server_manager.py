@@ -1273,6 +1273,7 @@ class ServerManager:
     @staticmethod
     def _create_preexec_fn(memory_limit_mb: int):
         """Create a preexec_fn that sets memory limits for the subprocess (Unix only)."""
+
         def _set_limits():
             try:
                 import resource
