@@ -1217,18 +1217,16 @@ async def delete_server(
     Returns:
         Success message with deletion timestamp
     """
-<<<<<<< HEAD
     from ..services.tracing import enrich_current_span, enrich_span_with_error
     from ..context import set_user_id, set_server_id
+
+    user_id = user["user_id"]  # Extract user ID from context
 
     # Enrich span and context
     enrich_current_span(user_id=user_id, server_id=id)
     set_user_id(user_id)
     set_server_id(id)
 
-=======
-    user_id = user["user_id"]  # Extract user ID from context
->>>>>>> FluidMCP_V1_AUTH_backend
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -1295,18 +1293,16 @@ async def start_server(
     Returns:
         Success message with PID
     """
-<<<<<<< HEAD
     from ..services.tracing import enrich_current_span, enrich_span_with_error
     from ..context import set_user_id, set_server_id
+
+    user_id = user["user_id"]  # Extract user ID from context
 
     # Enrich span and context
     enrich_current_span(user_id=user_id, server_id=id)
     set_user_id(user_id)
     set_server_id(id)
 
-=======
-    user_id = user["user_id"]  # Extract user ID from context
->>>>>>> FluidMCP_V1_AUTH_backend
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)
@@ -1371,18 +1367,16 @@ async def stop_server(
     Returns:
         Success message with exit code
     """
-<<<<<<< HEAD
     from ..services.tracing import enrich_current_span, enrich_span_with_error
     from ..context import set_user_id, set_server_id
+
+    user_id = user["user_id"]  # Extract user ID from context
 
     # Enrich span and context
     enrich_current_span(user_id=user_id, server_id=id)
     set_user_id(user_id)
     set_server_id(id)
 
-=======
-    user_id = user["user_id"]  # Extract user ID from context
->>>>>>> FluidMCP_V1_AUTH_backend
     manager = get_server_manager(request)
 
     # Check if server is running
@@ -1431,18 +1425,16 @@ async def restart_server(
     Returns:
         Success message with new PID
     """
-<<<<<<< HEAD
     from ..services.tracing import enrich_current_span, enrich_span_with_error
     from ..context import set_user_id, set_server_id
+
+    user_id = user["user_id"]  # Extract user ID from context
 
     # Enrich span and context
     enrich_current_span(user_id=user_id, server_id=id)
     set_user_id(user_id)
     set_server_id(id)
 
-=======
-    user_id = user["user_id"]  # Extract user ID from context
->>>>>>> FluidMCP_V1_AUTH_backend
     manager = get_server_manager(request)
 
     # Check if server exists (in-memory or database)

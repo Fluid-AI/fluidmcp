@@ -195,6 +195,8 @@ class ApiClient {
   // Authentication APIs
   async getAuthConfig(options?: { signal?: AbortSignal }): Promise<any> {
     return this.request('/auth/config', options);
+  }
+
   // LLM Model Management APIs
   async listLLMModels(options?: { signal?: AbortSignal }): Promise<LLMModelsListResponse> {
     return this.request<LLMModelsListResponse>('/api/llm/models', options);
@@ -280,6 +282,19 @@ class ApiClient {
     return this.request('/api/servers', {
       method: 'POST',
       body: JSON.stringify(config),
+    });
+  }
+
+  async updateServer(serverId: string, config: any): Promise<{ message: string; id: string }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async deleteServer(serverId: string): Promise<{ message: string; id: string }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'DELETE',
     });
   }
 

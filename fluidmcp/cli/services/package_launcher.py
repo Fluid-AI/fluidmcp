@@ -682,17 +682,11 @@ def create_dynamic_router(server_manager):
                 # Send request to MCP server
                 msg = json.dumps(request)
                 try:
-                    # Send request to MCP server
-                    msg = json.dumps(request)
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                    # Read response (non-blocking with asyncio.to_thread)
-                    response_line = await asyncio.to_thread(process.stdout.readline)
-                    return JSONResponse(content=json.loads(response_line))
                 # Read response (non-blocking with asyncio.to_thread)
                 response_line = await asyncio.to_thread(process.stdout.readline)
                 response_data = json.loads(response_line)
@@ -702,11 +696,11 @@ def create_dynamic_router(server_manager):
 
                 return JSONResponse(content=response_data)
 
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    logger.error(f"Error proxying request to '{server_name}': {e}")
-                    raise HTTPException(500, f"Error communicating with server: {str(e)}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error proxying request to '{server_name}': {e}")
+                raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/sse", tags=["mcp"])
     async def sse_stream(

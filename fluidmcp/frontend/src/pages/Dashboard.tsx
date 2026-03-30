@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import ServerCard from "../components/ServerCard";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ServerListControls } from "../components/ServerListControls";
@@ -126,7 +126,7 @@ export default function Dashboard() {
     type: 'starting' | 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
 
-  const handleStartServer = useCallback(async (serverId: string, serverName: string) => {
+  const handleStartServer = useCallback(async (serverId: string) => {
     if (actionState.type !== null) return;
 
     // Store the action context before auth check
@@ -164,7 +164,7 @@ export default function Dashboard() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  }, [actionState.type, startServer]);
+  }, [actionState.type, startServer, servers, requireAuth]);
 
   if (loading) {
     return (
@@ -346,7 +346,7 @@ export default function Dashboard() {
                   >
                     <ServerCard
                       server={server}
-                      onStart={() => handleStartServer(server.id, server.name)}
+                      onStart={() => handleStartServer(server.id)}
                       onViewDetails={() => navigate(`/servers/${server.id}`)}
                       isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
                     />

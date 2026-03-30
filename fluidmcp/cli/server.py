@@ -15,15 +15,7 @@ import signal
 import secrets
 from pathlib import Path
 from loguru import logger
-<<<<<<< HEAD
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-=======
-from fastapi import FastAPI, Depends, Request
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
->>>>>>> FluidMCP_V1_AUTH_backend
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -61,7 +53,8 @@ class TraceContextMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         return response
-from .auth import verify_token
+
+from .auth import get_optional_user
 from .services.opentelemetry_manager import init_opentelemetry, shutdown_opentelemetry
 
 
@@ -131,7 +124,6 @@ def save_token_to_file(token: str) -> Path:
     logger.info(f"Token saved to: {token_file}")
     return token_file
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099, auth0_mode: bool = False) -> FastAPI:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -177,7 +169,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"Error during database disconnect: {e}")
 
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, auth0_mode: bool = False, host: str = "0.0.0.0", port: int = 8099) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -244,11 +236,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_headers=["*"],
     )
 
-<<<<<<< HEAD
     # Add trace context extraction middleware
     app.add_middleware(TraceContextMiddleware)
     logger.info("Trace context middleware added")
-=======
+
     # Add security headers middleware
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
@@ -279,7 +270,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         return response
 
     logger.info("Security headers middleware enabled")
->>>>>>> FluidMCP_V1_AUTH_backend
 
     # Store managers in app state for dependency injection
     app.state.db_manager = db_manager
@@ -391,7 +381,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
 
     @app.get("/metrics")
-    async def metrics(request: Request, _=Depends(verify_token)):
+    async def metrics(request: Request, _=Depends(get_optional_user)):
         """
         Prometheus-compatible metrics endpoint.
 
