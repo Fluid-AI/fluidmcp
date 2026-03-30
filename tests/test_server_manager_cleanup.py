@@ -543,7 +543,13 @@ class TestResourceLimits:
     """Tests for _create_preexec_fn subprocess memory limits."""
 
     def test_returns_none_when_disabled(self):
-        result = ServerManager._create_preexec_fn(0) if False else None
+        # Call site: preexec_fn = _create_preexec_fn(mb) if mb > 0 else None
+        # When mb=0 the call site never calls _create_preexec_fn — result is None
+        import os
+        if os.name == "nt":
+            pytest.skip("Not applicable on Windows")
+        memory_limit_mb = 0
+        result = ServerManager._create_preexec_fn(memory_limit_mb) if memory_limit_mb > 0 else None
         assert result is None
 
     def test_returns_callable_on_linux(self):
@@ -557,13 +563,14 @@ class TestResourceLimits:
         import sys
         if sys.platform == "win32":
             pytest.skip("Not applicable on Windows")
-        with patch("resource.setrlimit") as mock_rlimit:
-            with patch("resource.RLIMIT_AS", 9):
-                fn = ServerManager._create_preexec_fn(256)
-                with patch.dict("sys.modules", {"resource": __import__("unittest.mock").mock.MagicMock(
-                    setrlimit=mock_rlimit, RLIMIT_AS=9
-                )}):
-                    fn()
+        import resource as resource_module
+        with patch.object(resource_module, "setrlimit") as mock_rlimit:
+            fn = ServerManager._create_preexec_fn(256)
+            fn()
+            mock_rlimit.assert_called_once_with(
+                resource_module.RLIMIT_AS,
+                (256 * 1024 * 1024, 256 * 1024 * 1024)
+            )
 
 
 if __name__ == "__main__":
