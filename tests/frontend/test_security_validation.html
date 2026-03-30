@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Security Validation Tests</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 900px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .test-section {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .test-case {
+      border-left: 4px solid #cbd5e1;
+      padding: 12px;
+      margin: 10px 0;
+      background: #f9fafb;
+    }
+    .test-pass {
+      border-left-color: #10b981;
+    }
+    .test-fail {
+      border-left-color: #ef4444;
+    }
+    .result {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    .pass {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    .fail {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    h2 {
+      margin-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔐 Security Validation Tests</h1>
+  <p>This page tests the security validation functions from the McpContentView component.</p>
+  <p style="background: #e0f2fe; padding: 10px; border-radius: 4px; border-left: 4px solid #0284c7; margin-bottom: 20px;">
+    ℹ️ <strong>Note:</strong> Tests run automatically when this file is opened in a browser. No action needed.
+  </p>
+
+  <div class="test-section">
+    <h2>Image MIME Type Validation</h2>
+    <div id="image-tests"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>Image Size Validation</h2>
+    <div id="size-tests"></div>
+  </div>
+
+  <div class="test-section">
+    <h2>URL Scheme Validation</h2>
+    <div id="url-tests"></div>
+  </div>
+
+  <button onclick="runAllTests()">Run All Tests</button>
+
+  <script>
+    // Copy validation functions from McpContentView.tsx
+    const ALLOWED_IMAGE_MIMES = [
+      'image/png',
+      'image/jpeg',
+      'image/jpg',
+      'image/gif',
+      'image/webp'
+      // SVG removed due to XSS vulnerability
+    ];
+
+    const MAX_IMAGE_SIZE_MB = 10;
+
+    function isValidBase64(data) {
+      // Check if string contains only valid base64 characters
+      return /^[A-Za-z0-9+/]*={0,2}$/.test(data);
+    }
+
+    function validateImage(data, mimeType) {
+      // Check base64 validity first
+      if (!isValidBase64(data)) {
+        return { valid: false, error: 'Invalid base64 data' };
+      }
+
+      // Check MIME type
+      if (!ALLOWED_IMAGE_MIMES.includes(mimeType)) {
+        return { valid: false, error: `Unsupported image type: ${mimeType}` };
+      }
+
+      // Check size (base64 length * 0.75 ≈ bytes)
+      const estimatedBytes = data.length * 0.75;
+      const estimatedMB = estimatedBytes / (1024 * 1024);
+
+      if (estimatedMB > MAX_IMAGE_SIZE_MB) {
+        return {
+          valid: false,
+          error: `Image too large: ${estimatedMB.toFixed(1)}MB (max ${MAX_IMAGE_SIZE_MB}MB)`
+        };
+      }
+
+      return { valid: true };
+    }
+
+    function isSafeUrl(uri) {
+      // Block protocol-relative URLs and dangerous schemes
+      if (uri.startsWith('//') ||
+          uri.startsWith('javascript:') ||
+          uri.startsWith('data:') ||
+          uri.startsWith('file:') ||
+          uri.startsWith('vbscript:')) {
+        return false;
+      }
+
+      try {
+        const url = new URL(uri);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch {
+        return false;
+      }
+    }
+
+    // Test cases
+    const imageTests = [
+      { name: 'Valid PNG', mime: 'image/png', data: 'A'.repeat(1000), expected: true },
+      { name: 'Valid JPEG', mime: 'image/jpeg', data: 'A'.repeat(1000), expected: true },
+      { name: 'Valid GIF', mime: 'image/gif', data: 'A'.repeat(1000), expected: true },
+      { name: 'Valid WebP', mime: 'image/webp', data: 'A'.repeat(1000), expected: true },
+      { name: 'Invalid SVG (XSS risk)', mime: 'image/svg+xml', data: 'A'.repeat(1000), expected: false },
+      { name: 'Invalid base64', mime: 'image/png', data: 'INVALID!!!', expected: false },
+      { name: 'Invalid BMP', mime: 'image/bmp', data: 'A'.repeat(1000), expected: false },
+      { name: 'Invalid TIFF', mime: 'image/tiff', data: 'A'.repeat(1000), expected: false },
+      { name: 'Dangerous executable', mime: 'application/x-executable', data: 'A'.repeat(1000), expected: false },
+    ];
+
+    const sizeTests = [
+      { name: 'Small image (1KB)', data: 'A'.repeat(1333), expected: true },
+      { name: 'Medium image (1MB)', data: 'A'.repeat(1400000), expected: true },
+      { name: 'Large image (11MB)', data: 'A'.repeat(15000000), expected: false },
+    ];
+
+    const urlTests = [
+      { name: 'HTTPS URL', url: 'https://example.com', expected: true },
+      { name: 'HTTP URL', url: 'http://example.com', expected: true },
+      { name: 'Protocol-relative URL', url: '//evil.com/attack', expected: false },
+      { name: 'JavaScript URL (XSS)', url: 'javascript:alert(1)', expected: false },
+      { name: 'VBScript URL (XSS)', url: 'vbscript:msgbox(1)', expected: false },
+      { name: 'Data URL', url: 'data:text/html,<scr'+'ipt>alert(1)</scr'+'ipt>', expected: false },
+      { name: 'File URL', url: 'file:///etc/passwd', expected: false },
+      { name: 'FTP URL', url: 'ftp://example.com', expected: false },
+      { name: 'Invalid URL', url: 'not-a-url', expected: false },
+    ];
+
+    function renderTest(name, passed, message) {
+      const testClass = passed ? 'test-pass' : 'test-fail';
+      const resultClass = passed ? 'pass' : 'fail';
+      const icon = passed ? '✅' : '❌';
+
+      return `
+        <div class="test-case ${testClass}">
+          <strong>${icon} ${name}</strong>
+          <div class="result ${resultClass}">${message}</div>
+        </div>
+      `;
+    }
+
+    function runImageTests() {
+      const container = document.getElementById('image-tests');
+      let html = '';
+      let passed = 0;
+      let total = imageTests.length;
+
+      imageTests.forEach(test => {
+        const result = validateImage(test.data, test.mime);
+        const success = result.valid === test.expected;
+        if (success) passed++;
+
+        html += renderTest(
+          test.name,
+          success,
+          result.valid ? 'Accepted' : `Rejected: ${result.error}`
+        );
+      });
+
+      html += `<p><strong>Image MIME Tests: ${passed}/${total} passed</strong></p>`;
+      container.innerHTML = html;
+    }
+
+    function runSizeTests() {
+      const container = document.getElementById('size-tests');
+      let html = '';
+      let passed = 0;
+      let total = sizeTests.length;
+
+      sizeTests.forEach(test => {
+        const result = validateImage(test.data, 'image/png');
+        const success = result.valid === test.expected;
+        if (success) passed++;
+
+        html += renderTest(
+          test.name,
+          success,
+          result.valid ? 'Accepted' : `Rejected: ${result.error}`
+        );
+      });
+
+      html += `<p><strong>Size Tests: ${passed}/${total} passed</strong></p>`;
+      container.innerHTML = html;
+    }
+
+    function runUrlTests() {
+      const container = document.getElementById('url-tests');
+      let html = '';
+      let passed = 0;
+      let total = urlTests.length;
+
+      urlTests.forEach(test => {
+        const result = isSafeUrl(test.url);
+        const success = result === test.expected;
+        if (success) passed++;
+
+        html += renderTest(
+          test.name,
+          success,
+          result ? 'Accepted (Safe URL)' : 'Rejected (Unsafe URL)'
+        );
+      });
+
+      html += `<p><strong>URL Tests: ${passed}/${total} passed</strong></p>`;
+      container.innerHTML = html;
+    }
+
+    function runAllTests() {
+      runImageTests();
+      runSizeTests();
+      runUrlTests();
+    }
+
+    // Run tests on page load
+    window.addEventListener('load', runAllTests);
+  </script>
+</body>
+</html>

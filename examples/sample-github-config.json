@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "fastmcp-quickstart": {
+      "github_repo": "modelcontextprotocol/python-sdk",
+      "github_token": "your-github-token-here",
+      "branch": "main",
+      "env": {}
+    }
+  }
+}

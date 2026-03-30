@@ -12,7 +12,11 @@ name: PR Review with Claude Code
 
 on:
   pull_request:
+<<<<<<< HEAD
     types: [opened, synchronize, reopened]
+=======
+    types: [opened, reopened, ready_for_review]
+>>>>>>> 42a1ebd6a9ef08edd5ff4124d5649170805bc7a7
   workflow_dispatch:
     inputs:
       pr_number:
@@ -38,6 +42,7 @@ jobs:
       claude-model: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
       review-prompt: |
         REPO: ${{ github.repository }}
+<<<<<<< HEAD
         PR NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
 
         **CRITICAL WORKFLOW**: Use GitHub CLI (`gh`) commands with Pull Request Review system (NOT general PR comments). Follow this exact workflow:
@@ -378,6 +383,150 @@ jobs:
         - [ ] README updated if needed
 
         Be thorough but constructive. Focus on teaching Python/FastAPI best practices, ensuring MCP protocol compliance, and improving overall code quality. Since testing is a gap, strongly encourage adding tests for any new functionality.
+=======
+        PR: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+
+        ## Critical Workflow
+        Use MCP tool for inline comments, then `gh pr review` for final summary:
+        1. Check PR: `gh pr view <NUM> --json files,reviews`
+        2. Read diff: `gh pr diff <NUM>` and examine files
+        3. Create inline comments: For EACH issue, use MCP tool `mcp__github_inline_comment__create_inline_comment` with:
+           - File path and specific line number where issue occurs
+           - Detailed explanation with severity (🔴 Critical, 🟡 Major, 🟢 Minor)
+           - Code suggestions when applicable
+           - Example: Use MCP tool with path="fluidmcp/cli/services/config_resolver.py", line=42, body="🔴 Critical: Command injection risk"
+        4. Submit final review: After creating ALL inline comments, use `gh pr review <NUM>` with:
+           - `--request-changes` (or `--approve`) with `--body` containing comprehensive summary
+           - IMPORTANT: Use MCP tool for inline comments, NOT `gh pr review --comment`
+
+        ## Re-Review Workflow
+        1. Check previous reviews: `gh pr view <NUM> --json reviews`
+        2. Compare current code against previous comments
+        3. Track resolution: "✅ Resolved: [issue]" or flag persistent issues
+        4. Approve if all resolved, otherwise request changes with summary
+
+        ## Context
+        FluidMCP: Python CLI for MCP server orchestration with FastAPI gateway
+        Stack: FastAPI 0.115, Pydantic 2.11, Click 8.1, boto3, httpx, loguru, psutil
+
+        ## Review Areas
+
+        ### 1. Security (🔴 Critical)
+        - No secrets/API keys in code or commits
+        - Command injection: Validate input to `subprocess.Popen()`
+        - Path traversal: Use `Path.resolve()` validation
+        - Input sanitization: Package format `^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+$`
+        - Bearer token auth in secure mode, S3 credentials validation
+        - HTTPS only for registry URLs, mask secrets in logs
+
+        ### 2. MCP Protocol & STDIO
+        - JSON-RPC 2.0: Proper `jsonrpc`, `id`, `method`, `params`
+        - Protocol version: `2024-11-05`
+        - Initialize before use, line-based framing with `\n`
+        - Subprocess cleanup: `process.terminate()` and `wait()`
+        - Handle malformed JSON, validate subprocess alive before requests
+
+        ### 3. FastAPI & Async
+        - Proper async/await, no blocking I/O
+        - Pydantic models for validation
+        - `async with` for resource cleanup
+        - Correct HTTP status codes, proper error handling
+        - SSE streaming cleanup, dependency injection with `Depends()`
+
+        ### 4. Python & Type Safety
+        - Type hints for functions (avoid `Any`)
+        - Pydantic validation for data
+        - `Optional`, `Union`, `Dict`, `List` properly used
+        - `pathlib.Path` not `os.path`
+        - Proper exception types in error handling
+
+        ### 5. Code Quality (🟡 Major)
+
+        **5.1 Function Size and Complexity**
+        - Flag functions >100 lines or >3 levels of nesting
+        - Functions should have a single, clear responsibility
+        - Large functions should be broken down into smaller, manageable pieces
+        - If a function is difficult to understand at a glance, suggest refactoring
+
+        **5.2 Naming Conventions**
+        - PascalCase (classes), snake_case (functions), UPPER_SNAKE_CASE (constants)
+        - Function, class, and variable names must clearly describe their purpose
+        - Flag ambiguous names like "tool", "handler", "processor" without context
+        - Names should be self-documenting (e.g., "process_user_data" not "process")
+        - Suggest more descriptive names when current name doesn't convey intent
+
+        **5.3 Environment & Settings Variables**
+        - All environment variables or settings MUST have default values to prevent runtime errors
+        - Critical for FluidMCP's many env vars: S3_*, MCP_*, registry URLs, ports, timeouts
+        - Use `os.getenv(key, default)` pattern consistently
+        - Example: `port = int(os.getenv("MCP_CLIENT_SERVER_PORT", "8090"))`
+
+        **5.4 General Quality**
+        - Docstrings for all functions (critical gap - flag missing)
+        - loguru not print(), specific exceptions not bare except
+        - No code duplication, proper resource cleanup
+        - Business logic in services/, not cli.py
+
+        ### 6. Testing (🔴 Critical Gap)
+        - NO TESTS EXIST - Flag all PRs adding features without tests
+        - Require: Unit tests (services), integration tests (FastAPI), STDIO mocks
+        - Use pytest, mock externals (registry, S3, subprocesses)
+        - Test error cases not just happy paths
+
+        ### 7. Architecture
+        - Service-oriented: Logic in `services/` modules
+        - Configuration: JSON with `mcpServers` schema
+        - Port management: `find_free_port()` (8100-9000)
+        - Package structure: `.fmcp-packages/Author/Package/Version/`
+        - No circular dependencies, proper separation of concerns
+
+        ### 8. Environment & Config
+        - Defaults with `os.getenv(key, default)`
+        - `.env` support with python-dotenv
+        - Key locations: MCP_INSTALLATION_DIR, MCP_CLIENT_SERVER_PORT (8090), MCP_CLIENT_SERVER_ALL_PORT (8099)
+        - S3: S3_BUCKET_NAME, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION
+
+        ### 9. Process & Networking
+        - Subprocess: Proper Popen args and cleanup
+        - Port availability checks before binding
+        - Graceful shutdown: Handle SIGTERM/SIGINT
+        - Timeout handling, no zombie processes
+
+        ### 10. Documentation
+        - Docstrings (Google/NumPy style) - many missing, add them
+        - README updates for new features
+        - Inline comments for complex logic only
+        - Accurate CLI help text
+
+        ### 11. Git Hygiene
+        - Clear commit messages (imperative mood)
+        - Small focused changes, no merge conflicts
+        - No commented code, update requirements.txt if needed
+        - Proper .gitignore (.pyc, __pycache__, .env, .fmcp-packages/)
+
+        ## Submission Format
+        **Step 1: Create inline comments**
+        - Use MCP tool `mcp__github_inline_comment__create_inline_comment` for EACH specific issue
+        - Provide exact file path, line number, and detailed description
+        - Include severity indicators (🔴 Critical, 🟡 Major, 🟢 Minor)
+        - Add code suggestions when applicable
+
+        **Step 2: Submit final review**
+        - Use `gh pr review <NUM>` with `--body` containing:
+          - Summary including complexity (Low/Med/High/Very High) and risk level
+          - Count of issues found across all severity levels
+        - Use `--request-changes` for issues or `--approve` if all resolved
+        - IMPORTANT: DO NOT use `gh pr comment` - always use MCP tool for inline comments
+
+        ## Output Structure
+        **Summary**: Changes overview, assessment (Approve/Request Changes/Comment)
+        **Strengths**: Positive aspects and good practices
+        **Issues**: Critical (security, protocol), Major (bugs, missing tests), Minor (quality, docs)
+        **Recommendations**: Actionable suggestions with examples and line numbers
+        **Checklist**: Type hints, async patterns, security, tests, error handling, logging, docstrings
+
+        Be constructive. Focus on Python/FastAPI best practices, MCP protocol compliance, and code quality.
+>>>>>>> 42a1ebd6a9ef08edd5ff4124d5649170805bc7a7
     secrets:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

@@ -1,0 +1,74 @@
+{
+  "_comment": "Example MCP server configuration for Railway deployment with fmcp serve",
+  "_note": "This is a reference example. With fmcp serve, add servers via Management API after deployment, not via static config",
+  "_instructions": [
+    "1. Deploy FluidMCP to Railway with MongoDB",
+    "2. Set FMCP_BEARER_TOKEN environment variable",
+    "3. Use the Management API to add servers dynamically:",
+    "   curl -X POST https://your-app.railway.app/api/servers \\",
+    "     -H 'Authorization: Bearer YOUR_TOKEN' \\",
+    "     -H 'Content-Type: application/json' \\",
+    "     -d '{\"server_id\": \"filesystem\", \"config\": {...}}'",
+    "4. Server configurations are stored in MongoDB and persist across restarts"
+  ],
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {},
+      "description": "File system access MCP server - provides read/write/list operations for /tmp directory"
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {},
+      "description": "In-memory key-value store MCP server - stores data in memory (lost on restart)"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "GitHub MCP server - requires GITHUB_TOKEN environment variable"
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      },
+      "description": "Brave Search MCP server - requires BRAVE_API_KEY environment variable"
+    }
+  },
+  "_usage_example": {
+    "description": "How to use this configuration with Railway deployment",
+    "steps": [
+      {
+        "step": 1,
+        "action": "Deploy to Railway",
+        "command": "Push to fluidmcp_V1 branch, Railway auto-detects Dockerfile"
+      },
+      {
+        "step": 2,
+        "action": "Add filesystem server",
+        "command": "curl -X POST https://your-app.railway.app/api/servers -H 'Authorization: Bearer TOKEN' -d '{\"server_id\": \"filesystem\", \"config\": {\"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/tmp\"], \"env\": {}}}'"
+      },
+      {
+        "step": 3,
+        "action": "Start filesystem server",
+        "command": "curl -X POST https://your-app.railway.app/api/servers/filesystem/start -H 'Authorization: Bearer TOKEN'"
+      },
+      {
+        "step": 4,
+        "action": "Verify server is running",
+        "command": "curl https://your-app.railway.app/api/servers/filesystem/status -H 'Authorization: Bearer TOKEN'"
+      },
+      {
+        "step": 5,
+        "action": "Use MCP endpoint",
+        "command": "curl -X POST https://your-app.railway.app/filesystem/mcp -H 'Content-Type: application/json' -d '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/list\"}'"
+      }
+    ]
+  }
+}

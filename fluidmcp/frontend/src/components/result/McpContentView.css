@@ -1,0 +1,145 @@
+.mcp-content-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mcp-content-text {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 1rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.mcp-content-text pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+  color: #374151;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+.mcp-content-image {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mcp-content-image img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: block;
+}
+
+.mcp-content-image-info {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+  align-self: flex-start;
+}
+
+.mcp-content-mime {
+  padding: 0.25rem 0.5rem;
+  background: #e5e7eb;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.mcp-content-resource {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 4px;
+  padding: 1rem;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mcp-content-resource a {
+  color: #0284c7;
+  text-decoration: none;
+  word-break: break-all;
+  font-size: 0.875rem;
+}
+
+.mcp-content-resource a:hover {
+  text-decoration: underline;
+}
+
+.mcp-content-unknown {
+  background: #fef3c7;
+  border: 1px solid #fde047;
+  border-radius: 4px;
+  padding: 1rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.mcp-content-unknown pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.75rem;
+  color: #92400e;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+.mcp-content-empty {
+  text-align: center;
+  padding: 2rem;
+  color: #9ca3af;
+  font-size: 0.875rem;
+}
+
+/* Security warning styles */
+.mcp-content-warning {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-left: 4px solid #ef4444;
+  border-radius: 4px;
+  padding: 1rem;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mcp-content-warning strong {
+  display: block;
+  color: #991b1b;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.mcp-content-warning code {
+  background: #fee2e2;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 0.875rem;
+  color: #7f1d1d;
+  word-break: break-all;
+}
+
+.mcp-content-warning-detail {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.875rem;
+  color: #7f1d1d;
+  line-height: 1.5;
+}

@@ -1,0 +1,138 @@
+"""
+Utility functions for environment variable handling.
+
+Shared utilities used across database, API, and service layers.
+"""
+import re
+
+
+def has_env_var_syntax(value: str) -> bool:
+    """
+    Detect if a value uses environment variable placeholder syntax.
+
+    Detects common environment variable syntaxes:
+    - Bash/shell: ${VAR_NAME} or $VAR_NAME
+    - Docker Compose: ${VAR_NAME}
+
+    Note: {VAR_NAME} syntax (without $) is not environment variable syntax and will return
+    False, as os.path.expandvars requires the $ prefix.
+
+    Args:
+        value: The string value to check
+
+    Returns:
+        True if the value contains environment variable syntax, False otherwise
+
+    Examples:
+        >>> has_env_var_syntax("${REPLICATE_API_TOKEN}")
+        True
+        >>> has_env_var_syntax("$API_KEY")
+        True
+        >>> has_env_var_syntax("sk-1234567890abcdef")
+        False
+    """
+    if not isinstance(value, str):
+        return False
+
+    # Match ${VAR_NAME} or $VAR_NAME (NOT {VAR_NAME} without $)
+    # VAR_NAME must start with letter/underscore and contain only alphanumeric/underscore
+    # Both uppercase and lowercase variable names are supported (e.g., $API_KEY, $api_key, ${MY_VAR}, ${my_var})
+    env_var_pattern = r'\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*'
+    return bool(re.search(env_var_pattern, value))
+
+
+def is_placeholder(value: str) -> bool:
+    """
+    Detect if an environment variable value is a placeholder.
+
+    Uses multiple heuristics to identify placeholder values while minimizing false positives.
+    Real API keys/tokens are typically long, random, and lack obvious placeholder patterns.
+
+    Common placeholder patterns detected:
+    - Wrapped in angle brackets: <your-username>, <password>
+    - Contains repeated 'x' characters (6+ consecutive): xxxxxx-xxxx, XXXXXXXX
+    - Contains 'placeholder' keyword
+    - Generic instruction patterns: 'your-*', 'my-*', 'insert-*', 'enter-*'
+    - Common placeholder values: 'changeme', 'replace_me', 'todo', 'none', 'null'
+    - Too short for real credentials (< 8 chars) with placeholder keywords
+
+    Note: 'none' and 'null' are flagged as placeholders because in the context of
+    environment variables for credentials (API keys, tokens, secrets), these values
+    are almost always placeholders indicating missing configuration.
+
+    Args:
+        value: The environment variable value to check
+
+    Returns:
+        True if the value appears to be a placeholder, False otherwise
+
+    Examples:
+        >>> is_placeholder("YOUR_API_KEY_HERE")
+        True
+        >>> is_placeholder("<your-token>")
+        True
+        >>> is_placeholder("xxxx-xxxx-xxxx")
+        True
+        >>> is_placeholder("none")
+        True  # 'none' as an API key value is a placeholder
+        >>> is_placeholder("null")
+        True  # 'null' as an API key value is a placeholder
+        >>> is_placeholder("my-api-key-abc123def456ghi789")
+        False  # Too long and complex to be placeholder
+        >>> is_placeholder("sk-1234567890abcdef")
+        False  # Looks like real API key
+    """
+    if not isinstance(value, str):
+        return False
+
+    value_lower = value.lower()
+    value_stripped = value.strip()
+
+    # Empty or whitespace-only values
+    if not value_stripped:
+        return True
+
+    # Wrapped in angle brackets: <value>, <your-key>
+    if value_stripped.startswith('<') and value_stripped.endswith('>'):
+        return True
+
+    # Contains placeholder keyword
+    if 'placeholder' in value_lower:
+        return True
+
+    # Repeated 'x' characters (6+ consecutive x's to avoid false positives)
+    if 'xxxxxx' in value_lower or 'XXXXXX' in value:
+        return True
+
+    # Common placeholder values (exact match)
+    common_placeholders = [
+        'changeme', 'change_me', 'change-me',
+        'replace_me', 'replace-me', 'replaceme',
+        'todo', 'tbd', 'fixme',
+        'none', 'null',  # Special null-like values
+        'example', 'sample', 'test',
+        'your_key', 'your_token', 'your_password',
+        'my_key', 'my_token', 'my_password',
+        'none', 'null',
+    ]
+    if value_lower in common_placeholders:
+        return True
+
+    # Generic instruction patterns (at start of value)
+    # Only flag if relatively short (< 30 chars) to avoid false positives
+    if len(value) < 30:
+        instruction_prefixes = ['your-', 'your_', 'my-', 'my_', 'insert-', 'enter-', 'add-', 'set-']
+        if any(value_lower.startswith(prefix) for prefix in instruction_prefixes):
+            return True
+
+    # All caps with underscores and "HERE" or "YOUR" (classic placeholder pattern)
+    if value.isupper() and ('_HERE' in value or '_YOUR_' in value or value.startswith('YOUR_')):
+        return True
+
+    # If it's very short (< 8 chars) and contains common placeholder words
+    if len(value) < 8:
+        short_indicators = ['key', 'token', 'pass', 'secret', 'your', 'my']
+        if any(indicator in value_lower for indicator in short_indicators):
+            return True
+
+    return False

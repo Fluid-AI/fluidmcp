@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/shared-workspace"],
+      "env": {
+        "LOG_LEVEL": "info",
+        "WORKSPACE_ROOT": "/tmp/shared-workspace"
+      }
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite", "--db-path", "/tmp/shared-workspace/database.db"],
+      "env": {
+        "LOG_LEVEL": "info",
+        "WORKSPACE_ROOT": "/tmp/shared-workspace"
+      }
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "your-brave-api-key-here",
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}

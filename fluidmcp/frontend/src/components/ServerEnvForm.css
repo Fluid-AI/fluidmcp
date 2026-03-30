@@ -1,0 +1,172 @@
+/* Server Environment Form Styles */
+
+.server-env-form {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0;
+}
+
+.env-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.env-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.env-field label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: #f1f5f9;
+  margin-bottom: 6px;
+}
+
+.env-field label .required {
+  color: var(--color-error, #ef4444);
+}
+
+.env-field label .configured-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-success, #22c55e);
+  background: rgba(34, 197, 94, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.env-field .field-description {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary, #9ca3af);
+  margin: 0 0 6px 0;
+  line-height: 1.4;
+}
+
+.env-field input {
+  width: 100%;
+  max-width: 600px; /* Prevent extending too far on large screens */
+  padding: 0.6rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #20293a;
+  color: #eaeaea;
+  font-size: 0.95rem;
+  transition: border-color 0.2s ease;
+  box-sizing: border-box; /* Include padding in width calculation */
+}
+
+.env-field input:focus {
+  outline: none;
+  border-color: #7aa2ff;
+}
+
+.env-field input.error,
+.env-field.has-error input {
+  border-color: var(--color-error, #ef4444);
+}
+
+.env-field .field-error {
+  font-size: 0.875rem;
+  color: var(--color-error, #ef4444);
+  margin: 6px 0 0 0;
+}
+
+.restart-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-top: 24px;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 8px;
+  color: var(--color-warning, #eab308);
+  font-size: 0.9rem;
+}
+
+.restart-warning .warning-icon {
+  font-size: 1.2rem;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.form-actions button {
+  padding: 0.7rem 1.5rem;
+  border-radius: 8px;
+  border: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 0;
+}
+
+.form-actions .submit-button {
+  background: #7aa2ff;
+  color: #000;
+}
+
+.form-actions .submit-button:hover:not(:disabled) {
+  background: #5f8cff;
+}
+
+.form-actions .submit-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.form-actions .cancel-button {
+  background: transparent;
+  color: #9ca3af;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.form-actions .cancel-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Empty state */
+.env-form-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--color-text-secondary, #9ca3af);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .server-env-form {
+    padding: 16px;
+  }
+
+  .env-fields {
+    gap: 16px;
+  }
+
+  .env-field input {
+    max-width: 100%; /* Full width on mobile */
+    font-size: 16px; /* Prevent zoom on iOS */
+  }
+
+  .form-actions {
+    flex-direction: column;
+  }
+
+  .form-actions button {
+    width: 100%;
+  }
+}
