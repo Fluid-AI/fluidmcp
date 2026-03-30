@@ -877,6 +877,8 @@ class ServerManager:
                 process.kill()
                 try:
                     await asyncio.to_thread(lambda: process.wait(timeout=2))
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     pass
                 self._close_stderr_log(id)
@@ -892,6 +894,9 @@ class ServerManager:
 
             return process
 
+        except asyncio.CancelledError:
+            self._close_stderr_log(id)
+            raise
         except Exception as e:
             self._close_stderr_log(id)
             logger.exception(f"Error spawning process for server '{name}': {e}")
@@ -1219,11 +1224,16 @@ class ServerManager:
             if not os.path.exists(log_path):
                 return ""
             size = os.path.getsize(log_path)
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(log_path, "rb") as f:
                 if size > max_bytes:
-                    f.seek(size - max_bytes)
-                    f.readline()  # Skip partial line
-                return f.read()
+                    f.seek(-max_bytes, os.SEEK_END)
+                data = f.read()
+            text = data.decode("utf-8", errors="replace")
+            if size > max_bytes:
+                # Skip the first (possibly partial) line
+                lines = text.splitlines(keepends=True)
+                text = "".join(lines[1:]) if len(lines) > 1 else ""
+            return text
         except Exception as e:
             logger.debug(f"Failed to read stderr log for '{server_id}': {e}")
             return ""
@@ -1457,6 +1467,8 @@ class MCPHealthMonitor:
                 for server_id, process in list(self._sm.processes.items()):
                     try:
                         await self._check_server(server_id, process)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         logger.error(f"Error checking MCP server '{server_id}': {e}")
 
@@ -1563,6 +1575,8 @@ class MCPHealthMonitor:
                 logger.info(f"MCP server '{server_id}' restarted successfully")
             else:
                 logger.error(f"MCP server '{server_id}' failed to restart")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Error restarting MCP server '{server_id}': {e}")
         finally:
