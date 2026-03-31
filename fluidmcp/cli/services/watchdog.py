@@ -11,10 +11,28 @@ import os
 from loguru import logger
 
 
+def _get_env_float(name: str, default: float, min_value: float | None = None) -> float:
+    """Safely parse a float env var, falling back to default on invalid values.
+
+    Does NOT call logger — safe to use at module import time before loguru
+    is configured. Invalid values are silently replaced with the default.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    if min_value is not None and value < min_value:
+        return default
+    return value
+
+
 # Thresholds configurable via env vars (seconds)
-_WARN_THRESHOLD = float(os.getenv("FMCP_LOOP_LAG_WARN_S", "0.5"))
-_ERROR_THRESHOLD = float(os.getenv("FMCP_LOOP_LAG_ERROR_S", "2.0"))
-_CHECK_INTERVAL = float(os.getenv("FMCP_LOOP_LAG_INTERVAL_S", "10.0"))
+_WARN_THRESHOLD = _get_env_float("FMCP_LOOP_LAG_WARN_S", 0.5)
+_ERROR_THRESHOLD = _get_env_float("FMCP_LOOP_LAG_ERROR_S", 2.0)
+_CHECK_INTERVAL = _get_env_float("FMCP_LOOP_LAG_INTERVAL_S", 10.0, min_value=0.001)
 
 
 class EventLoopWatchdog:
