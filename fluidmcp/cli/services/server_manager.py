@@ -42,6 +42,9 @@ class ServerManager:
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
 
+        # I/O locks to serialize concurrent stdin/stdout access per server
+        self._io_locks: Dict[str, asyncio.Lock] = {}
+
         # Event loop for async operations
         self._loop = None
 
@@ -388,6 +391,17 @@ class ServerManager:
         if server_id not in self._operation_locks:
             self._operation_locks[server_id] = asyncio.Lock()
         return self._operation_locks[server_id]
+
+    def _get_io_lock(self, server_id: str) -> asyncio.Lock:
+        """
+        Get or create the I/O serialization lock for a server.
+
+        Ensures only one request at a time writes to stdin / reads from stdout.
+        A new lock is created lazily on first access (same pattern as _get_operation_lock).
+        """
+        if server_id not in self._io_locks:
+            self._io_locks[server_id] = asyncio.Lock()
+        return self._io_locks[server_id]
 
     async def restart_server(self, id: str) -> bool:
         """
@@ -1078,6 +1092,7 @@ class ServerManager:
             del self.processes[id]
         if id in self.start_times:
             del self.start_times[id]
+        self._io_locks.pop(id, None)
 
         # Update database
         await self.db.save_instance_state({
