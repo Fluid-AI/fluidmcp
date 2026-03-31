@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { UserMenu } from './UserMenu';
 
 interface NavbarProps {
   showAddButton?: boolean;
@@ -100,6 +101,7 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
             </svg>
             Report Issue
           </a>
+          <UserMenu />
         </div>
       </div>
     </header>

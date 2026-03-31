@@ -37,7 +37,18 @@ export const authService = {
 
   // Logout and clear cookie
   async logout() {
-    await apiClient.logout();
-    window.location.href = '/';
+    try {
+      const response = await apiClient.logout();
+      // Use logout_url from backend (redirects to Auth0 logout, then back to /ui)
+      if (response?.logout_url) {
+        window.location.href = response.logout_url;
+      } else {
+        // Fallback to /ui if no logout_url provided
+        window.location.href = '/ui';
+      }
+    } catch (error) {
+      // If logout fails, still redirect to /ui
+      window.location.href = '/ui';
+    }
   }
 };

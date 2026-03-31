@@ -96,8 +96,6 @@ def save_token_to_file(token: str) -> Path:
     logger.info(f"Token saved to: {token_file}")
     return token_file
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099, auth0_mode: bool = False) -> FastAPI:
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -142,7 +140,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"Error during database disconnect: {e}")
 
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099, auth0_mode: bool = False, host: str = "0.0.0.0") -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -263,7 +261,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     # Mount OAuth routes if enabled
     if auth0_mode:
         from .auth import auth_router, init_auth_routes, Auth0Config
-        auth_config = Auth0Config.from_env(port=8099)
+        auth_config = Auth0Config.from_env(port=port)
         init_auth_routes(auth_config)
         app.include_router(auth_router, tags=["Authentication"])
         logger.info("✓ OAuth routes mounted at /auth")

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import {
@@ -12,20 +12,37 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 
 export function UserMenu() {
-  const { user, loading, checkAuth, logout, isAuthenticated } = useAuth();
+  const { user, authConfig, loading, checkAuth, logout, isAuthenticated } = useAuth();
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // Check auth on mount (only for user menu display)
+  // Check auth only once on mount
   useEffect(() => {
-    checkAuth();
-  }, [checkAuth]);
+    if (!authChecked) {
+      checkAuth().finally(() => setAuthChecked(true));
+    }
+  }, [authChecked, checkAuth]);
 
-  if (loading) {
+  // Don't show anything until auth check is complete
+  if (!authChecked || loading) {
     return <div className="animate-pulse h-8 w-8 rounded-full bg-muted" />;
   }
 
-  // Not authenticated or OAuth not enabled - don't show anything
-  if (!isAuthenticated) {
+  // OAuth disabled - hide the menu entirely
+  if (!authConfig?.enabled) {
     return null;
+  }
+
+  // Not authenticated but OAuth is enabled - show login button
+  if (!isAuthenticated) {
+    return (
+      <Button
+        onClick={() => window.location.href = '/auth/login'}
+        variant="outline"
+        size="sm"
+      >
+        Sign In
+      </Button>
+    );
   }
 
   // Authenticated - show user menu
@@ -40,8 +57,10 @@ export function UserMenu() {
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="relative h-8 w-8 rounded-full">
           <Avatar className="h-8 w-8">
-            <AvatarImage src={user?.picture} alt={user?.name} />
-            <AvatarFallback>{initials}</AvatarFallback>
+            {user?.picture && <AvatarImage src={user.picture} alt={user?.name} />}
+            <AvatarFallback className="bg-zinc-700 text-white text-xs font-semibold">
+              {initials}
+            </AvatarFallback>
           </Avatar>
         </Button>
       </DropdownMenuTrigger>

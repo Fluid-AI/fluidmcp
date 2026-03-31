@@ -1,5 +1,5 @@
 // Auth context provider with lazy loading
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useCallback } from 'react';
 import { authService, User, AuthConfig } from '../services/auth';
 
 interface AuthContextType {
@@ -20,7 +20,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(false);
 
   // Check if user is authenticated (called on-demand, not on mount)
-  const checkAuth = async (): Promise<boolean> => {
+  const checkAuth = useCallback(async (): Promise<boolean> => {
     try {
       setLoading(true);
 
@@ -35,6 +35,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
+      // If OAuth not enabled, skip user check
+      if (authConfig && !authConfig.enabled) {
+        return true;
+      }
+
       // Check if user is authenticated
       const currentUser = await authService.getCurrentUser();
       setUser(currentUser);
@@ -45,10 +50,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [authConfig]);
 
   // Require authentication - redirect to login if not authenticated
-  const requireAuth = async (returnUrl?: string): Promise<boolean> => {
+  const requireAuth = useCallback(async (returnUrl?: string): Promise<boolean> => {
     const isAuth = await checkAuth();
 
     if (!isAuth) {
@@ -65,12 +70,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     return true;
-  };
+  }, [checkAuth]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     await authService.logout();
     setUser(null);
-  };
+  }, []);
 
   const value = {
     user,
