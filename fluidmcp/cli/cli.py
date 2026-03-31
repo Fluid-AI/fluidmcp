@@ -15,7 +15,6 @@ from .services import (
     edit_env_variables,
     parse_package_string,
     resolve_config,
-    run_servers,
 )
 from .services.package_installer import package_exists
 from .services.package_list import get_latest_version_dir
@@ -799,34 +798,17 @@ def run_command(args, secure_mode: bool = False, token: str = None) -> None:
     logger.debug(f"Arguments - package: {args.package}, s3: {getattr(args, 's3', False)}, file: {getattr(args, 'file', False)}")
     logger.debug(f"Arguments - start_server: {getattr(args, 'start_server', False)}, force_reload: {getattr(args, 'force_reload', False)}")
 
-    try:
-        # Resolve configuration from the appropriate source
-        config = resolve_config(args)
-
-        # Determine if this is a single package run
-        single_package = not (
-            getattr(args, 's3', False) or
-            getattr(args, 'file', False) or
-            args.package.lower() == "all"
-        )
-        logger.debug(f"Single package mode determined: {single_package}")
-
-        # Run the servers
-        run_servers(
-            config=config,
-            secure_mode=secure_mode,
-            token=token,
-            single_package=single_package,
-            start_server=getattr(args, 'start_server', False),
-            force_reload=getattr(args, 'force_reload', False)
-        )
-
-    except FileNotFoundError:
-        logger.exception("File not found error")
-        sys.exit(1)
-    except ValueError:
-        logger.exception("Configuration error")
-        sys.exit(1)
-    except Exception:
-        logger.exception("Error running servers")
-        sys.exit(1)
+    print(
+        "\n"
+        "ERROR: 'fmcp run' is deprecated and has been removed.\n"
+        "\n"
+        "Use 'fmcp serve' to start the FluidMCP gateway:\n"
+        "  fmcp serve --in-memory --allow-insecure\n"
+        "\n"
+        "Then add servers via the REST API:\n"
+        "  curl -X POST http://localhost:8099/api/servers ...\n"
+        "\n"
+        "See 'fmcp serve --help' for all options.\n",
+        file=sys.stderr
+    )
+    sys.exit(1)
