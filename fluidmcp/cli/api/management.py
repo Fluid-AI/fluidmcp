@@ -1107,13 +1107,9 @@ async def get_all_tools(request: Request, token: str = Depends(get_token)):
                 resp = await _proxy_to_sse_server(process.sse_url, req, timeout=5.0)
                 tools = resp.get("result", {}).get("tools", [])
             else:
-                io_lock = manager._get_io_lock(server_name)
-                async with io_lock:
-                    process.stdin.write(json.dumps(req) + "\n")
-                    process.stdin.flush()
-                    line = await asyncio.wait_for(
-                        asyncio.to_thread(process.stdout.readline), timeout=5.0
-                    )
+                line = await manager._dispatch_io_request(
+                    server_name, json.dumps(req), timeout=5.0
+                )
                 tools = json.loads(line).get("result", {}).get("tools", [])
             for t in tools:
                 t["server"] = server_name
