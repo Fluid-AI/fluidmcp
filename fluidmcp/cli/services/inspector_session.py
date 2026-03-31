@@ -1,9 +1,34 @@
 import time
 import json
 import asyncio
+import ipaddress
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 import httpx
 from loguru import logger
+
+
+def _validate_url(url: str) -> None:
+    """Block non-HTTP schemes and connections to private/internal network ranges."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        raise ValueError("Invalid URL")
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http/https URLs are allowed")
+
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("URL must include a host")
+
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return  # hostname, not a bare IP — DNS rebinding is out of scope
+
+    if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        raise ValueError("Connections to private/internal addresses are not allowed")
 
 
 class InspectorSession:
@@ -46,7 +71,8 @@ class InspectorSession:
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=10.0)
+                timeout=httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=10.0),
+                follow_redirects=False,  # prevent redirect-based SSRF bypass
             )
         return self._client
 
@@ -144,7 +170,6 @@ class InspectorSession:
                         if data_str.startswith("/") or data_str.startswith("http"):
                             # Relative path — make it absolute
                             if data_str.startswith("/"):
-                                from urllib.parse import urlparse
                                 parsed = urlparse(self.url)
                                 endpoint_url = f"{parsed.scheme}://{parsed.netloc}{data_str}"
                             else:
@@ -163,6 +188,18 @@ class InspectorSession:
 
         if not endpoint_url:
             raise Exception("SSE server did not provide a messages endpoint URL")
+
+        # Validate SSE-derived endpoint against SSRF blocklist
+        try:
+            _validate_url(endpoint_url)
+        except ValueError as e:
+            raise Exception(f"SSE endpoint rejected: {e}")
+
+        # Enforce same host as the original URL to prevent open-redirect abuse
+        base_host = urlparse(self.url).netloc
+        ep_host = urlparse(endpoint_url).netloc
+        if ep_host and ep_host != base_host:
+            raise Exception(f"SSE endpoint host mismatch — expected {base_host}, got {ep_host}")
 
         self._sse_post_url = endpoint_url
         logger.debug(f"SSE messages endpoint: {endpoint_url}")

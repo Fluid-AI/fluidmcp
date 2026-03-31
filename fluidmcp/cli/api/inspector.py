@@ -1,15 +1,18 @@
 import uuid
 import asyncio
 import time
+import ipaddress
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from pydantic import BaseModel
 from loguru import logger
 
 from ..services.inspector_session import InspectorSession
+from ..auth import verify_token
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_token)])
 
 # In-memory session store: session_id -> InspectorSession
 sessions: Dict[str, InspectorSession] = {}
@@ -32,6 +35,30 @@ class ConnectRequest(BaseModel):
     headers: Optional[Dict[str, str]] = None
     env_vars: Optional[Dict[str, str]] = None
     timeout: Optional[int] = 10000  # ms
+
+
+# ─── URL Validation ────────────────────────────────────────────────────────────
+
+def _validate_mcp_url(url: str) -> None:
+    """Block non-HTTP schemes and connections to private/internal network ranges."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        raise HTTPException(400, "Invalid URL")
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "Only http/https URLs are allowed")
+
+    host = parsed.hostname or ""
+    if not host:
+        raise HTTPException(400, "URL must include a host")
+
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            raise HTTPException(400, "Connections to private/internal addresses are not allowed")
+    except ValueError:
+        pass  # hostname, not a bare IP — DNS rebinding is out of scope here
 
 
 # ─── TTL Cleanup ───────────────────────────────────────────────────────────────
@@ -74,6 +101,8 @@ async def connect_server(body: ConnectRequest):
     """
     if not body.url:
         raise HTTPException(400, "url is required")
+
+    _validate_mcp_url(body.url)
 
     auth_dict = body.auth.model_dump() if body.auth else {}
 
