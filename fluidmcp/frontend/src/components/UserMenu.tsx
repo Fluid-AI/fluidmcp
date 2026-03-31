@@ -12,7 +12,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 
 export function UserMenu() {
-  const { user, loading, checkAuth, logout, isAuthenticated } = useAuth();
+  const { user, authConfig, loading, checkAuth, logout, isAuthenticated } = useAuth();
   const [authChecked, setAuthChecked] = useState(false);
 
   // Check auth only once on mount
@@ -27,7 +27,12 @@ export function UserMenu() {
     return <div className="animate-pulse h-8 w-8 rounded-full bg-muted" />;
   }
 
-  // Not authenticated - show login button
+  // OAuth disabled - hide the menu entirely
+  if (!authConfig?.enabled) {
+    return null;
+  }
+
+  // Not authenticated but OAuth is enabled - show login button
   if (!isAuthenticated) {
     return (
       <Button
@@ -52,8 +57,10 @@ export function UserMenu() {
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="relative h-8 w-8 rounded-full">
           <Avatar className="h-8 w-8">
-            <AvatarImage src={user?.picture} alt={user?.name} />
-            <AvatarFallback>{initials}</AvatarFallback>
+            {user?.picture && <AvatarImage src={user.picture} alt={user?.name} />}
+            <AvatarFallback className="bg-zinc-700 text-white text-xs font-semibold">
+              {initials}
+            </AvatarFallback>
           </Avatar>
         </Button>
       </DropdownMenuTrigger>

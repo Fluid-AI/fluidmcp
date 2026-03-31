@@ -142,32 +142,22 @@ export default function Dashboard() {
     const handleReplayAction = async (event: Event) => {
       const customEvent = event as CustomEvent;
       const action = customEvent.detail;
-      console.log('[Dashboard] Received replay-action event:', action);
 
       if (action.action === 'start' && action.serverId && action.serverName) {
-        console.log('[Dashboard] Starting server:', action.serverId, action.serverName);
         // Wait a bit for the UI to settle
         setTimeout(async () => {
           // Use stored server name instead of looking it up
           // This works even if servers array hasn't loaded yet
           await handleStartServer(action.serverId, action.serverName);
         }, 500);
-      } else {
-        console.log('[Dashboard] Action does not meet criteria:', {
-          hasAction: !!action.action,
-          hasServerId: !!action.serverId,
-          hasServerName: !!action.serverName
-        });
       }
     };
 
-    console.log('[Dashboard] Registering replay-action listener');
     // Add event listener
     window.addEventListener('replay-action', handleReplayAction);
 
     // Cleanup
     return () => {
-      console.log('[Dashboard] Removing replay-action listener');
       window.removeEventListener('replay-action', handleReplayAction);
     };
   }, [handleStartServer]);

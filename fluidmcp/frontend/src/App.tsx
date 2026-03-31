@@ -36,16 +36,13 @@ function App() {
     else if (pendingAction) {
       try {
         const action = JSON.parse(pendingAction);
-        console.log('[Auth] Found pending action:', action);
 
         // Clear the pending action to prevent infinite loops
         sessionStorage.removeItem('auth_pending_action');
 
         // Verify authentication before replaying action
         checkAuth().then((isAuth) => {
-          console.log('[Auth] Auth status:', isAuth, 'Action:', action);
           if (isAuth && action.action === 'start' && action.serverId && action.serverName) {
-            console.log('[Auth] Dispatching replay-action event');
             // Trigger a custom event that the Dashboard can listen to
             window.dispatchEvent(new CustomEvent('replay-action', {
               detail: action
