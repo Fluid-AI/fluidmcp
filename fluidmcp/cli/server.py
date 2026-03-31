@@ -629,7 +629,12 @@ async def main(args):
     server_manager.start_idle_cleanup_task()
 
     # Start MCP server health monitor (detects crashes, triggers auto-restart)
-    health_monitor = MCPHealthMonitor(server_manager)
+    try:
+        health_check_interval = int(os.getenv("FMCP_HEALTH_CHECK_INTERVAL", "30"))
+    except ValueError:
+        logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
+        health_check_interval = 30
+    health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
     health_monitor.start()
 
     # 4. Create FastAPI app (without MCP servers)

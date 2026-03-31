@@ -360,7 +360,16 @@ class DatabaseManager(PersistenceBackend):
 
             # Create indexes on fluidmcp_crash_events collection
             await self.db.fluidmcp_crash_events.create_index([("server_id", 1), ("timestamp", -1)])
-            logger.info("Created compound index on fluidmcp_crash_events")
+            # TTL index: auto-delete crash events older than 30 days to prevent unbounded growth
+            try:
+                ttl_days = int(os.getenv("FMCP_CRASH_EVENT_TTL_DAYS", "30"))
+            except ValueError:
+                ttl_days = 30
+            ttl_seconds = ttl_days * 86400
+            await self.db.fluidmcp_crash_events.create_index(
+                "timestamp", expireAfterSeconds=ttl_seconds
+            )
+            logger.info(f"Created TTL index on fluidmcp_crash_events (expires after {ttl_days} days)")
 
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:

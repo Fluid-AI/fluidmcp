@@ -823,7 +823,20 @@ class ServerManager:
             # Set subprocess memory limit (default 0 = disabled; set FMCP_DEFAULT_MEMORY_LIMIT_MB to enable)
             memory_limit_mb = config.get("memory_limit_mb",
                 int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
-            preexec_fn = self._create_preexec_fn(memory_limit_mb) if memory_limit_mb > 0 else None
+            if memory_limit_mb > 0 and os.name != "nt":
+                try:
+                    import resource as _resource  # noqa: F401
+                    preexec_fn = self._create_preexec_fn(memory_limit_mb)
+                except ImportError:
+                    logger.warning(
+                        f"resource module unavailable — memory limit ({memory_limit_mb}MB) not applied to '{name}'"
+                    )
+                    preexec_fn = None
+            elif memory_limit_mb > 0:
+                logger.warning("Subprocess memory limits (RLIMIT_AS) are not supported on Windows — skipping")
+                preexec_fn = None
+            else:
+                preexec_fn = None
 
             # Spawn subprocess
             process = subprocess.Popen(
@@ -1184,8 +1197,25 @@ class ServerManager:
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in server_id)
         return os.path.join(self.STDERR_LOG_DIR, f"mcp_{safe_id}_stderr.log")
 
+    def _cleanup_old_stderr_logs(self) -> None:
+        """Delete stderr log files (and their backups) older than 30 days."""
+        if not os.path.isdir(self.STDERR_LOG_DIR):
+            return
+        cutoff = time.time() - 30 * 86400
+        try:
+            for entry in os.scandir(self.STDERR_LOG_DIR):
+                if entry.name.startswith("mcp_") and "_stderr.log" in entry.name:
+                    try:
+                        if entry.stat().st_mtime < cutoff:
+                            os.remove(entry.path)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
     def _open_stderr_log(self, server_id: str) -> IO:
         """Open a stderr log file with rotation, returns file handle."""
+        self._cleanup_old_stderr_logs()
         os.makedirs(self.STDERR_LOG_DIR, exist_ok=True)
         log_path = self._get_stderr_log_path(server_id)
 
@@ -1242,18 +1272,16 @@ class ServerManager:
 
     @staticmethod
     def _create_preexec_fn(memory_limit_mb: int):
-        """Create a preexec_fn that sets memory limits for the subprocess."""
-        if os.name == "nt":
-            logger.warning("Subprocess memory limits (RLIMIT_AS) are not supported on Windows — skipping")
-            return None
-
+        """Create a preexec_fn that sets memory limits for the subprocess (Unix only)."""
         def _set_limits():
             try:
                 import resource
                 limit_bytes = memory_limit_mb * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
             except (ImportError, ValueError, OSError):
-                # resource module unavailable or limit rejected — continue without limits
+                # Cannot use logger here — this runs in the forked child process
+                # where logging locks may be in an inconsistent state (deadlock risk).
+                # The parent process logs a warning after spawn if needed.
                 pass
 
         return _set_limits
@@ -1569,7 +1597,17 @@ class MCPHealthMonitor:
                     logger.info(f"MCP server '{server_id}' was restarted manually during backoff, skipping")
                     return
                 await self._sm._cleanup_server(server_id, exit_code)
-                success = await self._sm._start_server_unlocked(server_id, config)
+                restart_timeout = float(os.getenv("FMCP_RESTART_TIMEOUT_S", "60"))
+                try:
+                    success = await asyncio.wait_for(
+                        self._sm._start_server_unlocked(server_id, config),
+                        timeout=restart_timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(
+                        f"MCP server '{server_id}' restart timed out after {restart_timeout}s"
+                    )
+                    success = False
             self._restart_counts[server_id] = count + 1
             if success:
                 logger.info(f"MCP server '{server_id}' restarted successfully")
