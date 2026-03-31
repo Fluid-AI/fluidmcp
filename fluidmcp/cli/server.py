@@ -697,11 +697,16 @@ async def main(args):
         except ValueError:
             pass  # Already logged in middleware
 
-    def _env_int(name: str, default: int) -> int:
+    def _env_int(name: str, default: int, min_value: int = 0) -> int:
         try:
-            return int(os.getenv(name, str(default)))
+            value = int(os.getenv(name, str(default)))
         except (ValueError, TypeError):
+            logger.warning(f"Invalid int for {name}; using default {default}")
             return default
+        if value < min_value:
+            logger.warning(f"Value for {name}={value} is below minimum {min_value}; using default {default}")
+            return default
+        return value
 
     config = Config(
         app,
@@ -710,9 +715,9 @@ async def main(args):
         loop="asyncio",
         log_level="info",
         # Recycle workers after N requests to avoid memory leaks (0 = disabled)
-        limit_max_requests=_env_int("FMCP_MAX_REQUESTS_PER_WORKER", 10000) or None,
+        limit_max_requests=_env_int("FMCP_MAX_REQUESTS_PER_WORKER", 10000, min_value=0) or None,
         # Drop idle keep-alive connections after N seconds
-        timeout_keep_alive=_env_int("FMCP_KEEP_ALIVE_TIMEOUT", 30),
+        timeout_keep_alive=_env_int("FMCP_KEEP_ALIVE_TIMEOUT", 30, min_value=1),
         # Note: Uvicorn doesn't provide a direct body size limit parameter
         # For production, configure limits at reverse proxy level (Nginx, Cloudflare, etc.)
     )

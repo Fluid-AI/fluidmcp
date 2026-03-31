@@ -1735,21 +1735,34 @@ async def list_all_crashes(
     # Also include servers from DB that may not be in memory
     try:
         db_configs = await manager.db.list_server_configs()
+        skipped = sum(1 for c in db_configs if "id" not in c)
+        if skipped:
+            logger.warning(f"{skipped} server config(s) from DB missing 'id' field — skipped in crash aggregation")
         db_ids = {c["id"] for c in db_configs if "id" in c}
         server_ids = list(set(server_ids) | db_ids)
     except Exception:
-        pass  # Fall back to in-memory only
+        logger.warning("Failed to list server configs from DB when aggregating crash events")
 
+    # Cap per-server fetch to avoid over-fetching; short-circuit once we have enough
+    per_server_limit = min(limit, 10)
     all_crashes = []
     for sid in server_ids:
+        if len(all_crashes) >= limit:
+            break
         try:
-            events = await manager.db.list_crash_events(sid, limit=limit)
+            events = await manager.db.list_crash_events(sid, limit=per_server_limit)
             all_crashes.extend(events)
         except Exception:
-            pass
+            logger.warning(f"Failed to list crash events for server '{sid}'")
 
     # Sort all events by timestamp descending, take top `limit`
-    all_crashes.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+    def _crash_ts(e: dict) -> datetime:
+        ts = e.get("timestamp")
+        if isinstance(ts, datetime):
+            return ts
+        return datetime.min
+
+    all_crashes.sort(key=_crash_ts, reverse=True)
     return {
         "crashes": all_crashes[:limit],
         "count": len(all_crashes[:limit])
