@@ -56,6 +56,9 @@ class EventLoopWatchdog:
 
     def start(self) -> None:
         """Schedule the watchdog loop as a background asyncio task."""
+        if self._task is not None and not self._task.done():
+            logger.warning("Event loop watchdog is already running — ignoring duplicate start()")
+            return
         self._task = asyncio.create_task(self._loop(), name="event-loop-watchdog")
         logger.info(
             f"Event loop watchdog started "
@@ -71,6 +74,8 @@ class EventLoopWatchdog:
             await self._task
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            logger.warning(f"Event loop watchdog task exited with unexpected error: {e}")
         self._task = None
         logger.info("Event loop watchdog stopped")
 

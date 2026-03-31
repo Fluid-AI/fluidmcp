@@ -895,7 +895,20 @@ class ServerManager:
                 except Exception:
                     pass
                 self._close_stderr_log(id)
-                stderr_output = self._read_crash_stderr(id)
+                # If stderr was piped (log file open failed), read directly from process;
+                # otherwise read from the log file for crash diagnostics.
+                stderr_output = ""
+                if process.stderr is not None:
+                    try:
+                        _, stderr_bytes = await asyncio.to_thread(lambda: process.communicate(timeout=2))
+                        if stderr_bytes:
+                            stderr_output = stderr_bytes.decode(errors="replace") if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        pass
+                if not stderr_output:
+                    stderr_output = self._read_crash_stderr(id)
                 if stderr_output:
                     logger.error(f"[{id}] Process stderr: {stderr_output[:500]}")
                 return None
