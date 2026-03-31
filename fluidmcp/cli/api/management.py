@@ -1674,6 +1674,88 @@ async def get_server_logs(
     }
 
 
+# ==================== Crash History ====================
+
+@router.get("/servers/{id}/crashes")
+async def get_server_crashes(
+    request: Request,
+    id: str,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of crash events to return")
+):
+    """
+    Get recent crash events for a server.
+
+    Returns crash history with exit codes, stderr snippets, and uptime at crash time.
+
+    Args:
+        id: Server identifier
+        limit: Maximum number of crash events (1-100, default 20)
+
+    Returns:
+        List of crash events, most recent first
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    crashes = await manager.db.list_crash_events(id, limit=limit)
+    return {
+        "server_id": id,
+        "crashes": crashes,
+        "count": len(crashes)
+    }
+
+
+@router.get("/crashes")
+async def list_all_crashes(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of crash events to return")
+):
+    """
+    List recent crash events across all servers.
+
+    Aggregates crash history from all known servers. Useful for a global
+    diagnostics view without knowing specific server IDs.
+
+    Args:
+        limit: Maximum total events to return (1-200, default 50)
+
+    Returns:
+        List of crash events across all servers, most recent first
+    """
+    manager = get_server_manager(request)
+
+    # Gather crash events for all known server IDs
+    server_ids = list(manager.configs.keys())
+
+    # Also include servers from DB that may not be in memory
+    try:
+        db_configs = await manager.db.list_server_configs()
+        db_ids = {c["id"] for c in db_configs if "id" in c}
+        server_ids = list(set(server_ids) | db_ids)
+    except Exception:
+        pass  # Fall back to in-memory only
+
+    all_crashes = []
+    for sid in server_ids:
+        try:
+            events = await manager.db.list_crash_events(sid, limit=limit)
+            all_crashes.extend(events)
+        except Exception:
+            pass
+
+    # Sort all events by timestamp descending, take top `limit`
+    all_crashes.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+    return {
+        "crashes": all_crashes[:limit],
+        "count": len(all_crashes[:limit])
+    }
+
+
 # ==================== Environment Variable Management ====================
 
 @router.get("/servers/{id}/instance/env")
