@@ -18,6 +18,7 @@ from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager, MCPHealthMonitor
+from .services.watchdog import EventLoopWatchdog
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
@@ -648,6 +649,10 @@ async def main(args):
     health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
     health_monitor.start()
 
+    # Start event loop watchdog (detects blocked/lagging event loop)
+    loop_watchdog = EventLoopWatchdog()
+    loop_watchdog.start()
+
     # 4. Create FastAPI app (without MCP servers)
     app = await create_app(
         db_manager=persistence,
@@ -692,12 +697,22 @@ async def main(args):
         except ValueError:
             pass  # Already logged in middleware
 
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except (ValueError, TypeError):
+            return default
+
     config = Config(
         app,
         host=args.host,
         port=args.port,
         loop="asyncio",
-        log_level="info"
+        log_level="info",
+        # Recycle workers after N requests to avoid memory leaks (0 = disabled)
+        limit_max_requests=_env_int("FMCP_MAX_REQUESTS_PER_WORKER", 10000) or None,
+        # Drop idle keep-alive connections after N seconds
+        timeout_keep_alive=_env_int("FMCP_KEEP_ALIVE_TIMEOUT", 30),
         # Note: Uvicorn doesn't provide a direct body size limit parameter
         # For production, configure limits at reverse proxy level (Nginx, Cloudflare, etc.)
     )
@@ -715,6 +730,12 @@ async def main(args):
 
     # Graceful cleanup
     logger.info("Initiating graceful shutdown...")
+
+    try:
+        # Stop event loop watchdog
+        await loop_watchdog.stop()
+    except Exception as e:
+        logger.error(f"Error stopping event loop watchdog: {e}")
 
     try:
         # Stop health monitor
