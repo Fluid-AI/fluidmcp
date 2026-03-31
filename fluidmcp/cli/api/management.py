@@ -1743,17 +1743,20 @@ async def list_all_crashes(
     except Exception:
         logger.warning("Failed to list server configs from DB when aggregating crash events")
 
-    # Cap per-server fetch to avoid over-fetching; short-circuit once we have enough
+    # Cap per-server fetch; fetch all servers concurrently with bounded concurrency
     per_server_limit = min(limit, 10)
-    all_crashes = []
-    for sid in server_ids:
-        if len(all_crashes) >= limit:
-            break
+    sem = asyncio.Semaphore(10)
+
+    async def _fetch(sid: str) -> list:
         try:
-            events = await manager.db.list_crash_events(sid, limit=per_server_limit)
-            all_crashes.extend(events)
+            async with sem:
+                return await manager.db.list_crash_events(sid, limit=per_server_limit)
         except Exception:
             logger.warning(f"Failed to list crash events for server '{sid}'")
+            return []
+
+    results = await asyncio.gather(*[_fetch(sid) for sid in server_ids])
+    all_crashes = [event for events in results for event in events]
 
     # Sort all events by timestamp descending, take top `limit`
     def _crash_ts(e: dict) -> datetime:
