@@ -474,7 +474,12 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
     from .services.network_utils import is_port_in_use, kill_process_on_port
     from .services.server_manager import ServerManager
     from .services.frontend_utils import setup_frontend_routes
-    from .services.run_servers import _add_health_endpoint, _add_metrics_endpoint
+    from .services.run_servers import (
+        _add_health_endpoint,
+        _add_metrics_endpoint,
+        _register_server_process,
+        _initialize_server_metrics,
+    )
     from .repositories.memory import InMemoryBackend
     from .api.management import router as management_router
     from fastapi import FastAPI
@@ -542,6 +547,8 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             server_manager.processes[package_name] = process
             server_manager.start_times[package_name] = time.monotonic()
             server_manager.configs[package_name] = {}
+            _register_server_process(package_name, process)   # keep health endpoint in sync
+            _initialize_server_metrics(package_name)           # populate uptime for metrics
 
             # Create FastAPI app with full serve-parity setup
             app = FastAPI(
