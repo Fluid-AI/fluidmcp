@@ -68,12 +68,13 @@ class PersistenceBackend(ABC):
         pass
 
     @abstractmethod
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
             enabled_only: If True, only return enabled servers
+            include_deleted: If True, include soft-deleted servers
 
         Returns:
             List of server configuration dicts
