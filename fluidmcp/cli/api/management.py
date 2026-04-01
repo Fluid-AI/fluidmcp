@@ -1743,6 +1743,17 @@ async def list_all_crashes(
     except Exception:
         logger.warning("Failed to list server configs from DB when aggregating crash events")
 
+    # Cap total servers queried to avoid unbounded N+1 with large fleets.
+    # With many servers we cannot guarantee global ordering beyond this cap,
+    # but the per-server endpoint is the right tool for targeted diagnostics.
+    MAX_SERVERS = 200
+    if len(server_ids) > MAX_SERVERS:
+        logger.warning(
+            f"Crash aggregation capped at {MAX_SERVERS} servers "
+            f"({len(server_ids)} total) — use GET /api/servers/{{id}}/crashes for targeted queries"
+        )
+        server_ids = server_ids[:MAX_SERVERS]
+
     # Cap per-server fetch; fetch all servers concurrently with bounded concurrency
     per_server_limit = min(limit, 10)
     sem = asyncio.Semaphore(10)
