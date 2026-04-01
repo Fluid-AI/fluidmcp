@@ -323,7 +323,7 @@ def run_servers(
                 # Register in server_manager for dynamic router dispatch (same as serve)
                 server_manager.processes[server_name] = process
                 server_manager.start_times[server_name] = time.monotonic()
-                server_manager.configs[server_name] = server_cfg
+                server_manager.configs[server_name] = {**server_cfg, "id": server_name, "name": server_name, "enabled": True}
 
                 # Also register in module-level dict (used by health/tools endpoints)
                 _register_server_process(server_name, process)
