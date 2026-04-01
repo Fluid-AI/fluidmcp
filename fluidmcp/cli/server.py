@@ -640,19 +640,6 @@ async def main(args):
     logger.info("Starting background tasks...")
     server_manager.start_idle_cleanup_task()
 
-    # Start MCP server health monitor (detects crashes, triggers auto-restart)
-    try:
-        health_check_interval = int(os.getenv("FMCP_HEALTH_CHECK_INTERVAL", "30"))
-    except ValueError:
-        logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
-        health_check_interval = 30
-    health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
-    health_monitor.start()
-
-    # Start event loop watchdog (detects blocked/lagging event loop)
-    loop_watchdog = EventLoopWatchdog()
-    loop_watchdog.start()
-
     # 4. Create FastAPI app (without MCP servers)
     app = await create_app(
         db_manager=persistence,
@@ -662,6 +649,14 @@ async def main(args):
         allowed_origins=allowed_origins,
         port=args.port
     )
+
+    # Start health monitor and watchdog only after app creation succeeds,
+    # so a create_app failure does not leak background tasks.
+    health_monitor = MCPHealthMonitor(server_manager)
+    health_monitor.start()
+
+    loop_watchdog = EventLoopWatchdog()
+    loop_watchdog.start()
 
     if db_connected:
         loaded_models = await load_models_from_persistence(persistence)

@@ -97,6 +97,7 @@ class TestEventLoopWatchdogThresholds:
             watchdog.start()
             await asyncio.sleep(0.05)
             await watchdog.stop()
+            mock_logger.warning.assert_not_called()
             mock_logger.error.assert_not_called()
 
     @pytest.mark.asyncio

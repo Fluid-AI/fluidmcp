@@ -1032,6 +1032,14 @@ class ServerManager:
             # Guard: process must still be alive
             if process.poll() is not None:
                 stderr_out = self._read_crash_stderr(id) or ""
+                # If no rotated log available, fall back to the subprocess pipe
+                if not stderr_out and getattr(process, "stderr", None) is not None:
+                    try:
+                        _, stderr_data = process.communicate(timeout=0.5)
+                        if stderr_data:
+                            stderr_out = stderr_data.decode(errors="replace") if isinstance(stderr_data, (bytes, bytearray)) else str(stderr_data)
+                    except Exception:
+                        pass
                 logger.error(
                     f"[{id}] SSE server process died before HTTP became ready "
                     f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
