@@ -220,9 +220,8 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
                 )
             logger.warning(error_msg)
 
-        router = create_mcp_router(pkg, process, process_lock)
-        logger.debug(f"Created router for package: {pkg}")
-        return pkg, router, process  # Return process for explicit registry
+        logger.debug(f"Launched MCP server process for package: {pkg}")
+        return pkg, None, process  # router is None — callers use create_dynamic_router(server_manager)
 
     except FileNotFoundError:
         logger.exception("Command not found")
