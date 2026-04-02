@@ -472,7 +472,6 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         extract_or_create_metadata,
     )
     from .services.package_launcher import launch_mcp_using_fastapi_proxy, create_dynamic_router
-<<<<<<< Updated upstream
     from .services.network_utils import is_port_in_use, kill_process_on_port
     from .services.server_manager import ServerManager
     from .services.frontend_utils import setup_frontend_routes
@@ -484,15 +483,9 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
     )
     from .repositories.memory import InMemoryBackend
     from .api.management import router as management_router
-=======
-    from .services.server_manager import ServerManager
-    from .services.network_utils import is_port_in_use, kill_process_on_port
-    from .repositories.memory import InMemoryBackend
->>>>>>> Stashed changes
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     import uvicorn
-    import time
 
     logger.debug(f"github_command called for repo: {args.repo}")
     logger.debug(f"Branch: {args.branch}, Secure mode: {secure_mode}")
@@ -557,20 +550,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
                         print("Invalid choice. Aborting")
                         return
 
-<<<<<<< Updated upstream
-            # Set up ServerManager with the launched process (same as serve)
-            db_manager = InMemoryBackend()
-            server_manager = ServerManager(db_manager)
-            server_manager.processes[package_name] = process
-            server_manager.start_times[package_name] = time.monotonic()
-            server_manager.configs[package_name] = {}
-            _register_server_process(package_name, process)   # keep health endpoint in sync
-            _initialize_server_metrics(package_name)           # populate uptime for metrics
-
             # Create FastAPI app with full serve-parity setup
-=======
-            # Create FastAPI app with dynamic router (same as serve/run)
->>>>>>> Stashed changes
             app = FastAPI(
                 title="FluidMCP Gateway",
                 description=f"Unified gateway for {package_name} from GitHub",
@@ -586,7 +566,6 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             app.state.db_manager = db_manager
             app.state.server_manager = server_manager
 
-<<<<<<< Updated upstream
             setup_frontend_routes(app, host="0.0.0.0", port=client_server_port)
 
             # Mount unified dynamic router (same as serve)
@@ -596,10 +575,6 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             _add_health_endpoint(app)
             _add_metrics_endpoint(app)
             app.include_router(management_router, prefix="/api", tags=["management"])
-=======
-            mcp_router = create_dynamic_router(server_manager)
-            app.include_router(mcp_router, tags=["mcp"])
->>>>>>> Stashed changes
 
             logger.info(f"Starting FastAPI server for {package_name}")
             logger.info(f"Swagger UI available at: http://localhost:{client_server_port}/docs")
