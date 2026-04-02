@@ -189,17 +189,17 @@ class InspectorSession:
         if not endpoint_url:
             raise Exception("SSE server did not provide a messages endpoint URL")
 
-        # Validate SSE-derived endpoint URL — attacker-controlled SSE stream could
-        # inject an internal address here, bypassing the initial _validate_mcp_url check.
-        _validate_url(endpoint_url)
+        # Validate SSE-derived endpoint against SSRF blocklist
+        try:
+            _validate_url(endpoint_url)
+        except ValueError as e:
+            raise Exception(f"SSE endpoint rejected: {e}")
 
-        # Enforce same-host: endpoint must be on the same origin as the SSE URL
-        origin_host = urlparse(self.url).netloc
-        endpoint_host = urlparse(endpoint_url).netloc
-        if origin_host != endpoint_host:
-            raise ValueError(
-                f"SSE endpoint host '{endpoint_host}' does not match origin '{origin_host}'"
-            )
+        # Enforce same host as the original URL to prevent open-redirect abuse
+        base_host = urlparse(self.url).netloc
+        ep_host = urlparse(endpoint_url).netloc
+        if ep_host and ep_host != base_host:
+            raise Exception(f"SSE endpoint host mismatch — expected {base_host}, got {ep_host}")
 
         self._sse_post_url = endpoint_url
         logger.debug(f"SSE messages endpoint: {endpoint_url}")
