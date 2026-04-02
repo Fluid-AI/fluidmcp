@@ -22,6 +22,7 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
 
 
@@ -257,6 +258,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
     logger.info("Management API mounted at /api")
 
+    # Include Inspector API
+    app.include_router(inspector_router, prefix="/api", tags=["inspector"])
+    logger.info("Inspector API mounted at /api")
+
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
     app.include_router(mcp_router, tags=["mcp"])
@@ -377,6 +382,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 "mcp": "/{server_name}/mcp"
             }
         }
+
+    # Start Inspector session cleanup task
+    @app.on_event("startup")
+    async def start_inspector_cleanup():
+        asyncio.create_task(cleanup_sessions())
+        logger.info("Inspector session cleanup task started")
 
     # Register cleanup handler for HTTP client and Redis connections
     @app.on_event("shutdown")
