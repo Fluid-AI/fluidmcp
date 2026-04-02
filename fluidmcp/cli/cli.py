@@ -466,13 +466,25 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
     """
+    import time
     from .services import (
         clone_github_repo,
         extract_or_create_metadata,
     )
-    from .services.package_launcher import launch_mcp_using_fastapi_proxy
+    from .services.package_launcher import launch_mcp_using_fastapi_proxy, create_dynamic_router
     from .services.network_utils import is_port_in_use, kill_process_on_port
+    from .services.server_manager import ServerManager
+    from .services.frontend_utils import setup_frontend_routes
+    from .services.run_servers import (
+        _add_health_endpoint,
+        _add_metrics_endpoint,
+        _register_server_process,
+        _initialize_server_metrics,
+    )
+    from .repositories.memory import InMemoryBackend
+    from .api.management import router as management_router
     from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
     import uvicorn
 
     logger.debug(f"github_command called for repo: {args.repo}")
@@ -499,13 +511,22 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         metadata_path = extract_or_create_metadata(dest_dir)
         logger.debug(f"Metadata processed: {metadata_path}")
 
+        # Initialize server manager for dynamic router dispatch
+        db_manager = InMemoryBackend()
+        server_manager = ServerManager(db_manager)
+
         # Launch the MCP server
         logger.info("Launching MCP server")
-        package_name, router = launch_mcp_using_fastapi_proxy(dest_dir)
+        package_name, _router, process = launch_mcp_using_fastapi_proxy(dest_dir)
 
-        if not router:
+        if not process:
             logger.error("Failed to launch MCP server")
             sys.exit(1)
+
+        # Register process in server_manager for dynamic router dispatch
+        server_manager.processes[package_name] = process
+        server_manager.start_times[package_name] = time.monotonic()
+        server_manager.configs[package_name] = {}
 
         logger.info(f"MCP server '{package_name}' launched successfully from GitHub")
 
@@ -529,14 +550,31 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
                         print("Invalid choice. Aborting")
                         return
 
-            # Create FastAPI app
+            # Create FastAPI app with full serve-parity setup
             app = FastAPI(
-                title=f"FluidMCP Server - {package_name}",
-                description=f"Gateway for {package_name} MCP server from GitHub",
+                title="FluidMCP Gateway",
+                description=f"Unified gateway for {package_name} from GitHub",
                 version="2.0.0"
             )
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+            app.state.db_manager = db_manager
+            app.state.server_manager = server_manager
 
-            app.include_router(router, tags=[package_name])
+            setup_frontend_routes(app, host="0.0.0.0", port=client_server_port)
+
+            # Mount unified dynamic router (same as serve)
+            mcp_router = create_dynamic_router(server_manager)
+            app.include_router(mcp_router, tags=["mcp"])
+
+            _add_health_endpoint(app)
+            _add_metrics_endpoint(app)
+            app.include_router(management_router, prefix="/api", tags=["management"])
 
             logger.info(f"Starting FastAPI server for {package_name}")
             logger.info(f"Swagger UI available at: http://localhost:{client_server_port}/docs")
