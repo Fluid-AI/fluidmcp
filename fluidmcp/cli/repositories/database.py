@@ -358,6 +358,10 @@ class DatabaseManager(PersistenceBackend):
             ])
             logger.info("Created compound index on fluidmcp_llm_model_versions for rollback queries")
 
+            # Create indexes on fluidmcp_crash_events collection
+            await self.db.fluidmcp_crash_events.create_index([("server_id", 1), ("timestamp", -1)])
+            logger.info("Created compound index on fluidmcp_crash_events")
+
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:
                 # Check if collection exists
@@ -1150,6 +1154,34 @@ class DatabaseManager(PersistenceBackend):
             True (MongoDB backend supports versioning)
         """
         return True
+
+    # ==================== Crash Event Persistence ====================
+
+    async def save_crash_event(self, event: Dict[str, Any]) -> bool:
+        """Save a server crash event to MongoDB."""
+        try:
+            doc = dict(event)
+            doc["timestamp"] = doc.get("timestamp", datetime.utcnow())
+            await self.db.fluidmcp_crash_events.insert_one(doc)
+            logger.info(f"Saved crash event for server '{event.get('server_id')}' (exit_code={event.get('exit_code')})")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving crash event: {e}")
+            return False
+
+    async def list_crash_events(self, server_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """List recent crash events for a server from MongoDB."""
+        try:
+            cursor = self.db.fluidmcp_crash_events.find(
+                {"server_id": server_id}
+            ).sort("timestamp", -1).limit(limit)
+            events = await cursor.to_list(length=limit)
+            for event in events:
+                event.pop("_id", None)
+            return events
+        except Exception as e:
+            logger.error(f"Error listing crash events for '{server_id}': {e}")
+            return []
 
     # ==================== Connection Management ====================
 

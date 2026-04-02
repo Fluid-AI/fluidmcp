@@ -932,7 +932,7 @@ async def add_server_from_github(
     server_name = config.get("server_name")
     subdirectory = config.get("subdirectory")
     env = config.get("env", {})
-    restart_policy = config.get("restart_policy", "never")
+    restart_policy = config.get("restart_policy", "on-failure")
     max_restarts = int(config.get("max_restarts", 3))
     enabled = bool(config.get("enabled", True))
     test_before_save = bool(config.get("test_before_save", True))
@@ -1671,6 +1671,115 @@ async def get_server_logs(
         "server": id,
         "logs": logs,
         "count": len(logs)
+    }
+
+
+# ==================== Crash History ====================
+
+@router.get("/servers/{id}/crashes")
+async def get_server_crashes(
+    request: Request,
+    id: str,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of crash events to return")
+):
+    """
+    Get recent crash events for a server.
+
+    Returns crash history with exit codes, stderr snippets, and uptime at crash time.
+
+    Args:
+        id: Server identifier
+        limit: Maximum number of crash events (1-100, default 20)
+
+    Returns:
+        List of crash events, most recent first
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    crashes = await manager.db.list_crash_events(id, limit=limit)
+    return {
+        "server_id": id,
+        "crashes": crashes,
+        "count": len(crashes)
+    }
+
+
+@router.get("/crashes")
+async def list_all_crashes(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of crash events to return")
+):
+    """
+    List recent crash events across all servers.
+
+    Aggregates crash history from all known servers. Useful for a global
+    diagnostics view without knowing specific server IDs.
+
+    Args:
+        limit: Maximum total events to return (1-200, default 50)
+
+    Returns:
+        List of crash events across all servers, most recent first
+    """
+    manager = get_server_manager(request)
+
+    # Gather crash events for all known server IDs
+    server_ids = list(manager.configs.keys())
+
+    # Also include servers from DB that may not be in memory
+    try:
+        db_configs = await manager.db.list_server_configs()
+        skipped = sum(1 for c in db_configs if "id" not in c)
+        if skipped:
+            logger.warning(f"{skipped} server config(s) from DB missing 'id' field — skipped in crash aggregation")
+        db_ids = {c["id"] for c in db_configs if "id" in c}
+        server_ids = list(set(server_ids) | db_ids)
+    except Exception:
+        logger.warning("Failed to list server configs from DB when aggregating crash events")
+
+    # Cap total servers queried to avoid unbounded N+1 with large fleets.
+    # With many servers we cannot guarantee global ordering beyond this cap,
+    # but the per-server endpoint is the right tool for targeted diagnostics.
+    MAX_SERVERS = 200
+    if len(server_ids) > MAX_SERVERS:
+        logger.warning(
+            f"Crash aggregation capped at {MAX_SERVERS} servers "
+            f"({len(server_ids)} total) — use GET /api/servers/{{id}}/crashes for targeted queries"
+        )
+        server_ids = server_ids[:MAX_SERVERS]
+
+    # Cap per-server fetch; fetch all servers concurrently with bounded concurrency
+    per_server_limit = min(limit, 10)
+    sem = asyncio.Semaphore(10)
+
+    async def _fetch(sid: str) -> list:
+        try:
+            async with sem:
+                return await manager.db.list_crash_events(sid, limit=per_server_limit)
+        except Exception:
+            logger.warning(f"Failed to list crash events for server '{sid}'")
+            return []
+
+    results = await asyncio.gather(*[_fetch(sid) for sid in server_ids])
+    all_crashes = [event for events in results for event in events]
+
+    # Sort all events by timestamp descending, take top `limit`
+    def _crash_ts(e: dict) -> datetime:
+        ts = e.get("timestamp")
+        if isinstance(ts, datetime):
+            return ts
+        return datetime.min
+
+    all_crashes.sort(key=_crash_ts, reverse=True)
+    return {
+        "crashes": all_crashes[:limit],
+        "count": len(all_crashes[:limit])
     }
 
 
