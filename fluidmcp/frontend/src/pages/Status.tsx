@@ -2,9 +2,9 @@ import { Link } from "react-router-dom";
 import { useState, useCallback } from "react";
 import { useServers } from "../hooks/useServers";
 import { showSuccess, showError, showLoading } from "../services/toast";
+import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Navbar } from "@/components/Navbar";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 
 export default function Status() {
