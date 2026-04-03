@@ -1,10 +1,72 @@
 // import React from "react";
 import { useState, useEffect, useRef } from "react";
+
+// Compact collapsible result bubble for chat mode
+function ChatResultBubble({ result }: { result: unknown }) {
+  const [expanded, setExpanded] = useState(true);
+  const [viewMode, setViewMode] = useState<"formatted" | "raw">("formatted");
+  const isMcp = typeof result === "object" && result !== null &&
+    "content" in result && Array.isArray((result as any).content);
+  const isMcpArray = Array.isArray(result) && result.length > 0 &&
+    (result as any[]).every((i: any) => typeof i === "object" && i !== null && "type" in i);
+  const preview = typeof result === "object" && result !== null
+    ? `{${Object.keys(result as object).length} keys}`
+    : String(result).slice(0, 60);
+
+  const tabStyle = (active: boolean) => ({
+    padding: "0.2rem 0.5rem", borderRadius: "0.25rem", border: "none",
+    fontSize: "0.75rem", fontWeight: 500 as const, cursor: "pointer",
+    background: active ? "#fff" : "transparent",
+    color: active ? "#000" : "rgba(255,255,255,0.6)"
+  });
+
+  return (
+    <div style={{ fontSize: "0.8rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <button
+          onClick={() => setExpanded(v => !v)}
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            color: "#22c55e", fontWeight: 600, padding: "0.25rem 0",
+            fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "0.3rem"
+          }}
+        >
+          {expanded ? "▼" : "▶"} Result:{!expanded && <span style={{ color: "rgba(255,255,255,0.6)", fontWeight: 400, marginLeft: "0.3rem" }}>{preview}</span>}
+        </button>
+        {expanded && (
+          <div style={{ display: "flex", background: "rgba(0,0,0,0.3)", borderRadius: "0.25rem", padding: "0.15rem", gap: "0.15rem" }}>
+            <button style={tabStyle(viewMode === "formatted")} onClick={() => setViewMode("formatted")}>Formatted</button>
+            <button style={tabStyle(viewMode === "raw")} onClick={() => setViewMode("raw")}>Raw JSON</button>
+          </div>
+        )}
+      </div>
+      {expanded && (
+        <div style={{
+          maxHeight: "260px", overflowY: "auto",
+          background: "rgba(0,0,0,0.3)",
+          border: "1px solid rgba(63,63,70,0.5)",
+          borderRadius: "0.5rem",
+          padding: "0.75rem",
+          marginTop: "0.25rem"
+        }}>
+          {viewMode === "raw"
+            ? <pre style={{ margin: 0, fontSize: "0.75rem", color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "ui-monospace, monospace" }}>{JSON.stringify(result, null, 2)}</pre>
+            : (isMcp || isMcpArray)
+              ? <McpContentView content={isMcpArray ? result as any : (result as any).content} />
+              : <JsonResultView data={result} />
+          }
+        </div>
+      )}
+    </div>
+  );
+}
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { apiClient } from "@/services/api";
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
+import { JsonResultView } from '../components/result/JsonResultView';
+import { McpContentView } from '../components/result/McpContentView';
 import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels'; 
 
 // Type for server object
@@ -72,16 +134,33 @@ export default function MCPInspector() {
   const [mode, setMode] = useState<"manual" | "chat">("manual")
 
   const [chatInput, setChatInput] = useState("")
-  // const [chatHistory, setChatHistory] = useState<any[]>([])
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([])
+  // 3A-2: Per-server logs
+  const [logsByServer, setLogsByServer] = useState<Record<string, LogEntry[]>>({})
+  const logs = logsByServer[selectedServerId ?? ""] ?? []
+
+  // 3A-3: Per-server chat memory
+  const [chatHistoryByServer, setChatHistoryByServer] = useState<Record<string, ChatMessage[]>>({})
+  const chatHistory = chatHistoryByServer[selectedServerId ?? ""] ?? []
+
+  // Helper to update chat for the currently selected server
+  const updateChat = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+    if (!selectedServerId) return;
+    setChatHistoryByServer(prev => ({
+      ...prev,
+      [selectedServerId]: typeof updater === "function"
+        ? updater(prev[selectedServerId] ?? [])
+        : updater
+    }));
+  };
+
   const [chatLoading, setChatLoading] = useState(false)
   const [panelSizes, setPanelSizes] = useState({
     left: 25,     // percentage (right auto-calculated as 100-left)
     logs: 35      // percentage of left panel height
   })
-  const [logs, setLogs] = useState<LogEntry[]>([])
   const logsRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
 
   const handleConnect = async () => {
 
@@ -164,13 +243,16 @@ export default function MCPInspector() {
       setToolResult(null);
       setToolError(null);
 
-      // Clear chat and show a welcome message for the new server
-      setChatHistory([{
-        id: crypto.randomUUID(),
-        type: "assistant",
-        content: `Connected to ${res.server_info?.name || "new server"}. Chat cleared — ready to go!`,
-        timestamp: Date.now(),
-      }]);
+      // Set welcome message for this server (preserve other servers' histories)
+      setChatHistoryByServer(prev => ({
+        ...prev,
+        [serverId]: [{
+          id: crypto.randomUUID(),
+          type: "assistant",
+          content: `Connected to ${res.server_info?.name || "new server"}. Chat cleared — ready to go!`,
+          timestamp: Date.now(),
+        }]
+      }));
 
       setAuthType("none")
       setToken("")
@@ -282,6 +364,19 @@ export default function MCPInspector() {
             : s
         )
       );
+      // Append reconnect notice to existing chat history (don't wipe it)
+      setChatHistoryByServer(prev => ({
+        ...prev,
+        [serverId]: [
+          ...(prev[serverId] ?? []),
+          {
+            id: crypto.randomUUID(),
+            type: "assistant" as const,
+            content: `Reconnected to ${res.server_info?.name || "server"}.`,
+            timestamp: Date.now(),
+          }
+        ]
+      }));
     } catch (err: any) {
       console.error("Failed to reconnect", err);
 
@@ -302,10 +397,10 @@ export default function MCPInspector() {
 
   const handleRemove = (serverId: string) => {
     setServers((prev) => prev.filter((s) => s.id !== serverId));
-
-    if (selectedServerId === serverId) {
-      setSelectedServerId(null);
-    }
+    // Clean up per-server state
+    setLogsByServer(prev => { const n = { ...prev }; delete n[serverId]; return n; });
+    setChatHistoryByServer(prev => { const n = { ...prev }; delete n[serverId]; return n; });
+    if (selectedServerId === serverId) setSelectedServerId(null);
   };
 
   const runTool = async (params: any) => {
@@ -358,7 +453,7 @@ export default function MCPInspector() {
     timestamp: Date.now()
   }
 
-  setChatHistory(prev => [...prev, userMsg])
+  updateChat(prev => [...prev, userMsg])
 
   try {
     setChatLoading(true)
@@ -371,14 +466,14 @@ export default function MCPInspector() {
       timestamp: Date.now()
     }
 
-    setChatHistory(prev => [...prev, thinkingMsg])
+    updateChat(prev => [...prev, thinkingMsg])
 
     // Call backend chat endpoint
     const res = await apiClient.chatWithInspector(
       selectedServer.session_id,
       {
         message,
-        chat_history: chatHistory.slice(-8).map(m => ({
+        chat_history: chatHistory.slice(-8).map((m: ChatMessage) => ({
           type: m.type,
           content: m.content
         }))
@@ -386,7 +481,7 @@ export default function MCPInspector() {
     )
 
     // Remove thinking message
-    setChatHistory(prev => prev.filter(m => m.id !== thinkingMsg.id))
+    updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
 
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
@@ -396,7 +491,7 @@ export default function MCPInspector() {
         timestamp: Date.now()
       }
 
-      setChatHistory(prev => [...prev, assistantMsg])
+      updateChat(prev => [...prev, assistantMsg])
       return
     }
 
@@ -409,7 +504,7 @@ export default function MCPInspector() {
       timestamp: Date.now()
     }
 
-    setChatHistory(prev => [...prev, toolCallMsg])
+    updateChat(prev => [...prev, toolCallMsg])
 
     // Execute tool
     const result = await apiClient.runInspectorTool(
@@ -425,7 +520,7 @@ export default function MCPInspector() {
       timestamp: Date.now()
     }
 
-    setChatHistory(prev => [...prev, resultMsg])
+    updateChat(prev => [...prev, resultMsg])
 
   } catch (err: any) {
 
@@ -436,7 +531,7 @@ export default function MCPInspector() {
       timestamp: Date.now()
     }
 
-    setChatHistory(prev => [...prev, errorMsg])
+    updateChat(prev => [...prev, errorMsg])
   } finally {
     setChatLoading(false)
   }
@@ -459,18 +554,19 @@ export default function MCPInspector() {
   }, [logs]);
 
   // Auto-scroll chat to bottom when new messages arrive
+  // Uses rAF so scroll runs after the DOM (including dynamic result content) has painted
   useEffect(() => {
-    if (chatRef.current) {
-      chatRef.current.scrollTop = chatRef.current.scrollHeight;
-    }
-  }, [chatHistory]);
+    requestAnimationFrame(() => {
+      chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    });
+  }, [chatHistoryByServer, selectedServerId]);
 
-  // Fetch logs from the server
+  // Fetch logs from the server (3A-2: stored per-server)
   const fetchLogs = async () => {
-    if (!selectedServer?.session_id) return;
+    if (!selectedServer?.session_id || !selectedServerId) return;
     try {
       const res = await apiClient.getInspectorLogs(selectedServer.session_id);
-      setLogs(res.logs || []);
+      setLogsByServer(prev => ({ ...prev, [selectedServerId]: res.logs || [] }));
     } catch (err) {
       console.error("Failed to fetch logs", err);
     }
@@ -478,21 +574,9 @@ export default function MCPInspector() {
 
   // Poll for logs every 2 seconds when a session is active
   useEffect(() => {
-    if (!selectedServer?.session_id) {
-      return;
-    }
-    // NOTE FOR REVIEW: When a new server connects, its logs replace the previous server's logs.
-    // Decision needed: Should we accumulate logs across all servers (keyed by session_id)?
-    // Or is replacing on new connection acceptable?
-    // Options:
-    //   A) Current behaviour — replace logs on new connection (simple, clean)
-    //   B) Accumulate all logs — merge new logs into existing, tag each entry with server name
-    //   C) Per-server log history — store logs[serverId] map, show logs for selected server
-    // Leaning towards C if inspector gets heavy usage, but A is fine for now.
-    fetchLogs();     // Fetch immediately
-
-    const interval = setInterval(fetchLogs, 2000);     // Set up polling interval
-
+    if (!selectedServer?.session_id) return;
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 2000);
     return () => clearInterval(interval);
   }, [selectedServer?.session_id]);
 
@@ -663,15 +747,7 @@ export default function MCPInspector() {
                                 setSelectedTool(null);
                                 setToolResult(null);
                                 setToolError(null);
-                                // Reset chat
-                                setChatHistory([
-                                  {
-                                    id: crypto.randomUUID(),
-                                    type: "assistant",
-                                    content: `Switched to ${server?.server_info?.name || "server"}. Chat cleared.`,
-                                    timestamp: Date.now()
-                                  }
-                                ]);
+                                // 3A-3: preserve chat history on switch (no reset)
                                 
                               }}
                               style={{
@@ -900,14 +976,24 @@ export default function MCPInspector() {
                     }}
                   >
                     {/* Logs header */}
-                    <div style={{ padding: "0.75rem 1rem 0.5rem", flexShrink: 0, borderBottom: "1px solid rgba(63,63,70,0.3)" }}>
-                      <span style={{ fontSize: "0.8rem", fontWeight: "600", color: "rgba(255,255,255,0.7)", fontFamily: "monospace" }}>
-                        LOGS
-                      </span>
-                      {logs.length > 0 && (
-                        <span style={{ marginLeft: "0.5rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.35)" }}>
-                          {logs.length} entries
+                    <div style={{ padding: "0.75rem 1rem 0.5rem", flexShrink: 0, borderBottom: "1px solid rgba(63,63,70,0.3)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div>
+                        <span style={{ fontSize: "0.8rem", fontWeight: "600", color: "rgba(255,255,255,0.7)", fontFamily: "monospace" }}>
+                          LOGS
                         </span>
+                        {logs.length > 0 && (
+                          <span style={{ marginLeft: "0.5rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.35)" }}>
+                            {logs.length} entries
+                          </span>
+                        )}
+                      </div>
+                      {logs.length > 0 && selectedServerId && (
+                        <button
+                          onClick={() => setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
+                          style={{ fontSize: "0.7rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0.15rem 0.4rem" }}
+                        >
+                          Clear
+                        </button>
                       )}
                     </div>
 
@@ -1039,7 +1125,7 @@ export default function MCPInspector() {
                 </div>
 
                 {/* ── MANUAL MODE ─── */}
-                <div style={{ flex: 1, overflow: "hidden", marginTop: "1rem", minHeight: 0 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", marginTop: "1rem", minHeight: 0 }}>
                   {mode === "manual" && selectedServer && selectedTool && (
                     <div>
                       <h3 style={{ marginBottom: "1rem" }}>{selectedTool.name}</h3>
@@ -1076,21 +1162,19 @@ export default function MCPInspector() {
 
                   {/* ── CHAT MODE ─── */}
                   {mode === "chat" && selectedServer && (
-                    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "0", overflow: "hidden" }}>
+                    <div style={{ display: "grid", gridTemplateRows: "1fr auto", flex: 1, minHeight: 0, overflow: "hidden" }}>
                       {selectedServer.status === "connected" ? (
                         <>
-                          {/* Chat History */}
+                          {/* Chat History — grid row 1 (1fr = all remaining space) */}
                           <div
                             ref={chatRef}
                             style={{
-                              flex: 1,
-                              minHeight: 0,        
                               overflowY: "auto",
-                              marginBottom: "1rem",
+                              minHeight: 0,
                               display: "flex",
                               flexDirection: "column",
                               gap: "0.5rem",
-                              padding: "0.5rem 0.5rem 0.5rem 0.25rem"
+                              padding: "0.5rem 0.5rem 0.75rem 0.25rem"
                             }}
                           >
                             {chatHistory.map((msg) => {
@@ -1163,10 +1247,10 @@ export default function MCPInspector() {
                                   <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
                                     <div style={{
                                       borderLeft: "3px solid #22c55e",
-                                      paddingLeft: "0.5rem",
+                                      paddingLeft: "0.6rem",
                                       maxWidth: "85%"
                                     }}>
-                                      <ToolResult result={msg.result} />
+                                      <ChatResultBubble result={msg.result} />
                                     </div>
                                   </div>
                                 )
@@ -1207,10 +1291,22 @@ export default function MCPInspector() {
                               }
 
                             })}
+                            <div ref={chatBottomRef} />
                           </div>
 
-                          {/* Chat Input */}
-                          <div style={{ display: "flex", gap: "0.5rem", flexShrink: 0 }}>
+                          {/* Chat Input — grid row 2 (auto height, always at bottom) */}
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", paddingTop: "0.5rem" }}>
+                          {chatHistory.length > 1 && selectedServerId && (
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                              <button
+                                onClick={() => setChatHistoryByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
+                                style={{ fontSize: "0.7rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0.15rem 0.4rem" }}
+                              >
+                                Clear Chat
+                              </button>
+                            </div>
+                          )}
+                          <div style={{ display: "flex", gap: "0.5rem" }}>
                             <input
                               value={chatInput}
                               disabled={chatLoading}
@@ -1242,6 +1338,7 @@ export default function MCPInspector() {
                             >
                               {chatLoading ? "Thinking..." : "Send"}
                             </button>
+                          </div>
                           </div>
                         </>
                       ) : (
