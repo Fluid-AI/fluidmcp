@@ -36,7 +36,7 @@ type ChatMessage = {
   timestamp: number
 }
 // Helper to generate unique server IDs
-const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
 export default function MCPInspector() {
 
@@ -274,18 +274,29 @@ export default function MCPInspector() {
     }
   };
 
+  // Stable UUID helper — falls back for non-secure contexts (e.g. plain HTTP)
+  const generateId = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
  const runChatTool = async () => {
-  if (!chatInput || !selectedServer?.session_id) return
+  // Guard against concurrent requests
+  if (!chatInput || !selectedServer?.session_id || chatLoading) return
 
   const message = chatInput
   setChatInput("")
 
   const userMsg: ChatMessage = {
-    id: crypto.randomUUID(),
+    id: generateId(),
     type: "user",
     content: message,
     timestamp: Date.now()
   }
+
+  // Capture history with userMsg before any state updates — used below to
+  // send an accurate chat_history to the backend (avoids stale closure).
+  const nextHistory = [...chatHistory, userMsg]
 
   setChatHistory(prev => [...prev, userMsg])
 
@@ -294,7 +305,7 @@ export default function MCPInspector() {
 
     // Show thinking
     const thinkingMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       type: "thinking",
       content: "Deciding which tool to use...",
       timestamp: Date.now()
@@ -307,7 +318,7 @@ export default function MCPInspector() {
       selectedServer.session_id,
       {
         message,
-        chat_history: chatHistory.slice(-8).map(m => ({
+        chat_history: nextHistory.slice(-8).map(m => ({
           type: m.type,
           content: m.content
         }))
@@ -319,7 +330,7 @@ export default function MCPInspector() {
 
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         type: "assistant",
         content: res.message,
         timestamp: Date.now()
@@ -331,7 +342,7 @@ export default function MCPInspector() {
 
     // Tool call message
     const toolCallMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       type: "tool_call",
       toolName: res.tool_name,
       params: res.params,
@@ -348,7 +359,7 @@ export default function MCPInspector() {
     )
 
     const resultMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       type: "tool_result",
       result,
       timestamp: Date.now()
@@ -359,7 +370,7 @@ export default function MCPInspector() {
   } catch (err: any) {
 
     const errorMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       type: "error",
       content: err?.message || "Chat error",
       timestamp: Date.now()
