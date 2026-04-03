@@ -8,8 +8,13 @@ import threading
 import asyncio
 from time import time as current_time
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 from loguru import logger
+
+# Type checking imports (not executed at runtime, only for IDE/mypy)
+if TYPE_CHECKING:
+    import redis.asyncio as redis
+    from fastapi import HTTPException
 
 
 # In-memory rate limiter state

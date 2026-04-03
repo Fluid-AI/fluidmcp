@@ -24,7 +24,7 @@ import threading
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
-from .package_launcher import launch_mcp_using_fastapi_proxy
+from .package_launcher import launch_mcp_using_fastapi_proxy, readline_with_timeout
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
@@ -89,6 +89,13 @@ def get_llm_health_monitor() -> Optional[LLMHealthMonitor]:
     """Get the LLM health monitor instance. Used by management API."""
     return _llm_health_monitor
 
+# Thread-safety locks for process stdin/stdout communication
+_process_locks: Dict[str, threading.Lock] = {}
+
+# Thread-safety lock for LLM registry operations
+_llm_registry_lock = threading.Lock()
+
+
 def register_llm_process(model_id: str, process: LLMProcess) -> None:
     """
     Register a single LLM process in the global registry.
@@ -100,11 +107,6 @@ def register_llm_process(model_id: str, process: LLMProcess) -> None:
     with _llm_registry_lock:
         _llm_processes[model_id] = process
         logger.info(f"Registered LLM process: {model_id}")
-# Thread-safety locks for process stdin/stdout communication
-_process_locks: Dict[str, threading.Lock] = {}
-
-# Thread-safety lock for LLM registry operations
-_llm_registry_lock = threading.Lock()
 
 # Shared HTTP client for LLM proxy (connection pooling)
 _http_client: Optional[httpx.AsyncClient] = None
@@ -557,13 +559,9 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
             )
             await asyncio.to_thread(process.stdin.flush)
 
-            # Add timeout to prevent indefinite hanging
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=5.0  # 5 second timeout
-                )
-            except asyncio.TimeoutError:
+            # Read with select()-based timeout — no stuck thread pool workers
+            response_line = await asyncio.to_thread(readline_with_timeout, process, 5.0)
+            if not response_line:
                 logger.warning(f"Timeout waiting for response from server: {server_name}")
                 return (server_name, [], "Timeout waiting for response")
 
