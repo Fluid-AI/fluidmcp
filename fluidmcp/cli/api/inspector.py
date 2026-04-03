@@ -6,12 +6,11 @@ from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Body, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from loguru import logger
 
 from ..services.inspector_session import InspectorSession
 from ..auth import verify_token
-from ..services.inspector_agent import choose_tool_with_llm
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -39,7 +38,7 @@ class ConnectRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    chat_history: Optional[list] = []
+    chat_history: Optional[list] = Field(default_factory=list)
 
 # ─── URL Validation ────────────────────────────────────────────────────────────
 
@@ -243,6 +242,9 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
     session.last_used = time.time()
 
     try:
+        # Lazy import — avoids server startup failure when GROQ_API_KEY is absent
+        from ..services.inspector_agent import choose_tool_with_llm
+
         tools = await session.list_tools()
 
         if not tools:
@@ -251,16 +253,25 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Claude agent
+        # Call the Groq agent
         agent_result = await choose_tool_with_llm(body.message, tools)
+
+        # Validate the response has the expected fields
+        tool_name = agent_result.get("tool_name")
+        available_names = {t["name"] for t in tools}
+        if not tool_name or not isinstance(tool_name, str) or tool_name not in available_names:
+            return {
+                "clarification_needed": True,
+                "message": "Could not determine which tool to run."
+            }
 
         session.add_log(
             "chat",
-            f"User: {body.message} → tool selected: {agent_result['tool_name']}"
+            f"User: {body.message} → tool selected: {tool_name}"
         )
 
         return {
-            "tool_name": agent_result["tool_name"],
+            "tool_name": tool_name,
             "params": agent_result.get("params", {})
         }
 

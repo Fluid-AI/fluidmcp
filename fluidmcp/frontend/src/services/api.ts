@@ -321,18 +321,11 @@ class ApiClient {
       method: "GET",
     });
   }
-  async chatWithInspector(sessionId: string, data: any) {
-    const res = await fetch(`/api/inspector/${sessionId}/chat`, {
+  async chatWithInspector(sessionId: string, data: any): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data)
-    })
-
-    if (!res.ok) {
-      throw new Error("Chat request failed")
-    }
-
-    return res.json()
+      body: JSON.stringify(data),
+    });
   }
 
   /**
