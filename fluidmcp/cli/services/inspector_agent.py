@@ -38,7 +38,7 @@ Parameters:
     return "\n".join(formatted)
 
 
-async def choose_tool_with_llm(message: str, tools: list):
+async def choose_tool_with_llm(message: str, tools: list, chat_history: list = []):
     """
     Universal MCP agent powered by Groq.
 
@@ -90,6 +90,14 @@ Return ONLY JSON.
     try:
         # The OpenAI client is synchronous — run in a thread to avoid blocking
         # the event loop.
+        # Build prior turns from chat_history for multi-turn context
+        history_messages = [
+            {"role": "user" if m.get("type") == "user" else "assistant",
+             "content": str(m.get("content", ""))}
+            for m in chat_history
+            if m.get("type") in ("user", "assistant") and m.get("content")
+        ]
+
         def _call_llm():
             return client.chat.completions.create(
                 model="llama-3.1-8b-instant",
@@ -114,6 +122,7 @@ Rules:
 - Always return JSON
 """
                     },
+                    *history_messages,
                     {
                         "role": "user",
                         "content": prompt
