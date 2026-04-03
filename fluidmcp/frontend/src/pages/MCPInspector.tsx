@@ -96,12 +96,22 @@ interface LogEntry {
 
 type ChatMessage = {
   id: string
+  runId?: string       // groups thinking + tool_call + tool_result for one agent turn
   type: "user" | "thinking" | "tool_call" | "tool_result" | "assistant" | "error"
   content?: string
   toolName?: string
   params?: any
   result?: any
   timestamp: number
+  perfMark?: number    // high-res mark for duration math (performance.now())
+}
+
+type ExecutionRun = {
+  runId: string
+  serverId: string
+  startTime: number    // Date.now() — wall time
+  endTime?: number     // set on completion or error
+  steps: ChatMessage[] // thinking + tool_call + tool_result in order
 }
 // Helper to generate unique server IDs
 const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
@@ -129,7 +139,9 @@ export default function MCPInspector() {
   const [toolError, setToolError] = useState<string | null>(null)
   const [executing, setExecuting] = useState(false)
   const [executionTime, setExecutionTime] = useState<number | null>(null)
-  const [executionHistory, setExecutionHistory] = useState<any[]>([])
+  // 3A-4: typed per-server execution history
+  const [executionHistoryByServer, setExecutionHistoryByServer] = useState<Record<string, ExecutionRun[]>>({})
+  const executionHistory = executionHistoryByServer[selectedServerId ?? ""] ?? []
 
   const [mode, setMode] = useState<"manual" | "chat">("manual")
 
@@ -399,6 +411,7 @@ export default function MCPInspector() {
     // Clean up per-server state
     setLogsByServer(prev => { const n = { ...prev }; delete n[serverId]; return n; });
     setChatHistoryByServer(prev => { const n = { ...prev }; delete n[serverId]; return n; });
+    setExecutionHistoryByServer(prev => { const n = { ...prev }; delete n[serverId]; return n; });
     if (selectedServerId === serverId) setSelectedServerId(null);
   };
 
@@ -421,16 +434,20 @@ export default function MCPInspector() {
 
       setToolResult(res);
       setExecutionTime((end - start) / 1000);
-      setExecutionHistory((prev) => [
-        {
-          id: Date.now(),
-          tool: selectedTool,
-          params,
-          result: res,
-          time: new Date().toLocaleTimeString(),
-        },
-        ...prev,
-      ]);
+      if (selectedServerId) {
+        const runId = crypto.randomUUID();
+        const run: ExecutionRun = {
+          runId,
+          serverId: selectedServerId,
+          startTime: Date.now() - Math.round(end - start),
+          endTime: Date.now(),
+          steps: [
+            { id: crypto.randomUUID(), runId, type: "tool_call", toolName: selectedTool.name, params, timestamp: Date.now(), perfMark: start },
+            { id: crypto.randomUUID(), runId, type: "tool_result", result: res, timestamp: Date.now(), perfMark: end },
+          ]
+        };
+        setExecutionHistoryByServer(prev => ({ ...prev, [selectedServerId]: [run, ...(prev[selectedServerId] ?? [])] }));
+      }
     } catch (err: any) {
       console.error(err);
       setToolError(err?.message || "Tool execution failed");
@@ -447,7 +464,7 @@ export default function MCPInspector() {
 
  const runChatTool = async () => {
   // Guard against concurrent requests
-  if (!chatInput || !selectedServer?.session_id || chatLoading) return
+  if (!chatInput || !selectedServer?.session_id || chatLoading || !selectedServerId) return
 
   const message = chatInput
   setChatInput("")
@@ -456,7 +473,8 @@ export default function MCPInspector() {
     id: generateId(),
     type: "user",
     content: message,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    perfMark: performance.now()
   }
 
   // Capture history with userMsg before any state updates — used below to
@@ -465,20 +483,27 @@ export default function MCPInspector() {
 
   updateChat(prev => [...prev, userMsg])
 
+  // 3A-4: start an ExecutionRun for this agent turn
+  const runId = crypto.randomUUID()
+  const runStartTime = Date.now()
+  const runSteps: ChatMessage[] = []
+  const capturedServerId = selectedServerId
+
   try {
     setChatLoading(true)
 
-    // Show thinking
     const thinkingMsg: ChatMessage = {
-      id: generateId(),
+      id: crypto.randomUUID(),
+      runId,
       type: "thinking",
       content: "Deciding which tool to use...",
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      perfMark: performance.now()
     }
 
     updateChat(prev => [...prev, thinkingMsg])
+    runSteps.push(thinkingMsg)
 
-    // Call backend chat endpoint
     const res = await apiClient.chatWithInspector(
       selectedServer.session_id,
       {
@@ -490,33 +515,39 @@ export default function MCPInspector() {
       }
     )
 
-    // Remove thinking message
     updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
 
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
-        id: generateId(),
+        id: crypto.randomUUID(),
+        runId,
         type: "assistant",
         content: res.message,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        perfMark: performance.now()
       }
-
       updateChat(prev => [...prev, assistantMsg])
+      // save run (no tool call — just clarification)
+      setExecutionHistoryByServer(prev => ({
+        ...prev,
+        [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
+      }))
       return
     }
 
-    // Tool call message
     const toolCallMsg: ChatMessage = {
-      id: generateId(),
+      id: crypto.randomUUID(),
+      runId,
       type: "tool_call",
       toolName: res.tool_name,
       params: res.params,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      perfMark: performance.now()
     }
 
     updateChat(prev => [...prev, toolCallMsg])
+    runSteps.push(toolCallMsg)
 
-    // Execute tool
     const result = await apiClient.runInspectorTool(
       selectedServer.session_id,
       res.tool_name,
@@ -524,24 +555,42 @@ export default function MCPInspector() {
     )
 
     const resultMsg: ChatMessage = {
-      id: generateId(),
+      id: crypto.randomUUID(),
+      runId,
       type: "tool_result",
       result,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      perfMark: performance.now()
     }
 
     updateChat(prev => [...prev, resultMsg])
+    runSteps.push(resultMsg)
+
+    // save completed run
+    setExecutionHistoryByServer(prev => ({
+      ...prev,
+      [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
+    }))
 
   } catch (err: any) {
 
     const errorMsg: ChatMessage = {
-      id: generateId(),
+      id: crypto.randomUUID(),
+      runId,
       type: "error",
       content: err?.message || "Chat error",
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      perfMark: performance.now()
     }
 
     updateChat(prev => [...prev, errorMsg])
+    runSteps.push(errorMsg)
+
+    // save failed run
+    setExecutionHistoryByServer(prev => ({
+      ...prev,
+      [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
+    }))
   } finally {
     setChatLoading(false)
   }
@@ -949,7 +998,7 @@ export default function MCPInspector() {
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
                         <h3 style={{ fontSize: "0.9rem", fontWeight: "600" }}>Execution History</h3>
                         <button
-                          onClick={() => setExecutionHistory([])}
+                          onClick={() => selectedServerId && setExecutionHistoryByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
                           style={{
                             fontSize: "0.7rem", padding: "0.2rem 0.5rem",
                             borderRadius: "0.3rem", border: "1px solid rgba(63,63,70,0.6)",
@@ -966,26 +1015,34 @@ export default function MCPInspector() {
                           maxHeight: "160px", overflowY: "auto",
                         }}
                       >
-                        {executionHistory.map((item) => (
-                          <div
-                            key={item.id}
-                            onClick={() => {
-                              setToolResult(item.result);
-                              setSelectedTool(item.tool);
-                              setToolError(null);
-                            }}
-                            style={{
-                              padding: "0.4rem 0.5rem",
-                              borderRadius: "0.35rem",
-                              border: "1px solid rgba(63,63,70,0.6)",
-                              cursor: "pointer",
-                              background: "rgba(255,255,255,0.04)",
-                            }}
-                          >
-                            <div style={{ fontWeight: 600, fontSize: "0.8rem" }}>{item.tool.name}</div>
-                            <div style={{ fontSize: "0.75rem", opacity: 0.6 }}>{item.time}</div>
-                          </div>
-                        ))}
+                        {executionHistory.map((item: ExecutionRun) => {
+                          const toolCall = item.steps.find(s => s.type === "tool_call");
+                          const toolResult = item.steps.find(s => s.type === "tool_result");
+                          const duration = item.endTime ? item.endTime - item.startTime : null;
+                          return (
+                            <div
+                              key={item.runId}
+                              onClick={() => {
+                                if (toolResult) setToolResult(toolResult.result);
+                                if (toolCall?.toolName) setSelectedTool(selectedServer?.tools.find((t: any) => t.name === toolCall.toolName) || null);
+                                setToolError(null);
+                              }}
+                              style={{
+                                padding: "0.4rem 0.5rem",
+                                borderRadius: "0.35rem",
+                                border: "1px solid rgba(63,63,70,0.6)",
+                                cursor: "pointer",
+                                background: "rgba(255,255,255,0.04)",
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, fontSize: "0.8rem" }}>{toolCall?.toolName || "run"}</div>
+                              <div style={{ fontSize: "0.75rem", opacity: 0.6 }}>
+                                {new Date(item.startTime).toLocaleTimeString()}
+                                {duration !== null && <span style={{ marginLeft: "0.4rem", color: "rgba(99,102,241,0.8)" }}>{duration}ms</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
