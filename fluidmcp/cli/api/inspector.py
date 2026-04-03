@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Body, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from loguru import logger
 
 from ..services.inspector_session import InspectorSession
@@ -36,6 +36,9 @@ class ConnectRequest(BaseModel):
     env_vars: Optional[Dict[str, str]] = None
     timeout: Optional[int] = 10000  # ms
 
+class ChatRequest(BaseModel):
+    message: str
+    chat_history: Optional[list] = Field(default_factory=list)
 
 # ─── URL Validation ────────────────────────────────────────────────────────────
 
@@ -224,3 +227,58 @@ async def get_logs(session_id: str):
 
     session.last_used = time.time()
     return {"logs": session.logs}
+
+@router.post("/inspector/{session_id}/chat")
+async def chat_with_tools(session_id: str, body: ChatRequest):
+    """
+    Chat endpoint that asks the LLM which tool to run.
+    It DOES NOT execute the tool — frontend does that.
+    """
+
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    try:
+        # Lazy import — avoids server startup failure when GROQ_API_KEY is absent
+        from ..services.inspector_agent import choose_tool_with_llm
+
+        tools = await session.list_tools()
+
+        if not tools:
+            return {
+                "clarification_needed": True,
+                "message": "No tools available on this server."
+            }
+
+        # Call the Groq agent
+        agent_result = await choose_tool_with_llm(body.message, tools)
+
+        # Validate the response has the expected fields
+        tool_name = agent_result.get("tool_name")
+        available_names = {t["name"] for t in tools}
+        if not tool_name or not isinstance(tool_name, str) or tool_name not in available_names:
+            return {
+                "clarification_needed": True,
+                "message": "Could not determine which tool to run."
+            }
+
+        session.add_log(
+            "chat",
+            f"User: {body.message} → tool selected: {tool_name}"
+        )
+
+        return {
+            "tool_name": tool_name,
+            "params": agent_result.get("params", {})
+        }
+
+    except Exception as e:
+        logger.error(f"Inspector chat error: {e}")
+
+        return {
+            "clarification_needed": True,
+            "message": "Unable to determine which tool to run."
+        }
