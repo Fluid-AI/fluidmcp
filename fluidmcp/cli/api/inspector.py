@@ -11,7 +11,6 @@ from loguru import logger
 
 from ..services.inspector_session import InspectorSession
 from ..auth import verify_token
-from ..services.inspector_agent import choose_tool_with_llm
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -258,6 +257,15 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
         agent_result = await choose_tool_with_llm(
             body.message, tools, chat_history=body.chat_history or []
         )
+
+        # Validate the response has the expected fields
+        tool_name = agent_result.get("tool_name")
+        available_names = {t["name"] for t in tools}
+        if not tool_name or not isinstance(tool_name, str) or tool_name not in available_names:
+            return {
+                "clarification_needed": True,
+                "message": "Could not determine which tool to run."
+            }
 
         # Validate the response has the expected fields
         tool_name = agent_result.get("tool_name")
