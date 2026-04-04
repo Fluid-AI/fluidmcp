@@ -932,7 +932,7 @@ async def add_server_from_github(
     server_name = config.get("server_name")
     subdirectory = config.get("subdirectory")
     env = config.get("env", {})
-    restart_policy = config.get("restart_policy", "never")
+    restart_policy = config.get("restart_policy", "on-failure")
     max_restarts = int(config.get("max_restarts", 3))
     enabled = bool(config.get("enabled", True))
     test_before_save = bool(config.get("test_before_save", True))

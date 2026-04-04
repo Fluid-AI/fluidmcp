@@ -17,11 +17,12 @@ from pathlib import Path
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
-from .services.server_manager import ServerManager
+from .services.server_manager import ServerManager, MCPHealthMonitor
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
 
 
@@ -257,6 +258,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
     logger.info("Management API mounted at /api")
 
+    # Include Inspector API
+    app.include_router(inspector_router, prefix="/api", tags=["inspector"])
+    logger.info("Inspector API mounted at /api")
+
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
     app.include_router(mcp_router, tags=["mcp"])
@@ -377,6 +382,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 "mcp": "/{server_name}/mcp"
             }
         }
+
+    # Start Inspector session cleanup task
+    @app.on_event("startup")
+    async def start_inspector_cleanup():
+        asyncio.create_task(cleanup_sessions())
+        logger.info("Inspector session cleanup task started")
 
     # Register cleanup handler for HTTP client and Redis connections
     @app.on_event("shutdown")
@@ -628,6 +639,15 @@ async def main(args):
     logger.info("Starting background tasks...")
     server_manager.start_idle_cleanup_task()
 
+    # Start MCP server health monitor (detects crashes, triggers auto-restart)
+    try:
+        health_check_interval = int(os.getenv("FMCP_HEALTH_CHECK_INTERVAL", "30"))
+    except ValueError:
+        logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
+        health_check_interval = 30
+    health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
+    health_monitor.start()
+
     # 4. Create FastAPI app (without MCP servers)
     app = await create_app(
         db_manager=persistence,
@@ -695,6 +715,13 @@ async def main(args):
 
     # Graceful cleanup
     logger.info("Initiating graceful shutdown...")
+
+    try:
+        # Stop health monitor
+        logger.info("Stopping MCP health monitor...")
+        await health_monitor.stop()
+    except Exception as e:
+        logger.error(f"Error stopping health monitor: {e}")
 
     try:
         # Stop idle cleanup task

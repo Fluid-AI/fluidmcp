@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import apiClient from "@/services/api";
 
 interface NavbarProps {
   showAddButton?: boolean;
@@ -9,10 +10,25 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }) => {
   const location = useLocation();
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path);
+  const [apiToken, setApiToken] = React.useState("");
+  const [appliedToken, setAppliedToken] = React.useState<string | null>(null);
+  const [showSettings, setShowSettings] = React.useState(false);
+
+  React.useEffect(() => {
+    const savedToken = localStorage.getItem("api_token");
+
+    if (savedToken) {
+      setApiToken(savedToken);
+      setAppliedToken(savedToken);
+      apiClient.setToken(savedToken);
+    }
+  }, []);
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
+    <>
+      <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
       <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
+        {/* LEFT */}
         <div className="flex items-center space-x-8">
           <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
             <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP</span>
@@ -51,6 +67,14 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
               Manage
             </Link>
             <Link
+              to="/inspector"
+              className={`inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none ${
+                isActive('/inspector') ? 'text-foreground' : 'text-foreground/60'
+              }`}
+            >
+              Inspector
+            </Link>
+            <Link
               to="/documentation"
               className={`inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none ${
                 isActive('/documentation') ? 'text-foreground' : 'text-foreground/60'
@@ -60,7 +84,8 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
             </Link>
           </nav>
         </div>
-        <div className="flex items-center space-x-3">
+        {/* RIGHT */}
+        <div className="flex items-center space-x-3" >
           {showAddButton && onOpenAddDialog && (
             <button
               onClick={onOpenAddDialog}
@@ -100,8 +125,136 @@ export const Navbar: React.FC<NavbarProps> = ({ showAddButton, onOpenAddDialog }
             </svg>
             Report Issue
           </a>
+
+          {/* Hamburger */}
+          <button
+            onClick={() => setShowSettings(true)}
+            style={{
+              padding: "0.4rem",
+              border: "1px solid #444",
+              borderRadius: "6px",
+              cursor: "pointer"
+            }}
+          >
+            ☰
+          </button>
         </div>
       </div>
+        
     </header>
+    {/* SETTINGS DRAWER */}    
+        {showSettings && (
+          <>
+            {/* Overlay */}
+            <div
+              onClick={() => setShowSettings(false)}
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                background: "rgba(0, 0, 0, 0.6)",
+                zIndex: 999
+              }}
+            />
+
+            {/* Drawer */}
+            <div
+              onClick={(e) => e.stopPropagation()}  
+              style={{
+                position: "fixed",
+                top: 0,
+                right: 0,
+                height: "100%",
+                width: "320px",
+                background: "#18181b",
+                borderLeft: "1px solid rgba(63,63,70,0.6)",
+                zIndex: 1000,
+                padding: "20px",
+                isolation: "isolate",
+                boxShadow: "-4px 0 20px rgba(0,0,0,0.5)"
+              }}
+            >
+              <h3 style={{ marginBottom: "16px" }}>Settings</h3>
+
+              {/* Token Section */}
+              <div style={{ marginBottom: "20px" }}>
+                <label style={{ fontSize: "12px", color: "#aaa" }}>
+                  API Bearer Token
+                </label>
+
+                <input
+                  type="password"
+                  value={apiToken}
+                  onChange={(e) => setApiToken(e.target.value)}
+                  style={{
+                    width: "100%",
+                    marginTop: "6px",
+                    padding: "0.5rem",
+                    borderRadius: "6px",
+                    border: "1px solid #333",
+                    background: "#000",
+                    color: "#fff"
+                  }}
+                />
+                {/* ACTIVE INDICATOR */}
+                {appliedToken && (
+                  <div style={{ fontSize: "11px", color: "#22c55e", marginTop: "4px" }}>
+                    ● Active
+                  </div>
+                )}
+                {/* BUTTONS */}
+                <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                  <button
+                    onClick={() => {
+                      apiClient.setToken(apiToken || null);
+                      setAppliedToken(apiToken || null);
+                      if (apiToken) localStorage.setItem("api_token", apiToken);
+                    }}
+                    style={{
+                      padding: "6px 10px",
+                      background: "#16a34a",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Set
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setApiToken("");
+                      setAppliedToken(null);
+                      apiClient.setToken(null);
+                      localStorage.removeItem("api_token");
+                    }}
+                    style={{
+                      padding: "6px 10px",
+                      background: "#3f3f46",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: "4px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Close */}
+              <button 
+                onClick={() => setShowSettings(false)}
+                style={{ marginTop: "20px" }}
+              >
+                Close
+              </button>
+            </div>
+          </>
+      )}
+    </>
   );
 };
