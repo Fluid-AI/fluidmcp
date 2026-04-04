@@ -210,3 +210,17 @@ async def disconnect(session_id: str):
 
     logger.info(f"Inspector: session {session_id} disconnected")
     return {"status": "disconnected"}
+
+
+@router.get("/inspector/{session_id}/logs")
+async def get_logs(session_id: str):
+    """
+    Get the execution logs for an active session.
+    Updates last_used to keep the session alive.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+    return {"logs": session.logs}
