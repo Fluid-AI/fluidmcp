@@ -149,6 +149,9 @@ export default function MCPInspector() {
   // 3A-2: Per-server logs
   const [logsByServer, setLogsByServer] = useState<Record<string, LogEntry[]>>({})
   const logs = logsByServer[selectedServerId ?? ""] ?? []
+  // Tracks how many backend logs to skip per server after a manual clear.
+  // Using a ref so the polling closure always reads the latest value.
+  const logsClearedOffsetRef = useRef<Record<string, number>>({})
 
   // 3A-3: Per-server chat memory
   const [chatHistoryByServer, setChatHistoryByServer] = useState<Record<string, ChatMessage[]>>({})
@@ -241,6 +244,9 @@ export default function MCPInspector() {
 
       const res = await apiClient.connectInspectorServer(payload)
 
+
+      // Reset log offset for this server — new session, fresh log stream
+      logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [serverId]: 0 };
 
       setServers(prev =>
         prev.map(s =>
@@ -361,6 +367,8 @@ export default function MCPInspector() {
       }
       
       const res = await apiClient.connectInspectorServer(payload);
+      // Reset log offset — reconnect starts a new session with a fresh log stream
+      logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [serverId]: 0 };
       // Update with connected state and new session
       setServers((prev) =>
         prev.map((s) =>
@@ -625,7 +633,9 @@ export default function MCPInspector() {
     if (!selectedServer?.session_id || !selectedServerId) return;
     try {
       const res = await apiClient.getInspectorLogs(selectedServer.session_id);
-      setLogsByServer(prev => ({ ...prev, [selectedServerId]: res.logs || [] }));
+      const allLogs: LogEntry[] = res.logs || [];
+      const offset = logsClearedOffsetRef.current[selectedServerId] ?? 0;
+      setLogsByServer(prev => ({ ...prev, [selectedServerId]: allLogs.slice(offset) }));
     } catch (err) {
       console.error("Failed to fetch logs", err);
     }
@@ -1056,7 +1066,13 @@ export default function MCPInspector() {
                       </div>
                       {logs.length > 0 && selectedServerId && (
                         <button
-                          onClick={() => setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
+                          onClick={() => {
+                            if (!selectedServerId) return;
+                            // Advance the offset so future polls skip everything up to now
+                            const currentOffset = logsClearedOffsetRef.current[selectedServerId] ?? 0;
+                            logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [selectedServerId]: currentOffset + logs.length };
+                            setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }));
+                          }}
                           style={{ fontSize: "0.7rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0.15rem 0.4rem" }}
                         >
                           Clear
