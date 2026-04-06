@@ -150,7 +150,7 @@ export default function MCPInspector() {
 
       const res = await apiClient.connectInspectorServer(payload)
 
-      // Update server after connect
+
       setServers(prev =>
         prev.map(s =>
           s.id === serverId
@@ -267,7 +267,6 @@ export default function MCPInspector() {
       }
       
       const res = await apiClient.connectInspectorServer(payload);
-      console.log("Reconnect auth:", server.auth)
       // Update with connected state and new session
       setServers((prev) =>
         prev.map((s) =>
