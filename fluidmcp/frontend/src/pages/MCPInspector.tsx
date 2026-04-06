@@ -114,7 +114,7 @@ type ExecutionRun = {
   steps: ChatMessage[] // thinking + tool_call + tool_result in order
 }
 // Helper to generate unique server IDs
-const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
 export default function MCPInspector() {
 
@@ -241,7 +241,7 @@ export default function MCPInspector() {
 
       const res = await apiClient.connectInspectorServer(payload)
 
-      // Update server after connect
+
       setServers(prev =>
         prev.map(s =>
           s.id === serverId
@@ -361,7 +361,6 @@ export default function MCPInspector() {
       }
       
       const res = await apiClient.connectInspectorServer(payload);
-      console.log("Reconnect auth:", server.auth)
       // Update with connected state and new session
       setServers((prev) =>
         prev.map((s) =>
@@ -457,24 +456,35 @@ export default function MCPInspector() {
     }
   };
 
+  // Stable UUID helper — falls back for non-secure contexts (e.g. plain HTTP)
+  const generateId = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
  const runChatTool = async () => {
-  if (!chatInput || !selectedServer?.session_id || !selectedServerId) return
+  // Guard against concurrent requests and missing server
+  if (!chatInput || !selectedServer?.session_id || !selectedServerId || chatLoading) return
 
   const message = chatInput
   setChatInput("")
 
   const userMsg: ChatMessage = {
-    id: crypto.randomUUID(),
+    id: generateId(),
     type: "user",
     content: message,
     timestamp: Date.now(),
     perfMark: performance.now()
   }
 
+  // Capture history with userMsg before any state updates — used below to
+  // send an accurate chat_history to the backend (avoids stale closure).
+  const nextHistory = [...chatHistory, userMsg]
+
   updateChat(prev => [...prev, userMsg])
 
   // 3A-4: start an ExecutionRun for this agent turn
-  const runId = crypto.randomUUID()
+  const runId = generateId()
   const runStartTime = Date.now()
   const runSteps: ChatMessage[] = []
   const capturedServerId = selectedServerId
@@ -483,7 +493,7 @@ export default function MCPInspector() {
     setChatLoading(true)
 
     const thinkingMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "thinking",
       content: "Deciding which tool to use...",
@@ -498,7 +508,7 @@ export default function MCPInspector() {
       selectedServer.session_id,
       {
         message,
-        chat_history: chatHistory.slice(-8).map((m: ChatMessage) => ({
+        chat_history: nextHistory.slice(-8).map((m: ChatMessage) => ({
           type: m.type,
           content: m.content
         }))
@@ -509,7 +519,7 @@ export default function MCPInspector() {
 
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         runId,
         type: "assistant",
         content: res.message,
@@ -526,7 +536,7 @@ export default function MCPInspector() {
     }
 
     const toolCallMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "tool_call",
       toolName: res.tool_name,
@@ -545,7 +555,7 @@ export default function MCPInspector() {
     )
 
     const resultMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "tool_result",
       result,
@@ -565,7 +575,7 @@ export default function MCPInspector() {
   } catch (err: any) {
 
     const errorMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "error",
       content: err?.message || "Chat error",
@@ -1347,6 +1357,7 @@ export default function MCPInspector() {
                                 )
                               }
 
+                              return null
                             })}
                             <div ref={chatBottomRef} />
                           </div>

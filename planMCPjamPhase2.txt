@@ -1,0 +1,191 @@
+FluidMCP
+MCP Inspector — Phase 2 Plan
+Version: 1.0 | Status: Planning | Builds on: Phase 1 (complete)
+
+
+1. Phase 1 — What Was Built
+Phase 1 delivered a fully functional MCP debugging interface. The following are complete:
+• Backend: 4 inspector endpoints, InspectorSession class, TTL cleanup
+• Frontend: Two-panel layout, Add Server modal, Server cards with status
+• Tool discovery from connected server, tool list in left panel
+• Manual tab: dynamic form from tool's JSON schema using existing JsonSchemaForm
+• Chat tab: basic single-turn chat input
+• Tool execution with JSON result viewer
+• Execution history with timestamps and clear button
+• Disconnect flow with session cleanup
+
+2. Phase 2 — Your Priorities
+Based on your direction, Phase 2 focuses on these four areas in order of importance:
+Feature Priority Effort
+Beautiful Chat with tool transparency High 2–3 days
+Improved execution logs panel High 1–2 days
+Resizable left/right panels Medium 0.5–1 day
+Keep disconnected servers in UI Medium 0.5 day
+
+3. Feature 1 — Beautiful Chat with Tool Transparency
+The current chat is a basic input. Phase 2 makes it feel like a real AI-powered tool debugger with full
+visibility into what the LLM is doing.
+3.1 Chat Message Types
+The chat history should support distinct message types rendered differently:
+user User's natural language message — right-aligned bubble
+thinking LLM's reasoning step — subtle, muted style, collapsible. e.g. 'Deciding
+which tool to use...'
+tool_call Tool being invoked — highlighted card showing: Calling tool:
+airbnb_search | Params: { location: 'Paris' }
+tool_result JSON result from the tool — uses existing ToolResult / JsonResultView
+component
+assistant LLM's final natural language answer (Phase 3 agent loop) — left-aligned
+bubble
+error Tool failed — red-tinted card with error message
+
+3.2 LLM Tool Selection Flow
+IMPORTANT ARCHITECTURE DECISION: The chat endpoint only handles LLM tool selection — it does
+NOT execute the tool. The frontend runs the tool separately via /tools/run. This keeps tool execution
+consistent, logs centralized, and the chat endpoint lightweight.
+• Step 1 — Frontend sends: POST /chat with { message, chat_history (last 8 only) }
+• Step 2 — Backend: convert tools to OpenAI format, normalize schema (always add required: [] if
+missing), call LLM
+• Step 3 — Backend returns: { tool_name, params } ONLY — no tool execution on backend
+• Step 4 — Frontend shows 'Calling tool: X | Params: {...}' card immediately
+• Step 5 — Frontend calls POST /tools/{tool_name}/run with params
+• Step 6 — Tool result shown as tool_result card in chat
+• If LLM cannot pick a tool, return { clarification_needed: true, message } — show as assistant
+message
+
+3.3 Backend: New Chat Endpoint
+Handles LLM call only — does NOT execute the tool. Keeps the endpoint fast and focused:
+Endpoint POST /api/inspector/{session_id}/chat
+Body { message: string, chat_history: [] } — frontend sends last 8 messages
+max to prevent huge LLM requests
+Flow 1. Get session tools → 2. Normalize schemas (add required: [] if
+missing) → 3. Convert to OpenAI format → 4. Call LLM → 5. Return tool
+selection only
+Response (tool found) { tool_name: string, params: dict }
+Response (no tool) { clarification_needed: true, message: string }
+Schema normalization Always add required: [] if MCP tool schema lacks it. OpenAI expects:
+{ type: 'object', properties: {...}, required: [...] }
+LLM Model Reuse existing LLM model already configured in FluidMCP — no new
+integration
+Error handling If LLM call fails → return { error, clarification_needed: true }
+
+3.4 Chat UX Details
+• Enter key sends message (already done in Phase 1 — keep it)
+• Loading state: show 'Thinking...' message while LLM is running, then 'Calling tool...' while
+/tools/run is in flight
+• Each chat entry shows: timestamp, which tool was called, execution time in ms
+• Each tool call and result gets an execution_id so history and logs can cross-reference
+• Copy button on tool_call and tool_result cards
+• Clear chat button resets chatHistory[] state
+• If no server is connected, chat input is disabled with a hint
+• Auto-scroll fix — IMPORTANT: add useEffect(() => { chatRef.current.scrollTop =
+chatRef.current.scrollHeight }, [chatHistory]) to prevent chat freezing at top
+
+4. Feature 2 — Execution Logs Panel
+Add a collapsible Logs panel below the right panel's output area. This gives developers visibility into
+what's happening under the hood.
+4.1 What to Log
+connect Timestamp, URL, transport, server name, protocol version, tool count
+tool_call Timestamp, tool name, params sent, execution time (ms), response size
+tool_error Timestamp, tool name, error message
+disconnect Timestamp, session duration, total tools called
+chat Timestamp, user message, tool selected by LLM, params
+
+4.2 Frontend Log Panel
+• Lives in the bottom section of the LEFT panel — vertically resizable against the Server+Tools
+section above it
+• Each log entry is a single line: timestamp + icon + short description
+• Click to expand a log entry and see full params/response
+• Color-coded: green for success, red for error, blue for info
+• Clear logs button
+• Auto-scroll to latest entry
+• Collapse handle to minimize logs and give more space to the tools list
+
+4.3 Backend: Log Endpoint
+Extend InspectorSession with a central log helper and expose logs via endpoint:
+Endpoint GET /api/inspector/{session_id}/logs
+InspectorSession change Add self.logs = [] and a helper: session.log(type, data). All tool calls and
+errors use this helper — never log inline.
+Log entry shape { id (uuid), timestamp, type, tool_name?, params?, result_size?,
+duration_ms?, error? }. Measure duration: start = time.time() → call tool
+→ duration = time.time() - start
+execution_id Each tool call gets a uuid execution_id shared between the log entry and
+the frontend response — enables cross-referencing
+Append-only Logs are only ever appended, never overwritten or recomputed
+Frontend polling Poll GET /logs every 2 seconds ONLY when the logs panel is open.
+Stop polling when panel is closed. This avoids unnecessary requests.
+
+5. Feature 3 — Resizable Panels
+Replace the fixed grid layout with draggable, resizable panels using react-resizable-panels library.
+5.1 Library
+• Use: react-resizable-panels (lightweight, performant, no extra deps)
+• Install: npm install react-resizable-panels
+5.2 Layout Structure
+Outer layout PanelGroup direction='horizontal' → Left Panel + Right Panel (resizable
+width)
+Left panel inner PanelGroup direction='vertical' → Server+Tools section (top) + Logs
+section (bottom) — vertically resizable between them
+Right panel Switches between Manual mode and Chat mode — single
+execution/output area, no further splitting needed
+Default sizes Left: 25% width, Right: 75% width. Inside left: Tools 60%, Logs 40%
+Min sizes Left panel min width: 20%. Right panel min width: 50%. Logs min height:
+15%
+Persistence Save panel sizes to sessionStorage so they survive re-renders within the
+same tab
+Handle style Thin drag handle between panels — subtle, matches dark theme.
+Vertical handle inside left panel too.
+
+6. Feature 4 — Keep Disconnected Servers in UI
+Currently when a server is disconnected, it disappears from the list. Instead, keep it visible with a
+'Disconnected' state so users can reconnect without re-entering the URL.
+6.1 State Change
+Each server in servers[] gets a status field: 'connecting' | 'connected' | 'disconnected' | 'failed'
+On connect success status = 'connected', sessionId = res.session_id, tools = res.tools
+On disconnect status = 'disconnected', sessionId = null, tools = [] — card stays in list
+On connect fail status = 'failed', sessionId = null, tools = []
+On reconnect User clicks 'Reconnect' button on a disconnected card — runs
+handleConnect again with stored URL + transport
+
+6.2 Server Card Changes
+• Connected card: green badge + Disconnect button (same as Phase 1)
+• Disconnected card: grey badge + Reconnect button
+• Failed card: red badge + Retry button + error message
+• Connecting card: spinner + 'Connecting...' text (same as Phase 1)
+• Add a Remove button (X) on all cards to fully delete from the list
+
+7. Updated Frontend State
+Phase 2 adds to the existing state model:
+servers[] Each server now has: { id, name, url, transport, auth?, headers?,
+envVars?, timeout, status, sessionId, tools[] }. Status persists across
+connect/disconnect.
+chatHistory[] Now typed: { id, type, content, toolName?, params?, executionId?,
+durationMs?, timestamp }
+logs[] New: array of log entries fetched from backend. Polled every 2s only
+when logs panel is open.
+logsPanelOpen New boolean: controls whether polling is active. True = poll every 2s.
+False = stop polling.
+panelSizes New: { leftWidth, logsHeight } — persisted to sessionStorage to survive
+re-renders
+
+8. Implementation Order
+Recommended order to minimise risk and get visible wins early:
+• 1. Keep disconnected servers in UI — purely frontend state change, lowest risk, 0.5 day
+• 2. Resizable panels — layout infrastructure, do this before adding more panels, 0.5–1 day
+• 3. Logs panel — add backend logging first, then frontend panel, 1–2 days
+• 4. Beautiful chat — biggest feature, do last when infrastructure is stable, 2–3 days
+
+9. Files to Create / Modify
+Inspector.tsx (modify) Add server status persistence, reconnect flow, logs state, panel size
+state
+api.ts (modify) Add: chatWithInspector(), getInspectorLogs()
+inspector.py (modify) Add POST /chat endpoint, GET /logs endpoint
+inspector_session.py (modify) Add self.logs list, append on every tool call with timing
+New: ChatPanel.tsx (optional) Extract chat UI when Inspector.tsx gets too large
+New: LogsPanel.tsx (optional) Bottom section of left panel — shows fetch/call logs with
+expand/collapse per entry
+
+10. Deferred to Phase 3
+• Full agent loop — LLM calls multiple tools in sequence, reasons over results
+• Streaming tool execution for long-running tools
+• UI rendering — detect HTML in MCP response, render in sandboxed iframe
+• Save tested server to FluidMCP's MongoDB
+• Raw JSON-RPC message inspecto

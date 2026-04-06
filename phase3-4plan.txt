@@ -1,0 +1,424 @@
+# MCP Inspector — Phase 3 & Phase 4 Plan
+
+> **Goal:** Transform MCP Inspector from a working tool UI into a full agent debugging platform — production-ready, comparable to MCP Jam.
+
+---
+
+## Phase 3 — Agent Debugger Platform
+
+### Sprint 3A — Auth + Observability
+*Unblocks real-world usage. Do first.*
+
+---
+
+#### 🔐 3A-1 · Authentication System
+
+**Why first:** Without auth, users can only connect to open/public servers. This is the single biggest capability gap blocking real adoption.
+
+**Three auth tiers to ship (in order of priority):**
+
+- `None` — current default, no change
+- `Bearer Token` — quick option, 90% of real-world cases. User pastes a token, the header `Authorization: Bearer <token>` is constructed automatically. No key input needed.
+- `Header Token` — advanced option, user specifies both the header key and value manually (for non-standard auth headers like `X-Api-Key`, `Proxy-Authorization`, etc.)
+
+This two-tier approach keeps the common case (Bearer) as a single input, while still supporting edge cases via Header Token.
+
+- Mask all token inputs (password field)
+- Pass auth headers through all three API calls: `connectInspectorServer`, `runInspectorTool`, `chatWithInspector`
+- Store auth config in memory per server (never log, never persist to localStorage)
+
+**Data model change:**
+```ts
+interface MCPServer {
+  // ... existing fields
+  auth?: {
+    type: "none" | "bearer" | "header"
+    token?: string       // used by bearer: auto-builds "Authorization: Bearer <token>"
+    headerKey?: string   // used by header: e.g. "X-Api-Key"
+    headerValue?: string // used by header: e.g. "abc123"
+  }
+}
+
+// Resolved at call time:
+function resolveAuthHeaders(auth?: MCPServer["auth"]): Record<string, string> {
+  if (!auth || auth.type === "none") return {}
+  if (auth.type === "bearer") return { Authorization: `Bearer ${auth.token}` }
+  if (auth.type === "header") return { [auth.headerKey!]: auth.headerValue! }
+  return {}
+}
+```
+
+**UI change in Add Server modal:**
+```
+Auth Type:  [ None ▾ ]
+
+            [ Bearer Token ▾ ]
+              Token:  [••••••••••••••••••]
+
+            [ Header Token ▾ ]
+              Header Key:   [X-Api-Key          ]
+              Token:        [••••••••••••••••••]
+```
+
+---
+
+#### 🔍 3A-2 · Per-Server Logs
+
+**Why:** Switching servers wipes logs. You even have a TODO comment for this in the code.
+
+- Change `logs` state from `LogEntry[]` to `Record<serverId, LogEntry[]>`
+- When switching servers, show that server's log history (not wiped)
+- When a server is removed, clean up its logs
+- Add a **Clear** button per server
+
+```ts
+// Before
+const [logs, setLogs] = useState<LogEntry[]>([])
+
+// After
+const [logsByServer, setLogsByServer] = useState<Record<string, LogEntry[]>>({})
+const logs = logsByServer[selectedServerId ?? ""] ?? []
+```
+
+---
+
+#### 🧠 3A-3 · Per-Server Chat Memory
+
+- Change `chatHistory` to `chatHistoryByServer: Record<serverId, ChatMessage[]>`
+- Switching servers now *preserves* that server's chat history instead of wiping it
+- New connection still gets a fresh chat with a welcome message
+- Clear Chat button becomes per-server
+
+```ts
+const [chatHistoryByServer, setChatHistoryByServer] = useState<Record<string, ChatMessage[]>>({})
+const chatHistory = chatHistoryByServer[selectedServerId ?? ""] ?? []
+```
+
+This pairs with 3A-2: both logs and chat are now scoped per server.
+
+---
+
+#### 🗂️ 3A-4 · Execution History Store (Foundation for Timeline + Traces)
+
+**This is the most strategically important data structure addition in Phase 3.** Without it, the timeline view (3B-2), trace export (Phase 4), and retry (3C-1) are all harder to build correctly.
+
+Right now `executionHistory` is a flat array of past tool runs. Replace it with a proper per-server store of typed execution runs:
+
+```ts
+type ExecutionRun = {
+  runId: string
+  serverId: string
+  startTime: number        // performance.now() or Date.now() when run started
+  endTime?: number         // set when the run completes or errors
+  steps: ChatMessage[]     // thinking + tool_call + tool_result in order
+}
+
+// State
+const [executionHistoryByServer, setExecutionHistoryByServer] =
+  useState<Record<string, ExecutionRun[]>>({})
+```
+
+**What this unlocks:**
+- **Timeline view** — render steps from `ExecutionRun.steps` with real timing between them
+- **Per-step durations** — `step.timestamp - run.startTime` gives exact ms per step (answers the duration question below)
+- **Trace export** in Phase 4 — serialize one `ExecutionRun` to JSON
+- **Retry** — re-run from `run.steps[step].params` without retyping
+- **Execution history panel** — scoped per server (same pattern as logs and chat)
+
+**How durations are tracked — source of truth:**
+```ts
+// In runChatTool, when building each ChatMessage:
+const thinkingMsg: ChatMessage = {
+  ...
+  timestamp: Date.now(),    // wall time for display
+  perfMark: performance.now() // high-res for duration math
+}
+
+// Duration between steps:
+const duration = tool_call.perfMark - thinking.perfMark  // ms
+
+// Total run duration:
+const totalDuration = run.endTime! - run.startTime       // ms
+```
+
+This makes the `[~120ms]` labels in the timeline view real numbers, not estimates.
+
+---
+
+### Sprint 3B — Execution Timeline & Debugger UX
+*The feature that turns this from a chat UI into an agent debugger.*
+
+---
+
+#### 📊 3B-1 · Execution Step Grouping
+
+Group `thinking → tool_call → tool_result` into a single **execution run block** using a `runId`.
+
+**ChatMessage type change:**
+```ts
+type ChatMessage = {
+  id: string
+  runId?: string  // ← new: groups related steps
+  type: "user" | "thinking" | "tool_call" | "tool_result" | "assistant" | "error"
+  // ... rest unchanged
+}
+```
+
+In `runChatTool`, assign the same `runId` to the thinking, tool_call, and tool_result messages of a single agent turn. Render them as one grouped block in the UI.
+
+---
+
+#### 📊 3B-2 · Timeline View
+
+Render the grouped execution block as a vertical step trace, built from `ExecutionRun.steps`:
+
+```
+● User message
+│
+├─ Step 1: Thinking      [118ms]       ← perfMark delta, real number
+│   └─ "Deciding which tool to use..."
+│
+├─ Step 2: Tool Call
+│   └─ 🔧 airbnb_search { location: "Paris" }
+│
+└─ Step 3: Result        [✓ 341ms]    ← tool round-trip time
+    └─ [Collapsed JSON — click to expand]
+
+                         Total: 459ms  ← run.endTime - run.startTime
+```
+
+- Durations come from `perfMark` deltas on each `ChatMessage` (see 3A-4) — no estimates, no tildes
+- Steps are collapsible individually
+- The whole execution block is collapsible
+- Color-coded: blue for thinking, amber for tool call, green for result, red for error
+
+This matches LangSmith / OpenAI's tool use UI pattern.
+
+---
+
+#### 🎨 3B-3 · Collapsible Tool Results
+
+Right now large JSON outputs are unreadable. Add expand/collapse to every `tool_result` bubble:
+
+- Show first 3 lines by default with a `▶ Show full result` toggle
+- Fully expanded shows pretty-printed JSON
+- Copy to clipboard button on the result block
+- Download as `.json` button
+
+---
+
+#### 🖥️ 3B-4 · MCP UI Apps Rendering in Chat
+
+**What this is:** Some MCP servers return tool results that are HTML, React components, or iframe-embeddable URLs — not just raw JSON. Currently these render as escaped string blobs. Instead, detect and render them inline.
+
+**Detection logic with fallback safety:**
+```ts
+function detectResultType(result: any): "json" | "html" | "url" | "markdown" | "image" {
+  if (typeof result === "string") {
+    if (result.trim().startsWith("<") && result.includes("</")) return "html"
+    if (result.startsWith("http") && isEmbeddableUrl(result)) return "url"
+    if (result.includes("![") || result.includes("**")) return "markdown"
+  }
+  if (result?.type === "image") return "image"
+  return "json"
+}
+```
+
+**Critical: always wrap rendering in try/catch and fall back to JSON on failure.** A malformed HTML blob or a URL that fails to iframe-embed should never crash the chat panel:
+
+```ts
+function SafeResultRenderer({ result }: { result: any }) {
+  const [renderFailed, setRenderFailed] = useState(false)
+  const type = detectResultType(result)
+
+  if (renderFailed || type === "json") {
+    return <CollapsibleJsonViewer data={result} />
+  }
+
+  try {
+    if (type === "html") return (
+      <iframe
+        srcDoc={result}
+        sandbox="allow-scripts"
+        onError={() => setRenderFailed(true)}
+      />
+    )
+    // ... other types
+  } catch {
+    return <CollapsibleJsonViewer data={result} />  // silent fallback
+  }
+}
+```
+
+**Rendering by type:**
+
+| Result Type | How to render |
+|---|---|
+| HTML string | Sandboxed `<iframe srcDoc={html}>` with `sandbox="allow-scripts"` |
+| Embeddable URL | `<iframe src={url}>` inside a resizable container |
+| Markdown | Render with `react-markdown` |
+| Image (base64 / URL) | `<img>` tag inline in the result bubble |
+| JSON (default) | Pretty-printed collapsible JSON viewer |
+
+**UI placement:** In the `tool_result` message renderer, wrap the result with a type detector. Add a toggle so users can always switch to "Raw JSON" view regardless of detected type.
+
+**Where this fits in the chat flow:**
+```
+● Tool Call: airbnb_search
+│
+└─ Result:
+   ┌─────────────────────────────┐
+   │  [Rendered HTML / Map / UI] │   ← iframe or component
+   │  [ Raw JSON ] button        │   ← fallback toggle
+   └─────────────────────────────┘
+```
+
+This is a major differentiator — no other open inspector renders MCP UI results inline.
+
+---
+
+#### ✨ 3B-5 · Animated Thinking State
+
+Replace the static "Deciding which tool to use..." with:
+- Animated pulsing dots (`...`)
+- Optionally cycle through messages: "Analyzing request → Selecting tool → Preparing params"
+- This is CSS-only, ~20 lines
+
+---
+
+### Sprint 3C — Polish & Copy/Download
+*Clean up everything before shipping.*
+
+---
+
+#### 🛠️ 3C-1 · Tool Execution UX
+
+- Show execution time on every tool result (already tracked in `runTool`, bring it to chat mode)
+- **Retry button** on `error` message types — re-runs the last tool call without retyping
+- Better parameter display in `tool_call` bubbles (key-value table instead of raw JSON dump)
+
+#### 🔍 3C-2 · Log Filtering
+
+Add filter pills above the logs panel:
+
+```
+[All]  [connect]  [tool_call]  [error]  [chat]
+```
+
+Filter client-side — no backend change needed.
+
+#### 🎨 3C-3 · UI Polish Pass
+
+- Highlight active/selected server more clearly (left border accent)
+- Better empty states with actionable copy ("+ Add a server to get started")
+- Consistent error UI across manual and chat modes
+- Smooth scroll behaviour in chat (already partially done)
+
+---
+
+## Phase 4 — Advanced Platform Features
+
+*Deferred. These require significant architecture changes or are lower ROI vs. Phase 3.*
+
+---
+
+### 🔐 4-1 · OAuth / Auth0 Support
+
+Header Token covers 80% of real servers. OAuth is the remaining 20% but requires:
+- A redirect flow (cannot be done in a modal)
+- Token refresh handling
+- Possibly a backend proxy for the OAuth exchange
+
+Ship only after Phase 3 auth is validated in production.
+
+---
+
+### 🌊 4-2 · Streaming Responses
+
+Allow the agent's responses and tool results to stream token-by-token instead of appearing all at once.
+
+Requires:
+- Backend SSE or WebSocket endpoint for the chat route
+- Frontend streaming reader with incremental state updates
+- Rework of `runChatTool` to handle partial messages
+
+This is the most user-visible upgrade but also the most complex backend change.
+
+---
+
+### 🔗 4-3 · Multi-Step Tool Chaining
+
+Let the agent call multiple tools in sequence to answer one user request, instead of stopping after one tool call.
+
+Requires an **agent loop** on the backend:
+```
+user message
+  → LLM picks tool
+  → execute tool
+  → feed result back to LLM
+  → LLM picks next tool (or produces final answer)
+  → repeat until done
+```
+
+The frontend already has the rendering for this (step grouping from 3B-1 handles multi-step naturally). The work is entirely in the agent backend.
+
+---
+
+### 💾 4-4 · Save & Load Sessions
+
+Allow users to export the current inspector state (server config, chat history, execution history) as a `.json` file and re-import it later.
+
+- Export: serialize `servers`, `chatHistoryByServer`, `executionHistory` to JSON
+- Import: validate and hydrate state from file
+- Optionally: auto-reconnect servers on import
+
+---
+
+### 🔁 4-5 · Retry Failed Tool Executions
+
+A retry button exists as a polish item in 3C-1 for chat mode. Phase 4 extends this to the **manual execution mode** as well — with the ability to edit parameters before retrying from the execution history panel.
+
+---
+
+### 📤 4-6 · Share / Export Execution Traces
+
+Export a single execution run (the grouped `thinking → tool_call → tool_result` block) as:
+- A shareable link (requires backend persistence)
+- A formatted markdown report
+- A JSON trace file (LangSmith-compatible format)
+
+---
+
+### 🧪 4-7 · Multi-Server Tool Routing (Stretch)
+
+Allow the agent to route tool calls across multiple connected servers in a single conversation. Currently the agent is scoped to one active server. Multi-server routing requires:
+- Merging tool lists across servers into a unified tool registry
+- Tracking which session to call for each tool via a `serverId + toolName` composite key
+- **Tool name collision handling** — when two servers both expose a `search` tool, the agent needs disambiguation. Strategies: prefix tool names with server name (`airbnb::search`, `time::search`), or let the LLM pick based on tool description context
+- Updating the backend agent to accept a tool registry instead of a single session's tools
+
+```ts
+// Tool registry key to avoid collisions
+type ToolKey = `${serverId}::${toolName}`  // e.g. "server_123::search"
+
+type UnifiedTool = {
+  key: ToolKey
+  serverId: string
+  sessionId: string
+  toolDefinition: MCPTool
+}
+```
+
+---
+
+## Summary
+
+| Phase | Sprint | What ships |
+|---|---|---|
+| **3A** | Auth + Observability | Bearer/Header Token auth, per-server logs, per-server chat memory, ExecutionHistory store |
+| **3B** | Debugger UX | Execution timeline (real durations), step grouping, collapsible results, MCP UI rendering with fallback, animated thinking |
+| **3C** | Polish | Log filtering, retry button, tool execution UX, UI consistency pass |
+| **4** | Advanced | OAuth, streaming, multi-step chaining, session save/load, trace export, multi-server routing with collision handling |
+
+**After Phase 3:** MCP Inspector is a full agent debugging platform — auth-capable, trace-based, with inline UI rendering.  
+**After Phase 4:** It's a production observability tool comparable to LangSmith f
