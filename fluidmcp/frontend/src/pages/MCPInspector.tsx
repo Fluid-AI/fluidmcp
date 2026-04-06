@@ -34,32 +34,200 @@ function ChatResultBubble({ result }: { result: unknown }) {
           {expanded ? "▼" : "▶"} Result:{!expanded && <span style={{ color: "rgba(255,255,255,0.6)", fontWeight: 400, marginLeft: "0.3rem" }}>{preview}</span>}
         </button>
         {expanded && (
-          <div style={{ display: "flex", background: "rgba(0,0,0,0.3)", borderRadius: "0.25rem", padding: "0.15rem", gap: "0.15rem" }}>
-            <button style={tabStyle(viewMode === "formatted")} onClick={() => setViewMode("formatted")}>Formatted</button>
-            <button style={tabStyle(viewMode === "raw")} onClick={() => setViewMode("raw")}>Raw JSON</button>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <div style={{ display: "flex", background: "rgba(0,0,0,0.3)", borderRadius: "0.25rem", padding: "0.15rem", gap: "0.15rem" }}>
+              <button style={tabStyle(viewMode === "formatted")} onClick={() => setViewMode("formatted")}>Formatted</button>
+              <button style={tabStyle(viewMode === "raw")} onClick={() => setViewMode("raw")}>Raw JSON</button>
+            </div>
+            <button
+              onClick={() => navigator.clipboard.writeText(JSON.stringify(result, null, 2))}
+              style={{ ...tabStyle(false), border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.25rem" }}
+              title="Copy to clipboard"
+            >
+              Copy
+            </button>
           </div>
         )}
       </div>
       {expanded && (
         <div style={{
-          maxHeight: "260px", overflowY: "auto",
+          maxHeight: "260px", overflowY: "auto", overflowX: "hidden",
           background: "rgba(0,0,0,0.3)",
           border: "1px solid rgba(63,63,70,0.5)",
           borderRadius: "0.5rem",
           padding: "0.75rem",
-          marginTop: "0.25rem"
+          marginTop: "0.25rem",
+          width: "100%", boxSizing: "border-box",
         }}>
           {viewMode === "raw"
-            ? <pre style={{ margin: 0, fontSize: "0.75rem", color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "ui-monospace, monospace" }}>{JSON.stringify(result, null, 2)}</pre>
-            : (isMcp || isMcpArray)
-              ? <McpContentView content={isMcpArray ? result as any : (result as any).content} />
-              : <JsonResultView data={result} />
+            ? <pre style={{ margin: 0, fontSize: "0.75rem", color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace, monospace", width: "100%", boxSizing: "border-box" as const }}>{JSON.stringify(result, null, 2)}</pre>
+            : <div style={{ minWidth: 0, width: "100%", overflow: "hidden" }}>
+                {(isMcp || isMcpArray)
+                  ? <McpContentView content={isMcpArray ? result as any : (result as any).content} />
+                  : <JsonResultView data={result} />
+                }
+              </div>
           }
         </div>
       )}
     </div>
   );
 }
+// ── Animated thinking indicator ──────────────────────────────────────────────
+function ThinkingDots() {
+  return (
+    <span style={{ display: "inline-flex", gap: "3px", alignItems: "center", marginLeft: "4px" }}>
+      {[0, 1, 2].map(i => (
+        <span key={i} style={{
+          width: "4px", height: "4px", borderRadius: "50%",
+          background: "rgba(255,255,255,0.55)", display: "inline-block",
+          animation: `thinking-blink 1.4s infinite ${i * 0.2}s`,
+        }} />
+      ))}
+    </span>
+  );
+}
+
+// ── Group flat chat messages into standalone + run blocks ─────────────────────
+type DisplayGroup =
+  | { kind: "standalone"; msg: ChatMessage }
+  | { kind: "run"; runId: string; steps: ChatMessage[]; run?: ExecutionRun }
+
+function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): DisplayGroup[] {
+  const runMap = new Map(execHistory.map(r => [r.runId, r]));
+  const seen = new Set<string>();
+  return messages.reduce<DisplayGroup[]>((acc, msg) => {
+    if (!msg.runId) {
+      acc.push({ kind: "standalone", msg });
+    } else if (!seen.has(msg.runId)) {
+      seen.add(msg.runId);
+      acc.push({
+        kind: "run",
+        runId: msg.runId,
+        steps: messages.filter(m => m.runId === msg.runId),
+        run: runMap.get(msg.runId),
+      });
+    }
+    return acc;
+  }, []);
+}
+
+// ── Timeline block for one agent turn (thinking → tool_call → tool_result) ───
+function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: ExecutionRun }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const thinking  = steps.find(s => s.type === "thinking");
+  const toolCall  = steps.find(s => s.type === "tool_call");
+  const toolResult = steps.find(s => s.type === "tool_result");
+  const errorStep = steps.find(s => s.type === "error");
+  const isActive  = !toolResult && !errorStep; // run still in progress
+
+  const totalMs    = run?.endTime ? run.endTime - run.startTime : null;
+  const thinkingMs = (toolCall?.perfMark && thinking?.perfMark)
+    ? Math.round(toolCall.perfMark - thinking.perfMark) : null;
+  const toolMs     = (toolResult?.perfMark && toolCall?.perfMark)
+    ? Math.round(toolResult.perfMark - toolCall.perfMark) : null;
+
+  const dot = (color: string) => (
+    <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: color, marginTop: "4px", flexShrink: 0 }} />
+  );
+
+  return (
+    <div style={{ maxWidth: "90%", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "10px", overflow: "hidden" }}>
+      {/* Header */}
+      <div
+        onClick={() => setCollapsed(v => !v)}
+        style={{
+          display: "flex", alignItems: "center", gap: "0.5rem",
+          padding: "0.45rem 0.75rem",
+          background: "rgba(255,255,255,0.04)", cursor: "pointer",
+          borderBottom: collapsed ? "none" : "1px solid rgba(63,63,70,0.25)",
+        }}
+      >
+        <span style={{ fontSize: "0.7rem", opacity: 0.45 }}>{collapsed ? "▶" : "▼"}</span>
+        <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>
+          {toolCall ? `🔧 ${toolCall.toolName}` : errorStep ? "❌ Error" : "🤖 Thinking"}
+        </span>
+        {isActive && <ThinkingDots />}
+        {totalMs !== null && (
+          <span style={{ marginLeft: "auto", fontSize: "0.7rem", color: "rgba(99,102,241,0.7)", fontFamily: "monospace" }}>
+            {totalMs}ms
+          </span>
+        )}
+      </div>
+
+      {!collapsed && (
+        <div style={{ padding: "0.6rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+          {/* Thinking step */}
+          {thinking && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#3b82f6")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#60a5fa", fontWeight: 600, display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  Thinking
+                  {thinkingMs !== null && <span style={{ fontWeight: 400, opacity: 0.65 }}>{thinkingMs}ms</span>}
+                  {isActive && <ThinkingDots />}
+                </div>
+                <div style={{ fontSize: "0.73rem", opacity: 0.6, fontStyle: "italic", marginTop: "0.15rem" }}>
+                  {thinking.content}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tool call step */}
+          {toolCall && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#f59e0b")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#fbbf24", fontWeight: 600 }}>
+                  Tool: {toolCall.toolName}
+                </div>
+                <pre style={{
+                  margin: "0.2rem 0 0", padding: "0.35rem 0.5rem",
+                  background: "rgba(0,0,0,0.3)", borderRadius: "6px",
+                  fontSize: "0.7rem", overflowX: "auto", whiteSpace: "pre-wrap",
+                  wordBreak: "break-all", color: "#e5e7eb", fontFamily: "ui-monospace,monospace",
+                }}>
+                  {JSON.stringify(toolCall.params, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          {/* Result step */}
+          {toolResult && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#22c55e")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#4ade80", fontWeight: 600, display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  Result
+                  {toolMs !== null && <span style={{ fontWeight: 400, opacity: 0.65 }}>{toolMs}ms</span>}
+                </div>
+                <div style={{ marginTop: "0.2rem" }}>
+                  <ChatResultBubble result={toolResult.result} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Error step */}
+          {errorStep && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#ef4444")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#fca5a5", fontWeight: 600 }}>Error</div>
+                <div style={{ fontSize: "0.73rem", color: "#fca5a5", marginTop: "0.15rem" }}>
+                  {errorStep.content}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { apiClient } from "@/services/api";
@@ -670,6 +838,7 @@ export default function MCPInspector() {
       className="dashboard"
       style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}
     >
+      <style>{`@keyframes thinking-blink{0%,80%,100%{opacity:0}40%{opacity:1}}`}</style>
       <Navbar />
 
       <div style={{ paddingTop: "64px", flex: 1, display: "flex", flexDirection: "column" }}>
@@ -965,58 +1134,6 @@ export default function MCPInspector() {
                       )}
                     </div>
 
-                    {/* Execution History */}
-                    <div style={{ marginTop: "1.25rem", flexShrink: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                        <h3 style={{ fontSize: "0.9rem", fontWeight: "600" }}>Execution History</h3>
-                        <button
-                          onClick={() => selectedServerId && setExecutionHistoryByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
-                          style={{
-                            fontSize: "0.7rem", padding: "0.2rem 0.5rem",
-                            borderRadius: "0.3rem", border: "1px solid rgba(63,63,70,0.6)",
-                            background: "transparent", color: "rgba(255,255,255,0.6)", cursor: "pointer",
-                          }}
-                        >
-                          Clear
-                        </button>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "flex", flexDirection: "column", gap: "0.4rem",
-                          maxHeight: "160px", overflowY: "auto",
-                        }}
-                      >
-                        {executionHistory.map((item: ExecutionRun) => {
-                          const toolCall = item.steps.find(s => s.type === "tool_call");
-                          const toolResult = item.steps.find(s => s.type === "tool_result");
-                          const duration = item.endTime ? item.endTime - item.startTime : null;
-                          return (
-                            <div
-                              key={item.runId}
-                              onClick={() => {
-                                if (toolResult) setToolResult(toolResult.result);
-                                if (toolCall?.toolName) setSelectedTool(selectedServer?.tools.find((t: any) => t.name === toolCall.toolName) || null);
-                                setToolError(null);
-                              }}
-                              style={{
-                                padding: "0.4rem 0.5rem",
-                                borderRadius: "0.35rem",
-                                border: "1px solid rgba(63,63,70,0.6)",
-                                cursor: "pointer",
-                                background: "rgba(255,255,255,0.04)",
-                              }}
-                            >
-                              <div style={{ fontWeight: 600, fontSize: "0.8rem" }}>{toolCall?.toolName || "run"}</div>
-                              <div style={{ fontSize: "0.75rem", opacity: 0.6 }}>
-                                {new Date(item.startTime).toLocaleTimeString()}
-                                {duration !== null && <span style={{ marginLeft: "0.4rem", color: "rgba(99,102,241,0.8)" }}>{duration}ms</span>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
                   </div>
                 </Panel>
 
@@ -1260,83 +1377,30 @@ export default function MCPInspector() {
                               padding: "0.5rem 0.5rem 0.75rem 0.25rem"
                             }}
                           >
-                            {chatHistory.map((msg) => {
+                            {groupMessages(chatHistory, executionHistory).map((group) => {
+                              if (group.kind === "run") {
+                                return (
+                                  <div key={group.runId} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                    <ExecutionRunBlock steps={group.steps} run={group.run} />
+                                  </div>
+                                );
+                              }
+
+                              const msg = group.msg;
 
                               if (msg.type === "user") {
                                 return (
                                   <div key={msg.id} style={{ display: "flex", justifyContent: "flex-end" }}>
                                     <div style={{
-                                      background: "#2563eb",
-                                      color: "#fff",
+                                      background: "#2563eb", color: "#fff",
                                       padding: "0.6rem 0.75rem",
                                       borderRadius: "12px 12px 4px 12px",
-                                      maxWidth: "70%",
-                                      fontSize: "0.9rem",
-                                      lineHeight: 1.4
+                                      maxWidth: "70%", fontSize: "0.9rem", lineHeight: 1.4
                                     }}>
                                       {msg.content}
                                     </div>
                                   </div>
-                                )
-                              }
-
-                              if (msg.type === "thinking") {
-                                return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
-                                    <div style={{
-                                      fontSize: "0.8rem",
-                                      opacity: 0.7,
-                                      fontStyle: "italic",
-                                      padding: "0.3rem 0.5rem"
-                                    }}>
-                                      🤖 {msg.content}...
-                                    </div>
-                                  </div>
-                                )
-                              }
-
-                              if (msg.type === "tool_call") {
-                                return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
-                                    <div style={{
-                                      background: "rgba(59,130,246,0.12)",
-                                      border: "1px solid rgba(59,130,246,0.35)",
-                                      borderRadius: "8px",
-                                      padding: "0.6rem",
-                                      maxWidth: "80%",
-                                      fontSize: "0.8rem"
-                                    }}>
-                                      <div style={{ fontWeight: 600, marginBottom: "0.3rem" }}>
-                                        🔧 Tool: {msg.toolName}
-                                      </div>
-
-                                      <div style={{
-                                        fontFamily: "monospace",
-                                        fontSize: "0.75rem",
-                                        background: "rgba(0,0,0,0.3)",
-                                        padding: "0.4rem",
-                                        borderRadius: "6px",
-                                        overflowX: "auto"
-                                      }}>
-                                        {JSON.stringify(msg.params, null, 2)}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )
-                              }
-
-                              if (msg.type === "tool_result") {
-                                return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
-                                    <div style={{
-                                      borderLeft: "3px solid #22c55e",
-                                      paddingLeft: "0.6rem",
-                                      maxWidth: "85%"
-                                    }}>
-                                      <ChatResultBubble result={msg.result} />
-                                    </div>
-                                  </div>
-                                )
+                                );
                               }
 
                               if (msg.type === "assistant") {
@@ -1347,33 +1411,15 @@ export default function MCPInspector() {
                                       border: "1px solid rgba(99,102,241,0.3)",
                                       padding: "0.6rem 0.75rem",
                                       borderRadius: "12px 12px 12px 4px",
-                                      maxWidth: "70%",
-                                      fontSize: "0.9rem"
+                                      maxWidth: "70%", fontSize: "0.9rem"
                                     }}>
                                       {msg.content}
                                     </div>
                                   </div>
-                                )
+                                );
                               }
 
-                              if (msg.type === "error") {
-                                return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
-                                    <div style={{
-                                      background: "rgba(239,68,68,0.15)",
-                                      border: "1px solid rgba(239,68,68,0.4)",
-                                      padding: "0.6rem",
-                                      borderRadius: "8px",
-                                      color: "#fca5a5",
-                                      maxWidth: "70%"
-                                    }}>
-                                      ❌ {msg.content}
-                                    </div>
-                                  </div>
-                                )
-                              }
-
-                              return null
+                              return null;
                             })}
                             <div ref={chatBottomRef} />
                           </div>
