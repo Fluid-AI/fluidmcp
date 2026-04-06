@@ -1680,7 +1680,8 @@ async def get_server_logs(
 async def get_server_crashes(
     request: Request,
     id: str,
-    limit: int = Query(20, ge=1, le=100, description="Maximum number of crash events to return")
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of crash events to return"),
+    token: str = Depends(get_token)
 ):
     """
     Get recent crash events for a server.
@@ -1713,7 +1714,8 @@ async def get_server_crashes(
 @router.get("/crashes")
 async def list_all_crashes(
     request: Request,
-    limit: int = Query(50, ge=1, le=200, description="Maximum number of crash events to return")
+    limit: int = Query(50, ge=1, le=200, description="Maximum number of crash events to return"),
+    token: str = Depends(get_token)
 ):
     """
     List recent crash events across all servers.

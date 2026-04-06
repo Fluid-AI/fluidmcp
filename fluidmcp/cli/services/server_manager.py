@@ -1226,11 +1226,11 @@ class ServerManager:
 
     def _cleanup_old_stderr_logs(self) -> None:
         """Delete stderr log files (and their backups) older than 30 days."""
-        if not os.path.isdir(self.STDERR_LOG_DIR):
+        if not os.path.isdir(self._get_stderr_log_dir()):
             return
         cutoff = time.time() - 30 * 86400
         try:
-            for entry in os.scandir(self.STDERR_LOG_DIR):
+            for entry in os.scandir(self._get_stderr_log_dir()):
                 if entry.name.startswith("mcp_") and "_stderr.log" in entry.name:
                     try:
                         if entry.stat().st_mtime < cutoff:
