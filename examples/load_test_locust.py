@@ -92,12 +92,12 @@ class ManagementAPIUser(HttpUser):
         # Prefer a running server; fall back to any server if none are running
         resp = self.client.get("/api/servers", name="/api/servers [discovery]")
         if resp.status_code == 200:
-            servers = resp.json()
+            servers = resp.json().get("servers", [])
             if isinstance(servers, list) and servers:
-                running = [s for s in servers if isinstance(s, dict) and s.get("status") == "running"]
+                running = [s for s in servers if isinstance(s, dict) and s.get("status", {}).get("state") == "running"]
                 source = running if running else servers
                 first = source[0]
-                self.server_id = first.get("server_id") or first.get("id")
+                self.server_id = first.get("id")
                 logger.info(f"ManagementAPIUser: using server_id={self.server_id} (running={bool(running)})")
             else:
                 logger.warning("ManagementAPIUser: no servers found — server-specific tasks will be skipped")
@@ -156,36 +156,56 @@ class MCPProxyUser(HttpUser):
     def on_start(self):
         self.client.headers.update(_auth_headers())
         self.servers = []
+        self.server_tools = {}  # {server_id: [tool_name, ...]}
 
         # Discover running servers once — never repeated per request
         resp = self.client.get("/api/servers", name="/api/servers [discovery]")
         if resp.status_code == 200:
-            all_servers = resp.json()
+            all_servers = resp.json().get("servers", [])
             self.servers = [
-                s.get("server_id") or s.get("id")
+                s.get("id")
                 for s in all_servers
-                if isinstance(s, dict) and s.get("status") == "running"
+                if isinstance(s, dict) and s.get("status", {}).get("state") == "running"
             ]
-            # Filter out any None values (malformed entries)
             self.servers = [s for s in self.servers if s]
             logger.info(f"MCPProxyUser: {len(self.servers)} running servers: {self.servers}")
         else:
             logger.warning(f"MCPProxyUser: server discovery failed ({resp.status_code}) — all proxy tasks will be skipped")
+            return
+
+        # Fetch tools for each running server once at startup
+        for server_id in self.servers:
+            tresp = self.client.get(
+                f"/api/servers/{server_id}/tools",
+                name="/api/servers/{id}/tools [discovery]",
+            )
+            if tresp.status_code == 200:
+                tools = tresp.json().get("tools", [])
+                names = [t["name"] for t in tools if t.get("name")]
+                if names:
+                    self.server_tools[server_id] = names
+                    logger.info(f"  {server_id}: {names}")
+            else:
+                logger.warning(f"  {server_id}: tool discovery failed ({tresp.status_code})")
 
     def _pick_tool(self, server_id: str) -> str:
-        """Select an appropriate tool based on the server type."""
+        """Pick a random real tool for this server; fall back to heuristic if discovery failed."""
+        tools = self.server_tools.get(server_id, [])
+        if tools:
+            return random.choice(tools)
+        # Fallback heuristic if tool discovery failed
         if "council" in server_id.lower():
             return "send_response"
         return "tools/list"
 
     @task(7)
     def tools_call(self):
-        """Send tools/call JSON-RPC (70% of requests)."""
+        """Send tools/call JSON-RPC using a real discovered tool name (70% of requests)."""
         if not self.servers:
             return
         server = random.choice(self.servers)
         tool = self._pick_tool(server)
-        self.client.post(
+        with self.client.post(
             f"/{server}/mcp",
             json={
                 "jsonrpc": "2.0",
@@ -194,7 +214,16 @@ class MCPProxyUser(HttpUser):
                 "params": {"name": tool, "arguments": {}},
             },
             name="/{server}/mcp [tools/call]",
-        )
+            catch_response=True,
+        ) as resp:
+            if resp.status_code == 200:
+                body = resp.json()
+                if "error" in body:
+                    # JSON-RPC error (e.g. missing required args) — proxy worked fine
+                    logger.debug(f"JSON-RPC error {server}/{tool}: {body['error'].get('message')}")
+                resp.success()
+            else:
+                resp.failure(f"HTTP {resp.status_code}")
 
     @task(3)
     def tools_list(self):
