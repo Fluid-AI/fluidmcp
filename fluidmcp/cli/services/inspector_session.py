@@ -2,7 +2,7 @@ import time
 import json
 import asyncio
 import ipaddress
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 import httpx
@@ -99,7 +99,7 @@ class InspectorSession:
 
     def add_log(self, log_type: str, message: str) -> None:
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": log_type,
             "message": message
         }

@@ -1,22 +1,7 @@
 import os
 import json
+import asyncio
 from loguru import logger
-from openai import OpenAI
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY not found in environment")
-
-# Groq client (OpenAI compatible)
-client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1"
-)
 
 
 def format_tools_for_prompt(tools):
@@ -53,16 +38,35 @@ Parameters:
     return "\n".join(formatted)
 
 
-async def choose_tool_with_llm(message: str, tools: list):
+async def choose_tool_with_llm(message: str, tools: list, chat_history: list = []):
     """
     Universal MCP agent powered by Groq.
-    Works with ANY MCP tool schema.
+
+    Imports and initialises the Groq client lazily so the server can start
+    even when GROQ_API_KEY is absent — the error surfaces only when the chat
+    endpoint is actually called.
     """
 
     if not tools:
         raise RuntimeError("No tools available")
 
     logger.info(f"Inspector chat message: {message}")
+
+    # Lazy imports — avoids startup failure when GROQ_API_KEY is absent
+    from dotenv import load_dotenv
+    from openai import OpenAI
+
+    load_dotenv()
+
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if not groq_api_key:
+        raise RuntimeError("GROQ_API_KEY not configured")
+
+    # Build client inside the function — no module-level side effects
+    client = OpenAI(
+        api_key=groq_api_key,
+        base_url="https://api.groq.com/openai/v1"
+    )
 
     tool_description = format_tools_for_prompt(tools)
 
@@ -84,12 +88,23 @@ Return ONLY JSON.
 """
 
     try:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """
+        # The OpenAI client is synchronous — run in a thread to avoid blocking
+        # the event loop.
+        # Build prior turns from chat_history for multi-turn context
+        history_messages = [
+            {"role": "user" if m.get("type") == "user" else "assistant",
+             "content": str(m.get("content", ""))}
+            for m in chat_history
+            if m.get("type") in ("user", "assistant") and m.get("content")
+        ]
+
+        def _call_llm():
+            return client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """
 You are a strict JSON API for MCP tool selection.
 
 You MUST return ONLY valid JSON.
@@ -106,22 +121,25 @@ Rules:
 - No extra text
 - Always return JSON
 """
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0,
-            max_tokens=200,
-            stop=["\n\n"]
-        )
+                    },
+                    *history_messages,
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0,
+                max_tokens=200,
+                stop=["\n\n"]
+            )
+
+        response = await asyncio.to_thread(_call_llm)
 
         content = response.choices[0].message.content.strip()
 
         logger.info(f"LLM raw response: {repr(content)}")
 
-        # ✅ First attempt: direct parse
+        # First attempt: direct parse
         try:
             result = json.loads(content)
             logger.info(f"LLM parsed result (direct): {result}")
@@ -130,7 +148,7 @@ Rules:
         except json.JSONDecodeError:
             logger.warning("Direct JSON parse failed, attempting extraction...")
 
-            # ✅ Fallback: extract JSON block
+            # Fallback: extract JSON block
             start = content.find("{")
             end = content.rfind("}") + 1
 
@@ -138,10 +156,6 @@ Rules:
                 raise ValueError(f"No JSON found in LLM response: {content}")
 
             json_str = content[start:end]
-            
-            # 🔥 Attempt auto-fix for truncated JSON
-            open_braces = json_str.count("{")
-            close_braces = json_str.count("}")
 
             try:
                 result = json.loads(json_str)
@@ -156,4 +170,3 @@ Rules:
     except Exception as e:
         logger.error(f"Groq agent error: {e}")
         raise
-
