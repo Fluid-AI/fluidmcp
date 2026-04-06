@@ -8,9 +8,17 @@ import asyncio
 import subprocess
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime
+from loguru import logger
 
 from fluidmcp.cli.services.server_manager import ServerManager
 from fluidmcp.cli.repositories import InMemoryBackend
+
+
+@pytest.fixture(autouse=True)
+def silence_loguru():
+    """Remove loguru handlers during tests to prevent I/O errors on closed streams."""
+    logger.remove()
+    yield
 
 
 @pytest.fixture
