@@ -113,7 +113,7 @@ function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): Di
 }
 
 // ── Timeline block for one agent turn (thinking → tool_call → tool_result) ───
-function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: ExecutionRun }) {
+function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; run?: ExecutionRun; sessionId?: string }) {
   const [collapsed, setCollapsed] = useState(false);
   const thinking  = steps.find(s => s.type === "thinking");
   const toolCall  = steps.find(s => s.type === "tool_call");
@@ -206,6 +206,14 @@ function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: Executi
                 <div style={{ marginTop: "0.2rem" }}>
                   <ChatResultBubble result={toolResult.result} />
                 </div>
+                {toolResult.resourceUri && sessionId && toolCall && (
+                  <WidgetSandbox
+                    sessionId={sessionId}
+                    resourceUri={toolResult.resourceUri}
+                    toolInput={toolCall.params || {}}
+                    toolResult={toolResult.result}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -235,7 +243,8 @@ import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
 import { JsonResultView } from '../components/result/JsonResultView';
 import { McpContentView } from '../components/result/McpContentView';
-import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels'; 
+import { WidgetSandbox } from '../components/WidgetSandbox';
+import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels';
 
 // Type for server object
 interface MCPServer {
@@ -270,6 +279,7 @@ type ChatMessage = {
   toolName?: string
   params?: any
   result?: any
+  resourceUri?: string // set on tool_result when tool has _meta["ui/resourceUri"]
   timestamp: number
   perfMark?: number    // high-res mark for duration math (performance.now())
 }
@@ -722,11 +732,22 @@ export default function MCPInspector() {
       res.params
     )
 
+    // Check for UI widget resource — can be on the tool definition (tools/list)
+    // or on the result itself (FastMCP puts _meta on the result, not the tool def)
+    const toolDef = selectedServer.tools.find((t: any) => t.name === res.tool_name)
+    const resourceUri: string | undefined =
+      toolDef?._meta?.["ui/resourceUri"] ||
+      toolDef?._meta?.ui?.resourceUri ||
+      result?.result?._meta?.["ui/resourceUri"] ||
+      result?.result?._meta?.ui?.resourceUri ||
+      undefined
+
     const resultMsg: ChatMessage = {
       id: crypto.randomUUID(),
       runId,
       type: "tool_result",
       result,
+      resourceUri,
       timestamp: Date.now(),
       perfMark: performance.now()
     }
@@ -1403,7 +1424,7 @@ export default function MCPInspector() {
                               if (group.kind === "run") {
                                 return (
                                   <div key={group.runId} style={{ display: "flex", justifyContent: "flex-start" }}>
-                                    <ExecutionRunBlock steps={group.steps} run={group.run} />
+                                    <ExecutionRunBlock steps={group.steps} run={group.run} sessionId={selectedServer?.session_id ?? undefined} />
                                   </div>
                                 );
                               }
