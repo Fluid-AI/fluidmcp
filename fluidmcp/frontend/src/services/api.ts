@@ -328,6 +328,16 @@ class ApiClient {
     });
   }
 
+  async listInspectorResources(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources`);
+  }
+
+  async readInspectorResource(sessionId: string, uri: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources/read`, {
+      method: "POST",
+      body: JSON.stringify({ uri }),
+    });
+  }
 
   /**
    * Clone a GitHub repository and register its MCP server(s).
