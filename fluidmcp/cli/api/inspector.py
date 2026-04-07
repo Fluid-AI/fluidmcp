@@ -39,6 +39,7 @@ class ConnectRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[list] = Field(default_factory=list)
+    system_prompt: Optional[str] = None
 
 class ReadResourceRequest(BaseModel):
     uri: str
@@ -292,9 +293,11 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent, passing chat history for multi-turn context
+        # Call the Groq agent, passing chat history and optional system prompt
         agent_result = await choose_tool_with_llm(
-            body.message, tools, chat_history=body.chat_history or []
+            body.message, tools,
+            chat_history=body.chat_history or [],
+            system_prompt=body.system_prompt or "",
         )
 
         # Validate the response has the expected fields

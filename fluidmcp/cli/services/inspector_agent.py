@@ -38,7 +38,7 @@ Parameters:
     return "\n".join(formatted)
 
 
-async def choose_tool_with_llm(message: str, tools: list, chat_history: list = []):
+async def choose_tool_with_llm(message: str, tools: list, chat_history: list = [], system_prompt: str = ""):
     """
     Universal MCP agent powered by Groq.
 
@@ -98,14 +98,7 @@ Return ONLY JSON.
             if m.get("type") in ("user", "assistant") and m.get("content")
         ]
 
-        def _call_llm():
-            return client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """
-You are a strict JSON API for MCP tool selection.
+        base_system = """You are a strict JSON API for MCP tool selection.
 
 You MUST return ONLY valid JSON.
 
@@ -121,12 +114,15 @@ Rules:
 - No extra text
 - Always return JSON
 """
-                    },
+        system_content = f"{system_prompt.strip()}\n\n{base_system}" if system_prompt.strip() else base_system
+
+        def _call_llm():
+            return client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": system_content},
                     *history_messages,
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "user", "content": prompt}
                 ],
                 temperature=0,
                 max_tokens=200,
