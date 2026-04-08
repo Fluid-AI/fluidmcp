@@ -24,7 +24,7 @@ import threading
 from .config_resolver import ServerConfig, INSTALLATION_DIR
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
-from .package_launcher import launch_mcp_using_fastapi_proxy
+from .package_launcher import launch_mcp_using_fastapi_proxy, create_dynamic_router
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
@@ -314,14 +314,19 @@ def run_servers(
             if server_name not in _process_locks:
                 _process_locks[server_name] = threading.Lock()
 
-            package_name, router, process = launch_mcp_using_fastapi_proxy(
+            package_name, _router, process = launch_mcp_using_fastapi_proxy(
                 install_path,
                 _process_locks[server_name]
             )
 
-            if router and process:
-                app.include_router(router, tags=[server_name])
-                _register_server_process(server_name, process)  # Register in explicit registry
+            if process:
+                # Register in server_manager for dynamic router dispatch (same as serve)
+                server_manager.processes[server_name] = process
+                server_manager.start_times[server_name] = time.monotonic()
+                server_manager.configs[server_name] = server_cfg
+
+                # Also register in module-level dict (used by health/tools endpoints)
+                _register_server_process(server_name, process)
 
                 # Initialize metrics for the server
                 _initialize_server_metrics(server_name)
@@ -330,7 +335,7 @@ def run_servers(
                 launched_servers += 1
                 logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
             else:
-                logger.error(f"Failed to create router for {server_name}")
+                logger.error(f"Failed to launch server '{server_name}'")
 
         except Exception:
             logger.exception(f"Error launching server '{server_name}'")
@@ -342,6 +347,11 @@ def run_servers(
 
     if launched_servers > 0:
         logger.info(f"Successfully launched {launched_servers} MCP server(s)")
+
+    # Mount unified dynamic router (same as serve) — single router for all registered servers
+    mcp_router = create_dynamic_router(server_manager)
+    app.include_router(mcp_router, tags=["mcp"])
+    logger.debug("Dynamic MCP router mounted")
 
     # Launch LLM models if configured (supports multiple types: vllm, replicate, etc.)
     if config.llm_models:
