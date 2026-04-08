@@ -6,7 +6,7 @@ Thank you for your interest in contributing to FluidMCP! This guide will help yo
 
 ### Prerequisites
 
-- Python 3.6 or higher
+- Python 3.10 or higher
 - Git
 
 ### Setting Up Your Development Environment
