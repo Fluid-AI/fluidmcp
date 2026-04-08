@@ -1,0 +1,1851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fmcp serve - Feature Tutorial | FluidMCP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0d1117;
+    --bg2:#161b22;
+    --bg3:#1c2128;
+    --bg4:#21262d;
+    --border:rgba(210,168,255,0.15);
+    --border2:rgba(88,166,255,0.15);
+    --accent:#d2a8ff;
+    --accent2:#58a6ff;
+    --accent3:#3fb950;
+    --accent4:#f78166;
+    --accent5:#e3b341;
+    --text:#e6edf3;
+    --text2:#8b949e;
+    --text3:#6e7681;
+    --shadow:0 8px 32px rgba(0,0,0,0.5);
+    --radius:12px;
+    --radius-sm:8px;
+  }
+
+  * { box-sizing:border-box; margin:0; padding:0; }
+
+  body {
+    font-family:'Inter',sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    display:flex;
+    height:100vh;
+    overflow:hidden;
+  }
+
+  /* ─── SIDEBAR ─────────────────────────────────────────────── */
+  .sidebar {
+    width:280px;
+    min-width:280px;
+    background:var(--bg2);
+    border-right:1px solid var(--border);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+
+  .sidebar-header {
+    padding:24px 20px 16px;
+    border-bottom:1px solid var(--border);
+    flex-shrink:0;
+  }
+
+  .sidebar-logo {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:14px;
+  }
+
+  .logo-icon {
+    width:32px;
+    height:32px;
+    background:linear-gradient(135deg,#d2a8ff,#58a6ff);
+    border-radius:8px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:16px;
+    font-weight:700;
+    color:#0d1117;
+    flex-shrink:0;
+  }
+
+  .sidebar-title {
+    font-size:13px;
+    font-weight:600;
+    color:var(--accent);
+    letter-spacing:0.5px;
+    text-transform:uppercase;
+  }
+
+  .sidebar-subtitle {
+    font-size:11px;
+    color:var(--text3);
+    margin-top:2px;
+  }
+
+  .sidebar-progress {
+    margin-top:12px;
+  }
+
+  .progress-label {
+    display:flex;
+    justify-content:space-between;
+    font-size:11px;
+    color:var(--text3);
+    margin-bottom:6px;
+  }
+
+  .progress-bar {
+    height:4px;
+    background:var(--bg3);
+    border-radius:2px;
+    overflow:hidden;
+  }
+
+  .progress-fill {
+    height:100%;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    border-radius:2px;
+    transition:width 0.4s ease;
+  }
+
+  .nav-list {
+    list-style:none;
+    overflow-y:auto;
+    flex:1;
+    padding:10px 0;
+  }
+
+  .nav-list::-webkit-scrollbar { width:4px; }
+  .nav-list::-webkit-scrollbar-track { background:transparent; }
+  .nav-list::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+  .nav-item {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:9px 20px;
+    cursor:pointer;
+    transition:background 0.15s;
+    border-left:3px solid transparent;
+    position:relative;
+  }
+
+  .nav-item:hover { background:var(--bg3); }
+  .nav-item.active {
+    background:rgba(210,168,255,0.08);
+    border-left-color:var(--accent);
+  }
+
+  .nav-badge {
+    width:22px;
+    height:22px;
+    border-radius:6px;
+    background:var(--bg4);
+    border:1px solid var(--border);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:10px;
+    font-weight:600;
+    color:var(--text2);
+    flex-shrink:0;
+    transition:all 0.2s;
+  }
+
+  .nav-item.active .nav-badge {
+    background:var(--accent);
+    color:#0d1117;
+    border-color:var(--accent);
+  }
+
+  .nav-item.done .nav-badge {
+    background:var(--accent3);
+    color:#0d1117;
+    border-color:var(--accent3);
+  }
+
+  .nav-label {
+    font-size:12px;
+    font-weight:500;
+    color:var(--text2);
+    line-height:1.3;
+  }
+
+  .nav-item.active .nav-label { color:var(--text); }
+  .nav-item.done .nav-label { color:var(--accent3); }
+
+  /* ─── MAIN CONTENT ────────────────────────────────────────── */
+  .main {
+    flex:1;
+    overflow-y:auto;
+    padding:0;
+    scroll-behavior:smooth;
+  }
+
+  .main::-webkit-scrollbar { width:6px; }
+  .main::-webkit-scrollbar-track { background:transparent; }
+  .main::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+
+  .lesson {
+    display:none;
+    padding:40px 48px 60px;
+    max-width:900px;
+    animation:slideInUp 0.3s ease;
+  }
+
+  .lesson.active { display:block; }
+
+  @keyframes slideInUp {
+    from { opacity:0; transform:translateY(16px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
+
+  /* ─── LESSON HEADER ──────────────────────────────────────── */
+  .lesson-badge {
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:4px 12px;
+    background:rgba(210,168,255,0.1);
+    border:1px solid rgba(210,168,255,0.25);
+    border-radius:20px;
+    font-size:11px;
+    font-weight:600;
+    color:var(--accent);
+    letter-spacing:0.5px;
+    text-transform:uppercase;
+    margin-bottom:16px;
+  }
+
+  .lesson-title {
+    font-size:28px;
+    font-weight:700;
+    color:var(--text);
+    line-height:1.2;
+    margin-bottom:8px;
+  }
+
+  .lesson-subtitle {
+    font-size:15px;
+    color:var(--text2);
+    line-height:1.6;
+    margin-bottom:32px;
+    max-width:680px;
+  }
+
+  /* ─── CARDS ──────────────────────────────────────────────── */
+  .cards {
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+    gap:14px;
+    margin:20px 0;
+  }
+
+  .cards.cols-2 { grid-template-columns:repeat(2,1fr); }
+  .cards.cols-3 { grid-template-columns:repeat(3,1fr); }
+  .cards.cols-4 { grid-template-columns:repeat(4,1fr); }
+
+  .card {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:18px;
+    transition:border-color 0.2s, transform 0.2s;
+  }
+
+  .card:hover {
+    border-color:rgba(210,168,255,0.35);
+    transform:translateY(-2px);
+  }
+
+  .card-icon {
+    font-size:22px;
+    margin-bottom:10px;
+  }
+
+  .card-title {
+    font-size:13px;
+    font-weight:600;
+    color:var(--text);
+    margin-bottom:5px;
+  }
+
+  .card-text {
+    font-size:12px;
+    color:var(--text2);
+    line-height:1.5;
+  }
+
+  /* ─── CODE BLOCKS ─────────────────────────────────────────── */
+  .code-block {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    overflow:hidden;
+    margin:16px 0;
+  }
+
+  .code-header {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:10px 16px;
+    background:var(--bg3);
+    border-bottom:1px solid var(--border);
+  }
+
+  .code-lang {
+    font-size:11px;
+    font-weight:600;
+    color:var(--text3);
+    text-transform:uppercase;
+    letter-spacing:0.5px;
+  }
+
+  .code-dots {
+    display:flex;
+    gap:5px;
+  }
+
+  .code-dots span {
+    width:10px;
+    height:10px;
+    border-radius:50%;
+  }
+
+  .code-dots .dot-r { background:#f78166; }
+  .code-dots .dot-y { background:#e3b341; }
+  .code-dots .dot-g { background:#3fb950; }
+
+  .code-body {
+    padding:18px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:13px;
+    line-height:1.7;
+    color:#e6edf3;
+    overflow-x:auto;
+    white-space:pre;
+  }
+
+  .code-body::-webkit-scrollbar { height:4px; }
+  .code-body::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+  /* Syntax highlight classes */
+  .kw  { color:#ff7b72; }
+  .str { color:#a5d6ff; }
+  .cm  { color:var(--text3); font-style:italic; }
+  .fn  { color:#d2a8ff; }
+  .num { color:#f2cc60; }
+  .var { color:#ffa657; }
+  .op  { color:#79c0ff; }
+  .key { color:#58a6ff; }
+
+  /* ─── INFO / WARN / OK BOXES ─────────────────────────────── */
+  .info-box, .warn-box, .ok-box, .err-box {
+    display:flex;
+    gap:12px;
+    padding:14px 16px;
+    border-radius:var(--radius-sm);
+    margin:14px 0;
+    font-size:13px;
+    line-height:1.6;
+  }
+
+  .info-box {
+    background:rgba(88,166,255,0.07);
+    border:1px solid rgba(88,166,255,0.2);
+  }
+
+  .warn-box {
+    background:rgba(227,179,65,0.07);
+    border:1px solid rgba(227,179,65,0.25);
+  }
+
+  .ok-box {
+    background:rgba(63,185,80,0.07);
+    border:1px solid rgba(63,185,80,0.2);
+  }
+
+  .err-box {
+    background:rgba(247,129,102,0.07);
+    border:1px solid rgba(247,129,102,0.2);
+  }
+
+  .box-icon { font-size:16px; flex-shrink:0; margin-top:1px; }
+  .box-text { color:var(--text2); }
+  .box-text strong { color:var(--text); }
+
+  /* ─── SECTION HEADINGS ───────────────────────────────────── */
+  .section-title {
+    font-size:16px;
+    font-weight:600;
+    color:var(--text);
+    margin:28px 0 12px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+
+  .section-title::after {
+    content:'';
+    flex:1;
+    height:1px;
+    background:var(--border);
+  }
+
+  /* ─── DIRECTORY TREE ─────────────────────────────────────── */
+  .directory-tree {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:18px 20px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:12.5px;
+    line-height:1.8;
+    margin:16px 0;
+    overflow-x:auto;
+  }
+
+  .dir-line { display:flex; align-items:baseline; gap:6px; white-space:nowrap; }
+  .dir-indent-1 { padding-left:20px; }
+  .dir-indent-2 { padding-left:40px; }
+  .dir-indent-3 { padding-left:60px; }
+  .dir-icon { font-size:13px; flex-shrink:0; }
+  .dir-name { color:var(--accent2); }
+  .dir-name.dir { color:var(--accent); }
+  .dir-highlight { color:var(--accent3); font-weight:600; }
+  .dir-comment { color:var(--text3); font-style:italic; font-size:11.5px; }
+  .dir-tree-char { color:var(--text3); }
+
+  /* ─── TABLES ──────────────────────────────────────────────── */
+  .event-table {
+    width:100%;
+    border-collapse:collapse;
+    margin:16px 0;
+    font-size:13px;
+  }
+
+  .event-table th {
+    background:var(--bg3);
+    color:var(--text2);
+    font-weight:600;
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.5px;
+    padding:10px 14px;
+    text-align:left;
+    border-bottom:1px solid var(--border);
+  }
+
+  .event-table td {
+    padding:10px 14px;
+    border-bottom:1px solid rgba(210,168,255,0.06);
+    color:var(--text2);
+    vertical-align:top;
+    line-height:1.5;
+  }
+
+  .event-table tr:last-child td { border-bottom:none; }
+  .event-table tr:hover td { background:rgba(255,255,255,0.02); }
+  .event-table td:first-child { color:var(--accent2); font-family:'JetBrains Mono',monospace; font-size:12px; }
+
+  .tag {
+    display:inline-block;
+    padding:2px 8px;
+    border-radius:4px;
+    font-size:11px;
+    font-weight:600;
+    font-family:'JetBrains Mono',monospace;
+  }
+
+  .tag-green { background:rgba(63,185,80,0.15); color:var(--accent3); }
+  .tag-blue  { background:rgba(88,166,255,0.15); color:var(--accent2); }
+  .tag-purple{ background:rgba(210,168,255,0.15); color:var(--accent); }
+  .tag-red   { background:rgba(247,129,102,0.15); color:var(--accent4); }
+  .tag-yellow{ background:rgba(227,179,65,0.15); color:var(--accent5); }
+
+  /* ─── ARCHITECTURE DIAGRAM ───────────────────────────────── */
+  .arch-diagram {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:24px;
+    margin:16px 0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:0;
+    flex-wrap:wrap;
+    row-gap:16px;
+  }
+
+  .arch-box {
+    background:var(--bg3);
+    border:1px solid var(--border);
+    border-radius:var(--radius-sm);
+    padding:12px 18px;
+    text-align:center;
+    min-width:120px;
+  }
+
+  .arch-box-title {
+    font-size:12px;
+    font-weight:600;
+    color:var(--text);
+    margin-bottom:3px;
+  }
+
+  .arch-box-sub {
+    font-size:10px;
+    color:var(--text3);
+    font-family:'JetBrains Mono',monospace;
+  }
+
+  .arch-box.primary { border-color:rgba(210,168,255,0.4); }
+  .arch-box.secondary { border-color:rgba(88,166,255,0.4); }
+  .arch-box.tertiary { border-color:rgba(63,185,80,0.4); }
+
+  .arch-arrow {
+    font-size:18px;
+    color:var(--text3);
+    padding:0 8px;
+    flex-shrink:0;
+  }
+
+  /* ─── STEP LIST ───────────────────────────────────────────── */
+  .step-list {
+    list-style:none;
+    margin:16px 0;
+  }
+
+  .step-item {
+    display:flex;
+    gap:14px;
+    padding:14px 0;
+    border-bottom:1px solid rgba(210,168,255,0.06);
+  }
+
+  .step-item:last-child { border-bottom:none; }
+
+  .step-num {
+    width:26px;
+    height:26px;
+    border-radius:50%;
+    background:linear-gradient(135deg,rgba(210,168,255,0.2),rgba(88,166,255,0.2));
+    border:1px solid var(--border);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:11px;
+    font-weight:700;
+    color:var(--accent);
+    flex-shrink:0;
+    margin-top:1px;
+  }
+
+  .step-content { flex:1; }
+  .step-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:4px; }
+  .step-desc { font-size:12px; color:var(--text2); line-height:1.6; }
+
+  /* ─── DO / DON'T TABLE ───────────────────────────────────── */
+  .dos-donts {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+    margin:16px 0;
+  }
+
+  .dos-col, .donts-col {
+    background:var(--bg2);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    overflow:hidden;
+  }
+
+  .dos-col { border-top:2px solid var(--accent3); }
+  .donts-col { border-top:2px solid var(--accent4); }
+
+  .col-header {
+    padding:12px 16px;
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.5px;
+    text-transform:uppercase;
+    background:var(--bg3);
+    border-bottom:1px solid var(--border);
+  }
+
+  .dos-col .col-header { color:var(--accent3); }
+  .donts-col .col-header { color:var(--accent4); }
+
+  .col-list { list-style:none; padding:12px 16px; }
+
+  .col-list li {
+    font-size:12.5px;
+    color:var(--text2);
+    padding:6px 0;
+    border-bottom:1px solid rgba(255,255,255,0.03);
+    display:flex;
+    gap:8px;
+    align-items:flex-start;
+    line-height:1.5;
+  }
+
+  .col-list li:last-child { border-bottom:none; }
+  .col-list li .li-icon { flex-shrink:0; margin-top:1px; }
+
+  /* ─── INLINE CODE ─────────────────────────────────────────── */
+  code {
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px;
+    background:rgba(210,168,255,0.1);
+    color:var(--accent);
+    padding:2px 6px;
+    border-radius:4px;
+  }
+
+  /* ─── NAVIGATION BUTTONS ─────────────────────────────────── */
+  .lesson-nav {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-top:40px;
+    padding-top:24px;
+    border-top:1px solid var(--border);
+  }
+
+  .complete-btn {
+    padding:9px 20px;
+    border-radius:var(--radius-sm);
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    border:none;
+    transition:all 0.2s;
+    display:flex;
+    align-items:center;
+    gap:6px;
+  }
+
+  .complete-btn.primary {
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    color:#0d1117;
+  }
+
+  .complete-btn.primary:hover { opacity:0.88; transform:translateY(-1px); }
+
+  .complete-btn.secondary {
+    background:var(--bg3);
+    color:var(--text2);
+    border:1px solid var(--border);
+  }
+
+  .complete-btn.secondary:hover { border-color:var(--accent); color:var(--accent); }
+
+  .complete-btn.done {
+    background:rgba(63,185,80,0.15);
+    color:var(--accent3);
+    border:1px solid rgba(63,185,80,0.3);
+  }
+
+  .spacer { flex:1; }
+
+  /* ─── RESPONSIVE ──────────────────────────────────────────── */
+  @media(max-width:768px) {
+    .sidebar { width:220px; min-width:220px; }
+    .lesson { padding:24px 20px 40px; }
+    .cards.cols-3, .cards.cols-4 { grid-template-columns:1fr 1fr; }
+    .dos-donts { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ─── SIDEBAR ─────────────────────────────────────────────── -->
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">
+      <div class="logo-icon">F</div>
+      <div>
+        <div class="sidebar-title">FluidMCP</div>
+        <div class="sidebar-subtitle">Feature Tutorial</div>
+      </div>
+    </div>
+    <div class="sidebar-progress">
+      <div class="progress-label">
+        <span>Progress</span>
+        <span id="prog-label">0 / 8</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="prog-fill" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+  <ul class="nav-list" id="nav-list"></ul>
+</aside>
+
+<!-- ─── MAIN ─────────────────────────────────────────────────── -->
+<main class="main" id="main"></main>
+
+<script>
+/* ─────────────────────────────────────────────────────────────
+   LESSONS DATA
+   ───────────────────────────────────────────────────────────── */
+const lessons = [
+
+/* ═══════════════════════════════════════════════════════ L1 */
+{
+  id:1,
+  title:`What is <code>fmcp serve</code>?`,
+  sub:`A persistent FastAPI gateway for dynamic MCP server management with MongoDB state persistence.`,
+  content:`
+<div class="section-title">&#x1F4A1; Command Overview</div>
+<p style="color:var(--text2);font-size:14px;line-height:1.7;margin-bottom:16px;">
+  <code>fmcp serve</code> starts a long-running <strong>FastAPI gateway</strong> on port <strong>8099</strong> that manages MCP servers
+  dynamically through a REST API. Unlike <code>fmcp run</code>, which blocks the terminal and bundles servers from a static config file,
+  <code>fmcp serve</code> stays alive and lets you add, start, stop, and inspect servers at runtime via HTTP calls.
+</p>
+
+<div class="cards cols-2">
+  <div class="card">
+    <div class="card-icon">&#x1F6AB;</div>
+    <div class="card-title">fmcp run &mdash; Old approach</div>
+    <div class="card-text">Reads a config file once, starts all servers, then <strong>blocks the process</strong>. Cannot add servers at runtime. No REST API. No state persistence.</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x2705;</div>
+    <div class="card-title">fmcp serve &mdash; New approach</div>
+    <div class="card-text">Starts a <strong>persistent gateway</strong>. Servers are added via REST API. State stored in MongoDB. Survives restarts. Deployable to Railway / Docker.</div>
+  </div>
+</div>
+
+<div class="section-title">&#x1F3D7;&#xFE0F; Architecture Overview</div>
+
+<div class="arch-diagram">
+  <div class="arch-box">
+    <div class="arch-box-title">CLI / REST Client</div>
+    <div class="arch-box-sub">curl / your app</div>
+  </div>
+  <div class="arch-arrow">&#x2192;</div>
+  <div class="arch-box primary">
+    <div class="arch-box-title">FastAPI Gateway</div>
+    <div class="arch-box-sub">port 8099</div>
+  </div>
+  <div class="arch-arrow">&#x21C4;</div>
+  <div class="arch-box secondary">
+    <div class="arch-box-title">ServerManager</div>
+    <div class="arch-box-sub">process lifecycle</div>
+  </div>
+  <div class="arch-arrow">&#x2192;</div>
+  <div class="arch-box tertiary">
+    <div class="arch-box-title">MongoDB</div>
+    <div class="arch-box-sub">state persistence</div>
+  </div>
+</div>
+
+<div class="info-box">
+  <span class="box-icon">&#x2139;&#xFE0F;</span>
+  <div class="box-text">
+    <strong>How the flow works:</strong> A REST client sends a <code>POST /api/servers</code> request.
+    The FastAPI gateway saves the config to MongoDB via <code>DatabaseManager</code>, then the
+    <code>ServerManager</code> spawns the actual MCP server subprocess. On restart, all server
+    configs are reloaded from MongoDB automatically.
+  </div>
+</div>
+
+<div class="section-title">&#x2728; Key Benefits</div>
+<div class="cards cols-4">
+  <div class="card">
+    <div class="card-icon">&#x1F504;</div>
+    <div class="card-title">Persistent State</div>
+    <div class="card-text">Server configs survive container restarts via MongoDB</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F512;</div>
+    <div class="card-title">Bearer Token Auth</div>
+    <div class="card-text">Secure every endpoint with timing-safe token validation</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F680;</div>
+    <div class="card-title">Railway Ready</div>
+    <div class="card-text">Production Dockerfile included, auto-detects PORT env var</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F527;</div>
+    <div class="card-title">Dynamic Mgmt</div>
+    <div class="card-text">Add / remove / restart servers with a single HTTP call</div>
+  </div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L2 */
+{
+  id:2,
+  title:`Directory Structure`,
+  sub:`Every file involved in the serve command — what it is, what it does, and what to look at first.`,
+  content:`
+<div class="section-title">&#x1F4C1; Relevant File Tree</div>
+
+<div class="directory-tree">
+<div class="dir-line"><span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">fluidmcp/</span></div>
+<div class="dir-line dir-indent-1"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">cli/</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">cli.py</span>           <span class="dir-comment"># CLI argument parser &mdash; serve command entry point</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">server.py</span>        <span class="dir-comment"># FastAPI app creation, startup, connect_with_retry()</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">auth.py</span>          <span class="dir-comment"># Bearer token auth: verify_token(), secrets.compare_digest()</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">api/</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">management.py</span>    <span class="dir-comment"># All REST API route handlers (40+ endpoints)</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">inspector.py</span>     <span class="dir-comment"># MCP inspector WebSocket sessions</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">models/</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">api.py</span>           <span class="dir-comment"># Pydantic request/response models</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">repositories/</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">database.py</span>      <span class="dir-comment"># MongoDB async driver, DatabaseManager, collections setup</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">memory.py</span>        <span class="dir-comment"># In-memory fallback backend (dev/testing)</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">base.py</span>          <span class="dir-comment"># PersistenceBackend abstract interface</span></div>
+<div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">services/</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">server_manager.py</span> <span class="dir-comment"># MCP server process lifecycle, MCPHealthMonitor</span></div>
+<div class="dir-line dir-indent-1"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">Dockerfile</span>       <span class="dir-comment"># Production container (Railway deployment)</span></div>
+</div>
+
+<div class="section-title">&#x1F4CB; Component Relationship</div>
+<table class="event-table">
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Purpose</th>
+      <th>Key Functions / Classes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>cli.py</td>
+      <td>Parses <code>fmcp serve</code> sub-command and dispatches to <code>server.run()</code></td>
+      <td><code>serve_command()</code></td>
+    </tr>
+    <tr>
+      <td>server.py</td>
+      <td>FastAPI app factory, MongoDB retry logic, graceful shutdown</td>
+      <td><code>create_app()</code>, <code>connect_with_retry()</code>, <code>main()</code>, <code>run()</code></td>
+    </tr>
+    <tr>
+      <td>auth.py</td>
+      <td>Bearer token validation; used as FastAPI dependency on every protected route</td>
+      <td><code>verify_token()</code>, <code>get_token()</code>, <code>_validate_bearer_token()</code></td>
+    </tr>
+    <tr>
+      <td>api/management.py</td>
+      <td>All REST route handlers — servers, LLM models, chat completions, image gen</td>
+      <td><code>router</code>, 40+ endpoint functions</td>
+    </tr>
+    <tr>
+      <td>repositories/database.py</td>
+      <td>Async MongoDB driver wrapper; creates collections &amp; indexes on first connect</td>
+      <td><code>DatabaseManager</code>, <code>init_db()</code>, <code>connect()</code></td>
+    </tr>
+    <tr>
+      <td>repositories/memory.py</td>
+      <td>Dict-backed in-memory store; implements same <code>PersistenceBackend</code> interface</td>
+      <td><code>InMemoryBackend</code></td>
+    </tr>
+    <tr>
+      <td>services/server_manager.py</td>
+      <td>Spawns and tracks MCP server subprocesses; auto-restarts on crash</td>
+      <td><code>ServerManager</code>, <code>MCPHealthMonitor</code></td>
+    </tr>
+    <tr>
+      <td>Dockerfile</td>
+      <td>Production image — builds frontend, installs dependencies, runs <code>fmcp serve</code></td>
+      <td>CMD, HEALTHCHECK, ENV defaults</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="ok-box">
+  <span class="box-icon">&#x1F50D;</span>
+  <div class="box-text">
+    <strong>Where to start reading:</strong> Open <code>server.py</code> first — it wires everything together.
+    Trace <code>main()</code> &#x2192; <code>connect_with_retry()</code> &#x2192; <code>create_app()</code> to understand the full startup sequence.
+  </div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L3 */
+{
+  id:3,
+  title:`CLI Arguments & Configuration`,
+  sub:`Every flag accepted by fmcp serve, with dev vs production comparison.`,
+  content:`
+<div class="section-title">&#x1F6A9; Basic Usage</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Minimal development start</span>
+fmcp serve --in-memory --allow-insecure
+
+<span class="cm"># Production start with MongoDB and auth</span>
+fmcp serve \
+  --host 0.0.0.0 \
+  --port 8099 \
+  --secure \
+  --mongodb-uri mongodb+srv://user:pass@cluster.net/fluidmcp \
+  --database fluidmcp \
+  --require-persistence</div>
+</div>
+
+<div class="section-title">&#x1F4CB; All Flags Reference</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Flag</th><th>Default</th><th>Env Override</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>--host</td>
+      <td><code>0.0.0.0</code></td>
+      <td>&mdash;</td>
+      <td>Bind address for the Uvicorn server</td>
+    </tr>
+    <tr>
+      <td>--port</td>
+      <td><code>8099</code></td>
+      <td><code>PORT</code></td>
+      <td>TCP port to listen on</td>
+    </tr>
+    <tr>
+      <td>--mongodb-uri</td>
+      <td><code>mongodb://localhost:27017</code></td>
+      <td><code>MONGODB_URI</code></td>
+      <td>Full MongoDB connection string</td>
+    </tr>
+    <tr>
+      <td>--database</td>
+      <td><code>fluidmcp</code></td>
+      <td><code>FMCP_DATABASE</code></td>
+      <td>MongoDB database name</td>
+    </tr>
+    <tr>
+      <td>--secure</td>
+      <td>off</td>
+      <td><code>FMCP_SECURE_MODE=true</code></td>
+      <td>Enable bearer token authentication on all endpoints</td>
+    </tr>
+    <tr>
+      <td>--token</td>
+      <td>auto-generated</td>
+      <td><code>FMCP_BEARER_TOKEN</code></td>
+      <td>Supply a specific bearer token instead of generating one</td>
+    </tr>
+    <tr>
+      <td>--allow-insecure</td>
+      <td>off</td>
+      <td>&mdash;</td>
+      <td>Allow HTTP without auth (development only)</td>
+    </tr>
+    <tr>
+      <td>--require-persistence</td>
+      <td>off</td>
+      <td>&mdash;</td>
+      <td>Exit immediately if MongoDB is unreachable (fail-fast)</td>
+    </tr>
+    <tr>
+      <td>--persistence-mode</td>
+      <td><code>mongodb</code></td>
+      <td>&mdash;</td>
+      <td>Choose <code>mongodb</code> or <code>memory</code> backend</td>
+    </tr>
+    <tr>
+      <td>--in-memory</td>
+      <td>off</td>
+      <td>&mdash;</td>
+      <td>Shorthand for <code>--persistence-mode memory</code></td>
+    </tr>
+    <tr>
+      <td>--allowed-origins</td>
+      <td>localhost only</td>
+      <td><code>FMCP_ALLOWED_ORIGINS</code></td>
+      <td>Comma-separated CORS origins (e.g. <code>https://app.example.com</code>)</td>
+    </tr>
+    <tr>
+      <td>--allow-all-origins</td>
+      <td>off</td>
+      <td>&mdash;</td>
+      <td>Allow all CORS origins with <code>*</code> — DEV ONLY, security risk</td>
+    </tr>
+    <tr>
+      <td>--verbose</td>
+      <td>off</td>
+      <td>&mdash;</td>
+      <td>Enable debug-level logging output</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F504; Dev vs Production Comparison</div>
+<div class="cards cols-2">
+  <div class="card">
+    <div class="card-icon">&#x1F6E0;&#xFE0F;</div>
+    <div class="card-title">Development Mode</div>
+    <div style="margin-top:10px;">
+      <div class="code-block" style="margin:0">
+        <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+        <div class="code-body">fmcp serve \
+  --in-memory \
+  --allow-insecure \
+  --allow-all-origins \
+  --port 8099</div>
+      </div>
+    </div>
+    <div class="card-text" style="margin-top:8px;">No MongoDB required. No auth. Data lost on restart. Perfect for local testing.</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F3ED;</div>
+    <div class="card-title">Production Mode</div>
+    <div style="margin-top:10px;">
+      <div class="code-block" style="margin:0">
+        <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+        <div class="code-body">fmcp serve \
+  --secure \
+  --mongodb-uri \${MONGODB_URI} \
+  --require-persistence \
+  --allowed-origins \
+  "https://app.example.com"</div>
+      </div>
+    </div>
+    <div class="card-text" style="margin-top:8px;">Auth enforced. Fails fast if MongoDB down. CORS locked down. Always use this in Railway/Docker.</div>
+  </div>
+</div>
+
+<div class="warn-box">
+  <span class="box-icon">&#x26A0;&#xFE0F;</span>
+  <div class="box-text">
+    <strong>Never use <code>--allow-insecure</code> or <code>--allow-all-origins</code> in production.</strong>
+    These flags disable authentication and open CORS to every origin respectively — they exist solely for local developer convenience.
+  </div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L4 */
+{
+  id:4,
+  title:`MongoDB Connection Setup`,
+  sub:`Connection pooling, timeouts, collections, indexes, and the retry logic inside server.py.`,
+  content:`
+<div class="section-title">&#x1F50C; Environment Variables</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>MONGODB_URI</td>
+      <td><code>mongodb://localhost:27017</code></td>
+      <td>Full MongoDB connection string, including credentials</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_SERVER_TIMEOUT</td>
+      <td><code>30000</code> ms</td>
+      <td>Max time to find a reachable MongoDB server</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_CONNECT_TIMEOUT</td>
+      <td><code>10000</code> ms</td>
+      <td>Timeout for the initial TCP connection</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_SOCKET_TIMEOUT</td>
+      <td><code>45000</code> ms</td>
+      <td>Timeout for individual socket reads/writes</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_MAX_POOL_SIZE</td>
+      <td><code>50</code></td>
+      <td>Maximum connections kept in the connection pool</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_MIN_POOL_SIZE</td>
+      <td><code>10</code></td>
+      <td>Minimum connections maintained in the pool</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_ALLOW_INVALID_CERTS</td>
+      <td><code>false</code></td>
+      <td>Disable TLS cert validation — DEV ONLY, MitM risk</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F501; Retry Logic &mdash; <code>connect_with_retry()</code> in server.py</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">python</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># server.py — simplified view of the retry loop</span>
+<span class="kw">async def</span> <span class="fn">connect_with_retry</span>(db_manager, max_retries=<span class="num">3</span>, require_persistence=<span class="kw">False</span>):
+    <span class="kw">for</span> attempt <span class="kw">in</span> <span class="fn">range</span>(<span class="num">1</span>, max_retries + <span class="num">1</span>):
+        db_connected = <span class="kw">await</span> db_manager.<span class="fn">init_db</span>()
+        <span class="kw">if</span> db_connected:
+            <span class="kw">return True</span>
+
+        wait_time = <span class="num">2</span> ** attempt   <span class="cm"># Exponential backoff: 2s &#x2192; 4s &#x2192; 8s</span>
+        <span class="kw">await</span> asyncio.<span class="fn">sleep</span>(wait_time)
+
+    <span class="kw">if</span> require_persistence:
+        <span class="kw">raise</span> <span class="fn">RuntimeError</span>(<span class="str">"MongoDB required but unavailable"</span>)
+    <span class="kw">return False</span>   <span class="cm"># Degrade gracefully (warn, continue in-memory)</span></div>
+</div>
+
+<div class="info-box">
+  <span class="box-icon">&#x23F1;&#xFE0F;</span>
+  <div class="box-text">
+    The Dockerfile <code>HEALTHCHECK</code> uses a 40-second start period specifically to allow the full
+    retry sequence (2 + 4 + 8 = 14 s of waits) plus MongoDB DNS/startup time before Railway marks the container unhealthy.
+  </div>
+</div>
+
+<div class="section-title">&#x1F4BE; MongoDB Collections</div>
+<p style="color:var(--text2);font-size:13px;margin-bottom:12px;">All collections are created automatically by <code>DatabaseManager.init_db()</code> on first connect:</p>
+<table class="event-table">
+  <thead>
+    <tr><th>Collection</th><th>Index</th><th>Purpose</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>fluidmcp_servers</td>
+      <td>Unique on <code>id</code></td>
+      <td>Server configs — command, args, env, metadata</td>
+    </tr>
+    <tr>
+      <td>fluidmcp_server_instances</td>
+      <td>Index on <code>server_id</code></td>
+      <td>Runtime instance state — PID, start time, status</td>
+    </tr>
+    <tr>
+      <td>fluidmcp_server_logs</td>
+      <td>Capped collection 100 MB</td>
+      <td>Stdout / stderr output from running MCP servers</td>
+    </tr>
+    <tr>
+      <td>fluidmcp_llm_models</td>
+      <td>Unique on <code>model_id</code></td>
+      <td>Registered LLM model configurations (Replicate, vLLM, etc.)</td>
+    </tr>
+    <tr>
+      <td>fluidmcp_crash_events</td>
+      <td>TTL 30 days</td>
+      <td>Crash reports from server subprocess exits</td>
+    </tr>
+    <tr>
+      <td>fluidmcp_audit_log</td>
+      <td>&mdash;</td>
+      <td>API call audit trail (who did what, when)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F9EA; In-Memory Fallback</div>
+<div class="cards cols-2">
+  <div class="card">
+    <div class="card-icon">&#x1F4BE;</div>
+    <div class="card-title">Use MongoDB when&hellip;</div>
+    <div class="card-text">Running in production, Railway/Docker, or any environment where server configs must survive restarts.</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x26A1;</div>
+    <div class="card-title">Use --in-memory when&hellip;</div>
+    <div class="card-text">Local development, CI tests, or quick demos where data loss on restart is acceptable.</div>
+  </div>
+</div>
+
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Start with in-memory backend (no MongoDB needed)</span>
+fmcp serve --in-memory --port 8099
+
+<span class="cm"># Equivalent long form</span>
+fmcp serve --persistence-mode memory --port 8099</div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L5 */
+{
+  id:5,
+  title:`Bearer Token Authentication`,
+  sub:`How tokens are generated, stored, validated, and why Railway deployments require a fixed token.`,
+  content:`
+<div class="section-title">&#x1F511; How Authentication Works</div>
+<div class="cards cols-3">
+  <div class="card">
+    <div class="card-icon">&#x1F3AF;</div>
+    <div class="card-title">1. Token Source</div>
+    <div class="card-text">Token comes from: <code>--token</code> flag &#x2192; <code>FMCP_BEARER_TOKEN</code> env &#x2192; auto-generated via <code>secrets.token_urlsafe(32)</code></div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F4C2;</div>
+    <div class="card-title">2. Token Storage</div>
+    <div class="card-text">Auto-generated tokens are saved to <code>~/.fmcp/tokens/current_token.txt</code> with <code>chmod 600</code> (owner read/write only)</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F510;</div>
+    <div class="card-title">3. Validation</div>
+    <div class="card-text"><code>auth.py</code> checks <code>Authorization: Bearer &lt;token&gt;</code> header using <code>secrets.compare_digest()</code> for timing-safe comparison</div>
+  </div>
+</div>
+
+<div class="section-title">&#x1F4CE; The auth.py Flow</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">python</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># auth.py — simplified</span>
+<span class="kw">def</span> <span class="fn">verify_token</span>(credentials = <span class="fn">Depends</span>(security)) -> <span class="kw">None</span>:
+    bearer_token = os.environ.<span class="fn">get</span>(<span class="str">"FMCP_BEARER_TOKEN"</span>)
+    secure_mode  = os.environ.<span class="fn">get</span>(<span class="str">"FMCP_SECURE_MODE"</span>) == <span class="str">"true"</span>
+
+    <span class="kw">if not</span> secure_mode:
+        <span class="kw">return None</span>               <span class="cm"># Public access when auth is off</span>
+
+    <span class="kw">if not</span> credentials <span class="kw">or</span> credentials.scheme.lower() != <span class="str">"bearer"</span>:
+        <span class="kw">raise</span> <span class="fn">HTTPException</span>(<span class="num">401</span>, <span class="str">"Invalid or missing authorization token"</span>)
+
+    <span class="cm"># Timing-safe comparison prevents timing oracle attacks</span>
+    <span class="kw">if not</span> secrets.<span class="fn">compare_digest</span>(credentials.credentials, bearer_token):
+        <span class="kw">raise</span> <span class="fn">HTTPException</span>(<span class="num">401</span>, <span class="str">"Invalid or missing authorization token"</span>)</div>
+</div>
+
+<div class="warn-box">
+  <span class="box-icon">&#x26A0;&#xFE0F;</span>
+  <div class="box-text">
+    <strong>Critical for Railway:</strong> Railway containers are <em>ephemeral</em>. Every restart destroys the filesystem.
+    If you rely on an auto-generated token, <strong>it regenerates on every deploy/restart</strong>, breaking all API clients.
+    <br><br>
+    <strong>Fix:</strong> Generate once with <code>openssl rand -hex 32</code> and set it as <code>FMCP_BEARER_TOKEN</code>
+    in the Railway environment variables dashboard.
+  </div>
+</div>
+
+<div class="section-title">&#x1F527; Token Management Commands</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Show current token (reads ~/.fmcp/tokens/current_token.txt)</span>
+fmcp token show
+
+<span class="cm"># Generate a new token and save it</span>
+fmcp token regenerate
+
+<span class="cm"># Remove saved token</span>
+fmcp token clear
+
+<span class="cm"># Generate a production token manually (recommended for Railway)</span>
+openssl rand -hex 32</div>
+</div>
+
+<div class="section-title">&#x1F4E1; Using the Token in API Calls</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Every protected endpoint requires Authorization header</span>
+curl -X GET http://localhost:8099/api/servers \
+  -H <span class="str">"Authorization: Bearer YOUR_TOKEN_HERE"</span>
+
+<span class="cm"># /health is intentionally public (no auth required)</span>
+curl http://localhost:8099/health</div>
+</div>
+
+<div class="section-title">&#x1F512; Security Properties</div>
+<div class="cards cols-2">
+  <div class="card">
+    <div class="card-icon">&#x23F1;&#xFE0F;</div>
+    <div class="card-title">Timing-Safe Comparison</div>
+    <div class="card-text"><code>secrets.compare_digest()</code> takes the same time whether the token matches or not, preventing timing oracle attacks that can reconstruct tokens bit-by-bit.</div>
+  </div>
+  <div class="card">
+    <div class="card-icon">&#x1F4C1;</div>
+    <div class="card-title">Restrictive File Permissions</div>
+    <div class="card-text">Saved token files use <code>chmod 600</code> (read/write for owner only). The parent <code>~/.fmcp</code> directory uses <code>chmod 700</code>.</div>
+  </div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L6 */
+{
+  id:6,
+  title:`REST API Endpoints`,
+  sub:`Every endpoint group with curl examples — from adding a server to executing a tool.`,
+  content:`
+<div class="section-title">&#x1F5C2;&#xFE0F; Server Management Endpoints</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Method + Path</th><th>Auth</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>POST /api/servers</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Register a new MCP server configuration</td>
+    </tr>
+    <tr>
+      <td>GET /api/servers</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>List all registered servers and their status</td>
+    </tr>
+    <tr>
+      <td>GET /api/servers/{id}</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Get a single server&apos;s full configuration</td>
+    </tr>
+    <tr>
+      <td>POST /api/servers/{id}/start</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Spawn the MCP server subprocess</td>
+    </tr>
+    <tr>
+      <td>POST /api/servers/{id}/stop</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Gracefully terminate the server process</td>
+    </tr>
+    <tr>
+      <td>POST /api/servers/{id}/restart</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Stop then start the server</td>
+    </tr>
+    <tr>
+      <td>GET /api/servers/{id}/status</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Runtime state — PID, uptime, last exit code</td>
+    </tr>
+    <tr>
+      <td>GET /api/servers/{id}/logs</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Tail stdout/stderr from the server process</td>
+    </tr>
+    <tr>
+      <td>GET /api/servers/{id}/tools</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>List MCP tools exposed by this server</td>
+    </tr>
+    <tr>
+      <td>POST /api/servers/{id}/tools/{tool}/run</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Execute an MCP tool with provided arguments</td>
+    </tr>
+    <tr>
+      <td>DELETE /api/servers/{id}</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Remove server config from MongoDB</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F916; LLM Model Endpoints</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Method + Path</th><th>Auth</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>POST /api/llm/models</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Register a new LLM model (Replicate, vLLM, Ollama)</td>
+    </tr>
+    <tr>
+      <td>GET /api/llm/models</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>List all registered LLM models</td>
+    </tr>
+    <tr>
+      <td>POST /api/llm/v1/chat/completions</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>OpenAI-compatible chat completion endpoint</td>
+    </tr>
+    <tr>
+      <td>POST /api/llm/v1/generate/image</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Text-to-image generation (Replicate FLUX, etc.)</td>
+    </tr>
+    <tr>
+      <td>POST /api/llm/v1/generate/video</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Text-to-video generation</td>
+    </tr>
+    <tr>
+      <td>GET /api/llm/predictions/{id}</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Poll generation status for async predictions</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F4CA; System Endpoints</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Path</th><th>Auth</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>GET /health</td>
+      <td><span class="tag tag-green">Public</span></td>
+      <td>Health check — DB status, model counts, version. Used by Railway&apos;s HEALTHCHECK</td>
+    </tr>
+    <tr>
+      <td>GET /metrics</td>
+      <td><span class="tag tag-purple">Bearer</span></td>
+      <td>Prometheus metrics — request counts, latencies, uptime, GPU mem</td>
+    </tr>
+    <tr>
+      <td>GET /docs</td>
+      <td><span class="tag tag-green">Public</span></td>
+      <td>Swagger UI — interactive API documentation</td>
+    </tr>
+    <tr>
+      <td>GET /</td>
+      <td><span class="tag tag-green">Public</span></td>
+      <td>Root JSON with links to docs, health, API</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F4BB; Working Example: Add and Start a Filesystem Server</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Step 1: Start fmcp serve (dev mode, no auth)</span>
+fmcp serve --in-memory --allow-insecure &
+
+<span class="cm"># Step 2: Register a server config (no auth header needed in dev mode)</span>
+curl -X POST http://localhost:8099/api/servers \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "id": "filesystem",
+    "name": "Filesystem Server",
+    "mcp_config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    }
+  }'</span>
+
+<span class="cm"># Step 3: Start the server subprocess</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/start
+
+<span class="cm"># Step 4: List available MCP tools</span>
+curl http://localhost:8099/api/servers/filesystem/tools
+
+<span class="cm"># Step 5: Execute a tool</span>
+curl -X POST \
+  http://localhost:8099/api/servers/filesystem/tools/list_directory/run \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{"path": "/tmp"}'</span></div>
+</div>
+
+<div class="ok-box">
+  <span class="box-icon">&#x1F4A1;</span>
+  <div class="box-text">
+    <strong>In production</strong> (with <code>--secure</code>), add <code>-H "Authorization: Bearer YOUR_TOKEN"</code>
+    to every curl call except <code>/health</code>.
+  </div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L7 */
+{
+  id:7,
+  title:`Railway Deployment`,
+  sub:`Step-by-step guide to deploying fmcp serve on Railway with MongoDB persistence.`,
+  content:`
+<div class="section-title">&#x1F680; Deployment Steps</div>
+<ul class="step-list">
+  <li class="step-item">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <div class="step-title">Add MongoDB Service</div>
+      <div class="step-desc">In Railway dashboard: <strong>New &#x2192; Database &#x2192; MongoDB</strong>. Railway auto-provisions a MongoDB instance and injects <code>MONGODB_URI</code> into your service environment.</div>
+    </div>
+  </li>
+  <li class="step-item">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <div class="step-title">Connect Repository</div>
+      <div class="step-desc">Railway: <strong>New &#x2192; GitHub Repo</strong> &#x2192; select your FluidMCP fork. Railway detects the <code>Dockerfile</code> automatically &mdash; no <code>railway.toml</code> needed.</div>
+    </div>
+  </li>
+  <li class="step-item">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <div class="step-title">Generate Bearer Token</div>
+      <div class="step-desc">Run this locally once and copy the output:
+        <div class="code-block" style="margin:8px 0 0">
+          <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+          <div class="code-body">openssl rand -hex 32
+<span class="cm"># Example output: a3f9e2c8b1d4...</span></div>
+        </div>
+      </div>
+    </div>
+  </li>
+  <li class="step-item">
+    <div class="step-num">4</div>
+    <div class="step-content">
+      <div class="step-title">Set Environment Variables in Railway</div>
+      <div class="step-desc">In your Railway service settings &#x2192; Variables, add these:</div>
+    </div>
+  </li>
+  <li class="step-item">
+    <div class="step-num">5</div>
+    <div class="step-content">
+      <div class="step-title">Deploy</div>
+      <div class="step-desc">Railway auto-deploys on push to your configured branch. Watch the build logs for the MongoDB connection attempt and health check.</div>
+    </div>
+  </li>
+  <li class="step-item">
+    <div class="step-num">6</div>
+    <div class="step-content">
+      <div class="step-title">Verify</div>
+      <div class="step-desc">Call the public health endpoint (no auth required) to confirm everything is running correctly.</div>
+    </div>
+  </li>
+</ul>
+
+<div class="section-title">&#x1F4CB; Required Environment Variables</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Variable</th><th>Source</th><th>Required?</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>MONGODB_URI</td>
+      <td><span class="tag tag-blue">Railway auto</span></td>
+      <td><span class="tag tag-red">Yes</span></td>
+      <td>Auto-injected from the MongoDB service you connected</td>
+    </tr>
+    <tr>
+      <td>FMCP_BEARER_TOKEN</td>
+      <td><span class="tag tag-yellow">Manual</span></td>
+      <td><span class="tag tag-red">Critical</span></td>
+      <td>Must be set manually. Auto-generated token regenerates every restart!</td>
+    </tr>
+    <tr>
+      <td>PORT</td>
+      <td><span class="tag tag-blue">Railway auto</span></td>
+      <td><span class="tag tag-green">Auto</span></td>
+      <td>Railway assigns this; Dockerfile CMD uses <code>\${PORT}</code></td>
+    </tr>
+    <tr>
+      <td>FMCP_ALLOWED_ORIGINS</td>
+      <td><span class="tag tag-yellow">Manual</span></td>
+      <td><span class="tag tag-green">Optional</span></td>
+      <td>Comma-separated CORS origins, e.g. <code>https://app.example.com</code></td>
+    </tr>
+    <tr>
+      <td>FMCP_DATABASE</td>
+      <td><span class="tag tag-yellow">Manual</span></td>
+      <td><span class="tag tag-green">Optional</span></td>
+      <td>MongoDB database name (default: <code>fluidmcp</code>)</td>
+    </tr>
+    <tr>
+      <td>FMCP_MONGODB_SERVER_TIMEOUT</td>
+      <td><span class="tag tag-yellow">Manual</span></td>
+      <td><span class="tag tag-green">Optional</span></td>
+      <td>Server selection timeout in ms (default: 30000)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F40B; Dockerfile CMD</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">dockerfile</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Dockerfile — final CMD (Railway auto-provides PORT and MONGODB_URI)</span>
+<span class="key">CMD</span> fmcp serve \
+    --host 0.0.0.0 \
+    --port <span class="var">\${PORT}</span> \
+    --secure \
+    --mongodb-uri <span class="var">\${MONGODB_URI}</span> \
+    --database <span class="var">\${FMCP_DATABASE:-fluidmcp}</span> \
+    --require-persistence</div>
+</div>
+
+<div class="section-title">&#x2705; Expected Health Check Response</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm"># Verify after deploy (replace with your Railway public URL)</span>
+curl https://your-app.railway.app/health</div>
+</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">json</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body">{
+  <span class="key">"status"</span>: <span class="str">"healthy"</span>,
+  <span class="key">"timestamp"</span>: <span class="str">"2026-04-08T10:00:00Z"</span>,
+  <span class="key">"database"</span>: {
+    <span class="key">"status"</span>: <span class="str">"connected"</span>,
+    <span class="key">"type"</span>: <span class="str">"DatabaseManager"</span>,
+    <span class="key">"persistence_enabled"</span>: <span class="kw">true</span>
+  },
+  <span class="key">"models"</span>: { <span class="key">"total"</span>: <span class="num">0</span>, <span class="key">"by_type"</span>: { <span class="key">"replicate"</span>: <span class="num">0</span> } },
+  <span class="key">"version"</span>: <span class="str">"2.0.0"</span>
+}</div>
+</div>
+
+<div class="warn-box">
+  <span class="box-icon">&#x26A0;&#xFE0F;</span>
+  <div class="box-text">
+    If <code>database.status</code> is <code>"disconnected"</code> or <code>"error"</code>, check that the MongoDB service
+    is linked in Railway and <code>MONGODB_URI</code> is populated. The overall <code>status</code> will show <code>"degraded"</code>
+    rather than <code>"healthy"</code> when the DB is unreachable.
+  </div>
+</div>
+`
+},
+
+/* ═══════════════════════════════════════════════════════ L8 */
+{
+  id:8,
+  title:`Best Practices & Troubleshooting`,
+  sub:`What to do, what to avoid, and how to diagnose the most common issues.`,
+  content:`
+<div class="section-title">&#x2696;&#xFE0F; Do&apos;s and Don&apos;ts</div>
+<div class="dos-donts">
+  <div class="dos-col">
+    <div class="col-header">&#x2705; Do&apos;s</div>
+    <ul class="col-list">
+      <li><span class="li-icon">&#x1F511;</span> Always set <code>FMCP_BEARER_TOKEN</code> manually in Railway — never rely on auto-generation</li>
+      <li><span class="li-icon">&#x1F4BE;</span> Use <code>--require-persistence</code> in production so crashes are loud and obvious</li>
+      <li><span class="li-icon">&#x2601;&#xFE0F;</span> Use MongoDB Atlas for production (not localhost or Railway-managed for critical data)</li>
+      <li><span class="li-icon">&#x1F512;</span> Generate tokens with <code>openssl rand -hex 32</code> (256-bit entropy)</li>
+      <li><span class="li-icon">&#x1F310;</span> Lock down CORS origins with <code>--allowed-origins</code> to your frontend domain</li>
+      <li><span class="li-icon">&#x1F9EA;</span> Use <code>--in-memory</code> for local dev and CI to avoid needing a real MongoDB</li>
+      <li><span class="li-icon">&#x1F4CA;</span> Monitor <code>/health</code> in your uptime checker — it is public and needs no auth</li>
+    </ul>
+  </div>
+  <div class="donts-col">
+    <div class="col-header">&#x274C; Don&apos;ts</div>
+    <ul class="col-list">
+      <li><span class="li-icon">&#x1F6AB;</span> Never use <code>--allow-insecure</code> in production — it disables all auth</li>
+      <li><span class="li-icon">&#x1F6AB;</span> Don&apos;t expose port 8099 publicly without <code>--secure</code> enabled</li>
+      <li><span class="li-icon">&#x1F6AB;</span> Don&apos;t use <code>--in-memory</code> in production — data is lost on every restart</li>
+      <li><span class="li-icon">&#x1F6AB;</span> Don&apos;t pass tokens on the CLI in production (<code>--token abc</code> appears in process list)</li>
+      <li><span class="li-icon">&#x1F6AB;</span> Don&apos;t set <code>FMCP_MONGODB_ALLOW_INVALID_CERTS=true</code> in production — enables MitM attacks</li>
+      <li><span class="li-icon">&#x1F6AB;</span> Don&apos;t use <code>--allow-all-origins</code> — any website can call your API</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-title">&#x1F527; Common Issues and Fixes</div>
+<table class="event-table">
+  <thead>
+    <tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>MongoDB connection failed</td>
+      <td>Wrong URI format or IP not whitelisted</td>
+      <td>Check <code>MONGODB_URI</code> includes credentials. In Atlas, whitelist <code>0.0.0.0/0</code> for Railway (its IPs change)</td>
+    </tr>
+    <tr>
+      <td>HTTP 401 Unauthorized</td>
+      <td>Token mismatch after container restart</td>
+      <td>Set <code>FMCP_BEARER_TOKEN</code> in Railway env vars. Verify with <code>fmcp token show</code> on local</td>
+    </tr>
+    <tr>
+      <td>MCP server not starting</td>
+      <td>Wrong command or missing dependency</td>
+      <td>Check <code>GET /api/servers/{id}/logs</code> for stderr output. Ensure <code>npx</code> / <code>python</code> is in PATH</td>
+    </tr>
+    <tr>
+      <td>Container crash loop on Railway</td>
+      <td>MongoDB unreachable + <code>--require-persistence</code></td>
+      <td>Fix the MongoDB service link in Railway. The crash loop is intentional (fail-fast mode)</td>
+    </tr>
+    <tr>
+      <td>HTTP 500 on protected endpoints</td>
+      <td><code>FMCP_BEARER_TOKEN</code> not set while <code>--secure</code> is on</td>
+      <td>Set <code>FMCP_BEARER_TOKEN</code> env var, or pass <code>--token</code> flag at startup</td>
+    </tr>
+    <tr>
+      <td>CORS error in browser</td>
+      <td>Frontend origin not in allowed list</td>
+      <td>Add your frontend URL to <code>FMCP_ALLOWED_ORIGINS</code> env or <code>--allowed-origins</code> flag</td>
+    </tr>
+    <tr>
+      <td>Tools list is empty</td>
+      <td>Server not started yet</td>
+      <td>Call <code>POST /api/servers/{id}/start</code> first, then wait ~2s for the process to initialize</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="section-title">&#x1F4CB; Quick Reference Cheatsheet</div>
+<div class="code-block">
+  <div class="code-header"><span class="code-lang">bash</span><div class="code-dots"><span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span></div></div>
+  <div class="code-body"><span class="cm">## ─── LOCAL DEV ───────────────────────────────────────</span>
+fmcp serve --in-memory --allow-insecure
+
+<span class="cm">## ─── LOCAL WITH MONGODB ──────────────────────────────</span>
+<span class="kw">export</span> <span class="var">MONGODB_URI</span>=mongodb://localhost:27017
+fmcp serve --secure
+
+<span class="cm">## ─── PRODUCTION LOCALLY ──────────────────────────────</span>
+<span class="kw">export</span> <span class="var">FMCP_BEARER_TOKEN</span>=$(openssl rand -hex 32)
+<span class="kw">export</span> <span class="var">MONGODB_URI</span>=mongodb+srv://user:pass@cluster.net
+fmcp serve --secure --require-persistence
+
+<span class="cm">## ─── TEST AUTH ───────────────────────────────────────</span>
+curl http://localhost:8099/health
+curl -H <span class="str">"Authorization: Bearer \${FMCP_BEARER_TOKEN}"</span> \
+     http://localhost:8099/api/servers
+
+<span class="cm">## ─── ADD + START FIRST SERVER ────────────────────────</span>
+TOKEN=\${FMCP_BEARER_TOKEN}
+curl -X POST http://localhost:8099/api/servers \
+  -H <span class="str">"Authorization: Bearer \${TOKEN}"</span> \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{"id":"fs","mcp_config":{"command":"npx",
+      "args":["-y","@modelcontextprotocol/server-filesystem","/tmp"],
+      "env":{}}}'</span>
+curl -X POST http://localhost:8099/api/servers/fs/start \
+  -H <span class="str">"Authorization: Bearer \${TOKEN}"</span></div>
+</div>
+
+<div class="ok-box">
+  <span class="box-icon">&#x1F3AF;</span>
+  <div class="box-text">
+    <strong>You have completed the fmcp serve tutorial!</strong>
+    You now understand the full lifecycle: CLI flags &#x2192; MongoDB connection &#x2192; Bearer token auth &#x2192;
+    REST API usage &#x2192; Railway deployment. Open <code>server.py</code> and trace <code>main()</code> for the authoritative implementation.
+  </div>
+</div>
+`
+}
+
+]; /* end lessons array */
+
+/* ─────────────────────────────────────────────────────────────
+   BUILD UI
+   ───────────────────────────────────────────────────────────── */
+const navList = document.getElementById('nav-list');
+const mainEl  = document.getElementById('main');
+let currentIdx = 0;
+
+const NAV_LABELS = [
+  "What is fmcp serve?",
+  "Directory Structure",
+  "CLI Arguments",
+  "MongoDB Setup",
+  "Bearer Token Auth",
+  "REST API Endpoints",
+  "Railway Deployment",
+  "Best Practices"
+];
+
+lessons.forEach((l, i) => {
+  /* --- nav item --- */
+  const li = document.createElement('li');
+  li.className = 'nav-item' + (i === 0 ? ' active' : '');
+  li.dataset.idx = i;
+  li.innerHTML = `
+    <div class="nav-badge">${l.id}</div>
+    <div class="nav-label">${NAV_LABELS[i]}</div>
+  `;
+  li.addEventListener('click', () => showLesson(i));
+  navList.appendChild(li);
+
+  /* --- lesson section --- */
+  const sec = document.createElement('section');
+  sec.className = 'lesson' + (i === 0 ? ' active' : '');
+  sec.id = 'lesson-' + l.id;
+
+  const doneClass = isDone(l.id) ? ' done' : '';
+  const doneText  = isDone(l.id) ? '&#x2713; Completed' : 'Mark Complete';
+
+  sec.innerHTML = `
+    <div class="lesson-badge">Lesson ${l.id} of ${lessons.length}</div>
+    <h1 class="lesson-title">${l.title}</h1>
+    <p class="lesson-subtitle">${l.sub}</p>
+    ${l.content}
+    <div class="lesson-nav">
+      ${i > 0 ? `<button class="complete-btn secondary" onclick="showLesson(${i-1})">&#x2190; Previous</button>` : ''}
+      <div class="spacer"></div>
+      <button class="complete-btn${doneClass}" id="done-btn-${l.id}" onclick="markDone(${l.id}, this)">
+        ${doneText}
+      </button>
+      ${i < lessons.length - 1
+        ? `<button class="complete-btn primary" onclick="showLesson(${i+1})">Next &#x2192;</button>`
+        : `<button class="complete-btn primary" onclick="showLesson(0)">&#x1F3E0; Start Over</button>`
+      }
+    </div>
+  `;
+  mainEl.appendChild(sec);
+});
+
+/* ─────────────────────────────────────────────────────────────
+   NAVIGATION
+   ───────────────────────────────────────────────────────────── */
+function showLesson(idx) {
+  if (idx < 0 || idx >= lessons.length) return;
+
+  /* hide current */
+  document.querySelectorAll('.lesson').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+
+  /* show new */
+  document.getElementById('lesson-' + lessons[idx].id).classList.add('active');
+  const navItems = document.querySelectorAll('.nav-item');
+  navItems[idx].classList.add('active');
+
+  currentIdx = idx;
+  mainEl.scrollTop = 0;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   PROGRESS
+   ───────────────────────────────────────────────────────────── */
+function isDone(id) {
+  return localStorage.getItem('fmcp-serve-done-' + id) === '1';
+}
+
+function markDone(id, btn) {
+  const already = isDone(id);
+  if (already) {
+    localStorage.removeItem('fmcp-serve-done-' + id);
+    btn.classList.remove('done');
+    btn.innerHTML = 'Mark Complete';
+  } else {
+    localStorage.setItem('fmcp-serve-done-' + id, '1');
+    btn.classList.add('done');
+    btn.innerHTML = '&#x2713; Completed';
+  }
+  updateProgress();
+  updateNavDone();
+}
+
+function updateProgress() {
+  const done = lessons.filter(l => isDone(l.id)).length;
+  const pct  = Math.round(done / lessons.length * 100);
+  document.getElementById('prog-fill').style.width = pct + '%';
+  document.getElementById('prog-label').textContent = done + ' / ' + lessons.length;
+}
+
+function updateNavDone() {
+  const navItems = document.querySelectorAll('.nav-item');
+  lessons.forEach((l, i) => {
+    if (isDone(l.id)) {
+      navItems[i].classList.add('done');
+      navItems[i].querySelector('.nav-badge').textContent = '✓';
+    } else {
+      navItems[i].classList.remove('done');
+      navItems[i].querySelector('.nav-badge').textContent = l.id;
+    }
+  });
+}
+
+/* ─────────────────────────────────────────────────────────────
+   INIT
+   ───────────────────────────────────────────────────────────── */
+updateProgress();
+updateNavDone();
+</script>
+</body>
+</html>
