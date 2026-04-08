@@ -466,6 +466,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
     """
+    import time
     from .services import (
         clone_github_repo,
         extract_or_create_metadata,
@@ -506,6 +507,10 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         metadata_path = extract_or_create_metadata(dest_dir)
         logger.debug(f"Metadata processed: {metadata_path}")
 
+        # Initialize server manager for dynamic router dispatch
+        db_manager = InMemoryBackend()
+        server_manager = ServerManager(db_manager)
+
         # Launch the MCP server
         logger.info("Launching MCP server")
         package_name, _router, process = launch_mcp_using_fastapi_proxy(dest_dir)
@@ -513,6 +518,11 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
         if not process:
             logger.error("Failed to launch MCP server")
             sys.exit(1)
+
+        # Register process in server_manager for dynamic router dispatch
+        server_manager.processes[package_name] = process
+        server_manager.start_times[package_name] = time.monotonic()
+        server_manager.configs[package_name] = {}
 
         logger.info(f"MCP server '{package_name}' launched successfully from GitHub")
 
