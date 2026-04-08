@@ -42,6 +42,14 @@ class ServerManager:
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
 
+        # Per-server instances, queues, and workers — indexed as lists to support
+        # multiple concurrent instances per server (instances=N in config).
+        # _instances[id][i] is the i-th subprocess; _request_queues[id][i] is its queue.
+        # Default is 1 instance (backward compatible).
+        self._instances: Dict[str, List[subprocess.Popen]] = {}
+        self._request_queues: Dict[str, List[asyncio.Queue]] = {}
+        self._worker_tasks: Dict[str, List[asyncio.Task]] = {}
+
         # Event loop for async operations
         self._loop = None
 
@@ -205,9 +213,30 @@ class ServerManager:
                 logger.error(f"Failed to spawn process for server '{name}' (id: {id})")
                 return False
 
-            # Store process
-            self.processes[id] = process
-            logger.info(f"Server '{name}' started (PID: {process.pid})")
+            # Spawn additional instances if configured (default = 1, backward compatible)
+            num_instances = max(1, int(config.get("instances", 1)))
+            instances = [process]
+            for i in range(1, num_instances):
+                try:
+                    extra = await asyncio.wait_for(
+                        self._spawn_mcp_process(id, config),
+                        timeout=30.0
+                    )
+                    if extra:
+                        instances.append(extra)
+                    else:
+                        logger.warning(f"Failed to spawn instance {i} for '{name}', using {len(instances)} instance(s)")
+                        break
+                except asyncio.TimeoutError:
+                    logger.warning(f"Instance {i} for '{name}' timed out, using {len(instances)} instance(s)")
+                    break
+
+            # Store all instances; keep self.processes pointing to instance 0 for backward compatibility
+            self._instances[id] = instances
+            self.processes[id] = instances[0]
+            for i, inst in enumerate(instances):
+                logger.info(f"Server '{name}' instance {i} started (PID: {inst.pid})")
+                self._start_io_worker(id, i)
 
             # Clear stale PID cache entry (if any) since server is now running
             self._stale_pid_updates.pop(id, None)
@@ -317,23 +346,25 @@ class ServerManager:
             config = self.configs.get(id, {})
             name = config.get("name", id)
 
-            # Check if already dead
+            # Check if already dead (primary instance)
             if process.poll() is not None:
                 logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
                 await self._cleanup_server(id, process.returncode, intentional=True)
                 return True
 
-            # Terminate process
-            logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
+            # Terminate ALL instances
+            all_instances = self._instances.get(id) or [process]
+            sig = "SIGKILL" if force else "SIGTERM"
+            logger.info(f"Stopping server '{name}' (id: {id}, {len(all_instances)} instance(s))...")
+            for inst in all_instances:
+                if inst.poll() is None:
+                    if force:
+                        inst.kill()
+                    else:
+                        inst.terminate()
+            logger.info(f"Sent {sig} to all instances of '{name}' (id: {id})")
 
-            if force:
-                process.kill()  # SIGKILL
-                logger.info(f"Sent SIGKILL to server '{name}' (id: {id})")
-            else:
-                process.terminate()  # SIGTERM
-                logger.info(f"Sent SIGTERM to server '{name}' (id: {id})")
-
-            # Wait for process to exit (with timeout)
+            # Wait for primary process to exit (with timeout); others share the same lifecycle
             try:
                 exit_code = await asyncio.wait_for(
                     asyncio.to_thread(process.wait),
@@ -342,7 +373,9 @@ class ServerManager:
                 logger.info(f"Server '{name}' (id: {id}) stopped (exit code: {exit_code})")
             except asyncio.TimeoutError:
                 logger.warning(f"Server '{name}' (id: {id}) did not stop gracefully, forcing kill...")
-                process.kill()
+                for inst in all_instances:
+                    if inst.poll() is None:
+                        inst.kill()
                 exit_code = await asyncio.to_thread(process.wait)
 
             # Cleanup
@@ -396,6 +429,152 @@ class ServerManager:
         if server_id not in self._operation_locks:
             self._operation_locks[server_id] = asyncio.Lock()
         return self._operation_locks[server_id]
+
+    def _start_io_worker(self, server_id: str, instance_idx: int = 0) -> None:
+        """Create a request queue and launch an I/O worker for one server instance."""
+        if server_id not in self._request_queues:
+            self._request_queues[server_id] = []
+            self._worker_tasks[server_id] = []
+        queue: asyncio.Queue = asyncio.Queue()
+        self._request_queues[server_id].append(queue)
+        self._worker_tasks[server_id].append(asyncio.create_task(
+            self._io_worker(server_id, instance_idx),
+            name=f"io_worker_{server_id}_{instance_idx}"
+        ))
+
+    async def _io_worker(self, server_id: str, instance_idx: int = 0) -> None:
+        """
+        Per-instance worker that serializes all stdin/stdout I/O for one server instance.
+
+        Queue item format: (msg: str, reply: asyncio.Future | asyncio.Queue, timeout: float | None)
+        Shutdown sentinel: None
+
+        reply is asyncio.Future  -> single-response mode (proxy_jsonrpc, list_tools, call_tool, query_one)
+        reply is asyncio.Queue   -> streaming mode (sse_stream); worker puts
+                                    ("line", line_str), ("done", None), or ("error", exc)
+        """
+        queue = self._request_queues[server_id][instance_idx]
+        try:
+            while True:
+                item = await queue.get()
+
+                if item is None:  # shutdown sentinel
+                    queue.task_done()
+                    return
+
+                msg, reply, timeout = item
+                try:
+                    instances = self._instances.get(server_id, [])
+                    process = instances[instance_idx] if instance_idx < len(instances) else None
+                    if process is None:
+                        exc = RuntimeError(f"Server '{server_id}' process not found")
+                        if isinstance(reply, asyncio.Future):
+                            if not reply.done():
+                                reply.set_exception(exc)
+                        else:
+                            await reply.put(("error", exc))
+                        continue
+
+                    # Write request to stdin
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        if isinstance(reply, asyncio.Future):
+                            if not reply.done():
+                                reply.set_exception(e)
+                        else:
+                            await reply.put(("error", e))
+                        continue
+
+                    # Single-response mode
+                    if isinstance(reply, asyncio.Future):
+                        try:
+                            line = await asyncio.wait_for(
+                                asyncio.to_thread(process.stdout.readline),
+                                timeout=timeout
+                            )
+                        except Exception as e:
+                            if not reply.done():
+                                reply.set_exception(e)
+                        else:
+                            if not reply.done():
+                                reply.set_result(line)
+
+                    # Streaming mode
+                    else:
+                        try:
+                            while True:
+                                line = await asyncio.to_thread(process.stdout.readline)
+                                if not line:
+                                    await reply.put(("done", None))
+                                    break
+                                await reply.put(("line", line))
+                                try:
+                                    if "result" in json.loads(line):
+                                        await reply.put(("done", None))
+                                        break
+                                except json.JSONDecodeError:
+                                    pass
+                        except Exception as e:
+                            await reply.put(("error", e))
+
+                except Exception as e:
+                    logger.exception(f"[io_worker:{server_id}:{instance_idx}] Unexpected error: {e}")
+                    try:
+                        if isinstance(reply, asyncio.Future):
+                            if not reply.done():
+                                reply.set_exception(e)
+                        else:
+                            await reply.put(("error", e))
+                    except Exception:
+                        pass
+                finally:
+                    queue.task_done()
+
+        except Exception:
+            logger.exception(f"[io_worker:{server_id}:{instance_idx}] Worker crashed — instance I/O is now stalled")
+
+    async def _dispatch_io_request(
+        self,
+        server_id: str,
+        msg: str,
+        timeout: Optional[float] = None
+    ) -> str:
+        """
+        Enqueue a single-response I/O request and await the result.
+
+        Returns the raw response line from the server.
+        Raises RuntimeError if no worker exists, or propagates OSError / asyncio.TimeoutError.
+        """
+        queues = self._request_queues.get(server_id)
+        if not queues:
+            raise RuntimeError(f"No I/O worker for server '{server_id}'")
+        # Least-queue-size load balancing: route to the instance with the fewest pending requests
+        queue = min(queues, key=lambda q: q.qsize())
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        await queue.put((msg, future, timeout))
+        return await future
+
+    async def _dispatch_streaming_request(
+        self,
+        server_id: str,
+        msg: str
+    ) -> asyncio.Queue:
+        """
+        Enqueue a streaming I/O request and return the reply queue.
+
+        The caller consumes: ("line", str) | ("done", None) | ("error", exc)
+        Raises RuntimeError if no worker exists.
+        """
+        queues = self._request_queues.get(server_id)
+        if not queues:
+            raise RuntimeError(f"No I/O worker for server '{server_id}'")
+        # Least-queue-size load balancing: route to the instance with the fewest pending requests
+        queue = min(queues, key=lambda q: q.qsize())
+        reply_queue: asyncio.Queue = asyncio.Queue()
+        await queue.put((msg, reply_queue, None))
+        return reply_queue
 
     async def restart_server(self, id: str) -> bool:
         """
@@ -1118,6 +1297,17 @@ class ServerManager:
             del self.processes[id]
         if id in self.start_times:
             del self.start_times[id]
+        self._instances.pop(id, None)
+        # Stop all I/O workers (one per instance)
+        for queue in self._request_queues.pop(id, []):
+            await queue.put(None)  # shutdown sentinel
+        for task in self._worker_tasks.pop(id, []):
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
         # Close stderr log file handle
         self._close_stderr_log(id)
