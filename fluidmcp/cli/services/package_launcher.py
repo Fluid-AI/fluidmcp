@@ -350,6 +350,12 @@ def create_dynamic_router(server_manager):
         APIRouter with dynamic dispatch endpoints
     """
     router = APIRouter()
+    _io_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_io_lock(name: str) -> asyncio.Lock:
+        if name not in _io_locks:
+            _io_locks[name] = asyncio.Lock()
+        return _io_locks[name]
 
     @router.post("/{server_name}/mcp", tags=["mcp"])
     async def proxy_jsonrpc(
@@ -400,14 +406,15 @@ def create_dynamic_router(server_manager):
             try:
                 # Send request to MCP server
                 msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                async with _get_io_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Read response (non-blocking with asyncio.to_thread)
-                response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Read response (non-blocking with asyncio.to_thread)
+                    response_line = await asyncio.to_thread(process.stdout.readline)
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -497,29 +504,30 @@ def create_dynamic_router(server_manager):
                 # ── stdio transport continues below ──────────────────────────
 
                 msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
-                    completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
-                    collector.record_error("io_error")
-                    yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                    return
+                async with _get_io_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                        #
+                        # IMPORTANT: This intentionally differs from the error_type used in
+                        # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                        # Here we use "broken_pipe" so operators can:
+                        #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                        #     overall rate of I/O-related failures across the service, and
+                        #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                        #     why individual streaming sessions terminated (client disconnects,
+                        #     broken pipes, etc.).
+                        #
+                        # In other words, both labels refer to the same underlying condition but are
+                        # scoped for different troubleshooting workflows: global error rates versus
+                        # per-stream termination reasons.
+                        completion_status = "broken_pipe"
+                        # Record in global error metric for monitoring
+                        collector.record_error("io_error")
+                        yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                        return
 
                 while True:
                     # Non-blocking I/O with asyncio.to_thread
@@ -587,14 +595,15 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            async with _get_io_lock(server_name):
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Non-blocking I/O with asyncio.to_thread
-            response_line = await asyncio.to_thread(process.stdout.readline)
+                # Non-blocking I/O with asyncio.to_thread
+                response_line = await asyncio.to_thread(process.stdout.readline)
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
@@ -657,26 +666,27 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            async with _get_io_lock(server_name):
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Tool execution with timeout
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=60.0  # 60 second tool execution timeout
-                )
-            except asyncio.TimeoutError:
-                # Log timeout failure
-                await server_manager.db.save_log_entry({
-                    "server_name": server_name,
-                    "stream": "error",
-                    "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
-                })
-                raise HTTPException(504, "Tool execution timed out")
+                # Tool execution with timeout
+                try:
+                    response_line = await asyncio.wait_for(
+                        asyncio.to_thread(process.stdout.readline),
+                        timeout=60.0  # 60 second tool execution timeout
+                    )
+                except asyncio.TimeoutError:
+                    # Log timeout failure
+                    await server_manager.db.save_log_entry({
+                        "server_name": server_name,
+                        "stream": "error",
+                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
+                    })
+                    raise HTTPException(504, "Tool execution timed out")
 
             response_data = json.loads(response_line)
 
