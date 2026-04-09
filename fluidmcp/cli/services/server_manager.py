@@ -895,7 +895,20 @@ class ServerManager:
                 except Exception:
                     pass
                 self._close_stderr_log(id)
-                stderr_output = self._read_crash_stderr(id)
+                # If stderr was piped (log file open failed), read directly from process;
+                # otherwise read from the log file for crash diagnostics.
+                stderr_output = ""
+                if process.stderr is not None:
+                    try:
+                        _, stderr_bytes = await asyncio.to_thread(lambda: process.communicate(timeout=2))
+                        if stderr_bytes:
+                            stderr_output = stderr_bytes.decode(errors="replace") if isinstance(stderr_bytes, bytes) else str(stderr_bytes)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        pass
+                if not stderr_output:
+                    stderr_output = self._read_crash_stderr(id)
                 if stderr_output:
                     logger.error(f"[{id}] Process stderr: {stderr_output[:500]}")
                 return None
@@ -1019,6 +1032,14 @@ class ServerManager:
             # Guard: process must still be alive
             if process.poll() is not None:
                 stderr_out = self._read_crash_stderr(id) or ""
+                # If no rotated log available, fall back to the subprocess pipe
+                if not stderr_out and getattr(process, "stderr", None) is not None:
+                    try:
+                        _, stderr_data = process.communicate(timeout=0.5)
+                        if stderr_data:
+                            stderr_out = stderr_data.decode(errors="replace") if isinstance(stderr_data, (bytes, bytearray)) else str(stderr_data)
+                    except Exception:
+                        pass
                 logger.error(
                     f"[{id}] SSE server process died before HTTP became ready "
                     f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
@@ -1102,7 +1123,7 @@ class ServerManager:
             # Tool discovery failure must never abort server startup
             logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
 
-    async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
+    async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False, stderr_tail: str = "") -> None:
         """
         Clean up after server stops.
 
@@ -1110,6 +1131,7 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
             intentional: True if this was a deliberate stop (not a crash)
+            stderr_tail: Pre-captured stderr (e.g. from PIPE); falls back to log file if empty
         """
         uptime = self.get_uptime(id)
 
@@ -1139,7 +1161,8 @@ class ServerManager:
 
         # Persist crash event for non-intentional failures
         if state == "failed":
-            stderr_tail = self._read_crash_stderr(id)
+            if not stderr_tail:
+                stderr_tail = self._read_crash_stderr(id)
             try:
                 await self.db.save_crash_event({
                     "server_id": id,
@@ -1188,22 +1211,26 @@ class ServerManager:
 
     # ==================== Stderr File Logging ====================
 
-    STDERR_LOG_DIR = os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
     STDERR_MAX_BYTES = 10 * 1024 * 1024  # 10MB
     STDERR_BACKUP_COUNT = 5
+
+    @staticmethod
+    def _get_stderr_log_dir() -> str:
+        """Resolve stderr log directory (env override or ~/.fluidmcp/logs)."""
+        return os.getenv("FLUIDMCP_STDERR_LOG_DIR") or os.path.join(os.path.expanduser("~"), ".fluidmcp", "logs")
 
     def _get_stderr_log_path(self, server_id: str) -> str:
         """Get the stderr log file path for a server."""
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in server_id)
-        return os.path.join(self.STDERR_LOG_DIR, f"mcp_{safe_id}_stderr.log")
+        return os.path.join(self._get_stderr_log_dir(), f"mcp_{safe_id}_stderr.log")
 
     def _cleanup_old_stderr_logs(self) -> None:
         """Delete stderr log files (and their backups) older than 30 days."""
-        if not os.path.isdir(self.STDERR_LOG_DIR):
+        if not os.path.isdir(self._get_stderr_log_dir()):
             return
         cutoff = time.time() - 30 * 86400
         try:
-            for entry in os.scandir(self.STDERR_LOG_DIR):
+            for entry in os.scandir(self._get_stderr_log_dir()):
                 if entry.name.startswith("mcp_") and "_stderr.log" in entry.name:
                     try:
                         if entry.stat().st_mtime < cutoff:
@@ -1216,7 +1243,8 @@ class ServerManager:
     def _open_stderr_log(self, server_id: str) -> IO:
         """Open a stderr log file with rotation, returns file handle."""
         self._cleanup_old_stderr_logs()
-        os.makedirs(self.STDERR_LOG_DIR, exist_ok=True)
+        log_dir = self._get_stderr_log_dir()
+        os.makedirs(log_dir, exist_ok=True)
         log_path = self._get_stderr_log_path(server_id)
 
         # Rotate if file exceeds max size (rotation happens at spawn time only;
@@ -1273,6 +1301,7 @@ class ServerManager:
     @staticmethod
     def _create_preexec_fn(memory_limit_mb: int):
         """Create a preexec_fn that sets memory limits for the subprocess (Unix only)."""
+
         def _set_limits():
             try:
                 import resource
