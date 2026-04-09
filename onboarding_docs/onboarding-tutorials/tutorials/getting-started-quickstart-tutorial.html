@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<!--
+  FluidMCP Getting Started Tutorial
+
+  HOW TO VIEW THIS TUTORIAL:
+
+  Option 1: Open directly in your browser
+    - Double-click this file or drag it into your browser
+    - Works with: Chrome, Firefox, Safari, Edge
+
+  Option 2: Use a local web server (recommended for best experience)
+    - Python:  python3 -m http.server 8080
+    - Node.js: npx http-server -p 8080
+    - Then open: http://localhost:8080/getting-started-quickstart-tutorial.html
+
+  Features:
+    ✓ Interactive lessons with progress tracking
+    ✓ Copy buttons for all code blocks
+    ✓ Responsive design (mobile-friendly)
+    ✓ Dark theme matching GitHub style
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FluidMCP - Getting Started &#x2014; Quick Start Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:rgba(210,168,255,0.15);--accent:#d2a8ff;--accent2:#58a6ff;--accent3:#3fb950;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+  .sidebar{width:280px;min-height:100vh;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100}
+  .sidebar-header{padding:24px 20px 16px;border-bottom:1px solid var(--border)}
+  .sidebar-logo{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+  .sidebar-title{font-size:15px;font-weight:700;color:var(--text);line-height:1.3}
+  .sidebar-progress{padding:12px 20px;border-bottom:1px solid var(--border)}
+  .progress-label{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;justify-content:space-between}
+  .progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s}
+  .nav-list{flex:1;overflow-y:auto;padding:12px 0}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;transition:all 0.2s;border-left:3px solid transparent}
+  .nav-item:hover{background:rgba(210,168,255,0.06)}
+  .nav-item.active{background:rgba(210,168,255,0.1);border-left-color:var(--accent)}
+  .nav-item.done .nav-badge{background:var(--accent3)}
+  .nav-badge{width:22px;height:22px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--text2);flex-shrink:0}
+  .nav-label{font-size:13px;color:var(--text2);line-height:1.3}
+  .nav-item.active .nav-label{color:var(--text);font-weight:500}
+  .main{margin-left:280px;flex:1;min-height:100vh}
+  .lesson{display:none;padding:48px 56px;max-width:900px;animation:slideInUp 0.4s ease both}
+  .lesson.active{display:block}
+  @keyframes slideInUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+  .lesson-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(210,168,255,0.1);border:1px solid rgba(210,168,255,0.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+  .lesson-title{font-size:32px;font-weight:700;color:var(--text);margin-bottom:8px;line-height:1.2}
+  .lesson-subtitle{font-size:15px;color:var(--text2);margin-bottom:36px;line-height:1.6}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-bottom:28px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;transition:all 0.25s;animation:slideInUp 0.4s ease both}
+  .card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,0.4);border-color:rgba(210,168,255,0.3)}
+  .card:nth-child(1){animation-delay:0.05s}.card:nth-child(2){animation-delay:0.1s}.card:nth-child(3){animation-delay:0.15s}
+  .card-icon{font-size:24px;margin-bottom:10px}.card-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .card-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .code-block{background:#010409;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
+  .code-header{background:var(--bg3);padding:8px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .code-lang{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
+  .code-copy{background:transparent;border:1px solid var(--border);color:var(--text2);padding:4px 12px;border-radius:6px;font-size:11px;cursor:pointer;transition:all 0.2s}
+  .code-copy:hover{background:var(--bg2);border-color:var(--accent)}
+  .code-copy.copied{background:var(--accent3);border-color:var(--accent3);color:#000}
+  .code-body{padding:18px 20px;overflow-x:auto}
+  .code-body pre{font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;color:#c9d1d9;white-space:pre}
+  .kw{color:#ff7b72}.str{color:#a5d6ff}.cm{color:#8b949e;font-style:italic}.fn{color:#d2a8ff}.num{color:#79c0ff}.var{color:#ffa657}
+  .info-box{background:rgba(210,168,255,0.07);border:1px solid rgba(210,168,255,0.25);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .warn-box{background:rgba(247,129,102,0.07);border:1px solid rgba(247,129,102,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .ok-box{background:rgba(63,185,80,0.07);border:1px solid rgba(63,185,80,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .box-icon{font-size:18px;flex-shrink:0;margin-top:1px}.box-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .box-text strong{color:var(--text)}
+  .quick-win{background:linear-gradient(135deg,rgba(63,185,80,0.15),rgba(63,185,80,0.05));border:1px solid rgba(63,185,80,0.4);border-radius:12px;padding:24px;margin-bottom:28px;display:flex;gap:16px;align-items:center}
+  .win-icon{font-size:32px;flex-shrink:0}
+  .win-content h2{font-size:18px;font-weight:600;color:var(--accent3);margin-bottom:6px}
+  .win-content p{font-size:13px;color:var(--text2);margin:0}
+  .dir-tree{background:#010409;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.8}
+  .dir-line{color:var(--text3);margin-left:0}
+  .dir-line.dir-highlight{color:var(--accent);font-weight:600}
+  .dir-comment{color:var(--text2);margin-left:8px}
+  h3{font-size:16px;font-weight:600;color:var(--text);margin:24px 0 12px}
+  p{font-size:14px;color:var(--text2);line-height:1.7;margin-bottom:14px}
+  ul{margin:0 0 14px 20px;color:var(--text2);font-size:14px;line-height:1.7}
+  .complete-btn{display:inline-flex;align-items:center;gap:8px;margin-top:32px;padding:12px 24px;background:linear-gradient(135deg,var(--accent),#8b5cf6);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s}
+  .complete-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(210,168,255,0.3)}
+  .complete-btn.done{background:linear-gradient(135deg,var(--accent3),#238636)}
+  .one-command{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px}
+  .command-label{font-size:12px;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;font-weight:600}
+  .command-box{background:#010409;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .command-box code{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);flex:1}
+  .command-box button{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;transition:all 0.2s}
+  .command-box button:hover{background:var(--accent);color:#000}
+  .command-result{font-size:12px;color:var(--accent3);display:flex;align-items:center;gap:6px}
+  .use-case-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:28px}
+  .use-case-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;transition:all 0.25s;cursor:pointer}
+  .use-case-card:hover{transform:translateY(-4px);border-color:var(--accent)}
+  .use-case-icon{font-size:28px;margin-bottom:12px}
+  .use-case-card h4{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .use-case-card p{font-size:12px;color:var(--text2);margin-bottom:12px}
+  .use-case-card button{background:transparent;border:1px solid var(--accent);color:var(--accent);padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;transition:all 0.2s}
+  .use-case-card button:hover{background:var(--accent);color:#000}
+  .next-steps-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:28px}
+  .next-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;display:flex;gap:14px;align-items:center;text-decoration:none;transition:all 0.25s}
+  .next-card:hover{transform:translateY(-4px);border-color:var(--accent)}
+  .next-icon{font-size:24px;flex-shrink:0}
+  .next-content{flex:1}
+  .next-content h4{font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px}
+  .next-content p{font-size:12px;color:var(--text2);margin:0}
+  .next-arrow{font-size:18px;color:var(--accent);flex-shrink:0}
+  .time-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(88,166,255,0.1);border:1px solid rgba(88,166,255,0.3);border-radius:20px;padding:4px 12px;font-size:11px;font-weight:600;color:var(--accent2)}
+  @media (max-width: 768px){.sidebar{width:100%;position:relative;min-height:auto}.main{margin-left:0}}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">&#x1F30A; FluidMCP</div>
+    <div class="sidebar-title">Getting Started</div>
+  </div>
+  <div class="sidebar-progress">
+    <div class="progress-label"><span>Progress</span><span id="prog-txt">0 / 7</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
+  </div>
+  <nav class="nav-list" id="nav"></nav>
+</aside>
+<main class="main" id="main"></main>
+<script>
+const lessons = [
+  {
+    id:1,title:"Welcome to FluidMCP",sub:"Orchestrate multiple MCP servers with a unified gateway",
+    content:`
+      <p><strong>FluidMCP</strong> is a CLI tool that lets you run multiple Model Context Protocol (MCP) servers from a single configuration file and expose them through a unified FastAPI gateway. Instead of managing servers individually, you define them once and FluidMCP handles the rest.</p>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F4C1;</div><div class="card-title">Single Config File</div><div class="card-text">Define all your MCP servers in one JSON file. No more juggling multiple terminals or scripts.</div></div>
+        <div class="card"><div class="card-icon">&#x1F310;</div><div class="card-title">Unified Gateway</div><div class="card-text">All servers exposed via FastAPI at <code>http://localhost:8099</code> with automatic Swagger docs.</div></div>
+        <div class="card"><div class="card-icon">&#x1F680;</div><div class="card-title">5 Minute Setup</div><div class="card-text">Install, create config, run servers. You'll have a working MCP gateway in under 5 minutes.</div></div>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x1F3AF;</div><div class="box-text"><strong>What you'll accomplish:</strong> By the end of this quickstart, you'll have FluidMCP running with sample MCP servers (filesystem & memory), accessible via HTTP endpoints and a web UI.</div></div>
+      <h3>Prerequisites</h3>
+      <p>Before starting, ensure you have:</p>
+      <ul>
+        <li><strong>Python 3.8+</strong> installed</li>
+        <li><strong>Node.js v18+</strong> (for npx-based MCP servers)</li>
+        <li><strong>5 minutes</strong> of time</li>
+      </ul>
+      <div class="time-badge">&#x23F1; Time: 5 minutes</div>
+    `
+  },
+  {
+    id:2,title:"Directory Structure",sub:"Key files and folders in the FluidMCP codebase",
+    content:`
+      <p>FluidMCP is organized into a clean structure. Here are the most important files you'll interact with:</p>
+      <div class="dir-tree">
+<span class="dir-line">fluidmcp/</span>
+<span class="dir-line">&#x251C;&#x2500;&#x2500; cli/</span>
+<span class="dir-line dir-highlight">&#x2502;   &#x251C;&#x2500;&#x2500; cli.py</span><span class="dir-comment"># Main CLI entry point</span>
+<span class="dir-line dir-highlight">&#x2502;   &#x251C;&#x2500;&#x2500; server.py</span><span class="dir-comment"># FastAPI gateway server</span>
+<span class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; services/</span>
+<span class="dir-line dir-highlight">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; config_resolver.py</span><span class="dir-comment"># Config resolution (files, S3, GitHub)</span>
+<span class="dir-line dir-highlight">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; run_servers.py</span><span class="dir-comment"># Server launcher</span>
+<span class="dir-line dir-highlight">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; package_launcher.py</span><span class="dir-comment"># MCP server process management</span>
+<span class="dir-line">&#x2502;   &#x2502;   &#x2514;&#x2500;&#x2500; server_manager.py</span><span class="dir-comment"># Process lifecycle (start/stop/restart)</span>
+<span class="dir-line">&#x2502;   &#x2514;&#x2500;&#x2500; api/</span>
+<span class="dir-line">&#x2502;       &#x2514;&#x2500;&#x2500; management.py</span><span class="dir-comment"># REST API endpoints for server management</span>
+<span class="dir-line">&#x251C;&#x2500;&#x2500; frontend/</span>
+<span class="dir-line dir-highlight">&#x2502;   &#x2514;&#x2500;&#x2500; src/</span><span class="dir-comment"># React frontend UI (served at /ui)</span>
+<span class="dir-line">&nbsp;</span>
+<span class="dir-line dir-highlight">examples/</span>
+<span class="dir-line dir-highlight">&#x251C;&#x2500;&#x2500; sample-config.json</span><span class="dir-comment"># Example config file (start here!)</span>
+<span class="dir-line">&#x2514;&#x2500;&#x2500; README.md</span><span class="dir-comment"># Testing guide with all examples</span>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Quick tip:</strong> Start by exploring <code>examples/sample-config.json</code> to see how MCP servers are configured. Then check <code>fluidmcp/cli/server.py</code> to understand the FastAPI gateway implementation.</div></div>
+      <h3>Key components</h3>
+      <ul>
+        <li><strong>CLI commands:</strong> <code>cli.py</code> handles <code>fmcp run</code>, <code>fmcp serve</code>, <code>fmcp install</code> commands</li>
+        <li><strong>Server orchestration:</strong> <code>run_servers.py</code> launches MCP servers from config files</li>
+        <li><strong>API management:</strong> <code>api/management.py</code> provides REST endpoints for dynamic server control</li>
+        <li><strong>Config examples:</strong> <code>examples/</code> folder has ready-to-use configurations for testing</li>
+        <li><strong>Web UI:</strong> <code>frontend/</code> contains the React dashboard (accessible at <code>/ui</code> or root path)</li>
+      </ul>
+      <h3>Two modes of operation</h3>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F4C1;</div><div class="card-title">fmcp run</div><div class="card-text">Runs servers from a static config file. Great for development and testing.</div></div>
+        <div class="card"><div class="card-icon">&#x1F4BE;</div><div class="card-title">fmcp serve</div><div class="card-text">Standalone backend with MongoDB persistence. Serves API + frontend on same port.</div></div>
+      </div>
+    `
+  },
+  {
+    id:3,title:"Installation & Setup",sub:"Install FluidMCP and verify it's working",
+    content:`
+      <h3>Install FluidMCP</h3>
+      <div class="one-command">
+        <div class="command-label">Run this command:</div>
+        <div class="command-box">
+          <code>pip install fluidmcp</code>
+          <button onclick="copyCommand(this, 'pip install fluidmcp')">&#x1F4CB; Copy</button>
+        </div>
+        <div class="command-result">&#x2705; This installs the <code>fluidmcp</code> CLI tool</div>
+      </div>
+      <h3>Verify installation</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Check version</span>
+fluidmcp --version
+
+<span class="cm"># You should see output like:</span>
+<span class="cm"># FluidMCP version 0.6.2</span>
+<span class="cm"># Python version: 3.11.7</span></pre></div>
+      </div>
+      <div class="ok-box"><div class="box-icon">&#x2705;</div><div class="box-text"><strong>Success indicator:</strong> If you see version information, FluidMCP is installed correctly!</div></div>
+      <h3>Available commands</h3>
+      <p>FluidMCP has three equivalent CLI names. Use whichever you prefer:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>fluidmcp &lt;command&gt;   <span class="cm"># Full name</span>
+fmcp &lt;command&gt;       <span class="cm"># Short alias (most common)</span>
+fluidai-mcp &lt;command&gt;  <span class="cm"># Alternative name</span></pre></div>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Pro tip:</strong> Use <code>fmcp</code> for faster typing. Throughout this guide, we'll use <code>fmcp</code> instead of <code>fluidmcp</code>.</div></div>
+    `
+  },
+  {
+    id:4,title:"Hello World - Run Sample Servers",sub:"Launch your first MCP servers in 30 seconds",
+    content:`
+      <h3>Create test directory</h3>
+      <p>The sample config uses a filesystem server that needs a directory to operate on:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>mkdir -p /tmp/test-directory</pre></div>
+      </div>
+      <h3>Run the sample configuration</h3>
+      <div class="one-command">
+        <div class="command-label">Start FluidMCP with sample servers:</div>
+        <div class="command-box">
+          <code>fmcp run examples/sample-config.json --file --start-server</code>
+          <button onclick="copyCommand(this, 'fmcp run examples/sample-config.json --file --start-server')">&#x1F4CB; Copy</button>
+        </div>
+        <div class="command-result">&#x2705; Starts filesystem & memory MCP servers on port 8099</div>
+      </div>
+      <div class="ok-box"><div class="box-icon">&#x1F389;</div><div class="box-text"><strong>You should see:</strong> <code>Server running on http://0.0.0.0:8099</code> — this means FluidMCP is running!</div></div>
+      <h3>Access your servers</h3>
+      <p>FluidMCP exposes both a web UI and API documentation:</p>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F310;</div><div class="card-title">Web UI</div><div class="card-text">Open <code>http://localhost:8099</code> in your browser for the dashboard</div></div>
+        <div class="card"><div class="card-icon">&#x1F4DA;</div><div class="card-title">Swagger Docs</div><div class="card-text">Visit <code>http://localhost:8099/docs</code> to explore the API interactively</div></div>
+      </div>
+      <h3>Test an endpoint</h3>
+      <p>Open a <strong>new terminal</strong> (keep FluidMCP running) and test the filesystem server:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>curl -X POST http://localhost:8099/filesystem/mcp \\
+  -H <span class="str">"Content-Type: application/json"</span> \\
+  -d <span class="str">'{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'</span></pre></div>
+      </div>
+      <p>You should see a JSON response listing available tools like <code>read_file</code>, <code>write_file</code>, etc.</p>
+      <div class="quick-win">
+        <div class="win-icon">&#x1F389;</div>
+        <div class="win-content">
+          <h2>Success! You're running FluidMCP</h2>
+          <p>You've just orchestrated two MCP servers through a unified gateway. That's the core of FluidMCP!</p>
+        </div>
+      </div>
+    `
+  },
+  {
+    id:5,title:"Key Concepts",sub:"Understanding how FluidMCP works",
+    content:`
+      <p>Now that you've seen it work, let's understand what just happened:</p>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F4DD;</div><div class="card-title">Configuration File</div><div class="card-text">The <code>sample-config.json</code> defines your MCP servers with command, args, and environment variables. FluidMCP reads this to know what to launch.</div></div>
+        <div class="card"><div class="card-icon">&#x1F310;</div><div class="card-title">FastAPI Gateway</div><div class="card-text">FluidMCP creates a FastAPI server that routes HTTP requests to the appropriate MCP server via stdio communication.</div></div>
+        <div class="card"><div class="card-icon">&#x1F50C;</div><div class="card-title">Unified Endpoint</div><div class="card-text">All servers are accessible at <code>http://localhost:8099</code> with paths like <code>/filesystem/mcp</code> and <code>/memory/mcp</code>.</div></div>
+      </div>
+      <h3>How the flow works</h3>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">flow diagram</span></div>
+        <div class="code-body"><pre>Your Request
+    &#x2193;
+FastAPI Gateway (port 8099)
+    &#x2193;
+Route to MCP Server
+    &#x2193;
+stdio JSON-RPC communication
+    &#x2193;
+MCP Server processes request
+    &#x2193;
+Response back through gateway</pre></div>
+      </div>
+      <h3>Configuration format</h3>
+      <p>Here's what the sample config looks like:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">json</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>{
+  <span class="str">"mcpServers"</span>: {
+    <span class="str">"filesystem"</span>: {
+      <span class="str">"command"</span>: <span class="str">"npx"</span>,
+      <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@modelcontextprotocol/server-filesystem"</span>, <span class="str">"/tmp/test-directory"</span>],
+      <span class="str">"env"</span>: {}
+    },
+    <span class="str">"memory"</span>: {
+      <span class="str">"command"</span>: <span class="str">"npx"</span>,
+      <span class="str">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@modelcontextprotocol/server-memory"</span>],
+      <span class="str">"env"</span>: {}
+    }
+  }
+}</pre></div>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Key insight:</strong> The <code>npx -y</code> command automatically downloads and runs npm packages, so no installation is required. FluidMCP handles the process lifecycle.</div></div>
+    `
+  },
+  {
+    id:6,title:"Common Use Cases",sub:"Practical patterns for using FluidMCP",
+    content:`
+      <p>Here are the most common ways developers use FluidMCP:</p>
+      <div class="use-case-grid">
+        <div class="use-case-card">
+          <div class="use-case-icon">&#x1F4C1;</div>
+          <h4>Run Single Server</h4>
+          <p>Test a specific MCP server</p>
+        </div>
+        <div class="use-case-card">
+          <div class="use-case-icon">&#x1F4DA;</div>
+          <h4>Run All Servers</h4>
+          <p>Launch all installed packages</p>
+        </div>
+        <div class="use-case-card">
+          <div class="use-case-icon">&#x1F4DD;</div>
+          <h4>Run from Config</h4>
+          <p>Use a configuration file</p>
+        </div>
+        <div class="use-case-card">
+          <div class="use-case-icon">&#x1F4BE;</div>
+          <h4>Standalone Backend</h4>
+          <p>Persistent server with REST API</p>
+        </div>
+      </div>
+      <h3>Example 1: Run from local config file</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Create your own config.json, then:</span>
+fmcp run config.json --file --start-server
+
+<span class="cm"># Access at http://localhost:8099</span></pre></div>
+      </div>
+      <h3>Example 2: Run standalone backend with persistence</h3>
+      <p>Use <code>fmcp serve</code> for a persistent backend with MongoDB and REST API:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Start standalone backend (serves API + frontend)</span>
+fmcp serve --port 8099
+
+<span class="cm"># Access frontend UI at:</span>
+<span class="cm"># http://localhost:8099/ui (or just http://localhost:8099)</span>
+
+<span class="cm"># Access API docs at:</span>
+<span class="cm"># http://localhost:8099/docs</span></pre></div>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Key difference:</strong> <code>fmcp serve</code> provides a persistent backend with REST API for managing servers dynamically, while <code>fmcp run</code> launches servers from a static config file. Both serve the frontend on the same port.</div></div>
+      <h3>Example 3: Run with GitHub repositories</h3>
+      <p>FluidMCP can clone and run MCP servers directly from GitHub:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre>fmcp github owner/repo \\
+  --github-token YOUR_TOKEN \\
+  --branch main \\
+  --start-server</pre></div>
+      </div>
+      <h3>Example 4: Run in development (Codespaces)</h3>
+      <p>If you're developing in GitHub Codespaces:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Start server</span>
+fmcp run examples/sample-config.json --file --start-server
+
+<span class="cm"># Access UI at:</span>
+<span class="cm"># https://&lt;codespace-name&gt;.github.dev</span></pre></div>
+      </div>
+      <h3>Example 5: Run in production (Railway)</h3>
+      <p>For production deployments with MongoDB persistence:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Set environment variables:</span>
+<span class="kw">export</span> FMCP_BEARER_TOKEN=<span class="str">"your-secure-token"</span>
+<span class="kw">export</span> MONGODB_URI=<span class="str">"mongodb://..."</span>
+
+<span class="cm"># Start with persistence:</span>
+fmcp serve --require-persistence</pre></div>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Port 8099:</strong> Both <code>fmcp run</code> and <code>fmcp serve</code> use port 8099 by default. The backend API and frontend UI are served on the same port. Access the UI at <code>http://localhost:8099</code> (or <code>/ui</code>) and API docs at <code>http://localhost:8099/docs</code>.</div></div>
+    `
+  },
+  {
+    id:7,title:"Next Steps",sub:"Where to go from here",
+    content:`
+      <p>Congratulations! You've successfully set up FluidMCP and run your first MCP servers. Here's what to explore next:</p>
+      <div class="next-steps-cards">
+        <a href="../../docs/CLAUDE.md" class="next-card">
+          <div class="next-icon">&#x1F4DA;</div>
+          <div class="next-content">
+            <h4>Technical Documentation</h4>
+            <p>Read CLAUDE.md for complete technical reference, architecture details, and advanced features</p>
+          </div>
+          <div class="next-arrow">&#x2192;</div>
+        </a>
+        <a href="../../examples/README.md" class="next-card">
+          <div class="next-icon">&#x1F4C1;</div>
+          <div class="next-content">
+            <h4>More Examples</h4>
+            <p>Explore examples/ directory for configs with API keys, GitHub repos, secure mode, and more</p>
+          </div>
+          <div class="next-arrow">&#x2192;</div>
+        </a>
+        <a href="../../README.md" class="next-card">
+          <div class="next-icon">&#x1F680;</div>
+          <div class="next-content">
+            <h4>Project README</h4>
+            <p>Learn about advanced features, deployment options, and the full CLI reference</p>
+          </div>
+          <div class="next-arrow">&#x2192;</div>
+        </a>
+      </div>
+      <h3>Advanced topics to explore</h3>
+      <ul>
+        <li><strong>Secure Mode:</strong> Add bearer token authentication with <code>--secure --token YOUR_TOKEN</code></li>
+        <li><strong>GitHub Integration:</strong> Clone and run servers directly from GitHub repositories</li>
+        <li><strong>LLM Inference:</strong> Add vLLM, Ollama, or Replicate models to your configuration</li>
+        <li><strong>Railway Deployment:</strong> Deploy FluidMCP to Railway with MongoDB persistence</li>
+        <li><strong>Custom Servers:</strong> Create your own MCP servers and add them to FluidMCP</li>
+      </ul>
+      <h3>Key files to read next</h3>
+      <div class="dir-tree">
+<span class="dir-line dir-highlight">CLAUDE.md</span><span class="dir-comment"># Complete project reference</span>
+<span class="dir-line dir-highlight">README.md</span><span class="dir-comment"># Quick start and features overview</span>
+<span class="dir-line dir-highlight">examples/README.md</span><span class="dir-comment"># All example configurations explained</span>
+<span class="dir-line dir-highlight">docs/RAILWAY_DEPLOYMENT.md</span><span class="dir-comment"># Production deployment guide</span>
+<span class="dir-line dir-highlight">docs/REPLICATE_SUPPORT.md</span><span class="dir-comment"># Cloud inference integration</span>
+      </div>
+      <h3>Testing and development</h3>
+      <p>If you want to contribute or modify FluidMCP:</p>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <button class="code-copy" onclick="copyCode(this)">&#x1F4CB; Copy</button>
+        </div>
+        <div class="code-body"><pre><span class="cm"># Install in development mode</span>
+pip install -e .
+
+<span class="cm"># Run tests</span>
+pytest
+
+<span class="cm"># Run specific test suites</span>
+pytest tests/test_llm_security.py
+pytest tests/test_llm_integration.py</pre></div>
+      </div>
+      <div class="ok-box"><div class="box-icon">&#x1F389;</div><div class="box-text"><strong>You're ready!</strong> You now understand the basics of FluidMCP. Start experimenting with different MCP servers and configurations to build your own workflows.</div></div>
+    `
+  }
+];
+
+const nav=document.getElementById('nav'),main=document.getElementById('main');
+const progFill=document.getElementById('prog-fill'),progTxt=document.getElementById('prog-txt');
+const DONE_KEY='fmcp_qs_done';let done=JSON.parse(localStorage.getItem(DONE_KEY)||'[]');
+function updateProgress(){const p=Math.round(done.length/lessons.length*100);progFill.style.width=p+'%';progTxt.textContent=done.length+' / '+lessons.length}
+lessons.forEach((l,i)=>{
+  const ni=document.createElement('div');
+  ni.className='nav-item'+(i===0?' active':'')+(done.includes(l.id)?' done':'');
+  ni.innerHTML=`<div class="nav-badge">${done.includes(l.id)?'&#x2713;':l.id}</div><div class="nav-label">${l.title}</div>`;
+  ni.addEventListener('click',()=>showLesson(i));nav.appendChild(ni);
+  const sec=document.createElement('section');
+  sec.className='lesson'+(i===0?' active':'');
+  sec.innerHTML=`<div class="lesson-badge">&#x1F30A; Lesson ${l.id}</div><h1 class="lesson-title">${l.title}</h1><p class="lesson-subtitle">${l.sub}</p>${l.content}
+    <button class="complete-btn ${done.includes(l.id)?'done':''}" onclick="markDone(${l.id},this)">${done.includes(l.id)?'&#x2713; Completed':'&#x2713; Mark Complete'}</button>
+    <div style="margin-top:20px;display:flex;gap:12px">
+      ${i>0?'<button onclick="showLesson('+(i-1)+')" style="padding:10px 18px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:13px">&#x2190; Prev</button>':''}\
+      ${i<lessons.length-1?'<button onclick="showLesson('+(i+1)+')" style="padding:10px 18px;background:var(--accent);border:none;border-radius:8px;color:#000;cursor:pointer;font-size:13px;font-weight:600">Next &#x2192;</button>':''}
+    </div>`;
+  main.appendChild(sec);
+});
+function showLesson(idx){document.querySelectorAll('.lesson').forEach((s,i)=>s.classList.toggle('active',i===idx));document.querySelectorAll('.nav-item').forEach((n,i)=>n.classList.toggle('active',i===idx));window.scrollTo(0,0)}
+function markDone(id,btn){if(!done.includes(id))done.push(id);localStorage.setItem(DONE_KEY,JSON.stringify(done));btn.textContent='✓ Completed';btn.classList.add('done');const ni=nav.querySelectorAll('.nav-item')[id-1];ni.classList.add('done');ni.querySelector('.nav-badge').innerHTML='&#x2713;';updateProgress()}
+function copyCommand(btn,cmd){navigator.clipboard.writeText(cmd);btn.innerHTML='&#x2705; Copied!';setTimeout(()=>btn.innerHTML='&#x1F4CB; Copy',2000)}
+function copyCode(btn){const code=btn.closest('.code-block').querySelector('pre').textContent;navigator.clipboard.writeText(code);btn.innerHTML='&#x2705; Copied!';btn.classList.add('copied');setTimeout(()=>{btn.innerHTML='&#x1F4CB; Copy';btn.classList.remove('copied')},2000)}
+updateProgress();
+</script>
+</body>
+</html>
