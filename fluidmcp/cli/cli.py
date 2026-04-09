@@ -29,19 +29,30 @@ def configure_logger(verbose: bool = False) -> None:
     Args:
         verbose: If True, set level to DEBUG; otherwise INFO
     """
+    # TEMPORARILY DISABLED - restoring default logging for debugging
     # Remove default handler
-    logger.remove()
+    # logger.remove()
 
     # Set level based on verbose flag
-    log_level = "DEBUG" if verbose else "INFO"
+    # log_level = "DEBUG" if verbose else "INFO"
 
     # Add new handler with specified level and simple format
-    logger.add(
-        sys.stderr,
-        level=log_level,
-        format="<level>{message}</level>",
-        colorize=True
-    )
+    # TEMPORARILY DISABLED - restoring default logging for debugging
+    # This custom format strips out timestamps, file/line info, and function names
+    # logger.add(
+    #     sys.stderr,
+    #     level=log_level,
+    #     format="<level>{message}</level>",
+    #     colorize=True
+    # )
+
+    # Using default loguru configuration which includes:
+    # - Timestamps
+    # - Log levels (DEBUG, INFO, WARNING, ERROR)
+    # - Source file and line numbers
+    # - Function names
+    # Default level is DEBUG, so all diagnostic output will be captured
+    pass
 
 
 
