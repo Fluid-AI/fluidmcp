@@ -55,6 +55,7 @@ function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
 
 class ApiClient {
   private baseUrl: string;
+  private token: string | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -80,6 +81,7 @@ class ApiClient {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         headers: {
           'Content-Type': 'application/json',
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           ...options?.headers,
         },
         ...options,
@@ -116,6 +118,9 @@ class ApiClient {
     return this.request<ServersListResponse>(url, options);
   }
 
+  setToken(token: string | null) {
+    this.token = token;
+  }
   async getServerDetails(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerDetailsResponse> {
     return this.request<ServerDetailsResponse>(`/api/servers/${serverId}`, options);
   }
@@ -273,6 +278,53 @@ class ApiClient {
   async deleteServer(serverId: string): Promise<{ message: string; deleted_at: string }> {
     return this.request(`/api/servers/${serverId}`, {
       method: 'DELETE',
+    });
+  }
+
+  // Inspector Tools APIs
+  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+    return this.request(`/api/inspector/connect`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async disconnectInspectorServer(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async runInspectorTool(
+    sessionId: string,
+    toolName: string,
+    params: Record<string, any>
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/tools/${toolName}/run`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+  
+  async runInspectorChat(
+    sessionId: string,
+    message: string
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+  }
+
+  async getInspectorLogs(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/logs`, {
+      method: "GET",
+    });
+  }
+  async chatWithInspector(sessionId: string, data: any): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify(data),
     });
   }
 

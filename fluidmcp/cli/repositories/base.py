@@ -216,6 +216,35 @@ class PersistenceBackend(ABC):
         """
         pass
 
+    # ==================== Crash Event Persistence ====================
+
+    async def save_crash_event(self, event: Dict[str, Any]) -> bool:
+        """
+        Save a server crash event for diagnostics.
+
+        Args:
+            event: Crash event dict with server_id, exit_code, stderr_tail,
+                   uptime_seconds, timestamp
+
+        Returns:
+            True if the event was handled. For backends that don't persist
+            crash events, True means the event was intentionally ignored (no-op).
+        """
+        return True  # Default no-op for backends that don't persist
+
+    async def list_crash_events(self, server_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        List recent crash events for a server.
+
+        Args:
+            server_id: Server identifier
+            limit: Maximum number of events to return
+
+        Returns:
+            List of crash event dicts, most recent first
+        """
+        return []
+
     def supports_rollback(self) -> bool:
         """
         Check if this backend supports model rollback/versioning.

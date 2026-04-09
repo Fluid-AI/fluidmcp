@@ -26,6 +26,7 @@ class InMemoryBackend(PersistenceBackend):
         self._instances: Dict[str, Dict[str, Any]] = {}
         self._logs: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self._llm_models: Dict[str, Dict[str, Any]] = {}
+        self._crash_events: Dict[str, deque] = {}
         self._connected = False
 
     async def connect(self) -> bool:
@@ -41,6 +42,7 @@ class InMemoryBackend(PersistenceBackend):
         self._instances.clear()
         self._logs.clear()
         self._llm_models.clear()
+        self._crash_events.clear()
         self._connected = False
         logger.info("Disconnected in-memory backend")
 
@@ -136,6 +138,24 @@ class InMemoryBackend(PersistenceBackend):
         logs = list(self._logs.get(server_name, []))
         # Return most recent 'lines' logs
         return logs[-lines:] if logs else []
+
+    # ==================== Crash Event Persistence ====================
+
+    async def save_crash_event(self, event: Dict[str, Any]) -> bool:
+        """Save crash event to in-memory storage."""
+        server_id = event.get("server_id")
+        if not server_id:
+            return False
+        if server_id not in self._crash_events:
+            self._crash_events[server_id] = deque(maxlen=100)
+        self._crash_events[server_id].appendleft(dict(event))
+        logger.debug(f"Saved crash event for server '{server_id}' to memory")
+        return True
+
+    async def list_crash_events(self, server_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """List recent crash events from in-memory storage."""
+        events = list(self._crash_events.get(server_id, []))
+        return events[:limit]
 
     # ==================== LLM Model Persistence ====================
 
