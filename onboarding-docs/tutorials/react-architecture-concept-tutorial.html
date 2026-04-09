@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<!--
+  FluidMCP React Architecture Tutorial
+
+  HOW TO VIEW:
+  Option 1: Open directly in your browser
+  Option 2: python3 -m http.server 8080 → http://localhost:8080/react-architecture-concept-tutorial.html
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FluidMCP &#x2014; React Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:rgba(210,168,255,0.15);--accent:#d2a8ff;--accent2:#58a6ff;--accent3:#3fb950;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+  .sidebar{width:280px;min-height:100vh;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100}
+  .sidebar-header{padding:24px 20px 16px;border-bottom:1px solid var(--border)}
+  .sidebar-logo{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+  .sidebar-title{font-size:15px;font-weight:700;color:var(--text);line-height:1.3}
+  .sidebar-progress{padding:12px 20px;border-bottom:1px solid var(--border)}
+  .progress-label{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;justify-content:space-between}
+  .progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s}
+  .nav-list{flex:1;overflow-y:auto;padding:12px 0}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;transition:all 0.2s;border-left:3px solid transparent}
+  .nav-item:hover{background:rgba(210,168,255,0.06)}
+  .nav-item.active{background:rgba(210,168,255,0.1);border-left-color:var(--accent)}
+  .nav-item.done .nav-badge{background:var(--accent3);color:#000}
+  .nav-badge{width:22px;height:22px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--text2);flex-shrink:0}
+  .nav-label{font-size:13px;color:var(--text2);line-height:1.3}
+  .nav-item.active .nav-label{color:var(--text);font-weight:500}
+  .main{margin-left:280px;flex:1;min-height:100vh}
+  .lesson{display:none;padding:48px 56px;max-width:900px;animation:slideInUp 0.4s ease both}
+  .lesson.active{display:block}
+  @keyframes slideInUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+  .lesson-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(210,168,255,0.1);border:1px solid rgba(210,168,255,0.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+  .lesson-title{font-size:32px;font-weight:700;color:var(--text);margin-bottom:8px;line-height:1.2}
+  .lesson-subtitle{font-size:15px;color:var(--text2);margin-bottom:36px;line-height:1.6}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:28px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;transition:all 0.25s;animation:slideInUp 0.4s ease both}
+  .card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,0.4);border-color:rgba(210,168,255,0.3)}
+  .card:nth-child(1){animation-delay:0.05s}.card:nth-child(2){animation-delay:0.1s}.card:nth-child(3){animation-delay:0.15s}.card:nth-child(4){animation-delay:0.2s}
+  .card-icon{font-size:24px;margin-bottom:10px}.card-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .card-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .code-block{background:#010409;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
+  .code-header{background:var(--bg3);padding:8px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .code-lang{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
+  .code-copy{background:transparent;border:1px solid var(--border);color:var(--text2);padding:4px 12px;border-radius:6px;font-size:11px;cursor:pointer;transition:all 0.2s}
+  .code-copy:hover{background:var(--bg2);border-color:var(--accent)}
+  .code-copy.copied{background:var(--accent3);border-color:var(--accent3);color:#000}
+  .code-body{padding:18px 20px;overflow-x:auto}
+  .code-body pre{font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;color:#c9d1d9;white-space:pre}
+  .kw{color:#ff7b72}.str{color:#a5d6ff}.cm{color:#8b949e;font-style:italic}.fn{color:#d2a8ff}.num{color:#79c0ff}.var{color:#ffa657}
+  .info-box{background:rgba(210,168,255,0.07);border:1px solid rgba(210,168,255,0.25);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .warn-box{background:rgba(247,129,102,0.07);border:1px solid rgba(247,129,102,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .ok-box{background:rgba(63,185,80,0.07);border:1px solid rgba(63,185,80,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .box-icon{font-size:18px;flex-shrink:0;margin-top:1px}.box-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .box-text strong{color:var(--text)}
+  .dir-tree{background:#010409;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.8}
+  .dir-line{color:var(--text3)}
+  .dir-line.dir-highlight{color:var(--accent);font-weight:600}
+  .dir-comment{color:var(--text2);font-style:italic}
+  h3{font-size:16px;font-weight:600;color:var(--text);margin:24px 0 12px}
+  p{font-size:14px;color:var(--text2);line-height:1.7;margin-bottom:14px}
+  ul,ol{margin:0 0 14px 20px;color:var(--text2);font-size:14px;line-height:1.7}
+  li{margin-bottom:4px}
+  .complete-btn{display:inline-flex;align-items:center;gap:8px;margin-top:32px;padding:12px 24px;background:linear-gradient(135deg,var(--accent),#8b5cf6);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s}
+  .complete-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(210,168,255,0.3)}
+  .complete-btn.done{background:linear-gradient(135deg,var(--accent3),#238636)}
+  .table-wrap{overflow-x:auto;margin-bottom:20px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:var(--bg3);color:var(--text);font-weight:600;padding:10px 14px;text-align:left;border:1px solid var(--border)}
+  td{padding:10px 14px;border:1px solid var(--border);color:var(--text2);vertical-align:top}
+  td code,th code{font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--bg3);padding:2px 6px;border-radius:4px;color:var(--accent)}
+  .flow-diagram{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;margin-bottom:20px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:2}
+  .flow-node{color:var(--accent);font-weight:600}
+  .flow-arrow{color:var(--text3)}
+  .flow-label{color:var(--text2)}
+  .section-label{display:inline-block;background:rgba(88,166,255,0.1);border:1px solid rgba(88,166,255,0.3);color:var(--accent2);font-size:11px;font-weight:600;padding:2px 10px;border-radius:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
+  @media(max-width:768px){.sidebar{width:100%;min-height:auto;position:relative}.main{margin-left:0}.lesson{padding:24px 20px}}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">FluidMCP</div>
+    <div class="sidebar-title">React Architecture</div>
+  </div>
+  <div class="sidebar-progress">
+    <div class="progress-label"><span>Progress</span><span id="progress-text">0 / 8</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+  </div>
+  <ul class="nav-list" id="nav-list">
+    <li class="nav-item active" data-lesson="0" onclick="goTo(0)"><div class="nav-badge">1</div><div class="nav-label">Welcome</div></li>
+    <li class="nav-item" data-lesson="1" onclick="goTo(1)"><div class="nav-badge">2</div><div class="nav-label">Directory Structure</div></li>
+    <li class="nav-item" data-lesson="2" onclick="goTo(2)"><div class="nav-badge">3</div><div class="nav-label">All Pages at a Glance</div></li>
+    <li class="nav-item" data-lesson="3" onclick="goTo(3)"><div class="nav-badge">4</div><div class="nav-label">Dashboard</div></li>
+    <li class="nav-item" data-lesson="4" onclick="goTo(4)"><div class="nav-badge">5</div><div class="nav-label">Manage Servers</div></li>
+    <li class="nav-item" data-lesson="5" onclick="goTo(5)"><div class="nav-badge">6</div><div class="nav-label">LLM Models</div></li>
+    <li class="nav-item" data-lesson="6" onclick="goTo(6)"><div class="nav-badge">7</div><div class="nav-label">Hooks &#x2014; How It All Wires Up</div></li>
+    <li class="nav-item" data-lesson="7" onclick="goTo(7)"><div class="nav-badge">8</div><div class="nav-label">Next Steps</div></li>
+  </ul>
+</nav>
+
+<main class="main">
+
+  <!-- LESSON 1: Welcome -->
+  <section class="lesson active" id="lesson-0">
+    <div class="lesson-badge">Lesson 1 &bull; 1 min</div>
+    <h1 class="lesson-title">React Architecture</h1>
+    <p class="lesson-subtitle">9 pages, 11 custom hooks, one API singleton. Here is how it all fits together.</p>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">&#x1F5FA;</div>
+        <div class="card-title">9 Pages</div>
+        <div class="card-text">Each page is a route component in <code>src/pages/</code>. Pages are thin &#x2014; they own layout and local UI state but delegate all data to hooks.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1FA9D;</div>
+        <div class="card-title">11 Custom Hooks</div>
+        <div class="card-text">All API calls and business logic live in <code>src/hooks/</code>. No Redux or Zustand &#x2014; each feature owns its state in a dedicated hook.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F517;</div>
+        <div class="card-title">One API Client</div>
+        <div class="card-text"><code>services/api.ts</code> is the only file that calls <code>fetch()</code>. Hooks import this singleton and call its typed methods.</div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F4CC;</div>
+      <div class="box-text"><strong>Reading this tutorial:</strong> Lesson 3 covers all 9 pages briefly. Lessons 4&#x2013;6 go deep on the three most important ones. Lesson 7 covers the hook patterns shared across the whole codebase.</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(0)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 2: Directory Structure (MANDATORY) -->
+  <section class="lesson" id="lesson-1">
+    <div class="lesson-badge">Lesson 2 &bull; 2 min</div>
+    <h1 class="lesson-title">Directory Structure</h1>
+    <p class="lesson-subtitle">Where everything lives inside <code>fluidmcp/frontend/src/</code>.</p>
+
+    <div class="dir-tree">
+      <div class="dir-line dir-highlight">src/</div>
+      <div class="dir-line">&#x251C;&#x2500;&#x2500; <span style="color:var(--accent2)">App.tsx</span>                    <span class="dir-comment"># Route definitions &#x2014; single source of truth for all URLs</span></div>
+      <div class="dir-line">&#x251C;&#x2500;&#x2500; main.tsx                   <span class="dir-comment"># React entry point</span></div>
+      <div class="dir-line">&#x2502;</div>
+      <div class="dir-line dir-highlight">&#x251C;&#x2500;&#x2500; pages/                     <span class="dir-comment"># One file per route (9 total)</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; Dashboard.tsx              <span class="dir-comment"># / &#x2014; server grid, search, filter, paginate</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; Status.tsx                 <span class="dir-comment"># /status &#x2014; running servers only</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; ManageServers.tsx          <span class="dir-comment"># /servers/manage &#x2014; CRUD table</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; ServerDetails.tsx          <span class="dir-comment"># /servers/:id &#x2014; tools, logs, env tabs</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; ToolRunner.tsx             <span class="dir-comment"># /servers/:id/tools/:tool &#x2014; execute tools</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; LLMModels.tsx              <span class="dir-comment"># /llm/models &#x2014; model grid</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; LLMModelDetails.tsx        <span class="dir-comment"># /llm/models/:id &#x2014; health &amp; logs</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; LLMPlayground.tsx          <span class="dir-comment"># /llm/playground &#x2014; chat interface</span></div>
+      <div class="dir-line">&#x2502;   &#x2514;&#x2500;&#x2500; Documentation.tsx          <span class="dir-comment"># /documentation &#x2014; static embedded docs</span></div>
+      <div class="dir-line">&#x2502;</div>
+      <div class="dir-line dir-highlight">&#x251C;&#x2500;&#x2500; hooks/                     <span class="dir-comment"># All data &amp; business logic (11 hooks)</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useServers.ts              <span class="dir-comment"># Server list + start/stop/restart</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useServerManagement.ts     <span class="dir-comment"># Server CRUD (add/edit/delete)</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useServerDetails.ts        <span class="dir-comment"># Single server data, tools, logs, env</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useServerEnv.ts            <span class="dir-comment"># Env variable CRUD</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useServerPolling.ts        <span class="dir-comment"># Periodic status refresh</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useServerFiltering.ts      <span class="dir-comment"># Client-side search + filter (servers)</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useActiveServerFiltering.ts<span class="dir-comment"># Filter for running servers (Status page)</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useLLMModels.ts            <span class="dir-comment"># LLM model list + restart/stop/health</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; useToolRunner.ts           <span class="dir-comment"># Tool execution + localStorage history</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; usePolling.ts              <span class="dir-comment"># Generic setInterval utility</span></div>
+      <div class="dir-line">&#x2502;   &#x2514;&#x2500;&#x2500; useDebounce.ts             <span class="dir-comment"># Delays state update by N ms</span></div>
+      <div class="dir-line">&#x2502;</div>
+      <div class="dir-line dir-highlight">&#x251C;&#x2500;&#x2500; components/                <span class="dir-comment"># Reusable UI components</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; ui/                        <span class="dir-comment"># shadcn/ui primitives (Button, Dialog&#x2026;)</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; form/                      <span class="dir-comment"># Dynamic JSON Schema form renderers</span></div>
+      <div class="dir-line">&#x2502;   &#x2514;&#x2500;&#x2500; result/                    <span class="dir-comment"># Tool result viewers (JSON/Table/Text/MCP)</span></div>
+      <div class="dir-line">&#x2502;</div>
+      <div class="dir-line dir-highlight">&#x251C;&#x2500;&#x2500; services/                  <span class="dir-comment"># Non-React utilities</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; <span style="color:var(--accent2)">api.ts</span>                     <span class="dir-comment"># Singleton ApiClient &#x2014; only fetch() caller</span></div>
+      <div class="dir-line">&#x2502;   &#x2514;&#x2500;&#x2500; toolHistory.ts             <span class="dir-comment"># localStorage tool execution history</span></div>
+      <div class="dir-line">&#x2502;</div>
+      <div class="dir-line">&#x2514;&#x2500;&#x2500; types/                     <span class="dir-comment"># TypeScript interfaces</span></div>
+      <div class="dir-line">    &#x251C;&#x2500;&#x2500; server.ts                  <span class="dir-comment"># Server, Tool, EnvVar</span></div>
+      <div class="dir-line">    &#x2514;&#x2500;&#x2500; llm.ts                     <span class="dir-comment"># LLMModel, ReplicateModel, ChatMessage</span></div>
+    </div>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F9E0;</div>
+      <div class="box-text"><strong>Rule of thumb:</strong> pages = what the user sees. hooks = the logic and data behind it. <code>api.ts</code> = the only wire to the backend. If you are debugging a data issue, start in the hook. If you are debugging a UI issue, start in the page.</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(1)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 3: All Pages at a Glance -->
+  <section class="lesson" id="lesson-2">
+    <div class="lesson-badge">Lesson 3 &bull; 2 min</div>
+    <h1 class="lesson-title">All Pages at a Glance</h1>
+    <p class="lesson-subtitle">9 routes, defined in <code>App.tsx</code>. Unknown paths fall back to <code>/</code>.</p>
+
+    <div class="warn-box">
+      <div class="box-icon">&#x1F4CD;</div>
+      <div class="box-text">
+        <strong>Always enter at <code>/ui</code>.</strong> The backend mounts the frontend at <code>/ui</code> &#x2014; going to <code>/servers</code> or <code>/llm/models</code> directly in the browser will not work. Start at <code>/ui</code> and React Router handles all navigation from there.<br><br>
+        <strong>Codespace:</strong> <code>https://&lt;name&gt;-8099.app.github.dev/ui</code><br>
+        <strong>Local:</strong> <code>http://localhost:8099/ui</code><br>
+        <strong>Railway:</strong> <code>https://&lt;your-app&gt;.railway.app/ui</code>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Page</th><th>Route</th><th>Hook(s)</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Dashboard</strong></td><td><code>/</code> or <code>/servers</code></td><td><code>useServers</code></td><td>Server grid with search, filter, sort, paginate. Quick start action.</td></tr>
+          <tr><td><strong>Status</strong></td><td><code>/status</code></td><td><code>useServers</code>, <code>useActiveServerFiltering</code></td><td>Running/starting servers only. Quick stop/restart.</td></tr>
+          <tr><td><strong>ServerDetails</strong></td><td><code>/servers/:id</code></td><td><code>useServerDetails</code>, <code>useServerPolling</code></td><td>Three tabs: Tools list, live Logs, Environment variables.</td></tr>
+          <tr><td><strong>ToolRunner</strong></td><td><code>/servers/:id/tools/:tool</code></td><td><code>useToolRunner</code></td><td>Auto-generated form from JSON Schema. Execute tool, view result, history in localStorage.</td></tr>
+          <tr><td><strong>ManageServers</strong></td><td><code>/servers/manage</code></td><td><code>useServerManagement</code></td><td>CRUD table. Add via manual config or GitHub clone. Edit, disable, delete.</td></tr>
+          <tr><td><strong>LLMModels</strong></td><td><code>/llm/models</code></td><td><code>useLLMModels</code>, <code>useDebounce</code></td><td>Model grid (vLLM, Ollama, Replicate). Health status, add/edit modal.</td></tr>
+          <tr><td><strong>LLMModelDetails</strong></td><td><code>/llm/models/:id</code></td><td><code>useLLMModels</code></td><td>Single model: health, uptime, logs, restart/stop.</td></tr>
+          <tr><td><strong>LLMPlayground</strong></td><td><code>/llm/playground</code></td><td>&#x2014; (local state)</td><td>Chat interface. Model selector, temperature/max_tokens, message history.</td></tr>
+          <tr><td><strong>Documentation</strong></td><td><code>/documentation</code></td><td>&#x2014; (static content)</td><td>Embedded docs with collapsible sidebar, section search, copy buttons.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>A note on Documentation and LLMPlayground</h3>
+    <p><strong>Documentation</strong> has no API calls &#x2014; all content is hardcoded. It uses <code>useLocation()</code> only to read the URL hash and scroll to the right section on load.</p>
+    <p><strong>LLMPlayground</strong> calls <code>apiClient.chatCompletion()</code> directly from the component (no custom hook) because it is essentially a one-shot stateful form &#x2014; no list to manage, no polling needed.</p>
+
+    <button class="complete-btn" onclick="complete(2)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 4: Dashboard -->
+  <section class="lesson" id="lesson-3">
+    <div class="lesson-badge">Lesson 4 &bull; 3 min</div>
+    <h1 class="lesson-title">Dashboard</h1>
+    <p class="lesson-subtitle"><code>src/pages/Dashboard.tsx</code> &#x2014; the landing page. Shows all MCP servers as cards.</p>
+
+    <div class="section-label">What it does</div>
+    <ul>
+      <li>Fetches all servers on mount via <code>useServers</code></li>
+      <li>Client-side filter (all / running / stopped / error), search by name, sort (name A&#x2013;Z, name Z&#x2013;A, status, recent)</li>
+      <li>Pagination &#x2014; 9 cards per page; scrolls back to list top on page change</li>
+      <li>"Start" triggers <code>startServer(id)</code> with toast feedback; <code>actionState</code> prevents double-clicks</li>
+      <li>"View Details" navigates to <code>/servers/:id</code></li>
+      <li>Skeleton loading state while data loads; <code>ErrorMessage</code> + retry on error</li>
+      <li>AOS (Animate On Scroll) on each card for entrance animations</li>
+    </ul>
+
+    <h3>Hook wiring</h3>
+    <div class="flow-diagram">
+      <div><span class="flow-node">Dashboard</span></div>
+      <div style="margin-left:20px"><span class="flow-arrow">&#x2514;&#x2500;</span> <span class="flow-node">useServers()</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">servers[]  &#x2192; filtered &#x2192; sorted &#x2192; paginated &#x2192; ServerCard[]</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">activeServers[]  &#x2192; subtitle "N running"</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">loading  &#x2192; skeleton grid</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">error  &#x2192; ErrorMessage + retry</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">startServer(id)  &#x2192; POST /api/servers/:id/start &#x2192; refetch</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x2514;</span> <span class="flow-label">refetch()  &#x2192; "Refresh" button</span></div>
+    </div>
+
+    <h3>Key local state</h3>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">const</span> [searchQuery, setSearchQuery] = <span class="fn">useState</span>(<span class="str">""</span>);
+<span class="kw">const</span> [sortBy, setSortBy]    = <span class="fn">useState</span>&lt;<span class="str">'name-asc'</span>|<span class="str">'name-desc'</span>|<span class="str">'status'</span>|<span class="str">'recent'</span>&gt;(<span class="str">'name-asc'</span>);
+<span class="kw">const</span> [filterBy, setFilterBy] = <span class="fn">useState</span>&lt;<span class="str">'all'</span>|<span class="str">'running'</span>|<span class="str">'stopped'</span>|<span class="str">'error'</span>&gt;(<span class="str">'all'</span>);
+<span class="kw">const</span> [currentPage, setCurrentPage] = <span class="fn">useState</span>(<span class="num">1</span>);
+
+<span class="cm">// Prevents double-click start while request is in flight</span>
+<span class="kw">const</span> [actionState, setActionState] = <span class="fn">useState</span>&lt;{
+  serverId: <span class="var">string</span> | <span class="kw">null</span>;
+  type: <span class="str">'starting'</span> | <span class="str">'stopping'</span> | <span class="kw">null</span>;
+}&gt;({ serverId: <span class="kw">null</span>, type: <span class="kw">null</span> });</pre></div>
+    </div>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F4A1;</div>
+      <div class="box-text"><strong>Filtering is client-side.</strong> The hook fetches all servers once; Dashboard filters them in memory. This is fine for typical server counts (&lt;100). No server-side filtering on Dashboard.</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(3)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 5: ManageServers -->
+  <section class="lesson" id="lesson-4">
+    <div class="lesson-badge">Lesson 5 &bull; 3 min</div>
+    <h1 class="lesson-title">Manage Servers</h1>
+    <p class="lesson-subtitle"><code>src/pages/ManageServers.tsx</code> &#x2014; the CRUD control panel. Intentionally separate from Dashboard.</p>
+
+    <div class="section-label">What it does</div>
+    <ul>
+      <li>Table layout (not cards) &#x2014; columns: name/ID, command, status, Edit/Delete</li>
+      <li>Fetches all servers including disabled ones (<code>enabled_only: false</code>)</li>
+      <li>"Add Server" opens a modal with two tabs: <strong>Manual Config</strong> and <strong>Clone from GitHub</strong></li>
+      <li>Editing a running server is blocked &#x2014; must stop it first</li>
+      <li>Delete opens <code>DeleteConfirmationModal</code> with two choices: soft-delete (disable) or hard delete</li>
+      <li>"Deleted" toggle reveals soft-deleted servers for admin recovery</li>
+      <li>Search by name or ID, filter by status, paginated at 10 per page</li>
+    </ul>
+
+    <h3>Hook wiring</h3>
+    <div class="flow-diagram">
+      <div><span class="flow-node">ManageServers</span></div>
+      <div style="margin-left:20px"><span class="flow-arrow">&#x2514;&#x2500;</span> <span class="flow-node">useServerManagement(showDeleted)</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">servers[]  &#x2192; filtered &#x2192; paginated &#x2192; table rows</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">createServer(config)  &#x2192; POST /api/servers &#x2192; refetch</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">updateServer(id, config)  &#x2192; PUT /api/servers/:id &#x2192; refetch</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">deleteServer(id)  &#x2192; DELETE /api/servers/:id &#x2192; refetch</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x2514;</span> <span class="flow-label">refetch(showDeleted)  &#x2192; called when toggle changes</span></div>
+    </div>
+
+    <h3>The edit guard</h3>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">const</span> <span class="fn">handleEdit</span> = (server: <span class="var">Server</span>) =&gt; {
+  <span class="kw">if</span> (server.status?.state === <span class="str">'running'</span>) {
+    <span class="fn">alert</span>(<span class="str">'Cannot edit running server. Stop it first.'</span>);
+    <span class="kw">return</span>;
+  }
+  <span class="fn">setEditingServer</span>(server);
+  <span class="fn">setShowForm</span>(<span class="kw">true</span>);
+};</pre></div>
+    </div>
+
+    <h3>Two ways to add a server</h3>
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">&#x2699;&#xFE0F;</div>
+        <div class="card-title">Manual Config</div>
+        <div class="card-text">Fill in name, command, args, env vars. Uses <code>ServerForm</code> component. Calls <code>POST /api/servers</code>.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4E5;</div>
+        <div class="card-title">Clone from GitHub</div>
+        <div class="card-text">Provide a GitHub repo URL + token. Uses <code>CloneFromGithubForm</code>. Calls <code>POST /api/servers/from-github</code> which clones and extracts metadata.</div>
+      </div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(4)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 6: LLMModels -->
+  <section class="lesson" id="lesson-5">
+    <div class="lesson-badge">Lesson 6 &bull; 3 min</div>
+    <h1 class="lesson-title">LLM Models</h1>
+    <p class="lesson-subtitle"><code>src/pages/LLMModels.tsx</code> &#x2014; the Dashboard equivalent for AI models.</p>
+
+    <div class="section-label">What it does</div>
+    <ul>
+      <li>Grid of LLM model cards &#x2014; same layout pattern as Dashboard</li>
+      <li>Supports three model types: <code>process</code> (vLLM/Ollama local), <code>replicate</code> (cloud API)</li>
+      <li>Debounced search via <code>useDebounce(searchQuery, 300)</code> &#x2014; filters on model ID</li>
+      <li>Filter by: all / running / stopped / healthy / unhealthy / process / replicate</li>
+      <li>Sort by: name, health score, uptime</li>
+      <li>Filter logic is <code>useMemo</code>-memoized (Dashboard does it inline)</li>
+      <li>"Add Model" opens <code>LLMModelForm</code> modal; "Try LLMs" navigates to playground</li>
+      <li>Shows summary stats: total, running, healthy counts</li>
+    </ul>
+
+    <h3>Hook wiring</h3>
+    <div class="flow-diagram">
+      <div><span class="flow-node">LLMModels</span></div>
+      <div style="margin-left:20px"><span class="flow-arrow">&#x251C;&#x2500;</span> <span class="flow-node">useLLMModels()</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">models[]  &#x2192; filtered (useMemo) &#x2192; sorted &#x2192; paginated &#x2192; LLMModelCard[]</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">runningModels[], healthyModels[]  &#x2192; subtitle stats</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x251C;</span> <span class="flow-label">loading, error  &#x2192; skeleton / error state</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x2514;</span> <span class="flow-label">refetch()  &#x2192; called after create/update</span></div>
+      <div style="margin-left:20px"><span class="flow-arrow">&#x2514;&#x2500;</span> <span class="flow-node">useDebounce(searchQuery, 300)</span></div>
+      <div style="margin-left:40px"><span class="flow-arrow">&#x2514;</span> <span class="flow-label">debouncedSearchQuery  &#x2192; passed into useMemo filter</span></div>
+    </div>
+
+    <h3>Why useDebounce here but not on Dashboard?</h3>
+    <p>LLMModels filters by model ID which may have many similar-looking strings &#x2014; debouncing prevents re-filtering on every keystroke. Dashboard filters by server name which is short and the list is typically smaller, so inline filtering is fine there.</p>
+
+    <h3>Creating a model (direct apiClient call)</h3>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">const</span> <span class="fn">handleCreateModel</span> = <span class="kw">async</span> (config: <span class="var">ReplicateModelConfig</span>) =&gt; {
+  <span class="kw">const</span> toastId = <span class="fn">showLoading</span>(<span class="str">'Creating model...'</span>);
+  <span class="kw">try</span> {
+    <span class="kw">await</span> apiClient.<span class="fn">createLLMModel</span>(config);   <span class="cm">// POST /api/models/register</span>
+    <span class="fn">showSuccess</span>(<span class="str">'Model created successfully'</span>, toastId);
+    <span class="fn">refetch</span>();
+  } <span class="kw">catch</span> (err) {
+    <span class="fn">showError</span>(`Failed: ${err.message}`, toastId);
+    <span class="kw">throw</span> err;
+  }
+};</pre></div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(5)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 7: Hooks -->
+  <section class="lesson" id="lesson-6">
+    <div class="lesson-badge">Lesson 7 &bull; 3 min</div>
+    <h1 class="lesson-title">Hooks &#x2014; How It All Wires Up</h1>
+    <p class="lesson-subtitle">Three patterns repeat across every hook in the codebase. Learn these and you will understand them all.</p>
+
+    <h3>Pattern 1: AbortController + isMountedRef</h3>
+    <p>Prevents state updates after a component unmounts (avoids React warnings and memory leaks):</p>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript — useServers.ts (representative example)</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">const</span> isMountedRef = <span class="fn">useRef</span>(<span class="kw">true</span>);
+<span class="kw">const</span> abortControllerRef = <span class="fn">useRef</span>&lt;AbortController | <span class="kw">null</span>&gt;(<span class="kw">null</span>);
+
+<span class="kw">const</span> <span class="fn">fetchServers</span> = <span class="fn">useCallback</span>(<span class="kw">async</span> () =&gt; {
+  abortControllerRef.current?.<span class="fn">abort</span>();           <span class="cm">// cancel previous in-flight request</span>
+  <span class="kw">const</span> controller = <span class="kw">new</span> <span class="fn">AbortController</span>();
+  abortControllerRef.current = controller;
+
+  <span class="fn">setLoading</span>(<span class="kw">true</span>);
+  <span class="kw">try</span> {
+    <span class="kw">const</span> response = <span class="kw">await</span> apiClient.<span class="fn">listServers</span>({ signal: controller.signal });
+    <span class="kw">if</span> (isMountedRef.current) <span class="fn">setServers</span>(response.servers);
+  } <span class="kw">catch</span> (err) {
+    <span class="kw">if</span> (!controller.signal.aborted &amp;&amp; isMountedRef.current)
+      <span class="fn">setError</span>(err.message);
+  } <span class="kw">finally</span> {
+    <span class="kw">if</span> (isMountedRef.current) <span class="fn">setLoading</span>(<span class="kw">false</span>);
+  }
+}, []);
+
+<span class="fn">useEffect</span>(() =&gt; {
+  isMountedRef.current = <span class="kw">true</span>;
+  <span class="fn">fetchServers</span>();
+  <span class="kw">return</span> () =&gt; {
+    isMountedRef.current = <span class="kw">false</span>;
+    abortControllerRef.current?.<span class="fn">abort</span>();
+  };
+}, [fetchServers]);</pre></div>
+    </div>
+
+    <h3>Pattern 2: Refetch after every mutation</h3>
+    <p>Every write (start/stop/create/update/delete) calls the fetch function at the end to keep UI in sync:</p>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript — useServerManagement.ts</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">const</span> <span class="fn">createServer</span> = <span class="fn">useCallback</span>(<span class="kw">async</span> (config: <span class="kw">any</span>) =&gt; {
+  <span class="kw">try</span> {
+    <span class="kw">await</span> apiClient.<span class="fn">addServer</span>(config);
+    <span class="fn">showSuccess</span>(`Server created`);
+    <span class="kw">await</span> <span class="fn">fetchServers</span>();   <span class="cm">// always re-sync after write</span>
+    <span class="kw">return true</span>;
+  } <span class="kw">catch</span> (err) {
+    <span class="fn">showError</span>(err.message);
+    <span class="kw">return false</span>;
+  }
+}, [fetchServers]);</pre></div>
+    </div>
+
+    <h3>Pattern 3: useCallback on fetch to avoid infinite loops</h3>
+    <p>The fetch function is wrapped in <code>useCallback</code> so its reference is stable. This prevents the <code>useEffect([fetchData])</code> from re-running on every render:</p>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="cm">// fetchServers is stable — only created once (no deps)</span>
+<span class="kw">const</span> <span class="fn">fetchServers</span> = <span class="fn">useCallback</span>(<span class="kw">async</span> () =&gt; { ... }, []);
+
+<span class="cm">// So this effect runs only once on mount</span>
+<span class="fn">useEffect</span>(() =&gt; {
+  <span class="fn">fetchServers</span>();
+}, [fetchServers]);</pre></div>
+    </div>
+
+    <div class="ok-box">
+      <div class="box-icon">&#x2705;</div>
+      <div class="box-text"><strong>Summary:</strong> Every hook follows the same skeleton: <code>useCallback</code> on fetch &#x2192; <code>useEffect</code> calls it on mount / cleans up on unmount &#x2192; mutations call fetch at the end. Once you see it once you will recognise it everywhere.</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(6)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 8: Next Steps -->
+  <section class="lesson" id="lesson-7">
+    <div class="lesson-badge">Lesson 8 &bull; 1 min</div>
+    <h1 class="lesson-title">Next Steps</h1>
+    <p class="lesson-subtitle">You now understand the architecture. Here is what to look at next.</p>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">&#x1F6E0;</div>
+        <div class="card-title">Tool Execution Flow</div>
+        <div class="card-text">Trace how a tool call travels from <code>ToolRunner.tsx</code> &#x2192; <code>useToolRunner</code> &#x2192; <code>api.ts</code> &#x2192; FastAPI &#x2192; MCP subprocess.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F511;</div>
+        <div class="card-title">Env Variables (UI)</div>
+        <div class="card-text">See how the env var editor in ServerDetails works end-to-end: <code>useServerEnv</code> &#x2192; <code>PATCH /api/servers/:id/env</code>.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F4E6;</div>
+        <div class="card-title">Backend Architecture</div>
+        <div class="card-text">Read <code>docs/RAILWAY_DEPLOYMENT.md</code> and the <code>TECHNICAL_ONBOARDING.md</code> in <code>onboarding_docs/</code> for backend service details.</div>
+      </div>
+    </div>
+
+    <h3>Adding a new page &#x2014; the pattern to follow</h3>
+    <ol>
+      <li>Create <code>src/pages/MyPage.tsx</code> &#x2014; thin component, local UI state only</li>
+      <li>Create <code>src/hooks/useMyFeature.ts</code> &#x2014; fetch + mutations using the three patterns above</li>
+      <li>Add typed methods to <code>src/services/api.ts</code> if you need new endpoints</li>
+      <li>Add <code>&lt;Route path="/my-page" element=&#x7B;&lt;MyPage /&gt;&#x7D; /&gt;</code> in <code>App.tsx</code></li>
+      <li>Add nav link in <code>Navbar.tsx</code>, run <code>npm run build</code>, restart backend</li>
+    </ol>
+
+    <div class="ok-box">
+      <div class="box-icon">&#x1F389;</div>
+      <div class="box-text"><strong>You are oriented.</strong> You know every page, you can read any hook, and you know where to add new features. The architecture is consistent &#x2014; once you understand one page+hook pair, you understand them all.</div>
+    </div>
+
+    <button class="complete-btn done" onclick="complete(7)">&#x2713; Tutorial Complete</button>
+  </section>
+
+</main>
+
+<script>
+const TOTAL = 8;
+const KEY = 'fmcp-react-arch-progress';
+let done = JSON.parse(localStorage.getItem(KEY) || '[]');
+let current = 0;
+
+function goTo(n) {
+  document.querySelectorAll('.lesson').forEach(l => l.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(l => l.classList.remove('active'));
+  document.getElementById('lesson-' + n).classList.add('active');
+  document.querySelector('[data-lesson="' + n + '"]').classList.add('active');
+  current = n;
+  window.scrollTo(0, 0);
+}
+
+function complete(n) {
+  if (!done.includes(n)) { done.push(n); localStorage.setItem(KEY, JSON.stringify(done)); }
+  document.querySelectorAll('.nav-item')[n].classList.add('done');
+  const btn = document.getElementById('lesson-' + n).querySelector('.complete-btn');
+  btn.classList.add('done'); btn.textContent = '\u2713 Done';
+  updateProgress();
+  if (n < TOTAL - 1) setTimeout(() => goTo(n + 1), 300);
+}
+
+function updateProgress() {
+  const pct = Math.round((done.length / TOTAL) * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-text').textContent = done.length + ' / ' + TOTAL;
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('pre').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+done.forEach(n => {
+  document.querySelectorAll('.nav-item')[n]?.classList.add('done');
+  const btn = document.getElementById('lesson-' + n)?.querySelector('.complete-btn');
+  if (btn) { btn.classList.add('done'); btn.textContent = '\u2713 Done'; }
+});
+updateProgress();
+</script>
+</body>
+</html>
