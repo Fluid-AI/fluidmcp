@@ -458,6 +458,44 @@ export default function MCPInspector() {
     setExecutionTime(null)
   }, [selectedTool])
 
+  // ── Session persistence ────────────────────────────────────────────────────
+  // Restore servers + selected server on mount (survives page navigation)
+  useEffect(() => {
+    const savedServers = sessionStorage.getItem('inspector-servers')
+    const savedSelectedId = sessionStorage.getItem('inspector-selected-server-id')
+
+    if (savedServers) {
+      try {
+        const parsed: MCPServer[] = JSON.parse(savedServers)
+        // Any mid-connect server was interrupted — treat as disconnected on restore
+        const restored = parsed.map(s =>
+          s.status === 'connecting'
+            ? { ...s, status: 'disconnected' as const, session_id: null }
+            : s
+        )
+        setServers(restored)
+      } catch {
+        // ignore malformed storage
+      }
+    }
+
+    if (savedSelectedId) setSelectedServerId(savedSelectedId)
+  }, [])
+
+  // Persist servers list whenever it changes
+  useEffect(() => {
+    sessionStorage.setItem('inspector-servers', JSON.stringify(servers))
+  }, [servers])
+
+  // Persist selected server ID whenever it changes
+  useEffect(() => {
+    if (selectedServerId) {
+      sessionStorage.setItem('inspector-selected-server-id', selectedServerId)
+    } else {
+      sessionStorage.removeItem('inspector-selected-server-id')
+    }
+  }, [selectedServerId])
+
   useEffect(() => {
     const saved = sessionStorage.getItem('inspector-panel-sizes')
     if (saved) setPanelSizes(JSON.parse(saved))
