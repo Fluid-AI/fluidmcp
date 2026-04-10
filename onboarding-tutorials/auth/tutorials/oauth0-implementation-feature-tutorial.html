@@ -970,6 +970,10 @@ const lessons = [
           <div class="env-desc">Secret for local JWT operations. Required by <code>validate_required()</code>.</div>
           <div class="env-required">REQUIRED</div>
         </div>
+        <div class="env-item" style="background:#f0f4ff;border-left:3px solid #4a6cf7;padding:10px 14px;">
+          <div class="env-key" style="font-size:0.85em;color:#4a6cf7;">&#x2139;&#xFE0F; Dual-algorithm design note</div>
+          <div class="env-desc" style="margin-top:6px;"><code>Auth0Config.jwt_algorithm</code> defaults to <code>"HS256"</code> and pairs with <code>FMCP_JWT_SECRET</code> for any locally-signed session tokens. This is <strong>separate</strong> from Auth0-issued access tokens, which are <strong>always</strong> validated with <code>RS256</code> via the Auth0 JWKS endpoint — that algorithm is pinned in <code>jwt_validator.py</code> and is not configurable. In short: <code>HS256</code> + <code>jwt_secret</code> = local sessions; <code>RS256</code> + JWKS = Auth0 tokens.</div>
+        </div>
         <div class="env-item">
           <div class="env-key">FMCP_AUTH0_CALLBACK_URL</div>
           <div class="env-desc">Override the auto-detected OAuth callback URL. Set this if automatic Codespaces/Gitpod detection fails or you use a custom domain.</div>
@@ -977,8 +981,8 @@ const lessons = [
         </div>
         <div class="env-item">
           <div class="env-key">FMCP_BASE_URL</div>
-          <div class="env-desc">Manually set the server base URL used in all generated links. Takes highest priority in <code>get_base_url()</code>.</div>
-          <div class="env-optional">OPTIONAL</div>
+          <div class="env-desc">Manually set the server base URL used in all generated links. Takes highest priority in <code>get_base_url()</code>.<br><br><strong>&#x26A0;&#xFE0F; Required on Railway and any HTTPS deployment in Auth0 mode:</strong> <code>is_local_development()</code> in <code>routes.py</code> checks this value to decide whether to set <code>Secure=True</code> on the <code>fmcp_auth_token</code> cookie. If this env var is unset (or contains <code>localhost</code>/<code>127.0.0.1</code>), the cookie ships <strong>without</strong> the <code>Secure</code> flag, meaning it can be sent over plain HTTP. Always set this to your public HTTPS URL (e.g. <code>https://your-app.up.railway.app</code>) when deploying behind HTTPS.</div>
+          <div class="env-optional">OPTIONAL (REQUIRED in HTTPS deployments with Auth0)</div>
         </div>
       </div>
 
@@ -1572,7 +1576,7 @@ function Dashboard() {
         <div class="card">
           <div class="card-icon">&#x1F6E1;</div>
           <div class="card-title">CSRF Protection</div>
-          <div class="card-text"><code>secrets.token_urlsafe(32)</code> state tokens stored in <code>_state_store</code> with 10-minute expiry. One-time use &#x2014; deleted on successful validation.</div>
+          <div class="card-text"><code>secrets.token_urlsafe(32)</code> state tokens stored in <code>_state_store</code> with 10-minute expiry. One-time use &#x2014; deleted on successful validation.<br><br><strong>&#x26A0;&#xFE0F; Multi-instance caveat:</strong> <code>_state_store</code> is an in-process Python dict (<code>routes.py</code> line 25). In multi-worker (<code>uvicorn --workers N</code>) or multi-replica Railway deployments, each process owns its own dict — a state token created by worker A will not be found by worker B, causing random CSRF login failures. For production multi-instance setups, use a single-worker deployment or replace <code>_state_store</code> with a shared Redis/DB-backed store.</div>
         </div>
         <div class="card">
           <div class="card-icon">&#x1F512;</div>
@@ -1582,7 +1586,7 @@ function Dashboard() {
         <div class="card">
           <div class="card-icon">&#x23F1;</div>
           <div class="card-title">Timing Attack Prevention</div>
-          <div class="card-text"><code>secrets.compare_digest()</code> used in <code>auth.py :: _validate_bearer_token()</code> for constant-time token comparison. Prevents timing side-channel attacks.</div>
+          <div class="card-text"><code>secrets.compare_digest()</code> used in <code>dependencies.py :: get_current_user()</code> for constant-time bearer token comparison. Prevents timing side-channel attacks.</div>
         </div>
         <div class="card">
           <div class="card-icon">&#x1F4CB;</div>
@@ -1590,6 +1594,15 @@ function Dashboard() {
           <div class="card-text">Middleware in <code>server.py</code> adds CSP, <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, and <code>X-XSS-Protection: 1; mode=block</code> to all responses.</div>
         </div>
       </div>
+
+      <h3>OAuth &#x2192; Bearer Fallback (<code>dependencies.py</code>)</h3>
+      <p>The CLI enforces a mutex between <code>--secure</code> and <code>--auth0</code> — you cannot pass both flags at once. However, when environment variables are set directly (e.g. in Railway or Docker), both <code>FMCP_AUTH0_MODE=true</code> and <code>FMCP_SECURE_MODE=true</code> can be active simultaneously. In that case <code>get_current_user()</code> in <code>dependencies.py</code> applies a silent fallback:</p>
+      <ol>
+        <li>OAuth JWT validation is attempted first via <code>jwt_validator.py :: validate_oauth_jwt()</code>.</li>
+        <li>If it fails <strong>and</strong> <code>FMCP_SECURE_MODE=true</code>, bearer token validation is tried next.</li>
+        <li>If bearer also fails, a <code>401</code> is returned.</li>
+      </ol>
+      <p>This fallback is intentional for gradual auth migrations, but should be used deliberately. Avoid setting both env vars in production unless you understand the precedence.</p>
 
       <h3>Security Headers (from <code>server.py :: add_security_headers</code>)</h3>
       <div class="code-block">

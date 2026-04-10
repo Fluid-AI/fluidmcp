@@ -6,6 +6,7 @@ both OAuth JWT tokens and simple bearer token authentication.
 """
 
 import os
+import secrets
 from typing import Dict, Optional
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -105,7 +106,7 @@ async def get_current_user(
                 detail="Bearer token authentication is enabled but FMCP_BEARER_TOKEN is not set"
             )
 
-        if token == bearer_token:
+        if secrets.compare_digest(token, bearer_token):
             logger.debug(f"Bearer token authentication successful")
             return {
                 "user_id": f"bearer_{token[:8]}",
