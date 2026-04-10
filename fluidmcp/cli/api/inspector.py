@@ -253,8 +253,10 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent
-        agent_result = await choose_tool_with_llm(body.message, tools)
+        # Call the Groq agent, passing chat history for multi-turn context
+        agent_result = await choose_tool_with_llm(
+            body.message, tools, chat_history=body.chat_history or []
+        )
 
         # Validate the response has the expected fields
         tool_name = agent_result.get("tool_name")
