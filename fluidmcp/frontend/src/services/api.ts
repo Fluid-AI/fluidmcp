@@ -65,8 +65,14 @@ class ApiClient {
     endpoint: string,
     options?: RequestInit & { signal?: AbortSignal }
   ): Promise<T> {
-    // AbortController lifecycle is owned by hooks/components, not apiClient
-    // This method accepts optional signal for request cancellation
+    // DEBUG: Log all cookies before request
+    console.log('[API Debug] All cookies:', document.cookie);
+    console.log('[API Debug] Request:', {
+      endpoint,
+      method: options?.method || 'GET',
+      credentials: 'include',
+      baseUrl: this.baseUrl
+    });
 
     // Create timeout controller (30 seconds default)
     const timeoutController = new AbortController();
@@ -84,22 +90,33 @@ class ApiClient {
           ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           ...options?.headers,
         },
+        credentials: 'include', // IMPORTANT: Send httpOnly cookies with all requests
         ...options,
         signal,
       });
 
       clearTimeout(timeoutId);
 
+      // DEBUG: Log response details
+      console.log('[API Debug] Response:', {
+        endpoint,
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok
+      });
+
       if (!response.ok) {
         const error: ApiError = await response.json().catch(() => ({
           detail: `HTTP ${response.status}: ${response.statusText}`,
         }));
+        console.error('[API Debug] Error response:', error);
         throw new Error(error.detail);
       }
 
       return response.json();
     } catch (err) {
       clearTimeout(timeoutId);
+      console.error('[API Debug] Request failed:', err);
 
       // Handle timeout errors specifically
       if (err instanceof Error && err.name === 'AbortError') {
@@ -180,6 +197,9 @@ class ApiClient {
     );
   }
 
+  // Authentication APIs
+  async getAuthConfig(options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request('/auth/config', options);
   // LLM Model Management APIs
   async listLLMModels(options?: { signal?: AbortSignal }): Promise<LLMModelsListResponse> {
     return this.request<LLMModelsListResponse>('/api/llm/models', options);
@@ -268,17 +288,12 @@ class ApiClient {
     });
   }
 
-  async updateServer(serverId: string, config: any): Promise<{ message: string; config: any }> {
-    return this.request(`/api/servers/${serverId}`, {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    });
+  async getCurrentUser(options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request('/auth/me', options);
   }
 
-  async deleteServer(serverId: string): Promise<{ message: string; deleted_at: string }> {
-    return this.request(`/api/servers/${serverId}`, {
-      method: 'DELETE',
-    });
+  async logout(): Promise<void> {
+    return this.request('/auth/logout', { method: 'POST' });
   }
 
   // Inspector Tools APIs
