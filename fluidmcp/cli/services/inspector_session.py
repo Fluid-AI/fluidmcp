@@ -65,6 +65,7 @@ class InspectorSession:
         # Execution logs for this session
         self.logs: List[Dict[str, Any]] = []
 
+
         # For SSE: the endpoint to POST messages to (received during SSE handshake)
         self._sse_post_url: Optional[str] = None
         self._sse_session_id: Optional[str] = None
@@ -295,6 +296,7 @@ class InspectorSession:
 
         # Log tool call
         self.add_log("tool_call", f"Running tool: {name}")
+
 
         request = {
             "jsonrpc": "2.0",
