@@ -305,6 +305,8 @@ The CLI entry point is `fluidmcp/cli/cli.py`. The `serve` subparser (registered 
 
 `create_app()` constructs the FastAPI application and attaches all middleware and routers. Two security-oriented middleware layers are applied to every request before route handlers execute: `CORSMiddleware` enforces origin policy, and `limit_request_size` rejects bodies exceeding the configured size limit (default 10 MB, set via `MAX_REQUEST_SIZE_MB`). The `/health` endpoint is intentionally public and un-instrumented to avoid metric pollution from load-balancer probes.
 
+> **Security note:** `limit_request_size` only enforces the body-size limit when a `Content-Length` header is present. Requests that use chunked transfer encoding (no `Content-Length`) bypass this check. For production deployments, configure a server-level limit in addition: Uvicorn `--limit-max-requests`, Nginx `client_max_body_size`, or an equivalent CDN/proxy setting.
+
 ### Auth (Cross-cutting)
 
 `auth.py · verify_token()` is a FastAPI dependency injected with `Depends()`. It is stateless and reads two environment variables at call-time: `FMCP_SECURE_MODE` and `FMCP_BEARER_TOKEN`. When secure mode is off, it is a no-op. When on, it delegates to `_validate_bearer_token()` which performs a constant-time comparison (`secrets.compare_digest`) to prevent timing attacks.

@@ -804,7 +804,7 @@ const lessons = [
 <div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">auth.py</span>          <span class="dir-comment"># Bearer token auth: verify_token(), secrets.compare_digest()</span></div>
 <div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">api/</span></div>
 <div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name dir-highlight">management.py</span>    <span class="dir-comment"># All REST API route handlers (40+ endpoints)</span></div>
-<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">inspector.py</span>     <span class="dir-comment"># MCP inspector WebSocket sessions</span></div>
+<div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">inspector.py</span>     <span class="dir-comment"># MCP inspector HTTP / SSE sessions</span></div>
 <div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">models/</span></div>
 <div class="dir-line dir-indent-3"><span class="dir-tree-char">&#x2514;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C4;</span><span class="dir-name">api.py</span>           <span class="dir-comment"># Pydantic request/response models</span></div>
 <div class="dir-line dir-indent-2"><span class="dir-tree-char">&#x251C;&#x2500;&#x2500;</span> <span class="dir-icon">&#x1F4C2;</span><span class="dir-name dir">repositories/</span></div>
@@ -1141,11 +1141,7 @@ fmcp serve \
       <td>TTL 30 days</td>
       <td>Crash reports from server subprocess exits</td>
     </tr>
-    <tr>
-      <td>fluidmcp_audit_log</td>
-      <td>&mdash;</td>
-      <td>API call audit trail (who did what, when)</td>
-    </tr>
+
   </tbody>
 </table>
 
@@ -1422,11 +1418,9 @@ curl -X POST http://localhost:8099/api/servers \
   -d <span class="str">'{
     "id": "filesystem",
     "name": "Filesystem Server",
-    "mcp_config": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-      "env": {}
-    }
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    "env": {}
   }'</span>
 
 <span class="cm"># Step 3: Start the server subprocess</span>
@@ -1702,9 +1696,9 @@ TOKEN=\${FMCP_BEARER_TOKEN}
 curl -X POST http://localhost:8099/api/servers \
   -H <span class="str">"Authorization: Bearer \${TOKEN}"</span> \
   -H <span class="str">"Content-Type: application/json"</span> \
-  -d <span class="str">'{"id":"fs","mcp_config":{"command":"npx",
+  -d <span class="str">'{"id":"fs","command":"npx",
       "args":["-y","@modelcontextprotocol/server-filesystem","/tmp"],
-      "env":{}}}'</span>
+      "env":{}}'</span>
 curl -X POST http://localhost:8099/api/servers/fs/start \
   -H <span class="str">"Authorization: Bearer \${TOKEN}"</span></div>
 </div>
