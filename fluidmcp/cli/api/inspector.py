@@ -40,6 +40,9 @@ class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[list] = Field(default_factory=list)
 
+class ReadResourceRequest(BaseModel):
+    uri: str
+
 # ─── URL Validation ────────────────────────────────────────────────────────────
 
 def _validate_mcp_url(url: str) -> None:
@@ -228,6 +231,42 @@ async def get_logs(session_id: str):
     session.last_used = time.time()
     return {"logs": session.logs}
 
+@router.get("/inspector/{session_id}/resources")
+async def list_resources(session_id: str):
+    """
+    List all resources available on the connected MCP server.
+    Also used to discover widget resources (ui:// URIs).
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    try:
+        resources = await session.list_resources()
+        return {"resources": resources, "count": len(resources)}
+    except Exception as e:
+        logger.error(f"Inspector: list_resources failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to fetch resources: {str(e)}")
+
+
+@router.post("/inspector/{session_id}/resources/read")
+async def read_resource(session_id: str, body: ReadResourceRequest):
+    """
+    Read a resource by URI from the connected MCP server.
+    Used to fetch widget HTML for ui:// resource URIs.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    try:
+        content = await session.read_resource(body.uri)
+        return content
+    except Exception as e:
+        logger.error(f"Inspector: read_resource failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to read resource: {str(e)}")
+
+
 @router.post("/inspector/{session_id}/chat")
 async def chat_with_tools(session_id: str, body: ChatRequest):
     """
@@ -253,8 +292,19 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent
-        agent_result = await choose_tool_with_llm(body.message, tools)
+        # Call the Groq agent, passing chat history for multi-turn context
+        agent_result = await choose_tool_with_llm(
+            body.message, tools, chat_history=body.chat_history or []
+        )
+
+        # Validate the response has the expected fields
+        tool_name = agent_result.get("tool_name")
+        available_names = {t["name"] for t in tools}
+        if not tool_name or not isinstance(tool_name, str) or tool_name not in available_names:
+            return {
+                "clarification_needed": True,
+                "message": "Could not determine which tool to run."
+            }
 
         # Validate the response has the expected fields
         tool_name = agent_result.get("tool_name")

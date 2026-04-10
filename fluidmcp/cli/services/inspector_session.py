@@ -36,12 +36,10 @@ class InspectorSession:
     """
     Manages a temporary connection to an external MCP server for the inspector.
 
-    Uses raw JSON-RPC over HTTP (for http transport) or SSE + HTTP POST
-    (for sse transport). No MCP SDK required — matches FluidMCP's existing
-    httpx-based pattern.
-
-    For stdio transport, the server is assumed to be already running and
-    accessible via a URL endpoint.
+    HTTP transport: raw JSON-RPC POST, response comes back in the same HTTP response.
+    SSE transport:  persistent GET /sse connection (background task) receives all
+                    responses; requests are sent via POST to the messages endpoint.
+                    This matches the MCP SSE spec — the stream must stay open.
     """
 
     def __init__(
@@ -58,279 +56,275 @@ class InspectorSession:
         self.auth = auth or {}
         self.extra_headers = headers or {}
         self.env_vars = env_vars or {}
-        self.timeout = timeout / 1000  # Convert ms to seconds
+        self.timeout = timeout / 1000  # ms → seconds
         self.created_at = time.time()
         self.last_used = time.time()
 
-        # Execution logs for this session
         self.logs: List[Dict[str, Any]] = []
 
-        # For SSE: the endpoint to POST messages to (received during SSE handshake)
-        self._sse_post_url: Optional[str] = None
-        self._sse_session_id: Optional[str] = None
+        # Auto-incrementing request ID (avoids hardcoded 1/2/3 collisions)
+        self._req_id = 0
 
-        # Shared httpx client for this session
+        # SSE state
+        self._sse_post_url: Optional[str] = None
+        self._sse_ready = asyncio.Event()      # set once endpoint URL is known
+        self._sse_pending: Dict[int, "asyncio.Future[dict]"] = {}  # id → Future
+        self._sse_task: Optional[asyncio.Task] = None
+
+        # Shared httpx client for HTTP/POST requests
         self._client: Optional[httpx.AsyncClient] = None
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _next_id(self) -> int:
+        self._req_id += 1
+        return self._req_id
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10.0, read=self.timeout, write=10.0, pool=10.0),
-                follow_redirects=False,  # prevent redirect-based SSRF bypass
+                follow_redirects=False,
             )
         return self._client
 
     def _build_headers(self) -> Dict[str, str]:
-        """Build request headers including auth and any custom headers."""
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-
-        # Add bearer token auth if configured
-        auth_type = self.auth.get("type", "none")
-        if auth_type == "bearer":
-            token = self.auth.get("token", "")
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-
-        # Merge any custom headers (these can override defaults)
+        if self.auth.get("type") == "bearer" and self.auth.get("token"):
+            headers["Authorization"] = f"Bearer {self.auth['token']}"
         headers.update(self.extra_headers)
         return headers
 
     MAX_LOGS = 250
 
     def add_log(self, log_type: str, message: str) -> None:
-        log_entry = {
+        entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": log_type,
-            "message": message
+            "message": message,
         }
-        self.logs.append(log_entry)
+        self.logs.append(entry)
         if len(self.logs) > self.MAX_LOGS:
             self.logs.pop(0)
         logger.debug(f"Inspector log [{log_type}]: {message}")
 
+    # ── SSE persistent listener ───────────────────────────────────────────────
+
+    async def _sse_listener(self) -> None:
+        """
+        Background task: holds the GET /sse connection open for the entire session.
+
+        - First data event   → the POST messages endpoint URL (signals _sse_ready)
+        - Subsequent events  → JSON-RPC responses, routed to waiting callers via Futures
+        """
+        sse_url = self.url if self.url.endswith("/sse") else f"{self.url}/sse"
+        sse_headers = {**self._build_headers(), "Accept": "text/event-stream"}
+
+        # Dedicated client with no read timeout — this stream stays open indefinitely
+        sse_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0),
+            follow_redirects=False,
+        )
+        try:
+            async with sse_client.stream("GET", sse_url, headers=sse_headers) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if not data_str:
+                        continue
+
+                    # ── First event: endpoint URL ──────────────────────────
+                    if self._sse_post_url is None:
+                        endpoint_url: Optional[str] = None
+                        if data_str.startswith("/") or data_str.startswith("http"):
+                            if data_str.startswith("/"):
+                                p = urlparse(self.url)
+                                endpoint_url = f"{p.scheme}://{p.netloc}{data_str}"
+                            else:
+                                endpoint_url = data_str
+                        else:
+                            try:
+                                ev = json.loads(data_str)
+                                if "endpoint" in ev:
+                                    endpoint_url = ev["endpoint"]
+                            except json.JSONDecodeError:
+                                pass
+
+                        if endpoint_url:
+                            try:
+                                _validate_url(endpoint_url)
+                            except ValueError as e:
+                                raise Exception(f"SSE endpoint rejected: {e}")
+
+                            base_host = urlparse(self.url).netloc
+                            ep_host = urlparse(endpoint_url).netloc
+                            if ep_host and ep_host != base_host:
+                                raise Exception(
+                                    f"SSE endpoint host mismatch — "
+                                    f"expected {base_host}, got {ep_host}"
+                                )
+
+                            self._sse_post_url = endpoint_url
+                            self._sse_ready.set()
+                            logger.debug(f"SSE messages endpoint: {endpoint_url}")
+                        continue
+
+                    # ── Subsequent events: JSON-RPC responses ──────────────
+                    try:
+                        msg = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    req_id = msg.get("id")
+                    if req_id is not None:
+                        future = self._sse_pending.pop(req_id, None)
+                        if future and not future.done():
+                            future.set_result(msg)
+
+        except asyncio.CancelledError:
+            pass  # normal shutdown
+        except Exception as e:
+            logger.warning(f"SSE listener terminated: {e}")
+            # Unblock any callers waiting on futures
+            for fut in self._sse_pending.values():
+                if not fut.done():
+                    fut.set_exception(e)
+            self._sse_pending.clear()
+            if not self._sse_ready.is_set():
+                self._sse_ready.set()
+        finally:
+            await sse_client.aclose()
+
+    async def _sse_request(self, request: dict) -> dict:
+        """POST a request and await the response that comes back on the SSE stream."""
+        await asyncio.wait_for(self._sse_ready.wait(), timeout=10.0)
+
+        if not self._sse_post_url:
+            raise Exception("SSE session not ready — no endpoint URL")
+
+        req_id = request["id"]
+        loop = asyncio.get_event_loop()
+        future: "asyncio.Future[dict]" = loop.create_future()
+        self._sse_pending[req_id] = future
+
+        try:
+            client = self._get_client()
+            resp = await client.post(
+                self._sse_post_url, json=request, headers=self._build_headers()
+            )
+            resp.raise_for_status()
+            # Server responds 202 Accepted; actual result arrives via SSE stream
+            return await asyncio.wait_for(future, timeout=self.timeout)
+        except Exception:
+            self._sse_pending.pop(req_id, None)
+            if not future.done():
+                future.cancel()
+            raise
+
+    # ── Transport dispatcher ──────────────────────────────────────────────────
+
+    def _make_request(self, method: str, params: dict) -> dict:
+        return {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params}
+
+    async def _send(self, request: dict) -> dict:
+        """Route request through SSE or plain HTTP depending on transport."""
+        if self.transport == "sse":
+            return await self._sse_request(request)
+
+        client = self._get_client()
+        response = await client.post(self.url, json=request, headers=self._build_headers())
+        response.raise_for_status()
+        return response.json()
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     async def initialize(self) -> Dict[str, Any]:
-        """
-        Perform the MCP initialize handshake to verify the server is reachable
-        and retrieve server info.
-
-        Returns server info dict with name and version.
-        Raises httpx.HTTPError or Exception on failure.
-        """
         self.last_used = time.time()
 
         if self.transport == "sse":
-            server_info = await self._initialize_sse()
-        else:
-            # HTTP and stdio both use JSON-RPC POST
-            server_info = await self._initialize_http()
+            # Kick off the background SSE listener before sending any requests
+            loop = asyncio.get_event_loop()
+            self._sse_task = loop.create_task(self._sse_listener())
 
-        # Log successful connection
-        self.add_log("connect", f"Connected to {server_info.get('name', 'Unknown Server')} ({self.transport.upper()})")
-        return server_info
-
-    async def _initialize_http(self) -> Dict[str, Any]:
-        """Send MCP initialize JSON-RPC request over HTTP POST."""
-        client = self._get_client()
-        headers = self._build_headers()
-
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "FluidMCP Inspector",
-                    "version": "1.0.0"
+        init_request = self._make_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "extensions": {
+                    "io.modelcontextprotocol/ui": {
+                        "mimeTypes": ["text/html+mcp", "text/html;profile=mcp-app"]
+                    }
                 }
-            }
-        }
+            },
+            "clientInfo": {"name": "FluidMCP Inspector", "version": "1.0.0"},
+        })
 
-        response = await client.post(self.url, json=init_request, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+        data = await self._send(init_request)
 
         if "error" in data:
             raise Exception(f"MCP initialize error: {data['error'].get('message', 'Unknown error')}")
 
         result = data.get("result", {})
         server_info = result.get("serverInfo", {})
-
-        return {
+        info = {
             "name": server_info.get("name", "Unknown MCP Server"),
             "version": server_info.get("version", "unknown"),
-            "protocol_version": result.get("protocolVersion", "unknown")
+            "protocol_version": result.get("protocolVersion", "unknown"),
         }
 
-    async def _initialize_sse(self) -> Dict[str, Any]:
-        """
-        Connect to SSE endpoint to get the POST messages URL,
-        then send the initialize request via POST.
-
-        MCP SSE pattern:
-          1. GET /sse  → streams events, first event contains the endpoint URL
-          2. POST {endpoint_url}  → send JSON-RPC messages
-        """
-        client = self._get_client()
-        headers = self._build_headers()
-        sse_headers = {**headers, "Accept": "text/event-stream"}
-
-        # Determine SSE endpoint URL
-        sse_url = self.url if self.url.endswith("/sse") else f"{self.url}/sse"
-
-        # Connect to SSE and read the first event to get the messages endpoint
-        endpoint_url = None
-        try:
-            async with client.stream("GET", sse_url, headers=sse_headers, timeout=10.0) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line.startswith("data:"):
-                        data_str = line[len("data:"):].strip()
-                        # MCP SSE servers send the messages endpoint URL as first data event
-                        if data_str.startswith("/") or data_str.startswith("http"):
-                            # Relative path — make it absolute
-                            if data_str.startswith("/"):
-                                parsed = urlparse(self.url)
-                                endpoint_url = f"{parsed.scheme}://{parsed.netloc}{data_str}"
-                            else:
-                                endpoint_url = data_str
-                            break
-                        # Some servers send JSON with endpoint info
-                        try:
-                            event_data = json.loads(data_str)
-                            if "endpoint" in event_data:
-                                endpoint_url = event_data["endpoint"]
-                                break
-                        except json.JSONDecodeError:
-                            pass
-        except asyncio.TimeoutError:
-            raise Exception("SSE connection timed out waiting for endpoint URL")
-
-        if not endpoint_url:
-            raise Exception("SSE server did not provide a messages endpoint URL")
-
-        # Validate SSE-derived endpoint against SSRF blocklist
-        try:
-            _validate_url(endpoint_url)
-        except ValueError as e:
-            raise Exception(f"SSE endpoint rejected: {e}")
-
-        # Enforce same host as the original URL to prevent open-redirect abuse
-        base_host = urlparse(self.url).netloc
-        ep_host = urlparse(endpoint_url).netloc
-        if ep_host and ep_host != base_host:
-            raise Exception(f"SSE endpoint host mismatch — expected {base_host}, got {ep_host}")
-
-        self._sse_post_url = endpoint_url
-        logger.debug(f"SSE messages endpoint: {endpoint_url}")
-
-        # Now send initialize via POST to the messages endpoint
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "FluidMCP Inspector",
-                    "version": "1.0.0"
-                }
-            }
-        }
-
-        response = await client.post(endpoint_url, json=init_request, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        if "error" in data:
-            raise Exception(f"MCP initialize error: {data['error'].get('message', 'Unknown error')}")
-
-        result = data.get("result", {})
-        server_info = result.get("serverInfo", {})
-
-        return {
-            "name": server_info.get("name", "Unknown MCP Server"),
-            "version": server_info.get("version", "unknown"),
-            "protocol_version": result.get("protocolVersion", "unknown")
-        }
-
-    def _get_post_url(self) -> str:
-        """Get the URL to POST JSON-RPC messages to."""
-        if self.transport == "sse" and self._sse_post_url:
-            return self._sse_post_url
-        return self.url
+        self.add_log("connect", f"Connected to {info['name']} ({self.transport.upper()})")
+        return info
 
     async def list_tools(self) -> list:
-        """Fetch the list of tools available on the MCP server."""
         self.last_used = time.time()
-        client = self._get_client()
-        headers = self._build_headers()
-        post_url = self._get_post_url()
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {}
-        }
-
-        response = await client.post(post_url, json=request, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
+        data = await self._send(self._make_request("tools/list", {}))
         if "error" in data:
             raise Exception(f"tools/list error: {data['error'].get('message', 'Unknown error')}")
-
         return data.get("result", {}).get("tools", [])
 
     async def call_tool(self, name: str, params: Dict[str, Any]) -> Any:
-        """Execute a tool on the MCP server."""
         self.last_used = time.time()
-        client = self._get_client()
-        headers = self._build_headers()
-        post_url = self._get_post_url()
-
-        # Log tool call
         self.add_log("tool_call", f"Running tool: {name}")
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": name,
-                "arguments": params
-            }
-        }
-
         try:
-            response = await client.post(post_url, json=request, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-
+            data = await self._send(
+                self._make_request("tools/call", {"name": name, "arguments": params})
+            )
             if "error" in data:
-                error_msg = data['error'].get('message', 'Unknown error')
-                self.add_log("tool_error", f"Tool '{name}' failed: {error_msg}")
-                raise Exception(f"tools/call error: {error_msg}")
-
-            # NOTE: MCP servers sometimes return isError: true inside a successful result.
-            # We log tool_result here because the JSON-RPC call succeeded at transport level.
-            # The frontend ToolResult component handles isError display separately.
-            # Future improvement: check result body for isError and log tool_error instead.
+                msg = data["error"].get("message", "Unknown error")
+                self.add_log("tool_error", f"Tool '{name}' failed: {msg}")
+                raise Exception(f"tools/call error: {msg}")
             self.add_log("tool_result", f"Tool '{name}' executed successfully")
             return data.get("result", {})
         except Exception as e:
-            # Log unexpected errors
-            if not self.logs or self.logs[-1]["type"] != "tool_error":  # Only log if not already logged above
+            if not self.logs or self.logs[-1]["type"] != "tool_error":
                 self.add_log("tool_error", f"Tool '{name}' error: {str(e)}")
             raise
 
-    async def close(self):
-        """Close the httpx client."""
+    async def list_resources(self) -> list:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("resources/list", {}))
+        if "error" in data:
+            raise Exception(f"resources/list error: {data['error'].get('message', 'Unknown error')}")
+        return data.get("result", {}).get("resources", [])
+
+    async def read_resource(self, uri: str) -> dict:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("resources/read", {"uri": uri}))
+        if "error" in data:
+            raise Exception(f"resources/read error: {data['error'].get('message', 'Unknown error')}")
+        contents = data.get("result", {}).get("contents", [])
+        return contents[0] if contents else {}
+
+    async def close(self) -> None:
         self.add_log("disconnect", "Session closed")
+        if self._sse_task:
+            self._sse_task.cancel()
+            try:
+                await self._sse_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._sse_task = None
         if self._client is not None:
             try:
                 await self._client.aclose()
