@@ -147,8 +147,11 @@ class InspectorSession:
                         else:
                             try:
                                 ev = json.loads(data_str)
-                                if "endpoint" in ev:
+                                if "endpoint" in ev and isinstance(ev["endpoint"], str):
                                     endpoint_url = ev["endpoint"]
+                                    if endpoint_url.startswith("/"):
+                                        p = urlparse(self.url)
+                                        endpoint_url = f"{p.scheme}://{p.netloc}{endpoint_url}"
                             except json.JSONDecodeError:
                                 pass
 
@@ -313,8 +316,7 @@ class InspectorSession:
         data = await self._send(self._make_request("resources/read", {"uri": uri}))
         if "error" in data:
             raise Exception(f"resources/read error: {data['error'].get('message', 'Unknown error')}")
-        contents = data.get("result", {}).get("contents", [])
-        return contents[0] if contents else {}
+        return data.get("result", {"contents": []})
 
     async def close(self) -> None:
         self.add_log("disconnect", "Session closed")

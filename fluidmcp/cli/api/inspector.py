@@ -261,7 +261,11 @@ async def read_resource(session_id: str, body: ReadResourceRequest):
 
     try:
         content = await session.read_resource(body.uri)
-        return content
+        if isinstance(content, dict) and "contents" in content:
+            return content
+        if isinstance(content, list):
+            return {"contents": content}
+        return {"contents": [content]}
     except Exception as e:
         logger.error(f"Inspector: read_resource failed for session {session_id} — {e}")
         raise HTTPException(500, f"Failed to read resource: {str(e)}")

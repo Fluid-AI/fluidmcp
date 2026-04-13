@@ -138,7 +138,7 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
   const toolCall  = steps.find(s => s.type === "tool_call");
   const toolResult = steps.find(s => s.type === "tool_result");
   const errorStep = steps.find(s => s.type === "error");
-  const isActive  = !toolResult && !errorStep; // run still in progress
+  const isActive  = run ? !run.endTime : !toolResult && !errorStep; // use run.endTime when available
 
   const totalMs    = run?.endTime ? run.endTime - run.startTime : null;
   const thinkingMs = (toolCall?.perfMark && thinking?.perfMark)
