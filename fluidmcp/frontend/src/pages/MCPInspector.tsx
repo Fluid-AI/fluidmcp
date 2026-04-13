@@ -1,5 +1,12 @@
-// import React from "react";
 import { useState, useEffect, useRef } from "react";
+import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
+import { apiClient } from "@/services/api";
+import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
+import { ToolResult } from '../components/result/ToolResult';
+import { JsonResultView } from '../components/result/JsonResultView';
+import { McpContentView } from '../components/result/McpContentView';
+import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 
 // Compact collapsible result bubble for chat mode
 function ChatResultBubble({ result }: { result: unknown }) {
@@ -60,15 +67,160 @@ function ChatResultBubble({ result }: { result: unknown }) {
     </div>
   );
 }
-import { Navbar } from "@/components/Navbar";
-import { Footer } from "@/components/Footer";
-import { apiClient } from "@/services/api";
-import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
-import { ToolResult } from '../components/result/ToolResult';
-import { JsonResultView } from '../components/result/JsonResultView';
-import { McpContentView } from '../components/result/McpContentView';
-import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels'; 
+// ── Animated thinking indicator ──────────────────────────────────────────────
+function ThinkingDots() {
+  return (
+    <span style={{ display: "inline-flex", gap: "3px", alignItems: "center", marginLeft: "4px" }}>
+      {[0, 1, 2].map(i => (
+        <span key={i} style={{
+          width: "4px", height: "4px", borderRadius: "50%",
+          background: "rgba(255,255,255,0.55)", display: "inline-block",
+          animation: `thinking-blink 1.4s infinite ${i * 0.2}s`,
+        }} />
+      ))}
+    </span>
+  );
+}
 
+// ── Group flat chat messages into standalone + run blocks ─────────────────────
+type DisplayGroup =
+  | { kind: "standalone"; msg: ChatMessage }
+  | { kind: "run"; runId: string; steps: ChatMessage[]; run?: ExecutionRun }
+
+function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): DisplayGroup[] {
+  const runMap = new Map(execHistory.map(r => [r.runId, r]));
+  const seen = new Set<string>();
+  return messages.reduce<DisplayGroup[]>((acc, msg) => {
+    if (!msg.runId) {
+      acc.push({ kind: "standalone", msg });
+    } else if (!seen.has(msg.runId)) {
+      seen.add(msg.runId);
+      acc.push({
+        kind: "run",
+        runId: msg.runId,
+        steps: messages.filter(m => m.runId === msg.runId),
+        run: runMap.get(msg.runId),
+      });
+    }
+    return acc;
+  }, []);
+}
+
+// ── Timeline block for one agent turn (thinking → tool_call → tool_result) ───
+function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: ExecutionRun }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const thinking  = steps.find(s => s.type === "thinking");
+  const toolCall  = steps.find(s => s.type === "tool_call");
+  const toolResult = steps.find(s => s.type === "tool_result");
+  const errorStep = steps.find(s => s.type === "error");
+  const isActive  = !toolResult && !errorStep; // run still in progress
+
+  const totalMs    = run?.endTime ? run.endTime - run.startTime : null;
+  const thinkingMs = (toolCall?.perfMark && thinking?.perfMark)
+    ? Math.round(toolCall.perfMark - thinking.perfMark) : null;
+  const toolMs     = (toolResult?.perfMark && toolCall?.perfMark)
+    ? Math.round(toolResult.perfMark - toolCall.perfMark) : null;
+
+  const dot = (color: string) => (
+    <div style={{ width: "7px", height: "7px", borderRadius: "50%", background: color, marginTop: "4px", flexShrink: 0 }} />
+  );
+
+  return (
+    <div style={{ maxWidth: "90%", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "10px", overflow: "hidden" }}>
+      {/* Header */}
+      <div
+        onClick={() => setCollapsed(v => !v)}
+        style={{
+          display: "flex", alignItems: "center", gap: "0.5rem",
+          padding: "0.45rem 0.75rem",
+          background: "rgba(255,255,255,0.04)", cursor: "pointer",
+          borderBottom: collapsed ? "none" : "1px solid rgba(63,63,70,0.25)",
+        }}
+      >
+        <span style={{ fontSize: "0.7rem", opacity: 0.45 }}>{collapsed ? "▶" : "▼"}</span>
+        <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>
+          {toolCall ? `🔧 ${toolCall.toolName}` : errorStep ? "❌ Error" : "🤖 Thinking"}
+        </span>
+        {isActive && <ThinkingDots />}
+        {totalMs !== null && (
+          <span style={{ marginLeft: "auto", fontSize: "0.7rem", color: "rgba(99,102,241,0.7)", fontFamily: "monospace" }}>
+            {totalMs}ms
+          </span>
+        )}
+      </div>
+
+      {!collapsed && (
+        <div style={{ padding: "0.6rem 0.75rem", display: "flex", flexDirection: "column", gap: "0.55rem" }}>
+          {/* Thinking step */}
+          {thinking && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#3b82f6")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#60a5fa", fontWeight: 600, display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  Thinking
+                  {thinkingMs !== null && <span style={{ fontWeight: 400, opacity: 0.65 }}>{thinkingMs}ms</span>}
+                  {isActive && <ThinkingDots />}
+                </div>
+                <div style={{ fontSize: "0.73rem", opacity: 0.6, fontStyle: "italic", marginTop: "0.15rem" }}>
+                  {thinking.content}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tool call step */}
+          {toolCall && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#f59e0b")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#fbbf24", fontWeight: 600 }}>
+                  Tool: {toolCall.toolName}
+                </div>
+                <pre style={{
+                  margin: "0.2rem 0 0", padding: "0.35rem 0.5rem",
+                  background: "rgba(0,0,0,0.3)", borderRadius: "6px",
+                  fontSize: "0.7rem", overflowX: "auto", whiteSpace: "pre-wrap",
+                  wordBreak: "break-all", color: "#e5e7eb", fontFamily: "ui-monospace,monospace",
+                }}>
+                  {JSON.stringify(toolCall.params, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          {/* Result step */}
+          {toolResult && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#22c55e")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#4ade80", fontWeight: 600, display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  Result
+                  {toolMs !== null && <span style={{ fontWeight: 400, opacity: 0.65 }}>{toolMs}ms</span>}
+                </div>
+                <div style={{ marginTop: "0.2rem" }}>
+                  <ChatResultBubble result={toolResult.result} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Error step */}
+          {errorStep && (
+            <div style={{ display: "flex", gap: "0.6rem" }}>
+              {dot("#ef4444")}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "0.72rem", color: "#fca5a5", fontWeight: 600 }}>Error</div>
+                <div style={{ fontSize: "0.73rem", color: "#fca5a5", marginTop: "0.15rem" }}>
+                  {errorStep.content}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 // Type for server object
 interface MCPServer {
   id: string;
@@ -154,13 +306,17 @@ export default function MCPInspector() {
   const [chatHistoryByServer, setChatHistoryByServer] = useState<Record<string, ChatMessage[]>>({})
   const chatHistory = chatHistoryByServer[selectedServerId ?? ""] ?? []
 
-  // Helper to update chat for the currently selected server
-  const updateChat = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
-    if (!selectedServerId) return;
+  // Helper to update chat — accepts explicit serverId so async flows
+  // (runChatTool) stay pinned to the originating server even if the user
+  // switches selection while the request is in-flight.
+  const updateChat = (
+    serverId: string,
+    updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
+  ) => {
     setChatHistoryByServer(prev => ({
       ...prev,
-      [selectedServerId]: typeof updater === "function"
-        ? updater(prev[selectedServerId] ?? [])
+      [serverId]: typeof updater === "function"
+        ? updater(prev[serverId] ?? [])
         : updater
     }));
   };
@@ -173,6 +329,8 @@ export default function MCPInspector() {
   const logsRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  // Tracks how many backend log entries existed when the user last cleared, per server
+  const logsClearedOffsetRef = useRef<Record<string, number>>({});
 
   const handleConnect = async () => {
 
@@ -259,7 +417,7 @@ export default function MCPInspector() {
       setChatHistoryByServer(prev => ({
         ...prev,
         [serverId]: [{
-          id: crypto.randomUUID(),
+          id: generateId(),
           type: "assistant",
           content: `Connected to ${res.server_info?.name || "new server"}. Chat cleared — ready to go!`,
           timestamp: Date.now(),
@@ -381,7 +539,7 @@ export default function MCPInspector() {
         [serverId]: [
           ...(prev[serverId] ?? []),
           {
-            id: crypto.randomUUID(),
+            id: generateId(),
             type: "assistant" as const,
             content: `Reconnected to ${res.server_info?.name || "server"}.`,
             timestamp: Date.now(),
@@ -415,6 +573,12 @@ export default function MCPInspector() {
     if (selectedServerId === serverId) setSelectedServerId(null);
   };
 
+  // Stable UUID helper — falls back for non-secure contexts (e.g. plain HTTP)
+  const generateId = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
   const runTool = async (params: any) => {
     if (!selectedServer?.session_id || !selectedTool || executing) return;
 
@@ -435,15 +599,15 @@ export default function MCPInspector() {
       setToolResult(res);
       setExecutionTime((end - start) / 1000);
       if (selectedServerId) {
-        const runId = crypto.randomUUID();
+        const runId = generateId();
         const run: ExecutionRun = {
           runId,
           serverId: selectedServerId,
           startTime: Date.now() - Math.round(end - start),
           endTime: Date.now(),
           steps: [
-            { id: crypto.randomUUID(), runId, type: "tool_call", toolName: selectedTool.name, params, timestamp: Date.now(), perfMark: start },
-            { id: crypto.randomUUID(), runId, type: "tool_result", result: res, timestamp: Date.now(), perfMark: end },
+            { id: generateId(), runId, type: "tool_call", toolName: selectedTool.name, params, timestamp: Date.now(), perfMark: start },
+            { id: generateId(), runId, type: "tool_result", result: res, timestamp: Date.now(), perfMark: end },
           ]
         };
         setExecutionHistoryByServer(prev => ({ ...prev, [selectedServerId]: [run, ...(prev[selectedServerId] ?? [])] }));
@@ -455,12 +619,6 @@ export default function MCPInspector() {
       setExecuting(false);
     }
   };
-
-  // Stable UUID helper — falls back for non-secure contexts (e.g. plain HTTP)
-  const generateId = () =>
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
  const runChatTool = async () => {
   // Guard against concurrent requests
@@ -480,20 +638,20 @@ export default function MCPInspector() {
   // Capture history with userMsg before any state updates — used below to
   // send an accurate chat_history to the backend (avoids stale closure).
   const nextHistory = [...chatHistory, userMsg]
+  const capturedServerId = selectedServerId
 
-  updateChat(prev => [...prev, userMsg])
+  updateChat(capturedServerId, prev => [...prev, userMsg])
 
   // 3A-4: start an ExecutionRun for this agent turn
-  const runId = crypto.randomUUID()
+  const runId = generateId()
   const runStartTime = Date.now()
   const runSteps: ChatMessage[] = []
-  const capturedServerId = selectedServerId
 
   try {
     setChatLoading(true)
 
     const thinkingMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "thinking",
       content: "Deciding which tool to use...",
@@ -501,7 +659,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(prev => [...prev, thinkingMsg])
+    updateChat(capturedServerId, prev => [...prev, thinkingMsg])
     runSteps.push(thinkingMsg)
 
     const res = await apiClient.chatWithInspector(
@@ -515,18 +673,18 @@ export default function MCPInspector() {
       }
     )
 
-    updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
+    updateChat(capturedServerId, prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
 
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         runId,
         type: "assistant",
         content: res.message,
         timestamp: Date.now(),
         perfMark: performance.now()
       }
-      updateChat(prev => [...prev, assistantMsg])
+      updateChat(capturedServerId, prev => [...prev, assistantMsg])
       // save run (no tool call — just clarification)
       setExecutionHistoryByServer(prev => ({
         ...prev,
@@ -536,7 +694,7 @@ export default function MCPInspector() {
     }
 
     const toolCallMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "tool_call",
       toolName: res.tool_name,
@@ -545,7 +703,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(prev => [...prev, toolCallMsg])
+    updateChat(capturedServerId, prev => [...prev, toolCallMsg])
     runSteps.push(toolCallMsg)
 
     const result = await apiClient.runInspectorTool(
@@ -555,7 +713,7 @@ export default function MCPInspector() {
     )
 
     const resultMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "tool_result",
       result,
@@ -563,7 +721,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(prev => [...prev, resultMsg])
+    updateChat(capturedServerId, prev => [...prev, resultMsg])
     runSteps.push(resultMsg)
 
     // save completed run
@@ -575,7 +733,7 @@ export default function MCPInspector() {
   } catch (err: any) {
 
     const errorMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       runId,
       type: "error",
       content: err?.message || "Chat error",
@@ -583,7 +741,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(prev => [...prev, errorMsg])
+    updateChat(capturedServerId, prev => [...prev, errorMsg])
     runSteps.push(errorMsg)
 
     // save failed run
@@ -626,9 +784,13 @@ export default function MCPInspector() {
     if (savedSelectedId) setSelectedServerId(savedSelectedId)
   }, [])
 
-  // Persist servers list whenever it changes
+  // Persist servers list — strip auth secrets (tokens/header values) before writing
   useEffect(() => {
-    sessionStorage.setItem('inspector-servers', JSON.stringify(servers))
+    const safeServers = servers.map(s => ({
+      ...s,
+      auth: s.auth ? { type: s.auth.type } : undefined,
+    }));
+    sessionStorage.setItem('inspector-servers', JSON.stringify(safeServers))
   }, [servers])
 
   // Persist selected server ID whenever it changes
@@ -663,7 +825,9 @@ export default function MCPInspector() {
     if (!selectedServer?.session_id || !selectedServerId) return;
     try {
       const res = await apiClient.getInspectorLogs(selectedServer.session_id);
-      setLogsByServer(prev => ({ ...prev, [selectedServerId]: res.logs || [] }));
+      const allLogs: LogEntry[] = res.logs || [];
+      const offset = logsClearedOffsetRef.current[selectedServerId] ?? 0;
+      setLogsByServer(prev => ({ ...prev, [selectedServerId]: allLogs.slice(offset) }));
     } catch (err) {
       console.error("Failed to fetch logs", err);
     }
@@ -1094,7 +1258,11 @@ export default function MCPInspector() {
                       </div>
                       {logs.length > 0 && selectedServerId && (
                         <button
-                          onClick={() => setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
+                          onClick={() => {
+                            const currentTotal = (logsClearedOffsetRef.current[selectedServerId] ?? 0) + logs.length;
+                            logsClearedOffsetRef.current[selectedServerId] = currentTotal;
+                            setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }));
+                          }}
                           style={{ fontSize: "0.7rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0.15rem 0.4rem" }}
                         >
                           Clear
