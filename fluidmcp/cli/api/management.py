@@ -1085,6 +1085,61 @@ async def list_servers(request: Request, enabled_only: bool = True, include_dele
     }
 
 
+@router.get("/tools", tags=["mcp"])
+async def get_all_tools(request: Request, token: str = Depends(get_token)):
+    """
+    Aggregate tool discovery across all running MCP servers.
+    Queries each server concurrently via tools/list.
+    """
+    from ..services.package_launcher import _proxy_to_sse_server
+    from ..services.sse_handle import SseSubprocessHandle
+    from fastapi.responses import JSONResponse
+
+    manager = get_server_manager(request)
+    all_tools: list = []
+    servers_found: list = []
+    servers_with_errors: list = []
+
+    async def query_one(server_name: str, process) -> None:
+        req = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        try:
+            if isinstance(process, SseSubprocessHandle):
+                resp = await _proxy_to_sse_server(process.sse_url, req, timeout=5.0)
+                tools = resp.get("result", {}).get("tools", [])
+            else:
+                line = await manager._dispatch_io_request(
+                    server_name, json.dumps(req), timeout=5.0
+                )
+                tools = json.loads(line).get("result", {}).get("tools", [])
+            for t in tools:
+                t["server"] = server_name
+            all_tools.extend(tools)
+            servers_found.append(server_name)
+        except Exception as e:
+            logger.warning(f"Tool discovery failed for '{server_name}': {e}")
+            servers_with_errors.append(server_name)
+
+    tasks = [
+        query_one(name, proc)
+        for name, proc in list(manager.processes.items())
+        if hasattr(proc, "poll") and proc.poll() is None
+    ]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    response: Dict[str, Any] = {
+        "tools": all_tools,
+        "summary": {
+            "total_tools": len(all_tools),
+            "servers": servers_found,
+            "server_count": len(servers_found),
+            "error_count": len(servers_with_errors),
+        }
+    }
+    if servers_with_errors:
+        response["summary"]["servers_with_errors"] = servers_with_errors
+    return JSONResponse(content=response)
+
+
 @router.get("/servers/{id}")
 async def get_server(request: Request, id: str):
     """
@@ -2236,7 +2291,7 @@ async def start_llm_model(
         Start result with process status
     """
     from ..services.llm_launcher import launch_single_llm_model
-    from ..services.run_servers import get_llm_processes, register_llm_process
+    from ..services.llm_registry import get_llm_processes, register_llm_process
     from ..services.llm_provider_registry import _registry_lock, _llm_models_config
 
     # Check if already running
@@ -2279,7 +2334,7 @@ async def start_llm_model(
             raise HTTPException(500, f"Failed to start model '{model_id}'")
 
         # Register in global registry (direct assignment to avoid nested locks)
-        from ..services.run_servers import get_llm_processes
+        from ..services.llm_registry import get_llm_processes
         with _registry_lock:
             _llm_processes = get_llm_processes()
             _llm_processes[model_id] = process
@@ -3391,7 +3446,7 @@ async def register_llm_model(
     elif model_type in ("vllm", "ollama", "lmstudio"):
         # Import LLM launcher and registry functions
         from ..services.llm_launcher import launch_single_llm_model
-        from ..services.run_servers import get_llm_processes, register_llm_process
+        from ..services.llm_registry import get_llm_processes, register_llm_process
         from ..services.llm_provider_registry import _registry_lock, _llm_models_config
 
         try:

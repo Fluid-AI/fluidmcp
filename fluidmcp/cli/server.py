@@ -547,7 +547,7 @@ async def load_models_from_persistence(db_manager: PersistenceBackend) -> int:
                 elif model_type in ("vllm", "ollama", "lmstudio"):
                     # Import launch helper and registry functions
                     from .services.llm_launcher import launch_single_llm_model
-                    from .services.run_servers import get_llm_processes, register_llm_process
+                    from .services.llm_registry import get_llm_processes, register_llm_process
 
                     # Check if already running
                     llm_processes = get_llm_processes()
@@ -585,6 +585,37 @@ async def load_models_from_persistence(db_manager: PersistenceBackend) -> int:
     except Exception as e:
         logger.error(f"Error loading models from MongoDB: {e}")
         return 0
+
+
+async def load_servers_from_config(
+    config_path: str,
+    server_manager: ServerManager,
+    auto_start: bool = False,
+) -> int:
+    """
+    Load MCP servers from a config file into serve mode.
+    Used when fmcp serve is called with --from-config.
+    Replaces the entire fmcp run --file flow.
+    """
+    from .services.repo_service import RepoService
+    repo = RepoService()
+    server_config = await repo.load_from_config_file(config_path)
+    if server_config.needs_install:
+        await repo.install_packages(server_config)
+    flat_configs = repo.build_server_configs_from_resolved(server_config)
+    loaded = 0
+    for cfg in flat_configs:
+        try:
+            await server_manager.db.save_server_config(cfg)
+            if auto_start:
+                success = await server_manager.start_server(cfg["id"], cfg)
+                if success:
+                    loaded += 1
+            else:
+                loaded += 1
+        except Exception as e:
+            logger.error(f"Failed to load server '{cfg.get('id')}': {e}")
+    return loaded
 
 
 async def main(args):
@@ -662,8 +693,15 @@ async def main(args):
         loaded_models = await load_models_from_persistence(persistence)
         if loaded_models > 0:
             logger.info(f"✓ Loaded {loaded_models} model(s) from MongoDB on startup")
+            from .services.llm_registry import start_llm_health_monitor_if_needed
+            await start_llm_health_monitor_if_needed()
     else:
         logger.info("Skipping MongoDB model loading (not connected)")
+
+    if hasattr(args, 'from_config') and args.from_config:
+        auto_start = getattr(args, 'auto_start', False)
+        loaded = await load_servers_from_config(args.from_config, server_manager, auto_start)
+        logger.info(f"Loaded {loaded} server(s) from config file: {args.from_config}")
 
     # 5. Setup graceful shutdown with comprehensive signal handlers
     shutdown_event = asyncio.Event()
@@ -742,6 +780,13 @@ async def main(args):
     except Exception as e:
         logger.error(f"Error during MCP server shutdown: {e}")
         server_manager._cleanup_on_exit()
+
+    try:
+        from .services.llm_registry import cleanup_llm_state
+        cleanup_llm_state()
+        logger.info("LLM processes cleaned up")
+    except Exception as e:
+        logger.error(f"Error during LLM cleanup: {e}")
 
     try:
         # Close database connection
