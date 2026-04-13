@@ -102,6 +102,17 @@ type DisplayGroup =
 
 function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): DisplayGroup[] {
   const runMap = new Map(execHistory.map(r => [r.runId, r]));
+
+  // Pre-build runId → steps map in a single pass to avoid O(n²) inner filter
+  const stepsByRunId = new Map<string, ChatMessage[]>();
+  for (const msg of messages) {
+    if (msg.runId) {
+      const arr = stepsByRunId.get(msg.runId);
+      if (arr) arr.push(msg);
+      else stepsByRunId.set(msg.runId, [msg]);
+    }
+  }
+
   const seen = new Set<string>();
   return messages.reduce<DisplayGroup[]>((acc, msg) => {
     if (!msg.runId) {
@@ -111,7 +122,7 @@ function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): Di
       acc.push({
         kind: "run",
         runId: msg.runId,
-        steps: messages.filter(m => m.runId === msg.runId),
+        steps: stepsByRunId.get(msg.runId) ?? [],
         run: runMap.get(msg.runId),
       });
     }
@@ -686,12 +697,9 @@ export default function MCPInspector() {
       }
     )
 
-    updateChat(capturedServerId, prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
-
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
         id: generateId(),
-        runId,
         type: "assistant",
         content: res.message,
         timestamp: Date.now(),

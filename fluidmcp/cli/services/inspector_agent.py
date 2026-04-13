@@ -129,8 +129,7 @@ Rules:
                     }
                 ],
                 temperature=0,
-                max_tokens=200,
-                stop=["\n\n"]
+                max_tokens=200
             )
 
         response = await asyncio.to_thread(_call_llm)
