@@ -10,7 +10,7 @@ interface WidgetSandboxProps {
 
 export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }: WidgetSandboxProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(300);
+  const [height, setHeight] = useState(400);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
   // Tracks pending requests WE sent to the widget (id → resolve/reject)
@@ -140,7 +140,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
       if (method === 'ui/notifications/size-change') {
         const { height: h } = msg.params || {};
         if (typeof h === 'number' && h > 0) {
-          setHeight(Math.min(h + 20, 800));
+          setHeight(Math.min(h + 40, 1600));
         }
         return;
       }
@@ -184,14 +184,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
   }
 
   return (
-    <div style={{
-      marginTop: '0.6rem',
-      borderRadius: '8px',
-      overflow: 'hidden',
-      border: '1px solid rgba(99,102,241,0.35)',
-      background: '#fff',
-      position: 'relative',
-    }}>
+    <div style={{ background: '#fff', position: 'relative', overflow: 'hidden' }}>
       {status === 'loading' && (
         <div style={{
           position: 'absolute', inset: 0,
@@ -207,13 +200,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
         src={`${import.meta.env.BASE_URL}sandbox-proxy.html`}
         sandbox="allow-scripts allow-same-origin allow-forms"
         title="MCP Widget"
-        style={{
-          width: '100%',
-          height: `${height}px`,
-          border: 'none',
-          display: 'block',
-          transition: 'height 0.15s ease',
-        }}
+        style={{ width: '100%', height: `${height}px`, border: 'none', display: 'block', transition: 'height 0.15s ease' }}
       />
     </div>
   );

@@ -1,17 +1,28 @@
-// import React from "react";
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 // Compact collapsible result bubble for chat mode
-function ChatResultBubble({ result }: { result: unknown }) {
+function ChatResultBubble({ result, initialView = "formatted", hideTabSwitcher = false }: { result: unknown; initialView?: "formatted" | "raw"; hideTabSwitcher?: boolean }) {
   const [expanded, setExpanded] = useState(true);
-  const [viewMode, setViewMode] = useState<"formatted" | "raw">("formatted");
+  const [viewMode, setViewMode] = useState<"formatted" | "raw">(initialView);
+  useEffect(() => { setViewMode(initialView); }, [initialView]);
   const isMcp = typeof result === "object" && result !== null &&
     "content" in result && Array.isArray((result as any).content);
   const isMcpArray = Array.isArray(result) && result.length > 0 &&
     (result as any[]).every((i: any) => typeof i === "object" && i !== null && "type" in i);
-  const preview = typeof result === "object" && result !== null
-    ? `{${Object.keys(result as object).length} keys}`
-    : String(result).slice(0, 60);
+  const preview = (() => {
+    if (isMcp) {
+      const texts = ((result as any).content || []).filter((c: any) => c.type === "text" && c.text);
+      if (texts.length > 0) return String(texts[0].text).slice(0, 80);
+      return `[${(result as any).content?.length || 0} items]`;
+    }
+    if (isMcpArray) {
+      const texts = (result as any[]).filter((c: any) => c.type === "text" && c.text);
+      if (texts.length > 0) return String(texts[0].text).slice(0, 80);
+      return `[${(result as any[]).length} items]`;
+    }
+    if (typeof result === "object" && result !== null) return `{${Object.keys(result as object).length} keys}`;
+    return String(result).slice(0, 60);
+  })();
 
   const tabStyle = (active: boolean) => ({
     padding: "0.2rem 0.5rem", borderRadius: "0.25rem", border: "none",
@@ -33,7 +44,7 @@ function ChatResultBubble({ result }: { result: unknown }) {
         >
           {expanded ? "▼" : "▶"} Result:{!expanded && <span style={{ color: "rgba(255,255,255,0.6)", fontWeight: 400, marginLeft: "0.3rem" }}>{preview}</span>}
         </button>
-        {expanded && (
+        {expanded && !hideTabSwitcher && (
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
             <div style={{ display: "flex", background: "rgba(0,0,0,0.3)", borderRadius: "0.25rem", padding: "0.15rem", gap: "0.15rem" }}>
               <button style={tabStyle(viewMode === "formatted")} onClick={() => setViewMode("formatted")}>Formatted</button>
@@ -51,16 +62,17 @@ function ChatResultBubble({ result }: { result: unknown }) {
       </div>
       {expanded && (
         <div style={{
-          maxHeight: "260px", overflowY: "auto", overflowX: "hidden",
           background: "rgba(0,0,0,0.3)",
           border: "1px solid rgba(63,63,70,0.5)",
           borderRadius: "0.5rem",
           padding: "0.75rem",
           marginTop: "0.25rem",
           width: "100%", boxSizing: "border-box",
+          maxHeight: "350px",
+          overflowY: "auto",
         }}>
           {viewMode === "raw"
-            ? <pre style={{ margin: 0, fontSize: "0.75rem", color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-all", fontFamily: "ui-monospace, monospace", width: "100%", boxSizing: "border-box" as const }}>{JSON.stringify(result, null, 2)}</pre>
+            ? <pre style={{ margin: 0, fontSize: "0.75rem", color: "#e5e7eb", whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "ui-monospace, monospace", width: "100%", boxSizing: "border-box" as const }}>{JSON.stringify(result, null, 2)}</pre>
             : <div style={{ minWidth: 0, width: "100%", overflow: "hidden" }}>
                 {(isMcp || isMcpArray)
                   ? <McpContentView content={isMcpArray ? result as any : (result as any).content} />
@@ -112,7 +124,7 @@ function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): Di
 }
 
 // ── Timeline block for one agent turn (thinking → tool_call → tool_result) ───
-function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; run?: ExecutionRun; sessionId?: string }) {
+function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: ExecutionRun }) {
   const [collapsed, setCollapsed] = useState(false);
   const thinking  = steps.find(s => s.type === "thinking");
   const toolCall  = steps.find(s => s.type === "tool_call");
@@ -131,7 +143,7 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
   );
 
   return (
-    <div style={{ maxWidth: "90%", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "10px", overflow: "hidden" }}>
+    <div style={{ width: "100%", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "10px" }}>
       {/* Header */}
       <div
         onClick={() => setCollapsed(v => !v)}
@@ -209,21 +221,15 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
             <div style={{ display: "flex", gap: "0.6rem" }}>
               {dot("#22c55e")}
               <div style={{ flex: 1 }}>
+                {/* Result label */}
                 <div style={{ fontSize: "0.72rem", color: "#4ade80", fontWeight: 600, display: "flex", gap: "0.4rem", alignItems: "center" }}>
                   Result
                   {toolMs !== null && <span style={{ fontWeight: 400, opacity: 0.65 }}>{toolMs}ms</span>}
                 </div>
+                {/* Result bubble — always shows Formatted/Raw tabs */}
                 <div style={{ marginTop: "0.2rem" }}>
                   <ChatResultBubble result={toolResult.result} />
                 </div>
-                {toolResult.resourceUri && sessionId && toolCall && (
-                  <WidgetSandbox
-                    sessionId={sessionId}
-                    resourceUri={toolResult.resourceUri}
-                    toolInput={toolCall.params || {}}
-                    toolResult={toolResult.result}
-                  />
-                )}
               </div>
             </div>
           )}
@@ -247,7 +253,6 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
 }
 
 import { Navbar } from "@/components/Navbar";
-import { Footer } from "@/components/Footer";
 import { apiClient } from "@/services/api";
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
@@ -312,6 +317,7 @@ export default function MCPInspector() {
   const [headerKey, setHeaderKey] = useState("")
   const [headerValue, setHeaderValue] = useState("")
 
+  const [inspectorFullscreen, setInspectorFullscreen] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [url, setUrl] = useState("");
   const [transport, setTransport] = useState("http");
@@ -689,7 +695,7 @@ export default function MCPInspector() {
   // send an accurate chat_history to the backend (avoids stale closure).
   const nextHistory = [...chatHistory, userMsg]
 
-  setChatHistory(prev => [...prev, userMsg])
+  updateChat(prev => [...prev, userMsg])
 
   // 3A-4: start an ExecutionRun for this agent turn
   const runId = crypto.randomUUID()
@@ -880,36 +886,69 @@ export default function MCPInspector() {
   return (
     <div
       className="dashboard"
-      style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}
+      style={inspectorFullscreen
+        ? { position: "fixed", inset: 0, zIndex: 1000, height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#09090b", maxWidth: "none", margin: 0, padding: 0 }
+        : { height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", maxWidth: "100%", padding: 0 }
+      }
     >
       <style>{`@keyframes thinking-blink{0%,100%{opacity:0.2}50%{opacity:1}}`}</style>
-      <Navbar />
+      {!inspectorFullscreen && <Navbar />}
 
-      <div style={{ paddingTop: "64px", flex: 1, display: "flex", flexDirection: "column" }}>
+      <div style={{ paddingTop: inspectorFullscreen ? "0" : "64px", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div
           style={{
-            maxWidth: "1600px",
+            maxWidth: inspectorFullscreen ? "none" : "1600px",
             width: "100%",
-            margin: "0 auto",
-            padding: "2rem",
+            margin: inspectorFullscreen ? "0" : "0 auto",
+            padding: inspectorFullscreen ? "0.4rem 0.5rem" : "2rem",
             flex: 1,
+            minHeight: 0,
             display: "flex",
             flexDirection: "column",
+            overflow: "hidden",
           }}
         >
-          {/* Page Header */}
-          <div style={{ marginBottom: "1.5rem" }}>
-            <h1 style={{ fontSize: "2rem", fontWeight: "bold" }}>
-              MCP Inspector
-            </h1>
-            <p style={{ color: "rgba(255,255,255,0.6)", marginTop: "0.5rem" }}>
-              Connect to any MCP server and inspect its tools.
-            </p>
-          </div>
+          {/* Page Header — hidden in fullscreen to maximise space */}
+          {inspectorFullscreen ? (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.4rem", flexShrink: 0 }}>
+              <button
+                onClick={() => setInspectorFullscreen(false)}
+                style={{
+                  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: "0.4rem", cursor: "pointer", padding: "0.3rem 0.6rem",
+                  fontSize: "0.75rem", color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: "0.4rem",
+                }}
+              >
+                ✕ Exit Fullscreen
+              </button>
+            </div>
+          ) : (
+            <div style={{ marginBottom: "1.5rem", flexShrink: 0, display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div>
+                <h1 style={{ fontSize: "2rem", fontWeight: "bold" }}>MCP Inspector</h1>
+                <p style={{ color: "rgba(255,255,255,0.6)", marginTop: "0.5rem" }}>
+                  Connect to any MCP server and inspect its tools.
+                </p>
+              </div>
+              <button
+                onClick={() => setInspectorFullscreen(true)}
+                title="Fullscreen"
+                style={{
+                  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: "0.4rem", cursor: "pointer", padding: "0.4rem 0.75rem",
+                  fontSize: "0.8rem", color: "rgba(255,255,255,0.7)", display: "flex", alignItems: "center", gap: "0.4rem",
+                  marginTop: "0.25rem", flexShrink: 0,
+                }}
+              >
+                ⤢ Fullscreen
+              </button>
+            </div>
+          )}
 
-          {/* Main Layout — fills remaining height */}
-          <PanelGroup 
-            direction="horizontal" 
+          {/* Main Layout — fills remaining height, never grows beyond it */}
+          <PanelGroup
+            key={inspectorFullscreen ? "fs" : "normal"}
+            direction="horizontal"
             onLayout={(sizes) => {
               setPanelSizes(prev => {
                 const updated = { ...prev, left: sizes[0] };
@@ -917,17 +956,13 @@ export default function MCPInspector() {
                 return updated;
               });
             }}
-            style={{ 
-              flex: 1,
-              // Minimum height so it doesn't collapse
-              minHeight: "calc(100vh - 220px)",
-            }}
+            style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
           >
             {/* ── LEFT PANEL (outer) ─────────────────────────────────────── */}
-            <Panel 
-              defaultSize={panelSizes.left} 
-              minSize={18} 
-              maxSize={50}
+            <Panel
+              defaultSize={inspectorFullscreen ? Math.min(panelSizes.left, 25) : panelSizes.left}
+              minSize={inspectorFullscreen ? 12 : 18}
+              maxSize={inspectorFullscreen ? 30 : 50}
               style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
             >
               {/* LEFT PANEL INNER: vertical split — Servers+Tools (top) / Logs (bottom) */}
@@ -940,14 +975,14 @@ export default function MCPInspector() {
                     return updated;
                   });
                 }}
-                style={{ flex: 1, height: "100%" }}
+                style={{ flex: 1, minHeight: 0, overflow: "hidden" }}
               >
 
                 {/* ── TOP: Servers + Tools ────────────────────────────────── */}
                 <Panel 
                   defaultSize={100 - panelSizes.logs} 
                   minSize={30}
-                  style={{ overflow: "auto", display: "flex", flexDirection: "column" }}
+                  style={{ overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}
                 >
                   <div
                     style={{
@@ -955,11 +990,12 @@ export default function MCPInspector() {
                       borderRadius: "0.75rem",
                       padding: "1.25rem",
                       background: "linear-gradient(to bottom right, rgba(39,39,42,0.9), rgba(24,24,27,0.9))",
-                      height: "100%",
+                      flex: 1,
+                      minHeight: 0,
                       boxSizing: "border-box",
                       display: "flex",
                       flexDirection: "column",
-                      overflow: "auto",
+                      overflow: "hidden",
                     }}
                   >
                     {/* Header */}
@@ -1356,12 +1392,12 @@ export default function MCPInspector() {
                   borderRadius: "0.75rem",
                   padding: "1.5rem",
                   background: "linear-gradient(to bottom right, rgba(39,39,42,0.9), rgba(24,24,27,0.9))",
-                  height: "100%",
+                  flex: 1,
+                  minHeight: 0,
                   boxSizing: "border-box",
                   display: "flex",
                   flexDirection: "column",
                   overflow: "hidden",
-                  minHeight: 0,
                 }}
               >
                 <h2 style={{ fontSize: "1.1rem", fontWeight: "600", flexShrink: 0 }}>
@@ -1399,7 +1435,7 @@ export default function MCPInspector() {
                 {/* ── MANUAL MODE ─── */}
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", marginTop: "1rem", minHeight: 0 }}>
                   {mode === "manual" && selectedServer && selectedTool && (
-                    <div>
+                    <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: "0.5rem" }}>
                       <h3 style={{ marginBottom: "1rem" }}>{selectedTool.name}</h3>
 
                       {selectedServer.status === "connected" ? (
@@ -1434,27 +1470,62 @@ export default function MCPInspector() {
 
                   {/* ── CHAT MODE ─── */}
                   {mode === "chat" && selectedServer && (
-                    <div style={{ display: "grid", gridTemplateRows: "1fr auto", flex: 1, minHeight: 0, overflow: "hidden" }}>
+                    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "hidden" }}>
                       {selectedServer.status === "connected" ? (
                         <>
-                          {/* Chat History — grid row 1 (1fr = all remaining space) */}
+                          {/* Chat History — fills remaining flex space, scrolls */}
                           <div
                             ref={chatRef}
                             style={{
-                              overflowY: "auto",
+                              flex: 1,
                               minHeight: 0,
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "0.5rem",
-                              padding: "0.5rem 0.5rem 0.75rem 0.25rem"
+                              overflowY: "auto",
+                              padding: "0.5rem 0.5rem 2rem 0.25rem"
                             }}
                           >
-                            {groupMessages(chatHistory, executionHistory).map((group) => {
+                            {/* Inner wrapper: flex layout for gap spacing.
+                                Kept separate from the scroll container so flex items
+                                don't shrink-to-fit and prevent overflow scrolling. */}
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                            {groupMessages(chatHistory, executionHistory).map((group, _idx, _arr) => {
+                              const isLast = _idx === _arr.length - 1;
                               if (group.kind === "run") {
+                                const toolResult = group.steps.find(s => s.type === "tool_result");
+                                const toolCall = group.steps.find(s => s.type === "tool_call");
+                                const sessionId = selectedServer?.session_id ?? undefined;
+                                const hasWidget = !!(toolResult?.resourceUri && sessionId && toolCall);
                                 return (
-                                  <div key={group.runId} style={{ display: "flex", justifyContent: "flex-start" }}>
-                                    <ExecutionRunBlock steps={group.steps} run={group.run} sessionId={selectedServer?.session_id ?? undefined} />
-                                  </div>
+                                  <React.Fragment key={group.runId}>
+                                    <ExecutionRunBlock steps={group.steps} run={group.run} />
+                                    {hasWidget && (
+                                      <div style={{
+                                        width: "100%",
+                                        border: "1px solid rgba(99,102,241,0.3)",
+                                        borderRadius: "10px",
+                                        overflow: "hidden",
+                                        background: "rgba(99,102,241,0.04)",
+                                      }}>
+                                        <div style={{
+                                          padding: "0.4rem 0.75rem",
+                                          borderBottom: "1px solid rgba(99,102,241,0.15)",
+                                          fontSize: "0.72rem", fontWeight: 600,
+                                          color: "rgba(99,102,241,0.8)",
+                                          display: "flex", alignItems: "center", gap: "0.4rem",
+                                          background: "rgba(99,102,241,0.06)",
+                                        }}>
+                                          <span>⬡</span> Widget
+                                        </div>
+                                        <WidgetSandbox
+                                          sessionId={sessionId!}
+                                          resourceUri={toolResult!.resourceUri!}
+                                          toolInput={toolCall!.params || {}}
+                                          toolResult={toolResult!.result}
+                                        />
+                                      </div>
+                                    )}
+                                    {/* Scroll anchor: AFTER widget so auto-scroll reveals the full widget */}
+                                    {isLast && <div ref={chatBottomRef} />}
+                                  </React.Fragment>
                                 );
                               }
 
@@ -1462,51 +1533,57 @@ export default function MCPInspector() {
 
                               if (msg.type === "user") {
                                 return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-end" }}>
-                                    <div style={{
-                                      background: "rgba(37,99,235,0.85)",
-                                      border: "1px solid rgba(59,130,246,0.4)",
-                                      color: "#fff",
-                                      padding: "0.55rem 0.85rem",
-                                      borderRadius: "16px 16px 4px 16px",
-                                      maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
-                                    }}>
-                                      {msg.content}
+                                  <React.Fragment key={msg.id}>
+                                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                      <div style={{
+                                        background: "rgba(37,99,235,0.85)",
+                                        border: "1px solid rgba(59,130,246,0.4)",
+                                        color: "#fff",
+                                        padding: "0.55rem 0.85rem",
+                                        borderRadius: "16px 16px 4px 16px",
+                                        maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
+                                      }}>
+                                        {msg.content}
+                                      </div>
                                     </div>
-                                  </div>
+                                    {isLast && <div ref={chatBottomRef} />}
+                                  </React.Fragment>
                                 );
                               }
 
                               if (msg.type === "assistant") {
                                 return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start", gap: "0.5rem", alignItems: "flex-start" }}>
-                                    <div style={{
-                                      width: "22px", height: "22px", borderRadius: "50%", flexShrink: 0, marginTop: "2px",
-                                      background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)",
-                                      display: "flex", alignItems: "center", justifyContent: "center",
-                                      fontSize: "0.65rem",
-                                    }}>🤖</div>
-                                    <div style={{
-                                      background: "rgba(39,39,42,0.8)",
-                                      border: "1px solid rgba(63,63,70,0.6)",
-                                      padding: "0.55rem 0.85rem",
-                                      borderRadius: "4px 16px 16px 16px",
-                                      maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
-                                      color: "rgba(255,255,255,0.85)",
-                                    }}>
-                                      {msg.content}
+                                  <React.Fragment key={msg.id}>
+                                    <div style={{ display: "flex", justifyContent: "flex-start", gap: "0.5rem", alignItems: "flex-start" }}>
+                                      <div style={{
+                                        width: "22px", height: "22px", borderRadius: "50%", flexShrink: 0, marginTop: "2px",
+                                        background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)",
+                                        display: "flex", alignItems: "center", justifyContent: "center",
+                                        fontSize: "0.65rem",
+                                      }}>🤖</div>
+                                      <div style={{
+                                        background: "rgba(39,39,42,0.8)",
+                                        border: "1px solid rgba(63,63,70,0.6)",
+                                        padding: "0.55rem 0.85rem",
+                                        borderRadius: "4px 16px 16px 16px",
+                                        maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
+                                        color: "rgba(255,255,255,0.85)",
+                                      }}>
+                                        {msg.content}
+                                      </div>
                                     </div>
-                                  </div>
+                                    {isLast && <div ref={chatBottomRef} />}
+                                  </React.Fragment>
                                 );
                               }
 
                               return null;
                             })}
-                            <div ref={chatBottomRef} />
+                            </div>{/* close inner flex wrapper */}
                           </div>
 
-                          {/* Chat Input — grid row 2 (auto height, always at bottom) */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(63,63,70,0.3)" }}>
+                          {/* Chat Input — always at bottom, shrinks to its content */}
+                          <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "0.35rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(63,63,70,0.3)" }}>
 
                             {/* ── Toolbar row: model badge · system prompt · clear ── */}
                             <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", paddingTop: "0.3rem" }}>
@@ -1822,7 +1899,6 @@ export default function MCPInspector() {
         </div>
       )}
 
-      <Footer />
     </div>
   );
 }
