@@ -1505,16 +1505,6 @@ export default function MCPInspector() {
                                         overflow: "hidden",
                                         background: "rgba(99,102,241,0.04)",
                                       }}>
-                                        <div style={{
-                                          padding: "0.4rem 0.75rem",
-                                          borderBottom: "1px solid rgba(99,102,241,0.15)",
-                                          fontSize: "0.72rem", fontWeight: 600,
-                                          color: "rgba(99,102,241,0.8)",
-                                          display: "flex", alignItems: "center", gap: "0.4rem",
-                                          background: "rgba(99,102,241,0.06)",
-                                        }}>
-                                          <span>⬡</span> Widget
-                                        </div>
                                         <WidgetSandbox
                                           sessionId={sessionId!}
                                           resourceUri={toolResult!.resourceUri!}

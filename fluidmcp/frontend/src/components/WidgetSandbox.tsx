@@ -13,6 +13,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
   const [height, setHeight] = useState(400);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState('');
+  const [isFullscreen, setIsFullscreen] = useState(false);
   // Tracks pending requests WE sent to the widget (id → resolve/reject)
   const pendingRef = useRef<Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>>(new Map());
   // Fallback timeout: if widget doesn't complete MCP handshake, auto-clear loading state
@@ -52,7 +53,9 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
       if (method === 'ui/notifications/sandbox-proxy-ready') {
         try {
           const res = await apiClient.readInspectorResource(sessionId, resourceUri);
-          const html: string = res?.text || res?.content || '';
+          // MCP spec: resources/read returns {contents: [{uri, mimeType, text}]}
+          const firstContent = res?.contents?.[0];
+          const html: string = firstContent?.text || firstContent?.content || res?.text || res?.content || '';
           if (!html) {
             setStatus('error');
             setErrorMsg('Widget resource returned empty HTML');
@@ -169,39 +172,77 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
     };
   }, [sessionId, resourceUri, toolInput, toolResult]);
 
-  if (status === 'error') {
-    return (
-      <div style={{
-        marginTop: '0.5rem', padding: '0.5rem 0.75rem',
-        fontSize: '0.75rem', color: '#fca5a5',
-        background: 'rgba(239,68,68,0.1)',
-        border: '1px solid rgba(239,68,68,0.3)',
-        borderRadius: '6px',
-      }}>
-        Widget error: {errorMsg}
-      </div>
-    );
-  }
-
+  // Single stable DOM tree — never changes depth regardless of fullscreen state.
+  // This prevents React from remounting the iframe (which would wipe the loaded widget).
   return (
-    <div style={{ background: '#fff', position: 'relative', overflow: 'hidden' }}>
-      {status === 'loading' && (
+    <div style={isFullscreen ? {
+      position: 'fixed', inset: 0, zIndex: 9999,
+      display: 'flex', flexDirection: 'column',
+      background: 'rgba(0,0,0,0.92)',
+    } : {}}>
+      {/* Header — always at depth 1 */}
+      <div style={{
+        padding: '0.4rem 0.75rem',
+        borderBottom: '1px solid rgba(99,102,241,0.15)',
+        fontSize: '0.72rem', fontWeight: 600,
+        color: 'rgba(99,102,241,0.8)',
+        display: 'flex', alignItems: 'center', gap: '0.4rem',
+        background: isFullscreen ? '#0f0f13' : 'rgba(99,102,241,0.06)',
+        flexShrink: 0,
+      }}>
+        <span>⬡</span>
+        <span style={{ flex: 1 }}>Widget</span>
+        <button
+          onClick={() => setIsFullscreen(f => !f)}
+          title={isFullscreen ? 'Exit fullscreen' : 'Expand widget'}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'rgba(99,102,241,0.7)', padding: '0 2px',
+            fontSize: '0.85rem', lineHeight: 1, display: 'flex', alignItems: 'center',
+          }}
+        >
+          {isFullscreen ? '✕' : '⤢'}
+        </button>
+      </div>
+
+      {/* Error state — replaces iframe area, but wrapper stays stable */}
+      {status === 'error' ? (
         <div style={{
-          position: 'absolute', inset: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(9,9,11,0.7)', fontSize: '0.75rem',
-          color: 'rgba(255,255,255,0.5)', zIndex: 1,
+          padding: '0.5rem 0.75rem',
+          fontSize: '0.75rem', color: '#fca5a5',
+          background: 'rgba(239,68,68,0.1)',
         }}>
-          Loading widget...
+          Widget error: {errorMsg}
+        </div>
+      ) : (
+        /* iframe container — always at depth 1, styles adjust for fullscreen */
+        <div style={{
+          background: '#fff', position: 'relative', overflow: 'hidden',
+          ...(isFullscreen ? { flex: 1 } : {}),
+        }}>
+          {status === 'loading' && (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(9,9,11,0.7)', fontSize: '0.75rem',
+              color: 'rgba(255,255,255,0.5)', zIndex: 1,
+            }}>
+              Loading widget...
+            </div>
+          )}
+          <iframe
+            ref={iframeRef}
+            src={`${import.meta.env.BASE_URL}sandbox-proxy.html`}
+            sandbox="allow-scripts allow-same-origin allow-forms"
+            title="MCP Widget"
+            style={{
+              width: '100%',
+              height: isFullscreen ? '100%' : `${height}px`,
+              border: 'none', display: 'block', transition: 'height 0.15s ease',
+            }}
+          />
         </div>
       )}
-      <iframe
-        ref={iframeRef}
-        src={`${import.meta.env.BASE_URL}sandbox-proxy.html`}
-        sandbox="allow-scripts allow-same-origin allow-forms"
-        title="MCP Widget"
-        style={{ width: '100%', height: `${height}px`, border: 'none', display: 'block', transition: 'height 0.15s ease' }}
-      />
     </div>
   );
 }
