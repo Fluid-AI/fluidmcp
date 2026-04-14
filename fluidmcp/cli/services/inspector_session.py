@@ -309,7 +309,36 @@ class InspectorSession:
         data = await self._send(self._make_request("resources/list", {}))
         if "error" in data:
             raise Exception(f"resources/list error: {data['error'].get('message', 'Unknown error')}")
-        return data.get("result", {}).get("resources", [])
+        resources = data.get("result", {}).get("resources", [])
+        for r in resources:
+            r["isTemplate"] = False
+        return resources
+
+    async def list_resource_templates(self) -> list:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("resources/templates/list", {}))
+        if "error" in data:
+            return []  # not all servers implement templates — silently skip
+        templates = data.get("result", {}).get("resourceTemplates", [])
+        # Normalise: rename uriTemplate → uri so the frontend uses one field
+        for t in templates:
+            t["uri"] = t.pop("uriTemplate", t.get("uri", ""))
+            t["isTemplate"] = True
+        return templates
+
+    async def list_prompts(self) -> list:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("prompts/list", {}))
+        if "error" in data:
+            raise Exception(f"prompts/list error: {data['error'].get('message', 'Unknown error')}")
+        return data.get("result", {}).get("prompts", [])
+
+    async def get_prompt(self, name: str, arguments: dict) -> dict:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("prompts/get", {"name": name, "arguments": arguments}))
+        if "error" in data:
+            raise Exception(f"prompts/get error: {data['error'].get('message', 'Unknown error')}")
+        return data.get("result", {})
 
     async def read_resource(self, uri: str) -> dict:
         self.last_used = time.time()

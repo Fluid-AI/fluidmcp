@@ -339,6 +339,17 @@ class ApiClient {
     });
   }
 
+  async listInspectorPrompts(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/prompts`);
+  }
+
+  async getInspectorPrompt(sessionId: string, name: string, args: Record<string, string>): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/prompts/get`, {
+      method: "POST",
+      body: JSON.stringify({ name, arguments: args }),
+    });
+  }
+
   /**
    * Clone a GitHub repository and register its MCP server(s).
    *
