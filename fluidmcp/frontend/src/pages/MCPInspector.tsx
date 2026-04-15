@@ -269,6 +269,7 @@ interface MCPServer {
   server_info?: any;
   tools: any[];
   url: string;
+  command?: string;    // stdio only — the full command string used to spawn the process
   transport: string;
   status: 'connecting' | 'connected' | 'disconnected' | 'failed';
   connectedAt?: number; // timestamp (ms) when status became "connected"
@@ -507,7 +508,7 @@ export default function MCPInspector() {
         ...prev.filter(s => !(s.url === serverUrl && s.status === "failed")),
         { id: serverId, session_id: null, url: serverUrl, transport, tools: [], status: "connecting" as const, auth: authConfig,
           ...(customName.trim() ? { name: customName.trim() } : {}),
-          ...(transport === "stdio" ? { name: customName.trim() || command.trim().split(" ").slice(0, 3).join(" ") } : {}),
+          ...(transport === "stdio" ? { name: customName.trim() || command.trim().split(" ").slice(0, 3).join(" "), command: command.trim() } : {}),
         },
       ]);
 
@@ -637,22 +638,22 @@ export default function MCPInspector() {
             : s
         )
       );
-      // Build payload with auth
-      const payload: any = {
-        url: server.url,
-        transport: server.transport,
-      };
+      // Build payload — stdio uses command, http/sse use url
+      const payload: any = server.transport === "stdio"
+        ? { command: server.command, transport: server.transport }
+        : { url: server.url, transport: server.transport };
 
-      // Bearer
-      if (server.auth?.type === "bearer" && server.auth.token) {
+      // Bearer (not applicable for stdio)
+      if (server.transport !== "stdio" && server.auth?.type === "bearer" && server.auth.token) {
         payload.auth = {
           type: "bearer",
           token: server.auth.token,
         };
       }
 
-      // Header
+      // Header (not applicable for stdio)
       if (
+        server.transport !== "stdio" &&
         server.auth?.type === "header" &&
         server.auth.headerKey &&
         server.auth.headerValue
@@ -1018,7 +1019,10 @@ export default function MCPInspector() {
         : { height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", maxWidth: "100%", padding: 0 }
       }
     >
-      <style>{`@keyframes thinking-blink{0%,100%{opacity:0.2}50%{opacity:1}}`}</style>
+      <style>{`
+        @keyframes thinking-blink{0%,100%{opacity:0.2}50%{opacity:1}}
+        html, body { overflow: hidden; height: 100%; }
+      `}</style>
       {!inspectorFullscreen && <Navbar />}
 
       <div style={{ paddingTop: inspectorFullscreen ? "0" : "64px", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1648,9 +1652,9 @@ export default function MCPInspector() {
                 </div>
 
                 {/* ── MANUAL MODE ─── */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", marginTop: "1rem", minHeight: 0 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
                   {mode === "manual" && selectedServer && selectedTool && (
-                    <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: "0.5rem" }}>
+                    <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: "0.5rem", marginTop: "1rem" }}>
                       <h3 style={{ marginBottom: "1rem" }}>{selectedTool.name}</h3>
 
                       {selectedServer.status === "connected" ? (
@@ -2145,7 +2149,7 @@ export default function MCPInspector() {
                   {/* Empty states */}
                   {mode === "manual" && (!selectedServer || !selectedTool) && (
                     <div style={{
-                      padding: "1rem", border: "1px dashed rgba(63,63,70,0.6)",
+                      marginTop: "1rem", padding: "1rem", border: "1px dashed rgba(63,63,70,0.6)",
                       borderRadius: "0.5rem", textAlign: "center", color: "rgba(255,255,255,0.6)",
                     }}>
                       Select a tool to execute
