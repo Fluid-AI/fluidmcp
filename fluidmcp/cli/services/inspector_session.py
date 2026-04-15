@@ -1,5 +1,6 @@
 import time
 import json
+import shlex
 import asyncio
 import ipaddress
 from datetime import datetime, timezone
@@ -36,16 +37,20 @@ class InspectorSession:
     """
     Manages a temporary connection to an external MCP server for the inspector.
 
-    HTTP transport: raw JSON-RPC POST, response comes back in the same HTTP response.
-    SSE transport:  persistent GET /sse connection (background task) receives all
-                    responses; requests are sent via POST to the messages endpoint.
-                    This matches the MCP SSE spec — the stream must stay open.
+    HTTP transport:  raw JSON-RPC POST, response comes back in the same HTTP response.
+    SSE transport:   persistent GET /sse connection (background task) receives all
+                     responses; requests are sent via POST to the messages endpoint.
+                     This matches the MCP SSE spec — the stream must stay open.
+    stdio transport: spawns the MCP server as a child subprocess and communicates
+                     over stdin/stdout pipes (JSON-RPC, newline-delimited).
+                     The server only exists while this session is open.
     """
 
     def __init__(
         self,
         url: str,
         transport: str,
+        command: Optional[str] = None,
         auth: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         env_vars: Optional[Dict[str, str]] = None,
@@ -53,6 +58,7 @@ class InspectorSession:
     ):
         self.url = url.rstrip("/")
         self.transport = transport.lower()
+        self.command = command  # shell command string for stdio transport
         self.auth = auth or {}
         self.extra_headers = headers or {}
         self.env_vars = env_vars or {}
@@ -70,6 +76,9 @@ class InspectorSession:
         self._sse_ready = asyncio.Event()      # set once endpoint URL is known
         self._sse_pending: Dict[int, "asyncio.Future[dict]"] = {}  # id → Future
         self._sse_task: Optional[asyncio.Task] = None
+
+        # stdio state
+        self._process: Optional[asyncio.subprocess.Process] = None
 
         # Shared httpx client for HTTP/POST requests
         self._client: Optional[httpx.AsyncClient] = None
@@ -226,13 +235,153 @@ class InspectorSession:
                 future.cancel()
             raise
 
+    # ── stdio transport ───────────────────────────────────────────────────────
+
+    async def _start_stdio_process(self) -> Dict[str, Any]:
+        """
+        Spawn the MCP server subprocess and run the MCP initialize handshake.
+        Returns server info dict (name, version, protocol_version).
+
+        Ported from package_launcher.initialize_mcp_server() but fully async:
+        uses asyncio.create_subprocess_exec + await readline instead of
+        blocking subprocess.Popen + asyncio.to_thread.
+        """
+        if not self.command:
+            raise Exception("stdio transport requires a command")
+
+        parts = shlex.split(self.command)
+
+        # Merge env_vars on top of the current process environment
+        import os
+        proc_env = {**os.environ, **self.env_vars} if self.env_vars else None
+
+        if self.env_vars:
+            logger.info(f"Inspector stdio: spawning {parts[0]!r} with env vars: {list(self.env_vars.keys())}")
+        else:
+            logger.info(f"Inspector stdio: spawning {parts[0]!r}")
+
+        self._process = await asyncio.create_subprocess_exec(
+            *parts,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=proc_env,
+        )
+
+        # MCP initialize handshake
+        init_request = {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": ["text/html+mcp", "text/html;profile=mcp-app"]
+                        }
+                    }
+                },
+                "clientInfo": {"name": "FluidMCP Inspector", "version": "1.0.0"},
+            },
+        }
+
+        self._process.stdin.write((json.dumps(init_request) + "\n").encode())
+        await self._process.stdin.drain()
+
+        # Read lines until we get the initialize response (skip non-JSON stdout noise)
+        deadline = asyncio.get_event_loop().time() + 30.0
+        while asyncio.get_event_loop().time() < deadline:
+            if self._process.returncode is not None:
+                stderr_bytes = await self._process.stderr.read(4096)
+                raise Exception(
+                    f"stdio process died during handshake (exit {self._process.returncode}): "
+                    f"{stderr_bytes.decode(errors='replace').strip()}"
+                )
+            try:
+                raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+
+            if not raw:
+                raise Exception("stdio process closed stdout during handshake")
+
+            line = raw.decode(errors="replace").strip()
+            if not line:
+                continue
+
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                logger.debug(f"Inspector stdio: skipping non-JSON line: {line[:200]}")
+                continue
+
+            if msg.get("id") == 0 and "result" in msg:
+                # Send notifications/initialized to complete the handshake
+                notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                self._process.stdin.write((json.dumps(notif) + "\n").encode())
+                await self._process.stdin.drain()
+                logger.info("Inspector stdio: handshake complete")
+                result = msg.get("result", {})
+                server_info = result.get("serverInfo", {})
+                return {
+                    "name": server_info.get("name", "Unknown MCP Server"),
+                    "version": server_info.get("version", "unknown"),
+                    "protocol_version": result.get("protocolVersion", "unknown"),
+                }
+
+        raise Exception("stdio process did not respond to initialize within 30s")
+
+    async def _stdio_send(self, request: dict) -> dict:
+        """
+        Write one JSON-RPC request to the subprocess stdin, read the matching
+        response from stdout. Skips non-JSON lines (log output from the server).
+        """
+        if not self._process or self._process.returncode is not None:
+            raise Exception("stdio process is not running")
+
+        line = (json.dumps(request) + "\n").encode()
+        self._process.stdin.write(line)
+        await self._process.stdin.drain()
+
+        req_id = request.get("id")
+        deadline = asyncio.get_event_loop().time() + self.timeout
+
+        while asyncio.get_event_loop().time() < deadline:
+            if self._process.returncode is not None:
+                raise Exception("stdio process died while waiting for response")
+            try:
+                raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+
+            if not raw:
+                raise Exception("stdio process closed stdout unexpectedly")
+
+            decoded = raw.decode(errors="replace").strip()
+            if not decoded:
+                continue
+
+            try:
+                msg = json.loads(decoded)
+            except json.JSONDecodeError:
+                logger.debug(f"Inspector stdio: skipping non-JSON line: {decoded[:200]}")
+                continue
+
+            if msg.get("id") == req_id:
+                return msg
+
+        raise Exception(f"stdio: no response for request id={req_id} within {self.timeout}s")
+
     # ── Transport dispatcher ──────────────────────────────────────────────────
 
     def _make_request(self, method: str, params: dict) -> dict:
         return {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params}
 
     async def _send(self, request: dict) -> dict:
-        """Route request through SSE or plain HTTP depending on transport."""
+        """Route request through stdio, SSE, or plain HTTP depending on transport."""
+        if self.transport == "stdio":
+            return await self._stdio_send(request)
         if self.transport == "sse":
             return await self._sse_request(request)
 
@@ -245,6 +394,14 @@ class InspectorSession:
 
     async def initialize(self) -> Dict[str, Any]:
         self.last_used = time.time()
+
+        if self.transport == "stdio":
+            # Spawn subprocess and run the full MCP handshake.
+            # _start_stdio_process() sends initialize + notifications/initialized
+            # and stores the initialize result so we can return server info here.
+            info = await self._start_stdio_process()
+            self.add_log("connect", f"Connected to {info['name']} (STDIO)")
+            return info
 
         if self.transport == "sse":
             # Kick off the background SSE listener before sending any requests
@@ -349,6 +506,15 @@ class InspectorSession:
 
     async def close(self) -> None:
         self.add_log("disconnect", "Session closed")
+        if self._process is not None:
+            try:
+                self._process.terminate()
+                await asyncio.wait_for(self._process.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                self._process.kill()
+            except Exception:
+                pass
+            self._process = None
         if self._sse_task:
             self._sse_task.cancel()
             try:

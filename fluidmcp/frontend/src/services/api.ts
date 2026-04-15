@@ -282,7 +282,14 @@ class ApiClient {
   }
 
   // Inspector Tools APIs
-  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+  async connectInspectorServer(payload: {
+    url?: string;
+    command?: string;
+    transport: string;
+    auth?: { type: string; token?: string };
+    headers?: Record<string, string>;
+    timeout?: number;
+  }): Promise<any> {
     return this.request(`/api/inspector/connect`, {
       method: "POST",
       body: JSON.stringify(payload),

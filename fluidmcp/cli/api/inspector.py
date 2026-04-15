@@ -29,8 +29,9 @@ class AuthConfig(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    url: str
-    transport: str = "http"   # "http" | "sse" | "stdio"
+    url: Optional[str] = None        # required for http / sse
+    command: Optional[str] = None    # required for stdio
+    transport: str = "http"          # "http" | "sse" | "stdio"
     auth: Optional[AuthConfig] = None
     headers: Optional[Dict[str, str]] = None
     env_vars: Optional[Dict[str, str]] = None
@@ -105,15 +106,21 @@ async def connect_server(body: ConnectRequest):
     The session is stored in memory and expires after SESSION_TTL seconds of
     inactivity. Nothing is persisted to MongoDB.
     """
-    if not body.url:
-        raise HTTPException(400, "url is required")
+    target = body.command if body.transport == "stdio" else body.url
 
-    _validate_mcp_url(body.url)
+    if body.transport == "stdio":
+        if not body.command:
+            raise HTTPException(400, "command is required for stdio transport")
+    else:
+        if not body.url:
+            raise HTTPException(400, "url is required")
+        _validate_mcp_url(body.url)
 
     auth_dict = body.auth.model_dump() if body.auth else {}
 
     session = InspectorSession(
-        url=body.url,
+        url=body.url or "stdio://local",
+        command=body.command,
         transport=body.transport,
         auth=auth_dict,
         headers=body.headers,
@@ -126,7 +133,7 @@ async def connect_server(body: ConnectRequest):
         server_info = await session.initialize()
     except Exception as e:
         await session.close()
-        logger.warning(f"Inspector: failed to connect to {body.url} — {e}")
+        logger.warning(f"Inspector: failed to connect to {target!r} — {e}")
         raise HTTPException(502, f"Failed to connect to MCP server: {str(e)}")
 
     # Fetch tools immediately so frontend gets everything in one response
@@ -134,13 +141,13 @@ async def connect_server(body: ConnectRequest):
         tools = await session.list_tools()
     except Exception as e:
         await session.close()
-        logger.warning(f"Inspector: connected but failed to list tools for {body.url} — {e}")
+        logger.warning(f"Inspector: connected but failed to list tools for {target!r} — {e}")
         raise HTTPException(502, f"Connected but failed to fetch tools: {str(e)}")
 
     session_id = str(uuid.uuid4())
     sessions[session_id] = session
 
-    logger.info(f"Inspector: new session {session_id} for {body.url} ({body.transport}), {len(tools)} tools")
+    logger.info(f"Inspector: new session {session_id} for {target!r} ({body.transport}), {len(tools)} tools")
 
     return {
         "session_id": session_id,
@@ -241,14 +248,19 @@ async def list_resources(session_id: str):
     if not session:
         raise HTTPException(404, "Session not found or expired")
 
+    resources, templates = [], []
     try:
         resources = await session.list_resources()
-        templates = await session.list_resource_templates()
-        combined = resources + templates
-        return {"resources": combined, "count": len(combined)}
     except Exception as e:
-        logger.error(f"Inspector: list_resources failed for session {session_id} — {e}")
-        raise HTTPException(500, f"Failed to fetch resources: {str(e)}")
+        if "Method not found" not in str(e):
+            logger.warning(f"Inspector: list_resources failed for session {session_id} — {e}")
+    try:
+        templates = await session.list_resource_templates()
+    except Exception as e:
+        if "Method not found" not in str(e):
+            logger.warning(f"Inspector: list_resource_templates failed for session {session_id} — {e}")
+    combined = resources + templates
+    return {"resources": combined, "count": len(combined)}
 
 
 @router.post("/inspector/{session_id}/resources/read")
@@ -288,6 +300,8 @@ async def list_prompts(session_id: str):
         prompts = await session.list_prompts()
         return {"prompts": prompts, "count": len(prompts)}
     except Exception as e:
+        if "Method not found" in str(e):
+            return {"prompts": [], "count": 0}
         logger.error(f"Inspector: list_prompts failed for session {session_id} — {e}")
         raise HTTPException(500, f"Failed to fetch prompts: {str(e)}")
 
