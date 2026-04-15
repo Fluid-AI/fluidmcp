@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import shlex
@@ -251,14 +252,42 @@ class InspectorSession:
 
         parts = shlex.split(self.command)
 
-        # Merge env_vars on top of the current process environment
-        import os
-        proc_env = {**os.environ, **self.env_vars} if self.env_vars else None
+        # ── Command allowlist ─────────────────────────────────────────────────
+        # Only permit known MCP server launchers. Check basename so full paths
+        # like /usr/local/bin/npx still pass.
+        _ALLOWED_EXECUTABLES = {"npx", "uvx", "node", "python", "python3", "deno", "bun"}
+        exe_basename = os.path.basename(parts[0])
+        if exe_basename not in _ALLOWED_EXECUTABLES:
+            raise Exception(
+                f"Command '{exe_basename}' is not allowed. "
+                f"Permitted launchers: {', '.join(sorted(_ALLOWED_EXECUTABLES))}"
+            )
+
+        # ── Subprocess environment ────────────────────────────────────────────
+        # Build a minimal safe env from a fixed allowlist of system variables
+        # so FluidMCP's own secrets (BEARER_TOKEN, MONGODB_URI, API_KEY,
+        # etc.) are never visible to the spawned process. User-supplied env_vars
+        # are layered on top — they can only add/override within this safe base.
+        _SYSTEM_ENV_ALLOWLIST = {
+            "PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP",
+            "LANG", "LC_ALL", "LC_CTYPE",
+            "NODE_PATH", "NPM_CONFIG_CACHE", "NPM_CONFIG_PREFIX",
+            "PYTHONPATH", "VIRTUAL_ENV",
+            "DENO_DIR", "BUN_INSTALL",
+            "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+        }
+        proc_env = {
+            k: v for k, v in os.environ.items()
+            if k in _SYSTEM_ENV_ALLOWLIST
+        }
+        # Layer user-supplied vars on top (they cannot see what's not in base)
+        if self.env_vars:
+            proc_env.update(self.env_vars)
 
         if self.env_vars:
-            logger.info(f"Inspector stdio: spawning {parts[0]!r} with env vars: {list(self.env_vars.keys())}")
+            logger.info(f"Inspector stdio: spawning {exe_basename!r} with env vars: {list(self.env_vars.keys())}")
         else:
-            logger.info(f"Inspector stdio: spawning {parts[0]!r}")
+            logger.info(f"Inspector stdio: spawning {exe_basename!r}")
 
         self._process = await asyncio.create_subprocess_exec(
             *parts,
