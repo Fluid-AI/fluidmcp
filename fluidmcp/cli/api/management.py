@@ -1281,6 +1281,9 @@ async def delete_server(
     if id in manager.configs:
         del manager.configs[id]
 
+    # Clean up stale instance state so a re-clone of the same server ID starts fresh
+    await manager.db.reset_instance_state(id)
+
     from datetime import datetime
     deleted_at = datetime.utcnow().isoformat()
     logger.info(f"Soft deleted server configuration: {id}")
