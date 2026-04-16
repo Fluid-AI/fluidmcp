@@ -1,6 +1,6 @@
 # Server Lifecycle Flow (UI)
 
-**Scope:** How an MCP server is added, started, stopped, and restarted through the UI — from the ManageServers / Dashboard pages down to the backend subprocess and back.
+**Scope:** How an MCP server is added, edited, deleted, started, stopped, and restarted through the UI — from the ManageServers / Dashboard pages down to the backend subprocess and back.
 
 ---
 
@@ -10,8 +10,14 @@
 Add server:
 /ui  →  ManageServers (/servers/manage)  →  "Add Server" form  →  Save
 
+Edit server:
+/ui  →  ManageServers (/servers/manage)  →  "Edit" on a row  →  Save
+
+Disable / Delete server:
+/ui  →  ManageServers (/servers/manage)  →  "Delete" on a row  →  choose Disable or Delete in modal
+
 Start / Stop / Restart:
-/ui  →  Dashboard (/)               →  server card action buttons
+/ui  →  Dashboard (/)                    →  server card action buttons
      →  ManageServers (/servers/manage)  →  row action buttons
 ```
 
@@ -49,6 +55,124 @@ Start / Stop / Restart:
 │  BROWSER — useServerManagement resumes                              │
 │    → refreshes server list                                          │
 │    → new server appears in ManageServers table with status Stopped  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Edit Server Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — ManageServers, user clicks "Edit", updates form, saves   │
+│                                                                     │
+│  useServerManagement().updateServer(serverId, config):              │
+│    → setLoading(true)                                               │
+│    → apiClient.updateServer(serverId, {                             │
+│        config: { command, args, env }                               │
+│      })                                                             │
+│         PUT /api/servers/:id                                        │
+└─────────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP PUT
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  FASTAPI GATEWAY  (management.py → update_server())                 │
+│    → validates bearer token                                         │
+│    → validates new config structure                                 │
+│    → DatabaseManager.update_server_config()                         │
+│        overwrites the stored mcp_config in MongoDB                  │
+│    → updates ServerManager.configs (in-memory)                     │
+│    → returns { server_id, status: current status }                 │
+└─────────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP 200
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — useServerManagement resumes                              │
+│    → refreshes server list                                          │
+│    → row shows updated config                                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+> **Note:** Editing a running server updates the stored config but does not restart the process. The running subprocess continues using the old config until it is restarted.
+
+---
+
+## Delete / Disable Flow
+
+Clicking "Delete" on a server row opens a `DeleteConfirmationModal` with two distinct options:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — user clicks "Delete" on a row                            │
+│    → DeleteConfirmationModal opens with two choices:                │
+│                                                                     │
+│      🔒 Disable   (yellow)  — hide for now, re-enable later        │
+│      🗑️ Delete    (red)     — permanent, admin recovery only        │
+└──────────────────┬───────────────────────┬──────────────────────────┘
+                   │                       │
+         user picks Disable      user picks Delete
+                   │                       │ (extra confirm step shown)
+                   ▼                       ▼
+```
+
+### Option A — Disable (hidden, reversible)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — user clicks "Disable"                                    │
+│                                                                     │
+│  handleDisable():                                                   │
+│    → apiClient.updateServer(serverId, { enabled: false, ...config })│
+│         PUT /api/servers/:id                                        │
+└─────────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP PUT
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  FASTAPI GATEWAY  (management.py → update_server())                 │
+│    → sets enabled: false in MongoDB document                        │
+│    → no deleted_at set — record stays fully intact                  │
+│    → updates ServerManager.configs (in-memory)                     │
+└─────────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP 200
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — modal closes, list refreshes                             │
+│    → server disappears from Dashboard (enabled_only=true by default)│
+│    → server still visible in ManageServers with "Disabled" badge    │
+│    → re-enable anytime by editing and setting enabled: true         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Option B — Delete (soft delete, admin-recoverable)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — user clicks "Delete" → second confirmation screen shown  │
+│    "Warning: Irreversible Action / Only admins can recover"         │
+│    → user clicks "Confirm Delete"                                   │
+│                                                                     │
+│  handleDelete():                                                    │
+│    → apiClient.deleteServer(serverId)                               │
+│         DELETE /api/servers/:id                                     │
+└─────────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP DELETE
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  FASTAPI GATEWAY  (management.py → delete_server())                 │
+│    → if server is running: stops process first (SIGTERM → SIGKILL)  │
+│    → DatabaseManager.soft_delete_server_config()                    │
+│        sets deleted_at: <timestamp> + enabled: false in MongoDB     │
+│        (document is NOT removed from DB)                            │
+│    → removes config from ServerManager.configs (in-memory)         │
+│    → returns { message: "Server deleted", deleted_at: "..." }      │
+└─────────────────────────────────────┬───────────────────────────────┘
+                                      │ HTTP 200
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  BROWSER — modal closes, list refreshes                             │
+│    → server gone from ManageServers table (default view)            │
+│    → admin can reveal it via "Show Deleted" toggle                  │
+│        (calls GET /api/servers?include_deleted=true)                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -172,6 +296,9 @@ POST /api/servers/:id/restart
 |---|---|---|
 | Duplicate `server_id` on Add | 409 | Server with that ID already in DB |
 | Invalid config (missing `command`) | 422 | Validation failure in `validators.py` |
+| Edit on unknown `server_id` | 404 | Server not found in DB |
+| Delete on unknown `server_id` | 404 | Server not found in DB |
+| Delete on already-deleted server | 410 | `deleted_at` already set in MongoDB |
 | Command not found at spawn | 500 | `npx`/`python` not on PATH |
 | Init timeout (30 s) | 500 | MCP subprocess didn't respond to handshake |
 | Stop on non-running server | 400 | Server not in running state |
@@ -185,8 +312,9 @@ POST /api/servers/:id/restart
 | `src/pages/ManageServers.tsx` | Add/Edit/Delete server configs; Start/Stop buttons |
 | `src/pages/Dashboard.tsx` | Server cards with Start/Stop/Restart quick actions |
 | `src/hooks/useServers.ts` | `startServer()`, `stopServer()` — calls API, refreshes list |
-| `src/hooks/useServerManagement.ts` | `addServer()`, `deleteServer()` — CRUD operations |
-| `src/services/api.ts` | `addServer()` — POST; `startServer()` / `stopServer()` — POST |
+| `src/hooks/useServerManagement.ts` | `addServer()`, `updateServer()`, `deleteServer()` — CRUD operations |
+| `src/components/DeleteConfirmationModal.tsx` | Two-step modal: Disable (PUT enabled:false) vs Delete (DELETE soft) |
+| `src/services/api.ts` | `addServer()` — POST; `updateServer()` — PUT; `deleteServer()` — DELETE; `startServer()` / `stopServer()` — POST |
 
 ---
 
