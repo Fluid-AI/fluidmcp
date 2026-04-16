@@ -274,7 +274,7 @@ async def read_resource(session_id: str, body: ReadResourceRequest):
 
 
 class GetPromptRequest(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=512)
     arguments: Optional[dict] = Field(default_factory=dict)
 
 
@@ -289,7 +289,7 @@ async def list_prompts(session_id: str):
         return {"prompts": prompts, "count": len(prompts)}
     except Exception as e:
         logger.error(f"Inspector: list_prompts failed for session {session_id} — {e}")
-        raise HTTPException(500, f"Failed to fetch prompts: {str(e)}")
+        raise HTTPException(500, "Failed to fetch prompts")
 
 
 @router.post("/inspector/{session_id}/prompts/get")
@@ -303,7 +303,7 @@ async def get_prompt(session_id: str, body: GetPromptRequest):
         return result
     except Exception as e:
         logger.error(f"Inspector: get_prompt failed for session {session_id} — {e}")
-        raise HTTPException(500, f"Failed to get prompt: {str(e)}")
+        raise HTTPException(500, "Failed to get prompt")
 
 
 @router.post("/inspector/{session_id}/chat")
