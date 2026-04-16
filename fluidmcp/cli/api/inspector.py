@@ -40,6 +40,10 @@ class ConnectRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[list] = Field(default_factory=list)
+    provider: Optional[str] = "groq"       # "groq" | "openai" | "anthropic" | "gemini"
+    model: Optional[str] = None            # None → use provider default
+    api_key: Optional[str] = None          # None → fall back to env var
+    system_prompt: Optional[str] = None
 
 class ReadResourceRequest(BaseModel):
     uri: str
@@ -345,9 +349,15 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent, passing chat history for multi-turn context
+        # Call the agent with the requested provider/model/key
         agent_result = await choose_tool_with_llm(
-            body.message, tools, chat_history=body.chat_history or []
+            body.message,
+            tools,
+            chat_history=body.chat_history or [],
+            provider=body.provider or "groq",
+            model=body.model or None,
+            api_key=body.api_key or None,
+            system_prompt=body.system_prompt or None,
         )
 
         # Validate the response has the expected fields
@@ -371,8 +381,40 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
 
     except Exception as e:
         logger.error(f"Inspector chat error: {e}")
+        err_str = str(e)
+
+        # Try to extract just the human-readable message from provider error dicts
+        # e.g. "Error code: 401 - {'error': {'message': 'Incorrect API key...', ...}}"
+        user_message = err_str
+        try:
+            import re, ast
+            match = re.search(r"\{.*\}", err_str, re.DOTALL)
+            if match:
+                parsed = ast.literal_eval(match.group())
+                if isinstance(parsed, dict):
+                    inner = parsed.get("error", parsed)
+                    if isinstance(inner, dict) and "message" in inner:
+                        user_message = inner["message"]
+        except Exception:
+            pass
+
+        is_auth = any(kw in err_str.lower() for kw in (
+            "api key", "apikey", "invalid_api_key", "unauthorized",
+            "authentication", "403", "401", "permission", "incorrect api key",
+            "no api key provided", "insufficient_quota", "quota",
+        ))
+
+        if is_auth:
+            is_quota = any(kw in err_str.lower() for kw in ("quota", "insufficient_quota", "429"))
+            prefix = "Quota exceeded" if is_quota else "Authentication failed"
+            return {
+                "clarification_needed": True,
+                "message": f"{prefix}: {user_message}",
+                "error_type": "auth",
+            }
 
         return {
             "clarification_needed": True,
-            "message": "Unable to determine which tool to run."
+            "message": f"LLM error: {user_message}",
+            "error_type": "llm",
         }

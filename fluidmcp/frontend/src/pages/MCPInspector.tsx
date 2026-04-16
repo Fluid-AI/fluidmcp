@@ -130,7 +130,7 @@ function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: Executi
   const toolCall  = steps.find(s => s.type === "tool_call");
   const toolResult = steps.find(s => s.type === "tool_result");
   const errorStep = steps.find(s => s.type === "error");
-  const isActive  = !toolResult && !errorStep; // run still in progress
+  const isActive  = !toolResult && !errorStep && !run?.endTime; // run still in progress
 
   const totalMs    = run?.endTime ? run.endTime - run.startTime : null;
   const thinkingMs = (toolCall?.perfMark && thinking?.perfMark)
@@ -424,6 +424,69 @@ export default function MCPInspector() {
   const [systemPrompt, setSystemPrompt] = useState("")
   const [systemPromptDraft, setSystemPromptDraft] = useState("")
   const [systemPromptOpen, setSystemPromptOpen] = useState(false)
+
+  // 5A: Multi-provider LLM selector
+  type LLMProvider = "groq" | "openai" | "anthropic" | "gemini"
+  const PROVIDER_DEFAULTS: Record<LLMProvider, { model: string; label: string; models: { id: string; label: string }[] }> = {
+    groq: {
+      label: "Groq", model: "llama-3.1-8b-instant",
+      models: [
+        { id: "llama-3.1-8b-instant",  label: "Llama 3.1 8B (fast)" },
+        { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
+        { id: "llama-3.1-70b-versatile", label: "Llama 3.1 70B" },
+        { id: "mixtral-8x7b-32768",    label: "Mixtral 8x7B" },
+      ],
+    },
+    openai: {
+      label: "OpenAI", model: "gpt-4o-mini",
+      models: [
+        { id: "gpt-4o-mini",  label: "GPT-4o Mini (fast)" },
+        { id: "gpt-4o",       label: "GPT-4o" },
+        { id: "gpt-4-turbo",  label: "GPT-4 Turbo" },
+        { id: "o1-mini",      label: "o1 Mini" },
+      ],
+    },
+    anthropic: {
+      label: "Anthropic", model: "claude-haiku-4-5-20251001",
+      models: [
+        { id: "claude-haiku-4-5-20251001",  label: "Claude Haiku 4.5 (fast)" },
+        { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+        { id: "claude-opus-4-5",   label: "Claude Opus 4.5" },
+      ],
+    },
+    gemini: {
+      label: "Gemini", model: "gemini-2.0-flash",
+      models: [
+        { id: "gemini-2.0-flash",      label: "Gemini 2.0 Flash (fast)" },
+        { id: "gemini-2.0-flash-lite", label: "Gemini 2.0 Flash Lite" },
+        { id: "gemini-1.5-pro",        label: "Gemini 1.5 Pro" },
+        { id: "gemini-1.5-flash",      label: "Gemini 1.5 Flash" },
+      ],
+    },
+  }
+  const loadLLMSettings = () => {
+    try {
+      const raw = localStorage.getItem("fmcp_llm_settings")
+      if (raw) return JSON.parse(raw)
+    } catch { /* ignore */ }
+    return { provider: "groq", model: "llama-3.1-8b-instant", apiKeys: {} }
+  }
+  const [llmSettings, setLLMSettings] = useState<{
+    provider: LLMProvider; model: string; apiKeys: Record<string, string>
+  }>(loadLLMSettings)
+  const [llmSelectorOpen, setLLMSelectorOpen] = useState(false)
+  const [llmDraft, setLLMDraft] = useState(llmSettings)
+
+  const saveLLMSettings = (next: typeof llmSettings) => {
+    const providerChanged = next.provider !== llmSettings.provider || next.model !== llmSettings.model
+    setLLMSettings(next)
+    localStorage.setItem("fmcp_llm_settings", JSON.stringify(next))
+    // Clear chat for all servers when provider/model changes — history from a
+    // different model context is misleading and can confuse the new model
+    if (providerChanged) {
+      setChatHistoryByServer({})
+    }
+  }
 
   // Helper to update chat for the currently selected server
   const updateChat = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
@@ -818,6 +881,11 @@ export default function MCPInspector() {
           type: m.type,
           content: m.content
         })),
+        provider: llmSettings.provider,
+        model: llmSettings.model,
+        ...(llmSettings.apiKeys[llmSettings.provider]
+          ? { api_key: llmSettings.apiKeys[llmSettings.provider] }
+          : {}),
         ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {})
       }
     )
@@ -825,16 +893,20 @@ export default function MCPInspector() {
     updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
 
     if (res.clarification_needed) {
+      const isAuthError = res.error_type === "auth" || res.error_type === "llm"
+      // No runId — renders as a standalone red bubble below the (now-closed) run block
       const assistantMsg: ChatMessage = {
         id: generateId(),
-        runId,
         type: "assistant",
-        content: res.message,
+        content: isAuthError
+          ? res.message
+          : (res.message || "Could not determine which tool to run."),
         timestamp: Date.now(),
-        perfMark: performance.now()
+        perfMark: performance.now(),
+        ...(isAuthError ? { errorType: res.error_type } : {})
       }
       updateChat(prev => [...prev, assistantMsg])
-      // save run (no tool call — just clarification)
+      // Save run with endTime so isActive becomes false in ExecutionRunBlock
       setExecutionHistoryByServer(prev => ({
         ...prev,
         [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
@@ -892,17 +964,20 @@ export default function MCPInspector() {
 
   } catch (err: any) {
 
+    // Always clear the thinking bubble before showing the error
+    updateChat(prev => prev.filter((m: ChatMessage) => m.type !== "thinking"))
+
+    // No runId — renders as a standalone red bubble below the (now-closed) run block
     const errorMsg: ChatMessage = {
       id: generateId(),
-      runId,
-      type: "error",
-      content: err?.message || "Chat error",
+      type: "assistant",
+      content: err?.message || "Something went wrong. Check your LLM settings.",
       timestamp: Date.now(),
-      perfMark: performance.now()
-    }
+      perfMark: performance.now(),
+      errorType: "llm",
+    } as any
 
     updateChat(prev => [...prev, errorMsg])
-    runSteps.push(errorMsg)
 
     // save failed run
     setExecutionHistoryByServer(prev => ({
@@ -1761,24 +1836,39 @@ export default function MCPInspector() {
                               }
 
                               if (msg.type === "assistant") {
+                                const isErrMsg = !!(msg as any).errorType
                                 return (
                                   <React.Fragment key={msg.id}>
                                     <div style={{ display: "flex", justifyContent: "flex-start", gap: "0.5rem", alignItems: "flex-start" }}>
                                       <div style={{
                                         width: "22px", height: "22px", borderRadius: "50%", flexShrink: 0, marginTop: "2px",
-                                        background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)",
+                                        background: isErrMsg ? "rgba(239,68,68,0.15)" : "rgba(99,102,241,0.2)",
+                                        border: `1px solid ${isErrMsg ? "rgba(239,68,68,0.4)" : "rgba(99,102,241,0.4)"}`,
                                         display: "flex", alignItems: "center", justifyContent: "center",
                                         fontSize: "0.65rem",
-                                      }}>🤖</div>
+                                      }}>{isErrMsg ? "⚠" : "🤖"}</div>
                                       <div style={{
-                                        background: "rgba(39,39,42,0.8)",
-                                        border: "1px solid rgba(63,63,70,0.6)",
+                                        background: isErrMsg ? "rgba(239,68,68,0.08)" : "rgba(39,39,42,0.8)",
+                                        border: `1px solid ${isErrMsg ? "rgba(239,68,68,0.35)" : "rgba(63,63,70,0.6)"}`,
                                         padding: "0.55rem 0.85rem",
                                         borderRadius: "4px 16px 16px 16px",
                                         maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
-                                        color: "rgba(255,255,255,0.85)",
+                                        color: isErrMsg ? "rgba(252,165,165,0.9)" : "rgba(255,255,255,0.85)",
+                                        display: "flex", flexDirection: "column", gap: "0.5rem",
                                       }}>
-                                        {msg.content}
+                                        <span>{msg.content}</span>
+                                        {isErrMsg && (
+                                          <button
+                                            onClick={() => { setLLMDraft(llmSettings); setLLMSelectorOpen(true); }}
+                                            style={{
+                                              fontSize: "0.7rem", padding: "0.25rem 0.6rem", borderRadius: "6px", cursor: "pointer",
+                                              background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.35)",
+                                              color: "rgba(252,165,165,0.9)", alignSelf: "flex-start",
+                                            }}
+                                          >
+                                            Fix LLM settings
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                     {isLast && <div ref={chatBottomRef} />}
@@ -1796,14 +1886,19 @@ export default function MCPInspector() {
 
                             {/* ── Toolbar row: model badge · system prompt · clear ── */}
                             <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", paddingTop: "0.3rem" }}>
-                              {/* Model badge */}
-                              <span style={{
-                                fontSize: "0.65rem", padding: "0.15rem 0.5rem", borderRadius: "999px",
-                                background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
-                                color: "rgba(165,180,252,0.9)", fontFamily: "monospace", flexShrink: 0,
-                              }}>
-                                Groq · llama-3.1-8b
-                              </span>
+                              {/* Model badge — clickable to open LLM selector */}
+                              <button
+                                onClick={() => { setLLMDraft(llmSettings); setLLMSelectorOpen(true); }}
+                                title="Change LLM provider / model"
+                                style={{
+                                  fontSize: "0.65rem", padding: "0.15rem 0.5rem", borderRadius: "999px",
+                                  background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
+                                  color: "rgba(165,180,252,0.9)", fontFamily: "monospace", flexShrink: 0,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                {PROVIDER_DEFAULTS[llmSettings.provider]?.label ?? llmSettings.provider} · {llmSettings.model.length > 20 ? llmSettings.model.slice(0, 20) + "…" : llmSettings.model}
+                              </button>
 
                               {/* System prompt button */}
                               <button
@@ -1869,6 +1964,139 @@ export default function MCPInspector() {
                                     </button>
                                     <button
                                       onClick={() => { setSystemPrompt(systemPromptDraft); setSystemPromptOpen(false); }}
+                                      style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem", borderRadius: "6px", background: "rgba(99,102,241,0.8)", border: "none", color: "#fff", cursor: "pointer", fontWeight: 600 }}
+                                    >
+                                      Save
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* ── LLM selector dialog ── */}
+                            {llmSelectorOpen && (
+                              <div style={{
+                                position: "fixed", inset: 0, zIndex: 50,
+                                background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
+                              }}
+                                onClick={(e) => { if (e.target === e.currentTarget) setLLMSelectorOpen(false); }}
+                              >
+                                <div style={{
+                                  background: "#18181b", border: "1px solid rgba(63,63,70,0.7)",
+                                  borderRadius: "12px", padding: "1.25rem", width: "420px", maxWidth: "90vw",
+                                  display: "flex", flexDirection: "column", gap: "0.85rem",
+                                }}>
+                                  <div style={{ fontSize: "0.9rem", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>LLM Settings</div>
+
+                                  {/* Warning when provider/model differs from saved */}
+                                  {(llmDraft.provider !== llmSettings.provider || llmDraft.model !== llmSettings.model) && chatHistory.length > 0 && (
+                                    <div style={{
+                                      fontSize: "0.72rem", padding: "0.4rem 0.65rem", borderRadius: "6px",
+                                      background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.3)",
+                                      color: "rgba(253,224,71,0.85)", display: "flex", alignItems: "center", gap: "0.4rem",
+                                    }}>
+                                      ⚠ Changing provider or model will clear the current chat
+                                    </div>
+                                  )}
+
+                                  {/* Provider selector */}
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                    <label style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)" }}>Provider</label>
+                                    <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                                      {(["groq", "openai", "anthropic", "gemini"] as LLMProvider[]).map(p => (
+                                        <button key={p}
+                                          onClick={() => setLLMDraft(d => ({
+                                            ...d,
+                                            provider: p,
+                                            model: PROVIDER_DEFAULTS[p].model,
+                                          }))}
+                                          style={{
+                                            fontSize: "0.75rem", padding: "0.3rem 0.7rem", borderRadius: "6px", cursor: "pointer",
+                                            background: llmDraft.provider === p ? "rgba(99,102,241,0.8)" : "rgba(39,39,42,0.8)",
+                                            border: llmDraft.provider === p ? "1px solid rgba(99,102,241,0.6)" : "1px solid rgba(63,63,70,0.5)",
+                                            color: llmDraft.provider === p ? "#fff" : "rgba(255,255,255,0.6)",
+                                            fontWeight: llmDraft.provider === p ? 600 : 400,
+                                          }}
+                                        >
+                                          {PROVIDER_DEFAULTS[p].label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  {/* Model selector */}
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                    <label style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)" }}>Model</label>
+                                    <select
+                                      value={PROVIDER_DEFAULTS[llmDraft.provider].models.some(m => m.id === llmDraft.model) ? llmDraft.model : "__custom__"}
+                                      onChange={e => {
+                                        if (e.target.value !== "__custom__") {
+                                          setLLMDraft(d => ({ ...d, model: e.target.value }))
+                                        }
+                                      }}
+                                      style={{
+                                        background: "#09090b", border: "1px solid rgba(63,63,70,0.6)",
+                                        borderRadius: "6px", padding: "0.45rem 0.6rem",
+                                        color: "#fff", fontSize: "0.8rem", fontFamily: "monospace",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      {PROVIDER_DEFAULTS[llmDraft.provider].models.map(m => (
+                                        <option key={m.id} value={m.id}>{m.label}</option>
+                                      ))}
+                                      <option value="__custom__" disabled style={{ color: "rgba(255,255,255,0.4)" }}>
+                                        ── custom (type below) ──
+                                      </option>
+                                    </select>
+                                    {/* Custom model input — shown when selection isn't in the list */}
+                                    <input
+                                      value={llmDraft.model}
+                                      onChange={e => setLLMDraft(d => ({ ...d, model: e.target.value }))}
+                                      placeholder="or type a custom model ID"
+                                      style={{
+                                        background: "#09090b", border: "1px solid rgba(63,63,70,0.4)",
+                                        borderRadius: "6px", padding: "0.4rem 0.6rem",
+                                        color: "rgba(255,255,255,0.7)", fontSize: "0.75rem", fontFamily: "monospace",
+                                      }}
+                                    />
+                                  </div>
+
+                                  {/* API key input */}
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                                    <label style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)" }}>
+                                      API Key
+                                      {llmDraft.provider === "groq" && (
+                                        <span style={{ marginLeft: "0.4rem", color: "rgba(134,239,172,0.7)" }}>(free key at console.groq.com)</span>
+                                      )}
+                                    </label>
+                                    <input
+                                      type="password"
+                                      value={llmDraft.apiKeys[llmDraft.provider] ?? ""}
+                                      onChange={e => setLLMDraft(d => ({
+                                        ...d,
+                                        apiKeys: { ...d.apiKeys, [d.provider]: e.target.value }
+                                      }))}
+                                      placeholder={llmDraft.provider === "groq" ? "gsk_... (leave blank for env var)" : "Paste your API key"}
+                                      style={{
+                                        background: "#09090b", border: "1px solid rgba(63,63,70,0.6)",
+                                        borderRadius: "6px", padding: "0.45rem 0.6rem",
+                                        color: "#fff", fontSize: "0.8rem", fontFamily: "monospace",
+                                      }}
+                                    />
+                                    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)" }}>
+                                      Stored in localStorage · never sent to FluidMCP servers
+                                    </span>
+                                  </div>
+
+                                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+                                    <button
+                                      onClick={() => setLLMSelectorOpen(false)}
+                                      style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem", borderRadius: "6px", background: "transparent", border: "1px solid rgba(63,63,70,0.5)", color: "rgba(255,255,255,0.5)", cursor: "pointer" }}
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      onClick={() => { saveLLMSettings(llmDraft); setLLMSelectorOpen(false); }}
                                       style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem", borderRadius: "6px", background: "rgba(99,102,241,0.8)", border: "none", color: "#fff", cursor: "pointer", fontWeight: 600 }}
                                     >
                                       Save
