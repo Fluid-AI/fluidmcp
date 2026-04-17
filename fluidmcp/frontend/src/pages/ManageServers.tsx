@@ -232,6 +232,7 @@ export default function ManageServers() {
                     <ServerForm
                       mode="create"
                       initialData={null}
+                      existingIds={servers.map(s => s.id)}
                       onSubmit={handleFormSubmit}
                       onCancel={() => setShowForm(false)}
                     />
