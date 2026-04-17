@@ -335,6 +335,10 @@ class ApiClient {
     });
   }
 
+  async exportInspectorServer(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/export`);
+  }
+
   async listInspectorResources(sessionId: string): Promise<any> {
     return this.request(`/api/inspector/${sessionId}/resources`);
   }

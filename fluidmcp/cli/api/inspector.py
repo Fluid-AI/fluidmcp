@@ -320,6 +320,47 @@ async def get_prompt(session_id: str, body: GetPromptRequest):
         raise HTTPException(500, f"Failed to get prompt: {str(e)}")
 
 
+@router.get("/inspector/{session_id}/export")
+async def export_server(session_id: str):
+    """
+    Export server config, tools, resources, and prompts as a JSON snapshot.
+    Auth tokens are stripped — only the auth type is included.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    tools, resources, prompts = [], [], []
+    try:
+        tools = await session.list_tools()
+    except Exception:
+        pass
+    try:
+        resources = await session.list_resources()
+    except Exception:
+        pass
+    try:
+        prompts = await session.list_prompts()
+    except Exception:
+        pass
+
+    # Strip auth tokens — only expose the type so the recipient knows what auth is needed
+    safe_auth = {"type": session.auth.get("type", "none")} if session.auth else {"type": "none"}
+
+    return {
+        "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "serverInfo": getattr(session, "server_info", {}),
+        "url": session.url,
+        "transport": session.transport,
+        "auth": safe_auth,
+        "tools": tools,
+        "resources": resources,
+        "prompts": prompts,
+    }
+
+
 @router.post("/inspector/{session_id}/chat")
 async def chat_with_tools(session_id: str, body: ChatRequest):
     """
