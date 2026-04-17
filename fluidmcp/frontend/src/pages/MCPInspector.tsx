@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/services/api";
+import { type SavedRequest, loadSavedRequests, saveRequest, deleteSavedRequest } from "@/lib/saved-requests";
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
 import { JsonResultView } from '../components/result/JsonResultView';
@@ -373,6 +374,11 @@ export default function MCPInspector() {
   const [executionTime, setExecutionTime] = useState<number | null>(null)
   const [lastRunParams, setLastRunParams] = useState<any | null>(null)
   const [copyRequestToast, setCopyRequestToast] = useState(false)
+  const [toolSubTab, setToolSubTab] = useState<"tools" | "saved">("tools")
+  const [savedRequests, setSavedRequests] = useState<SavedRequest[]>([])
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [saveTitle, setSaveTitle] = useState("")
+  const [formPrefill, setFormPrefill] = useState<Record<string, any> | undefined>(undefined)
   // 3A-4: typed per-server execution history
   const [executionHistoryByServer, setExecutionHistoryByServer] = useState<Record<string, ExecutionRun[]>>({})
   const executionHistory = executionHistoryByServer[selectedServerId ?? ""] ?? []
@@ -483,8 +489,6 @@ export default function MCPInspector() {
     const providerChanged = next.provider !== llmSettings.provider || next.model !== llmSettings.model
     setLLMSettings(next)
     localStorage.setItem("fmcp_llm_settings", JSON.stringify(next))
-    // Clear chat for all servers when provider/model changes — history from a
-    // different model context is misleading and can confuse the new model
     if (providerChanged) {
       setChatHistoryByServer({})
     }
@@ -836,12 +840,8 @@ export default function MCPInspector() {
       ? crypto.randomUUID()
       : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
- const runChatTool = async () => {
-  // Guard against concurrent requests
-  if (!chatInput || !selectedServer?.session_id || chatLoading || !selectedServerId) return
-
-  const message = chatInput
-  setChatInput("")
+ const runChatToolWithMessage = async (message: string) => {
+  if (!message || !selectedServer?.session_id || chatLoading || !selectedServerId) return
 
   const userMsg: ChatMessage = {
     id: generateId(),
@@ -994,12 +994,27 @@ export default function MCPInspector() {
   }
 }
 
+  const runChatTool = () => {
+    if (chatInput.trim()) {
+      const msg = chatInput;
+      setChatInput("");
+      runChatToolWithMessage(msg);
+    }
+  }
+
   useEffect(() => {
     setToolResult(null)
     setToolError(null)
     setExecutionTime(null)
     setLastRunParams(null)
   }, [selectedTool])
+
+  useEffect(() => {
+    if (selectedServer?.url) {
+      setSavedRequests(loadSavedRequests(selectedServer.url));
+      setToolSubTab("tools");
+    }
+  }, [selectedServer?.url])
 
   // 4B: Fetch prompts list when Prompts tab becomes active
   useEffect(() => {
@@ -1407,30 +1422,107 @@ export default function MCPInspector() {
 
                               {/* TOOLS (only show when selected) */}
                               {isSelected && (server?.tools?.length ?? 0) > 0 && (
-                                <div style={{ margin: "0.4rem 0.5rem 0.2rem", position: "relative" }}>
-                                  <input
-                                    value={toolSearch}
-                                    onChange={e => setToolSearch(e.target.value)}
-                                    placeholder="Search tools..."
-                                    onClick={e => e.stopPropagation()}
-                                    style={{
-                                      width: "100%", boxSizing: "border-box",
-                                      padding: "0.25rem 1.4rem 0.25rem 1.5rem",
-                                      fontSize: "0.7rem", borderRadius: "4px",
-                                      border: "1px solid rgba(63,63,70,0.5)",
-                                      background: "rgba(0,0,0,0.25)", color: "#fff",
-                                    }}
-                                  />
-                                  <span style={{ position: "absolute", left: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", pointerEvents: "none" }}>⌕</span>
-                                  {toolSearch && (
-                                    <span
-                                      onClick={e => { e.stopPropagation(); setToolSearch(''); }}
-                                      style={{ position: "absolute", right: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", cursor: "pointer", lineHeight: 1 }}
-                                    >✕</span>
+                                <>
+                                  {/* 5C: Tools | Saved sub-tabs */}
+                                  <div style={{ display: "flex", margin: "0.4rem 0.5rem 0.2rem", gap: "0.25rem" }} onClick={e => e.stopPropagation()}>
+                                    {(["tools", "saved"] as const).map(tab => (
+                                      <button
+                                        key={tab}
+                                        onClick={() => setToolSubTab(tab)}
+                                        style={{
+                                          flex: 1, fontSize: "0.68rem", padding: "0.18rem 0",
+                                          borderRadius: "4px", cursor: "pointer",
+                                          border: toolSubTab === tab ? "1px solid rgba(99,102,241,0.5)" : "1px solid rgba(63,63,70,0.4)",
+                                          background: toolSubTab === tab ? "rgba(99,102,241,0.15)" : "transparent",
+                                          color: toolSubTab === tab ? "rgba(165,180,252,0.9)" : "rgba(255,255,255,0.4)",
+                                          fontWeight: toolSubTab === tab ? 600 : 400,
+                                        }}
+                                      >
+                                        {tab === "tools" ? `Tools (${server.tools.length})` : `Saved (${savedRequests.length})`}
+                                      </button>
+                                    ))}
+                                  </div>
+
+                                  {toolSubTab === "tools" && (
+                                    <div style={{ margin: "0 0.5rem 0.2rem", position: "relative" }}>
+                                      <input
+                                        value={toolSearch}
+                                        onChange={e => setToolSearch(e.target.value)}
+                                        placeholder="Search tools..."
+                                        onClick={e => e.stopPropagation()}
+                                        style={{
+                                          width: "100%", boxSizing: "border-box",
+                                          padding: "0.25rem 1.4rem 0.25rem 1.5rem",
+                                          fontSize: "0.7rem", borderRadius: "4px",
+                                          border: "1px solid rgba(63,63,70,0.5)",
+                                          background: "rgba(0,0,0,0.25)", color: "#fff",
+                                        }}
+                                      />
+                                      <span style={{ position: "absolute", left: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", pointerEvents: "none" }}>⌕</span>
+                                      {toolSearch && (
+                                        <span
+                                          onClick={e => { e.stopPropagation(); setToolSearch(''); }}
+                                          style={{ position: "absolute", right: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", cursor: "pointer", lineHeight: 1 }}
+                                        >✕</span>
+                                      )}
+                                    </div>
                                   )}
-                                </div>
+
+                                  {/* 5C: Saved requests list */}
+                                  {toolSubTab === "saved" && (
+                                    <div onClick={e => e.stopPropagation()}>
+                                      {savedRequests.length === 0 ? (
+                                        <div style={{ margin: "0.5rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.3)", textAlign: "center", padding: "0.5rem" }}>
+                                          No saved requests yet.<br />Run a tool and click "Save".
+                                        </div>
+                                      ) : savedRequests.map(req => (
+                                        <div
+                                          key={req.id}
+                                          style={{
+                                            margin: "0.3rem 0.5rem",
+                                            padding: "0.35rem 0.5rem",
+                                            borderRadius: "5px",
+                                            border: "1px solid rgba(63,63,70,0.4)",
+                                            background: "rgba(0,0,0,0.2)",
+                                            cursor: "pointer",
+                                          }}
+                                          onClick={() => {
+                                            const tool = server.tools.find((t: any) => t.name === req.toolName);
+                                            if (tool) {
+                                              setSelectedTool(tool);
+                                              setFormPrefill(req.params as Record<string, any>);
+                                              setToolResult(null);
+                                              setToolError(null);
+                                              setToolSubTab("tools");
+                                            }
+                                          }}
+                                        >
+                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                              <div style={{ fontSize: "0.72rem", color: "#fff", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{req.title}</div>
+                                              <div style={{ fontSize: "0.64rem", color: "rgba(255,255,255,0.4)", marginTop: "0.1rem" }}>{req.toolName}</div>
+                                            </div>
+                                            <button
+                                              onClick={e => {
+                                                e.stopPropagation();
+                                                deleteSavedRequest(selectedServer.url, req.id);
+                                                setSavedRequests(loadSavedRequests(selectedServer.url));
+                                              }}
+                                              style={{
+                                                marginLeft: "0.35rem", fontSize: "0.6rem", padding: "0.1rem 0.3rem",
+                                                borderRadius: "3px", border: "1px solid rgba(63,63,70,0.5)",
+                                                background: "transparent", color: "rgba(255,255,255,0.3)", cursor: "pointer", flexShrink: 0,
+                                              }}
+                                              title="Delete saved request"
+                                            >✕</button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </>
                               )}
-                              {isSelected && server?.tools?.filter((t: any) =>
+                              {isSelected && toolSubTab === "tools" && server?.tools?.filter((t: any) =>
                                 toolSearch.trim() === '' || t.name.toLowerCase().includes(toolSearch.toLowerCase()) || (t.description ?? '').toLowerCase().includes(toolSearch.toLowerCase())
                               ).map((tool: any) => {
                                 const ann = tool.annotations ?? {};
@@ -1446,6 +1538,7 @@ export default function MCPInspector() {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setSelectedTool(tool);
+                                      setFormPrefill(undefined);
                                       setToolResult(null);
                                       setToolError(null);
                                     }}
@@ -1806,13 +1899,14 @@ export default function MCPInspector() {
                         <>
                           <JsonSchemaForm
                             schema={selectedTool.inputSchema}
+                            initialValues={formPrefill}
                             onSubmit={runTool}
                             submitLabel="Run Tool"
                             loading={executing}
                           />
 
                           {lastRunParams && (
-                            <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                               <button
                                 onClick={() => {
                                   const jsonrpc = {
@@ -1832,6 +1926,98 @@ export default function MCPInspector() {
                               >
                                 {copyRequestToast ? "✓ Copied!" : "Copy as JSON-RPC"}
                               </button>
+                              {/* 5C: Save this request */}
+                              <button
+                                onClick={() => {
+                                  setSaveTitle(selectedTool.name);
+                                  setSaveDialogOpen(true);
+                                }}
+                                style={{
+                                  fontSize: "0.72rem", padding: "0.25rem 0.65rem", borderRadius: "6px",
+                                  background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)",
+                                  color: "rgba(134,239,172,0.9)", cursor: "pointer",
+                                }}
+                              >
+                                Save Request
+                              </button>
+                            </div>
+                          )}
+
+                          {/* 5C: Save dialog */}
+                          {saveDialogOpen && (
+                            <div style={{
+                              position: "fixed", inset: 0, zIndex: 9999,
+                              background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
+                            }} onClick={() => setSaveDialogOpen(false)}>
+                              <div
+                                onClick={e => e.stopPropagation()}
+                                style={{
+                                  background: "#18181b", border: "1px solid rgba(63,63,70,0.7)",
+                                  borderRadius: "10px", padding: "1.25rem", width: "320px",
+                                }}
+                              >
+                                <div style={{ fontSize: "0.9rem", fontWeight: 600, color: "#fff", marginBottom: "0.75rem" }}>Save Request</div>
+                                <input
+                                  autoFocus
+                                  value={saveTitle}
+                                  onChange={e => setSaveTitle(e.target.value)}
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter" && saveTitle.trim() && lastRunParams && selectedServer) {
+                                      saveRequest(selectedServer.url, {
+                                        id: crypto.randomUUID(),
+                                        title: saveTitle.trim(),
+                                        toolName: selectedTool.name,
+                                        params: lastRunParams,
+                                        createdAt: Date.now(),
+                                        serverUrl: selectedServer.url,
+                                      });
+                                      setSavedRequests(loadSavedRequests(selectedServer.url));
+                                      setSaveDialogOpen(false);
+                                    }
+                                    if (e.key === "Escape") setSaveDialogOpen(false);
+                                  }}
+                                  placeholder="Request title..."
+                                  style={{
+                                    width: "100%", boxSizing: "border-box",
+                                    padding: "0.45rem 0.6rem", fontSize: "0.82rem",
+                                    borderRadius: "6px", border: "1px solid rgba(63,63,70,0.6)",
+                                    background: "rgba(0,0,0,0.3)", color: "#fff", outline: "none",
+                                    marginBottom: "0.75rem",
+                                  }}
+                                />
+                                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                                  <button
+                                    onClick={() => setSaveDialogOpen(false)}
+                                    style={{
+                                      fontSize: "0.78rem", padding: "0.3rem 0.75rem", borderRadius: "6px",
+                                      border: "1px solid rgba(63,63,70,0.6)", background: "transparent",
+                                      color: "rgba(255,255,255,0.5)", cursor: "pointer",
+                                    }}
+                                  >Cancel</button>
+                                  <button
+                                    onClick={() => {
+                                      if (!saveTitle.trim() || !lastRunParams || !selectedServer) return;
+                                      saveRequest(selectedServer.url, {
+                                        id: crypto.randomUUID(),
+                                        title: saveTitle.trim(),
+                                        toolName: selectedTool.name,
+                                        params: lastRunParams,
+                                        createdAt: Date.now(),
+                                        serverUrl: selectedServer.url,
+                                      });
+                                      setSavedRequests(loadSavedRequests(selectedServer.url));
+                                      setSaveDialogOpen(false);
+                                    }}
+                                    disabled={!saveTitle.trim()}
+                                    style={{
+                                      fontSize: "0.78rem", padding: "0.3rem 0.75rem", borderRadius: "6px",
+                                      border: "1px solid rgba(34,197,94,0.4)", background: "rgba(34,197,94,0.1)",
+                                      color: "rgba(134,239,172,0.9)", cursor: saveTitle.trim() ? "pointer" : "not-allowed",
+                                      opacity: saveTitle.trim() ? 1 : 0.5,
+                                    }}
+                                  >Save</button>
+                                </div>
+                              </div>
                             </div>
                           )}
 
@@ -1974,6 +2160,31 @@ export default function MCPInspector() {
                             })}
                             </div>{/* close inner flex wrapper */}
                           </div>
+
+                          {/* Starter prompt chips — shown when no user message sent yet */}
+                          {!chatHistory.some(m => m.type === "user") && (selectedServer?.tools?.length ?? 0) > 0 && (
+                            <div style={{ flexShrink: 0, padding: "0.5rem 0.25rem", display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                              {[
+                                ...selectedServer!.tools.slice(0, 3).map((t: any) => `Try ${t.name} with example data`),
+                                selectedServer!.tools.length > 1 ? `Run ${selectedServer!.tools[0].name}` : null,
+                              ].filter(Boolean).slice(0, 4).map((prompt: any) => (
+                                <button
+                                  key={prompt}
+                                  onClick={() => runChatToolWithMessage(prompt)}
+                                  style={{
+                                    fontSize: "0.72rem", padding: "0.3rem 0.7rem", borderRadius: "999px",
+                                    background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)",
+                                    color: "rgba(165,180,252,0.85)", cursor: "pointer",
+                                    transition: "background 0.15s",
+                                  }}
+                                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(99,102,241,0.18)")}
+                                  onMouseLeave={e => (e.currentTarget.style.background = "rgba(99,102,241,0.08)")}
+                                >
+                                  {prompt}
+                                </button>
+                              ))}
+                            </div>
+                          )}
 
                           {/* Chat Input — always at bottom, shrinks to its content */}
                           <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", gap: "0.35rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(63,63,70,0.3)" }}>
