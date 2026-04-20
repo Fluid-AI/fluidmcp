@@ -26,7 +26,7 @@ export default function ManageServers() {
 
   // Auto-open add-server modal when navigated from Dashboard
   useEffect(() => {
-    if ((location.state as any)?.openAddServer) {
+    if ((location.state as { openAddServer?: boolean })?.openAddServer) {
       setEditingServer(null);
       setCreateTab('manual');
       setShowForm(true);
