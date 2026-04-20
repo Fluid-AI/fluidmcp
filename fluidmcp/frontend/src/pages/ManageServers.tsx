@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ServerForm } from '../components/ServerForm';
 import { CloneFromGithubForm } from '../components/CloneFromGithubForm';
@@ -11,6 +12,7 @@ type FilterMode = 'all' | 'running' | 'stopped' | 'failed';
 type CreateTab = 'manual' | 'github';
 
 export default function ManageServers() {
+  const location = useLocation();
   const [showDeleted, setShowDeleted] = useState(false);
   const { servers, loading, createServer, updateServer, deleteServer, refetch } = useServerManagement(showDeleted);
 
@@ -21,6 +23,15 @@ export default function ManageServers() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Auto-open add-server modal when navigated from Dashboard
+  useEffect(() => {
+    if ((location.state as any)?.openAddServer) {
+      setEditingServer(null);
+      setCreateTab('manual');
+      setShowForm(true);
+    }
+  }, [location.state]);
 
   const SERVERS_PER_PAGE = 10;
 
