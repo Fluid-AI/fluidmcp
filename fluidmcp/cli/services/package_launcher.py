@@ -71,24 +71,43 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
     """
     import httpx
 
+    start_time = time.time()
+    method = payload.get("method", "unknown")
+    request_id = payload.get("id", "unknown")
+
+    logger.debug(f"[SSE] t+0.000s: Proxying to SSE server | url={sse_url} method={method} id={request_id}")
+
     messages_url = f"{sse_url.rstrip('/')}/messages/"
     try:
+        logger.debug(f"[SSE] t+{time.time() - start_time:.3f}s: Creating HTTP client | timeout={timeout}s")
         async with httpx.AsyncClient(timeout=timeout) as client:
+            logger.debug(f"[SSE] t+{time.time() - start_time:.3f}s: Sending POST request | url={messages_url}")
+            post_start = time.time()
             resp = await client.post(messages_url, json=payload)
+            post_duration = time.time() - post_start
+            logger.debug(f"[SSE] t+{time.time() - start_time:.3f}s: POST response received | duration={post_duration:.3f}s status={resp.status_code}")
+
             resp.raise_for_status()
-            return resp.json()
+
+            logger.debug(f"[SSE] t+{time.time() - start_time:.3f}s: Parsing JSON response")
+            response_data = resp.json()
+            total_duration = time.time() - start_time
+            logger.debug(f"[SSE] t+{total_duration:.3f}s: SSE proxy completed | total_duration={total_duration:.3f}s")
+            return response_data
     except httpx.HTTPStatusError as e:
+        logger.debug(f"[SSE] t+{time.time() - start_time:.3f}s: HTTP error | status={e.response.status_code}")
         raise HTTPException(
             e.response.status_code,
             f"SSE server returned HTTP {e.response.status_code}"
         )
     except httpx.ConnectError:
+        logger.debug(f"[SSE] t+{time.time() - start_time:.3f}s: Connection error")
         raise HTTPException(
             503,
             f"Cannot reach SSE server at {sse_url}. Is it still running?"
         )
     except Exception as e:
-        logger.error(f"SSE proxy error → {messages_url}: {e}")
+        logger.error(f"[SSE] t+{time.time() - start_time:.3f}s: SSE proxy error → {messages_url}: {e}")
         raise HTTPException(500, f"SSE proxy error: {str(e)}")
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -378,9 +397,15 @@ def create_dynamic_router(server_manager):
             server_name: Name of the target server
             request: JSON-RPC request payload
         """
+        # Start timing for diagnostic logging
+        start_time = time.time()
+        request_id = request.get("id", "unknown")
+        method = request.get("method", "unknown")
+
+        logger.debug(f"[{server_name}] t+0.000s: MCP request received | id={request_id} method={method}")
+
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
-        method = request.get("method", "unknown")
 
         # Track request with metrics (RequestTimer automatically records all errors)
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
@@ -388,44 +413,72 @@ def create_dynamic_router(server_manager):
         with RequestTimer(collector, method):
             # Check if server exists
             if server_name not in server_manager.processes:
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Server not found")
                 raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
             process = server_manager.processes[server_name]
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process retrieved from manager")
 
             # Check if process is alive
             if process.poll() is not None:
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process is dead")
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Using SSE transport")
                 with RequestTimer(collector, request.get("method", "unknown")):
                     response = await _proxy_to_sse_server(process.sse_url, request)
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: SSE response received | size={len(str(response))} bytes")
                     return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
+
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Using stdio transport")
 
             try:
                 # Send request to MCP server
                 msg = json.dumps(request)
+                msg_size = len(msg)
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Request serialized | size={msg_size} bytes")
+
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Acquiring I/O lock")
                 async with _get_io_lock(server_name):
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: I/O lock acquired")
+
                     try:
+                        write_start = time.time()
+                        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Writing to stdin")
                         process.stdin.write(msg + "\n")
                         process.stdin.flush()
+                        write_duration = time.time() - write_start
+                        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdin write+flush completed | duration={write_duration:.3f}s")
                     except (BrokenPipeError, OSError) as e:
+                        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdin write failed | error={e}")
                         raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
                     # Read response (non-blocking with asyncio.to_thread)
+                    read_start = time.time()
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Reading from stdout (blocking)")
                     response_line = await asyncio.to_thread(process.stdout.readline)
+                    read_duration = time.time() - read_start
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdout read completed | duration={read_duration:.3f}s size={len(response_line)} bytes")
+
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Parsing JSON response")
                 response_data = json.loads(response_line)
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: JSON parsed successfully")
 
                 # Update last_used_at for idle cleanup
                 await server_manager.update_last_used(server_name)
+
+                total_duration = time.time() - start_time
+                logger.debug(f"[{server_name}] t+{total_duration:.3f}s: Request completed | total_duration={total_duration:.3f}s")
 
                 return JSONResponse(content=response_data)
 
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Error proxying request to '{server_name}': {e}")
+                logger.error(f"[{server_name}] t+{time.time() - start_time:.3f}s: Error proxying request | error={e}")
                 raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/sse", tags=["mcp"])
@@ -569,23 +622,35 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
+        # Start timing for diagnostic logging
+        start_time = time.time()
+
+        logger.debug(f"[{server_name}] t+0.000s: Tools list request received")
+
         if server_name not in server_manager.processes:
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Server not found")
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
         process = server_manager.processes[server_name]
+        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process retrieved from manager")
 
         if process.poll() is not None:
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process is dead")
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
         # ── SSE transport ────────────────────────────────────────────────────
         if isinstance(process, SseSubprocessHandle):
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Using SSE transport")
             response = await _proxy_to_sse_server(
                 process.sse_url,
                 {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                 timeout=30.0
             )
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: SSE response received | size={len(str(response))} bytes")
             return JSONResponse(content=response)
         # ── stdio transport continues below ──────────────────────────────────
+
+        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Using stdio transport")
 
         try:
             request_payload = {
@@ -595,23 +660,44 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
+            msg_size = len(msg)
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Request serialized | size={msg_size} bytes")
+
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Acquiring I/O lock")
             async with _get_io_lock(server_name):
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: I/O lock acquired")
+
                 try:
+                    write_start = time.time()
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Writing to stdin")
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
+                    write_duration = time.time() - write_start
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdin write+flush completed | duration={write_duration:.3f}s")
                 except (BrokenPipeError, OSError) as e:
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdin write failed | error={e}")
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
                 # Non-blocking I/O with asyncio.to_thread
+                read_start = time.time()
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Reading from stdout (blocking)")
                 response_line = await asyncio.to_thread(process.stdout.readline)
+                read_duration = time.time() - read_start
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdout read completed | duration={read_duration:.3f}s size={len(response_line)} bytes")
+
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Parsing JSON response")
             response_data = json.loads(response_line)
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: JSON parsed successfully")
+
+            total_duration = time.time() - start_time
+            logger.debug(f"[{server_name}] t+{total_duration:.3f}s: Tools list completed | total_duration={total_duration:.3f}s")
 
             return JSONResponse(content=response_data)
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error listing tools for '{server_name}': {e}")
+            logger.error(f"[{server_name}] t+{time.time() - start_time:.3f}s: Error listing tools | error={e}")
             raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/mcp/tools/call", tags=["mcp"])
@@ -629,16 +715,26 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
+        # Start timing for diagnostic logging
+        start_time = time.time()
+        tool_name = request_body.get("name", "unknown")
+
+        logger.debug(f"[{server_name}] t+0.000s: Tool call request received | tool={tool_name}")
+
         if server_name not in server_manager.processes:
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Server not found")
             raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
         process = server_manager.processes[server_name]
+        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process retrieved from manager")
 
         if process.poll() is not None:
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process is dead")
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
         # ── SSE transport ────────────────────────────────────────────────────
         if isinstance(process, SseSubprocessHandle):
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Using SSE transport")
             if "name" not in request_body:
                 raise HTTPException(400, "Tool name is required")
             response = await _proxy_to_sse_server(
@@ -651,8 +747,11 @@ def create_dynamic_router(server_manager):
                 },
                 timeout=60.0
             )
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: SSE response received | size={len(str(response))} bytes")
             return JSONResponse(content=response)
         # ── stdio transport continues below ──────────────────────────────────
+
+        logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Using stdio transport")
 
         try:
             if "name" not in request_body:
@@ -666,20 +765,36 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
+            msg_size = len(msg)
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Request serialized | size={msg_size} bytes")
+
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Acquiring I/O lock")
             async with _get_io_lock(server_name):
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: I/O lock acquired")
+
                 try:
+                    write_start = time.time()
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Writing to stdin")
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
+                    write_duration = time.time() - write_start
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdin write+flush completed | duration={write_duration:.3f}s")
                 except (BrokenPipeError, OSError) as e:
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdin write failed | error={e}")
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
                 # Tool execution with timeout
+                read_start = time.time()
+                logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Reading from stdout (blocking, 60s timeout)")
                 try:
                     response_line = await asyncio.wait_for(
                         asyncio.to_thread(process.stdout.readline),
                         timeout=60.0  # 60 second tool execution timeout
                     )
+                    read_duration = time.time() - read_start
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdout read completed | duration={read_duration:.3f}s size={len(response_line)} bytes")
                 except asyncio.TimeoutError:
+                    logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Stdout read timed out after 60s")
                     # Log timeout failure
                     await server_manager.db.save_log_entry({
                         "server_name": server_name,
@@ -688,17 +803,22 @@ def create_dynamic_router(server_manager):
                     })
                     raise HTTPException(504, "Tool execution timed out")
 
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Parsing JSON response")
             response_data = json.loads(response_line)
+            logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: JSON parsed successfully")
 
             # Update last_used_at for idle cleanup
             await server_manager.update_last_used(server_name)
+
+            total_duration = time.time() - start_time
+            logger.debug(f"[{server_name}] t+{total_duration:.3f}s: Tool call completed | total_duration={total_duration:.3f}s")
 
             return JSONResponse(content=response_data)
 
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error calling tool on '{server_name}': {e}")
+            logger.error(f"[{server_name}] t+{time.time() - start_time:.3f}s: Error calling tool | error={e}")
             raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     return router
