@@ -129,8 +129,8 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
 
     if (!serverId.trim()) {
       errs.serverId = 'Server ID is required';
-    } else if (!/^[a-z0-9-]+$/.test(serverId.trim())) {
-      errs.serverId = 'Only lowercase letters, numbers, and hyphens';
+    } else if (!/^[a-z0-9_-]+$/.test(serverId.trim())) {
+      errs.serverId = 'Only lowercase letters, numbers, hyphens, and underscores';
     }
 
     if (!token.trim()) {
@@ -404,7 +404,7 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
           />
           {errors.serverId
             ? <p className="mt-1 text-xs text-red-400">{errors.serverId}</p>
-            : <p className="mt-1 text-xs text-zinc-500">Lowercase, numbers, hyphens only</p>
+            : <p className="mt-1 text-xs text-zinc-500">Lowercase, numbers, hyphens, underscores</p>
           }
         </div>
 

@@ -5,6 +5,8 @@ This test suite validates all validation functions to ensure they correctly
 identify valid and invalid inputs across various edge cases.
 """
 
+import re
+
 from fluidmcp.cli.services.validators import (
     validate_package_string,
     validate_port_number,
@@ -670,3 +672,58 @@ class TestEdgeCases:
         # Unicode in env values should be accepted
         env = {"MESSAGE": "Hello 世界"}
         assert validate_env_dict(env) is True
+
+
+# Server ID pattern used in AddServerFromGitHubRequest (api.py)
+SERVER_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+
+
+class TestServerIdValidation:
+    """Test server ID validation pattern (matches Pydantic field in api.py)."""
+
+    def test_valid_hyphens(self):
+        """Test valid server IDs with hyphens."""
+        assert SERVER_ID_PATTERN.match("my-server") is not None
+        assert SERVER_ID_PATTERN.match("pdf-to-excel") is not None
+
+    def test_valid_underscores(self):
+        """Test valid server IDs with underscores."""
+        assert SERVER_ID_PATTERN.match("pdf_to_excel_lic") is not None
+        assert SERVER_ID_PATTERN.match("my_server") is not None
+
+    def test_valid_mixed_hyphens_and_underscores(self):
+        """Test valid server IDs mixing hyphens and underscores."""
+        assert SERVER_ID_PATTERN.match("my_pdf-server") is not None
+        assert SERVER_ID_PATTERN.match("tool_v2-prod") is not None
+
+    def test_valid_numbers(self):
+        """Test valid server IDs with numbers."""
+        assert SERVER_ID_PATTERN.match("server123") is not None
+        assert SERVER_ID_PATTERN.match("server-2") is not None
+        assert SERVER_ID_PATTERN.match("server_v2") is not None
+
+    def test_valid_simple_lowercase(self):
+        """Test valid simple lowercase server IDs."""
+        assert SERVER_ID_PATTERN.match("filesystem") is not None
+        assert SERVER_ID_PATTERN.match("memory") is not None
+
+    def test_invalid_uppercase(self):
+        """Test that uppercase letters are rejected."""
+        assert SERVER_ID_PATTERN.match("MyServer") is None
+        assert SERVER_ID_PATTERN.match("PDF_to_excel") is None
+
+    def test_invalid_spaces(self):
+        """Test that spaces are rejected."""
+        assert SERVER_ID_PATTERN.match("my server") is None
+        assert SERVER_ID_PATTERN.match(" server") is None
+
+    def test_invalid_special_characters(self):
+        """Test that special characters are rejected."""
+        assert SERVER_ID_PATTERN.match("my@server") is None
+        assert SERVER_ID_PATTERN.match("server.name") is None
+        assert SERVER_ID_PATTERN.match("server/path") is None
+        assert SERVER_ID_PATTERN.match("server:8080") is None
+
+    def test_invalid_empty_string(self):
+        """Test that empty string is rejected."""
+        assert SERVER_ID_PATTERN.match("") is None

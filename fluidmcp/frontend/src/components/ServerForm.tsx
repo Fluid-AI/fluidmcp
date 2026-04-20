@@ -25,9 +25,9 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, onSub
 
     // Validate ID format (lowercase alphanumeric + hyphens)
     if (mode === 'create') {
-      const idRegex = /^[a-z0-9-]+$/;
+      const idRegex = /^[a-z0-9_-]+$/;
       if (!idRegex.test(formData.id)) {
-        alert('Server ID must contain only lowercase letters, numbers, and hyphens');
+        alert('Server ID must contain only lowercase letters, numbers, hyphens, and underscores');
         return;
       }
       if (formData.id.startsWith('-') || formData.id.endsWith('-')) {
@@ -85,11 +85,11 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, onSub
           onChange={(e) => setFormData({ ...formData, id: e.target.value.toLowerCase() })}
           disabled={mode === 'edit'}
           className="w-full px-3 py-2 bg-zinc-800/50 border border-zinc-700 text-white placeholder-zinc-400 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-zinc-900/50 disabled:cursor-not-allowed disabled:text-zinc-500"
-          placeholder="my-server-id"
+          placeholder="my-server-id or my_server_id"
           required
         />
         <p className="mt-1 text-xs text-zinc-400">
-          Lowercase letters, numbers, hyphens only. Cannot be changed after creation.
+          Lowercase letters, numbers, hyphens, and underscores. Cannot be changed after creation.
         </p>
       </div>
 
