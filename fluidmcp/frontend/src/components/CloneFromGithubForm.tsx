@@ -9,10 +9,10 @@ import type { CloneFromGithubServerResult } from '../types/server';
 function slugify(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_-]/g, '')
     .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/^[-_]+|[-_]+$/g, '');
 }
 
 /** Derive a server-id suggestion from a repo path like "awslabs/mcp". */

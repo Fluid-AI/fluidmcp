@@ -7,6 +7,10 @@ identify valid and invalid inputs across various edge cases.
 
 import re
 
+import pytest
+from pydantic import ValidationError
+
+from fluidmcp.cli.models.api import AddServerFromGitHubRequest
 from fluidmcp.cli.services.validators import (
     validate_package_string,
     validate_port_number,
@@ -674,56 +678,56 @@ class TestEdgeCases:
         assert validate_env_dict(env) is True
 
 
-# Server ID pattern used in AddServerFromGitHubRequest (api.py)
-SERVER_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+def _make_github_request(server_id: str) -> AddServerFromGitHubRequest:
+    return AddServerFromGitHubRequest(server_id=server_id, github_repo="owner/repo")
 
 
 class TestServerIdValidation:
-    """Test server ID validation pattern (matches Pydantic field in api.py)."""
+    """Test server ID validation via the live Pydantic model in api.py."""
 
     def test_valid_hyphens(self):
-        """Test valid server IDs with hyphens."""
-        assert SERVER_ID_PATTERN.match("my-server") is not None
-        assert SERVER_ID_PATTERN.match("pdf-to-excel") is not None
+        _make_github_request("my-server")
+        _make_github_request("pdf-to-excel")
 
     def test_valid_underscores(self):
-        """Test valid server IDs with underscores."""
-        assert SERVER_ID_PATTERN.match("pdf_to_excel_lic") is not None
-        assert SERVER_ID_PATTERN.match("my_server") is not None
+        _make_github_request("pdf_to_excel_lic")
+        _make_github_request("my_server")
 
     def test_valid_mixed_hyphens_and_underscores(self):
-        """Test valid server IDs mixing hyphens and underscores."""
-        assert SERVER_ID_PATTERN.match("my_pdf-server") is not None
-        assert SERVER_ID_PATTERN.match("tool_v2-prod") is not None
+        _make_github_request("my_pdf-server")
+        _make_github_request("tool_v2-prod")
 
     def test_valid_numbers(self):
-        """Test valid server IDs with numbers."""
-        assert SERVER_ID_PATTERN.match("server123") is not None
-        assert SERVER_ID_PATTERN.match("server-2") is not None
-        assert SERVER_ID_PATTERN.match("server_v2") is not None
+        _make_github_request("server123")
+        _make_github_request("server-2")
+        _make_github_request("server_v2")
 
     def test_valid_simple_lowercase(self):
-        """Test valid simple lowercase server IDs."""
-        assert SERVER_ID_PATTERN.match("filesystem") is not None
-        assert SERVER_ID_PATTERN.match("memory") is not None
+        _make_github_request("filesystem")
+        _make_github_request("memory")
 
     def test_invalid_uppercase(self):
-        """Test that uppercase letters are rejected."""
-        assert SERVER_ID_PATTERN.match("MyServer") is None
-        assert SERVER_ID_PATTERN.match("PDF_to_excel") is None
+        with pytest.raises(ValidationError):
+            _make_github_request("MyServer")
+        with pytest.raises(ValidationError):
+            _make_github_request("PDF_to_excel")
 
     def test_invalid_spaces(self):
-        """Test that spaces are rejected."""
-        assert SERVER_ID_PATTERN.match("my server") is None
-        assert SERVER_ID_PATTERN.match(" server") is None
+        with pytest.raises(ValidationError):
+            _make_github_request("my server")
+        with pytest.raises(ValidationError):
+            _make_github_request(" server")
 
     def test_invalid_special_characters(self):
-        """Test that special characters are rejected."""
-        assert SERVER_ID_PATTERN.match("my@server") is None
-        assert SERVER_ID_PATTERN.match("server.name") is None
-        assert SERVER_ID_PATTERN.match("server/path") is None
-        assert SERVER_ID_PATTERN.match("server:8080") is None
+        with pytest.raises(ValidationError):
+            _make_github_request("my@server")
+        with pytest.raises(ValidationError):
+            _make_github_request("server.name")
+        with pytest.raises(ValidationError):
+            _make_github_request("server/path")
+        with pytest.raises(ValidationError):
+            _make_github_request("server:8080")
 
     def test_invalid_empty_string(self):
-        """Test that empty string is rejected."""
-        assert SERVER_ID_PATTERN.match("") is None
+        with pytest.raises(ValidationError):
+            _make_github_request("")

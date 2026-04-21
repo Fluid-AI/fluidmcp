@@ -30,8 +30,9 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, onSub
         alert('Server ID must contain only lowercase letters, numbers, hyphens, and underscores');
         return;
       }
-      if (formData.id.startsWith('-') || formData.id.endsWith('-')) {
-        alert('Server ID cannot start or end with a hyphen');
+      if (formData.id.startsWith('-') || formData.id.endsWith('-') ||
+          formData.id.startsWith('_') || formData.id.endsWith('_')) {
+        alert('Server ID cannot start or end with a hyphen or underscore');
         return;
       }
     }
