@@ -109,34 +109,42 @@ export default function ServerDetails() {
     if (!serverId) return;
 
     const toastId = `env-${serverId}`;
+    const wasRunning = serverDetails?.status?.state === 'running';
 
     setEnvSubmitting(true);
-    showLoading('Saving environment variables and restarting server...', toastId);
+    showLoading(
+      wasRunning ? 'Saving environment variables and restarting server...' : 'Saving environment variables...',
+      toastId
+    );
 
     try {
       await updateEnv(env);
 
-      // Poll for server restart and tools availability
-      const success = await pollForServerState({
-        expectedState: 'running',
-        checkTools: true,
-        onSuccess: () => {
-          // Collapse form after successful restart
-          setEnvFormExpanded(false);
-          showSuccess('Environment variables saved and server restarted successfully', toastId);
-        },
-        onTimeout: () => {
-          showError('Server restart timed out. Please check server status manually.', toastId);
-        },
-      });
+      if (wasRunning) {
+        // Server was running — backend will restart it, poll until running again
+        const success = await pollForServerState({
+          expectedState: 'running',
+          onSuccess: () => {
+            setEnvFormExpanded(false);
+            showSuccess('Environment variables saved and server restarted successfully', toastId);
+          },
+          onTimeout: () => {
+            showError('Server restart timed out. Please check server status manually.', toastId);
+          },
+        });
 
-      // Refetch server details and env metadata after polling completes
-      if (success) {
+        if (success) {
+          await Promise.all([refetch(), refetchEnv()]);
+        }
+      } else {
+        // Server was stopped/failed — env saved, no restart triggered by backend
+        setEnvFormExpanded(false);
+        showSuccess('Environment variables saved. Start the server to apply them.', toastId);
         await Promise.all([refetch(), refetchEnv()]);
       }
     } catch (err) {
       showError(err instanceof Error ? err.message : 'Failed to update environment variables', toastId);
-      throw err; // Re-throw so form knows it failed
+      throw err;
     } finally {
       setEnvSubmitting(false);
     }
