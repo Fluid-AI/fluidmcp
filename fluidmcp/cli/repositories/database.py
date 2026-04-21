@@ -181,6 +181,8 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
             
             # Get connection pool settings from environment with safe parsing
+            # max_pool_size=6: matches Atlas M0 free-tier practical limit per application.
+            # Increase via FMCP_MONGODB_MAX_POOL_SIZE if using a paid Atlas tier or self-hosted MongoDB.
             default_max_pool_size = 6
             default_min_pool_size = 1
             
