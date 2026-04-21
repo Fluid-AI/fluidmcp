@@ -398,6 +398,11 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
         except Exception:
             pass
 
+        # Redact API key values echoed back in provider error messages
+        # e.g. "Incorrect API key provided: sk-abc123" or "provided: aaaaaaaaa"
+        import re as _re
+        user_message = _re.sub(r"(provided|key):\s*\S+", r"\1: [REDACTED]", user_message, flags=_re.IGNORECASE)
+
         is_auth = any(kw in err_str.lower() for kw in (
             "api key", "apikey", "invalid_api_key", "unauthorized",
             "authentication", "403", "401", "permission", "incorrect api key",
