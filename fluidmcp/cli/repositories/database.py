@@ -624,6 +624,7 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error soft deleting server config: {e}")
             return False
 
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
     async def reset_instance_state(self, server_id: str) -> bool:
         """
         Delete the instance state document for a server.
@@ -638,6 +639,8 @@ class DatabaseManager(PersistenceBackend):
             True if the document was removed (or did not exist)
         """
         try:
+            # TODO(auth): decide if delete should wipe all users' state or only the requesting user's;
+            # if per-user, change to delete_many({"server_id": server_id, "user_id": user_id})
             await self.db.fluidmcp_server_instances.delete_one({"server_id": server_id})
             return True
         except Exception as e:
