@@ -22,6 +22,7 @@ function ThinkingDots() {
 function ChatResultBubble({ result, initialView = "formatted", hideTabSwitcher = false }: { result: unknown; initialView?: "formatted" | "raw"; hideTabSwitcher?: boolean }) {
   const [expanded, setExpanded] = useState(true);
   const [viewMode, setViewMode] = useState<"formatted" | "raw">(initialView);
+  const [expandAll, setExpandAll] = useState(false);
   useEffect(() => { setViewMode(initialView); }, [initialView]);
   const isMcp = typeof result === "object" && result !== null &&
     "content" in result && Array.isArray((result as any).content);
@@ -68,6 +69,15 @@ function ChatResultBubble({ result, initialView = "formatted", hideTabSwitcher =
               <button style={tabStyle(viewMode === "formatted")} onClick={() => setViewMode("formatted")}>Formatted</button>
               <button style={tabStyle(viewMode === "raw")} onClick={() => setViewMode("raw")}>Raw JSON</button>
             </div>
+            {viewMode === "formatted" && !(isMcp || isMcpArray) && (
+              <button
+                onClick={() => setExpandAll(v => !v)}
+                style={{ ...tabStyle(false), border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.25rem" }}
+                title={expandAll ? "Collapse all" : "Expand all"}
+              >
+                {expandAll ? "Collapse All" : "Expand All"}
+              </button>
+            )}
             <button
               onClick={() => navigator.clipboard.writeText(JSON.stringify(result, null, 2))}
               style={{ ...tabStyle(false), border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.25rem" }}
@@ -94,7 +104,7 @@ function ChatResultBubble({ result, initialView = "formatted", hideTabSwitcher =
             : <div style={{ minWidth: 0, width: "100%", overflow: "hidden" }}>
                 {(isMcp || isMcpArray)
                   ? <McpContentView content={isMcpArray ? result as any : (result as any).content} />
-                  : <JsonResultView data={result} />
+                  : <JsonResultView data={result} expandAll={expandAll} />
                 }
               </div>
           }

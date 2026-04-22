@@ -1,11 +1,13 @@
 import uuid
 import asyncio
 import time
+import json
 import ipaddress
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, AsyncGenerator
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -40,6 +42,10 @@ class ConnectRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[list] = Field(default_factory=list)
+    provider: Optional[str] = "groq"
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    system_prompt: Optional[str] = None
 
 class ReadResourceRequest(BaseModel):
     uri: str
@@ -361,6 +367,93 @@ async def export_server(session_id: str):
     }
 
 
+@router.post("/inspector/{session_id}/chat/stream")
+async def chat_stream(session_id: str, body: ChatRequest):
+    """
+    Streaming chat endpoint — returns SSE events as the LLM generates tokens.
+
+    Event types:
+      {"type": "thinking"}                          — LLM is deciding which tool to use
+      {"type": "token", "content": "..."}           — streamed response token
+      {"type": "tool_call", "tool_name": "...", "params": {...}}  — tool selected
+      {"type": "clarification", "message": "..."}   — LLM couldn't pick a tool
+      {"type": "error", "message": "..."}           — unrecoverable error
+      {"type": "done"}                              — stream complete
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        def sse(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        try:
+            from ..services.inspector_agent import stream_tool_selection
+
+            tools = await session.list_tools()
+
+            if not tools:
+                yield sse({"type": "clarification", "message": "No tools available on this server."})
+                yield sse({"type": "done"})
+                return
+
+            yield sse({"type": "thinking"})
+
+            tool_name = None
+            tool_params = {}
+            clarification = None
+
+            async for event in stream_tool_selection(
+                message=body.message,
+                tools=tools,
+                chat_history=body.chat_history or [],
+                provider=body.provider or "groq",
+                model=body.model,
+                api_key=body.api_key,
+                system_prompt=body.system_prompt,
+            ):
+                event_type = event.get("type")
+
+                if event_type == "token":
+                    yield sse(event)
+
+                elif event_type == "tool_call":
+                    tool_name = event.get("tool_name")
+                    tool_params = event.get("params", {})
+                    available_names = {t["name"] for t in tools}
+                    if tool_name and tool_name in available_names:
+                        yield sse(event)
+                    else:
+                        clarification = "Could not determine which tool to run."
+
+                elif event_type == "clarification":
+                    clarification = event.get("message", "Could not determine which tool to run.")
+
+            if clarification:
+                yield sse({"type": "clarification", "message": clarification})
+            elif tool_name:
+                session.add_log("chat", f"User: {body.message} → tool selected: {tool_name}")
+
+            yield sse({"type": "done"})
+
+        except Exception as e:
+            logger.error(f"Inspector chat stream error: {e}")
+            yield sse({"type": "error", "message": "Unable to determine which tool to run."})
+            yield sse({"type": "done"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/inspector/{session_id}/chat")
 async def chat_with_tools(session_id: str, body: ChatRequest):
     """
@@ -375,7 +468,6 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
     session.last_used = time.time()
 
     try:
-        # Lazy import — avoids server startup failure when GROQ_API_KEY is absent
         from ..services.inspector_agent import choose_tool_with_llm
 
         tools = await session.list_tools()
@@ -386,9 +478,14 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent, passing chat history for multi-turn context
         agent_result = await choose_tool_with_llm(
-            body.message, tools, chat_history=body.chat_history or []
+            body.message,
+            tools,
+            chat_history=body.chat_history or [],
+            provider=body.provider or "groq",
+            model=body.model,
+            api_key=body.api_key,
+            system_prompt=body.system_prompt,
         )
 
         # Validate the response has the expected fields

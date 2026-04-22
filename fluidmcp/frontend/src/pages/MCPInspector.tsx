@@ -192,6 +192,7 @@ export default function MCPInspector() {
   const logsRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   const handleConnect = async () => {
 
@@ -524,60 +525,100 @@ export default function MCPInspector() {
   // Capture history with userMsg before any state updates — used below to
   // send an accurate chat_history to the backend (avoids stale closure).
   const nextHistory = [...chatHistory, userMsg]
-
   updateChat(prev => [...prev, userMsg])
 
-  // 3A-4: start an ExecutionRun for this agent turn
   const runId = crypto.randomUUID()
   const runStartTime = Date.now()
   const runSteps: ChatMessage[] = []
   const capturedServerId = selectedServerId
 
+  // Streaming message bubble shown while tokens arrive (before tool_call is known)
+  const streamingMsgId = generateId()
+
+  // Cancel any in-flight stream from a previous turn
+  chatAbortRef.current?.abort()
+  const abortController = new AbortController()
+  chatAbortRef.current = abortController
+
+  const thinkingMsg: ChatMessage = {
+    id: generateId(),
+    runId,
+    type: "thinking",
+    content: "Deciding which tool to use...",
+    timestamp: Date.now(),
+    perfMark: performance.now()
+  }
+
   try {
     setChatLoading(true)
-
-    const thinkingMsg: ChatMessage = {
-      id: generateId(),
-      runId,
-      type: "thinking",
-      content: "Deciding which tool to use...",
-      timestamp: Date.now(),
-      perfMark: performance.now()
-    }
-
     updateChat(prev => [...prev, thinkingMsg])
     runSteps.push(thinkingMsg)
 
-    const res = await apiClient.chatWithInspector(
-      selectedServer.session_id,
-      {
-        message,
-        chat_history: nextHistory.slice(-8).map(m => ({
-          type: m.type,
-          content: m.content
-        })),
-        provider: llmSettings.provider,
-        model: llmSettings.model,
-        ...(llmSettings.apiKeys[llmSettings.provider]
-          ? { api_key: llmSettings.apiKeys[llmSettings.provider] }
-          : {}),
-        ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {})
+    const payload = {
+      message,
+      chat_history: nextHistory.slice(-8).map(m => ({ type: m.type, content: m.content })),
+      provider: llmSettings.provider,
+      model: llmSettings.model,
+      ...(llmSettings.apiKeys[llmSettings.provider]
+        ? { api_key: llmSettings.apiKeys[llmSettings.provider] }
+        : {}),
+      ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {})
+    }
+
+    let toolName: string | null = null
+    let toolParams: Record<string, unknown> = {}
+    let clarificationText: string | null = null
+    let streamingStarted = false
+
+    for await (const event of apiClient.chatWithInspectorStream(selectedServer.session_id, payload, abortController.signal)) {
+      if (event.type === "thinking") {
+        // already showing thinking bubble — no-op
+      } else if (event.type === "token" && event.content) {
+        if (!streamingStarted) {
+          // Replace thinking bubble with streaming assistant bubble
+          updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
+          updateChat(prev => [...prev, {
+            id: streamingMsgId,
+            runId,
+            type: "assistant",
+            content: event.content ?? "",
+            timestamp: Date.now(),
+            perfMark: performance.now()
+          } as ChatMessage])
+          streamingStarted = true
+        } else {
+          // Append token to existing streaming bubble
+          updateChat(prev => prev.map((m: ChatMessage) =>
+            m.id === streamingMsgId
+              ? { ...m, content: (m.content ?? "") + (event.content ?? "") }
+              : m
+          ))
+        }
+      } else if (event.type === "tool_call") {
+        toolName = event.tool_name ?? null
+        toolParams = (event.params as Record<string, unknown>) ?? {}
+      } else if (event.type === "clarification") {
+        clarificationText = event.message ?? "Could not determine which tool to run."
+      } else if (event.type === "error") {
+        clarificationText = event.message ?? "Unable to determine which tool to run."
       }
-    )
+    }
 
+    // Remove thinking bubble if streaming never started
     updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
+    // Remove streaming bubble — it will be replaced by a proper typed message
+    updateChat(prev => prev.filter((m: ChatMessage) => m.id !== streamingMsgId))
 
-    if (res.clarification_needed) {
+    if (clarificationText || !toolName) {
       const assistantMsg: ChatMessage = {
         id: generateId(),
         runId,
         type: "assistant",
-        content: res.message,
+        content: clarificationText ?? "Could not determine which tool to run.",
         timestamp: Date.now(),
         perfMark: performance.now()
       }
       updateChat(prev => [...prev, assistantMsg])
-      // save run (no tool call — just clarification)
       setExecutionHistoryByServer(prev => ({
         ...prev,
         [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
@@ -589,24 +630,21 @@ export default function MCPInspector() {
       id: generateId(),
       runId,
       type: "tool_call",
-      toolName: res.tool_name,
-      params: res.params,
+      toolName,
+      params: toolParams,
       timestamp: Date.now(),
       perfMark: performance.now()
     }
-
     updateChat(prev => [...prev, toolCallMsg])
     runSteps.push(toolCallMsg)
 
     const result = await apiClient.runInspectorTool(
       selectedServer.session_id,
-      res.tool_name,
-      res.params
+      toolName,
+      toolParams
     )
 
-    // Check for UI widget resource — can be on the tool definition (tools/list)
-    // or on the result itself (FastMCP puts _meta on the result, not the tool def)
-    const toolDef = selectedServer.tools.find((t: any) => t.name === res.tool_name)
+    const toolDef = selectedServer.tools.find((t: any) => t.name === toolName)
     const resourceUri: string | undefined =
       toolDef?._meta?.["ui/resourceUri"] ||
       toolDef?._meta?.ui?.resourceUri ||
@@ -623,17 +661,16 @@ export default function MCPInspector() {
       timestamp: Date.now(),
       perfMark: performance.now()
     }
-
     updateChat(prev => [...prev, resultMsg])
     runSteps.push(resultMsg)
 
-    // save completed run
     setExecutionHistoryByServer(prev => ({
       ...prev,
       [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
     }))
 
   } catch (err: any) {
+    updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id && m.id !== streamingMsgId))
 
     const errorMsg: ChatMessage = {
       id: generateId(),
@@ -643,11 +680,9 @@ export default function MCPInspector() {
       timestamp: Date.now(),
       perfMark: performance.now()
     }
-
     updateChat(prev => [...prev, errorMsg])
     runSteps.push(errorMsg)
 
-    // save failed run
     setExecutionHistoryByServer(prev => ({
       ...prev,
       [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
@@ -671,6 +706,11 @@ export default function MCPInspector() {
     setExecutionTime(null)
     setLastRunParams(null)
   }, [selectedTool])
+
+  // Abort any in-flight chat stream when the selected server changes or on unmount
+  useEffect(() => {
+    return () => { chatAbortRef.current?.abort() }
+  }, [selectedServerId])
 
   useEffect(() => {
     if (selectedServer?.url) {
