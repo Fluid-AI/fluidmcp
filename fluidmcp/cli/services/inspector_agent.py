@@ -1,98 +1,25 @@
 import os
 import json
 import asyncio
+from typing import AsyncGenerator
 from loguru import logger
 
 
-# Default models per provider
 PROVIDER_DEFAULTS = {
-    "groq":      {"label": "Groq",      "model": "llama-3.1-8b-instant", "base_url": "https://api.groq.com/openai/v1"},
-    "openai":    {"label": "OpenAI",    "model": "gpt-4o-mini",           "base_url": "https://api.openai.com/v1"},
-    "gemini":    {"label": "Gemini",    "model": "gemini-2.0-flash",      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"},
-    "anthropic": {"label": "Anthropic", "model": "claude-haiku-4-5-20251001", "base_url": None},
+    "groq":      {"label": "Groq",      "base_url": "https://api.groq.com/openai/v1",                             "model": "llama-3.1-8b-instant"},
+    "openai":    {"label": "OpenAI",    "base_url": "https://api.openai.com/v1",                                  "model": "gpt-4o-mini"},
+    "gemini":    {"label": "Gemini",    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",   "model": "gemini-2.0-flash"},
+    "anthropic": {"label": "Anthropic", "base_url": None,                                                         "model": "claude-haiku-4-5-20251001"},
 }
 
+ENV_KEY_MAP = {
+    "groq":      "GROQ_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "gemini":    "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
 
-def format_tools_for_prompt(tools):
-    """
-    Convert MCP tools into a readable prompt format.
-    This remains dynamic → supports ANY MCP.
-    """
-
-    formatted = []
-
-    for tool in tools:
-        name = tool.get("name")
-        description = tool.get("description", "No description")
-
-        schema = tool.get("inputSchema", {})
-        props = schema.get("properties", {})
-
-        params = []
-        for param_name, param_info in props.items():
-            param_type = param_info.get("type", "string")
-            params.append(f"- {param_name} ({param_type})")
-
-        param_text = "\n".join(params) if params else "None"
-
-        formatted.append(
-            f"""
-Tool: {name}
-Description: {description}
-Parameters:
-{param_text}
-"""
-        )
-
-    return "\n".join(formatted)
-
-
-async def choose_tool_with_llm(
-    message: str,
-    tools: list,
-    chat_history: list | None = None,
-    provider: str = "groq",
-    model: str | None = None,
-    api_key: str | None = None,
-    system_prompt: str | None = None,
-):
-    """
-    Universal MCP agent with multi-provider support.
-
-    Supported providers: groq, openai, anthropic, gemini
-    - groq/openai/gemini: use the openai-compatible client
-    - anthropic: use the anthropic SDK directly
-
-    API keys are passed in from the frontend (stored in localStorage per provider).
-    Falls back to environment variables if no key is provided.
-    """
-
-    if chat_history is None:
-        chat_history = []
-
-    if not tools:
-        raise RuntimeError("No tools available")
-
-    provider = provider.lower()
-    logger.info(f"Inspector chat — provider={provider}, message={message!r}")
-
-    tool_description = format_tools_for_prompt(tools)
-
-    prompt = f"""
-Available tools:
-{tool_description}
-
-User request: {message}
-
-Instructions:
-1. Choose the BEST tool to fulfill the request.
-2. Extract parameters from the request.
-3. If parameters are missing, infer reasonable defaults or leave them empty. DO NOT explain anything.
-
-Return ONLY JSON.
-"""
-
-    sys_content = system_prompt.strip() if system_prompt and system_prompt.strip() else """
+SYSTEM_PROMPT = """
 You are a strict JSON API for MCP tool selection.
 
 You MUST return ONLY valid JSON.
@@ -108,7 +35,26 @@ Rules:
 - No markdown
 - No extra text
 - Always return JSON
+- One tool per response only
 """
+
+
+def format_tools_for_prompt(tools):
+    formatted = []
+    for tool in tools:
+        name = tool.get("name")
+        description = tool.get("description", "No description")
+        schema = tool.get("inputSchema", {})
+        props = schema.get("properties", {})
+        params = [f"- {p} ({i.get('type', 'string')})" for p, i in props.items()]
+        param_text = "\n".join(params) if params else "None"
+        formatted.append(f"\nTool: {name}\nDescription: {description}\nParameters:\n{param_text}\n")
+    return "\n".join(formatted)
+
+
+def _build_messages(message: str, tools: list, chat_history: list, system_prompt: str | None) -> list:
+    tool_description = format_tools_for_prompt(tools)
+    user_content = f"""Available tools:\n{tool_description}\n\nUser request: {message}\n\nInstructions:\n1. Choose the BEST tool to fulfill the request.\n2. Extract parameters from the request.\n3. If parameters are missing, infer reasonable defaults or leave them empty.\n\nReturn ONLY JSON."""
 
     history_messages = [
         {"role": "user" if m.get("type") == "user" else "assistant",
@@ -117,150 +63,215 @@ Rules:
         if m.get("type") in ("user", "assistant") and m.get("content")
     ]
 
-    if provider == "anthropic":
-        return await _call_anthropic(
-            message=prompt,
-            sys_content=sys_content,
-            history_messages=history_messages,
-            model=model,
-            api_key=api_key,
-        )
-    else:
-        return await _call_openai_compatible(
-            message=prompt,
-            sys_content=sys_content,
-            history_messages=history_messages,
-            provider=provider,
-            model=model,
-            api_key=api_key,
-        )
+    sys = system_prompt.strip() if system_prompt and system_prompt.strip() else SYSTEM_PROMPT.strip()
+
+    return [
+        {"role": "system", "content": sys},
+        *history_messages,
+        {"role": "user", "content": user_content},
+    ]
 
 
-async def _call_openai_compatible(
-    message: str,
-    sys_content: str,
-    history_messages: list,
-    provider: str,
-    model: str | None,
-    api_key: str | None,
-):
-    """Call Groq, OpenAI, or Gemini via the OpenAI-compatible client."""
-    from openai import OpenAI
+def _resolve_api_key(provider: str, api_key: str | None) -> str:
     from dotenv import load_dotenv
-
     load_dotenv()
-
-    defaults = PROVIDER_DEFAULTS.get(provider)
-    if not defaults:
-        raise RuntimeError(f"Unknown provider: {provider!r}")
-
-    resolved_model = model or defaults["model"]
-    base_url = defaults["base_url"]
-
-    # Key resolution: explicit > env var
-    env_key_names = {
-        "groq":   "GROQ_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-    }
-    resolved_key = api_key or os.getenv(env_key_names.get(provider, ""), "")
-    if not resolved_key:
-        raise RuntimeError(
-            f"No API key provided for {defaults['label']}. "
-            "Please add your API key in the LLM settings."
-        )
-
-    # Gemini's OpenAI-compatible endpoint requires the key as a query param.
-    # Use default_query so the OpenAI client appends ?key=... to every request
-    # without corrupting the path (appending to base_url breaks path construction).
-    if provider == "gemini":
-        client = OpenAI(api_key="not-used", base_url=base_url, default_query={"key": resolved_key})
-    else:
-        client = OpenAI(api_key=resolved_key, base_url=base_url)
-
-    def _call():
-        return client.chat.completions.create(
-            model=resolved_model,
-            messages=[
-                {"role": "system", "content": sys_content},
-                *history_messages,
-                {"role": "user", "content": message},
-            ],
-            temperature=0,
-            max_tokens=200,
-        )
-
-    response = await asyncio.to_thread(_call)
-    content = response.choices[0].message.content.strip()
-    logger.info(f"[{provider}] raw response: {repr(content)}")
-    return _parse_json_response(content)
+    key = api_key or os.getenv(ENV_KEY_MAP.get(provider, ""))
+    if not key and provider != "groq":
+        raise RuntimeError(f"No API key provided for provider '{provider}'")
+    if not key:
+        raise RuntimeError("GROQ_API_KEY not configured")
+    return key
 
 
-async def _call_anthropic(
-    message: str,
-    sys_content: str,
-    history_messages: list,
-    model: str | None,
-    api_key: str | None,
-):
-    """Call Anthropic Claude via the anthropic SDK."""
-    from anthropic import Anthropic
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    resolved_model = model or "claude-haiku-4-5-20251001"
-    resolved_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-    if not resolved_key:
-        raise RuntimeError(
-            "No API key provided for Anthropic. "
-            "Please add your API key in the LLM settings."
-        )
-
-    client = Anthropic(api_key=resolved_key)
-
-    # Anthropic uses system param separately; convert history
-    anthropic_messages = []
-    for m in history_messages:
-        anthropic_messages.append({"role": m["role"], "content": m["content"]})
-    anthropic_messages.append({"role": "user", "content": message})
-
-    def _call():
-        return client.messages.create(
-            model=resolved_model,
-            system=sys_content,
-            messages=anthropic_messages,
-            temperature=0,
-            max_tokens=200,
-        )
-
-    response = await asyncio.to_thread(_call)
-    content = response.content[0].text.strip()
-    logger.info(f"[anthropic] raw response: {repr(content)}")
-    return _parse_json_response(content)
-
-
-def _parse_json_response(content: str) -> dict:
-    """Parse JSON from LLM response, with fallback extraction."""
+def _parse_tool_json(content: str) -> dict:
     try:
-        result = json.loads(content)
-        logger.info(f"LLM parsed result (direct): {result}")
-        return result
+        return json.loads(content)
     except json.JSONDecodeError:
-        logger.warning("Direct JSON parse failed, attempting extraction...")
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError(f"No JSON found in LLM response: {content}")
+        return json.loads(content[start:end])
 
-    start = content.find("{")
-    end = content.rfind("}") + 1
 
-    if start == -1 or end == 0:
-        raise ValueError(f"No JSON found in LLM response: {content}")
+async def stream_tool_selection(
+    message: str,
+    tools: list,
+    chat_history: list | None = None,
+    provider: str = "groq",
+    model: str | None = None,
+    api_key: str | None = None,
+    system_prompt: str | None = None,
+) -> AsyncGenerator[dict, None]:
+    """
+    Async generator that streams LLM tool selection.
 
-    json_str = content[start:end]
+    Yields dicts:
+      {"type": "token", "content": "..."}
+      {"type": "tool_call", "tool_name": "...", "params": {...}}
+      {"type": "clarification", "message": "..."}
+    """
+    if chat_history is None:
+        chat_history = []
+
+    logger.info(f"Inspector stream chat — provider={provider} message={message!r}")
+
+    key = _resolve_api_key(provider, api_key)
+    defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["groq"])
+    resolved_model = model or defaults["model"]
+    messages = _build_messages(message, tools, chat_history, system_prompt)
+
+    if provider == "anthropic":
+        async for event in _stream_anthropic(key, resolved_model, messages):
+            yield event
+    else:
+        async for event in _stream_openai_compatible(key, resolved_model, messages, defaults["base_url"], provider):
+            yield event
+
+
+async def _stream_openai_compatible(
+    api_key: str,
+    model: str,
+    messages: list,
+    base_url: str,
+    provider: str,
+) -> AsyncGenerator[dict, None]:
+    from openai import OpenAI
+
+    extra_kwargs = {}
+    if provider == "gemini":
+        extra_kwargs["default_query"] = {"key": api_key}
+
+    client = OpenAI(api_key=api_key, base_url=base_url, **extra_kwargs)
+
+    def _collect_tokens() -> list[str]:
+        # Runs in a thread — collects all tokens before returning to the event loop.
+        # Fine for short JSON tool-selection responses; for true sub-token latency
+        # a queue-based approach would be needed.
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0,
+            max_tokens=500,
+            stream=True,
+        )
+        tokens = []
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content if chunk.choices else None
+            if delta:
+                tokens.append(delta)
+        return tokens
+
     try:
-        result = json.loads(json_str)
-        logger.info(f"LLM parsed result (extracted): {result}")
-        return result
+        tokens = await asyncio.to_thread(_collect_tokens)
+
+        accumulated = ""
+        for token in tokens:
+            accumulated += token
+            yield {"type": "token", "content": token}
+
+        logger.info(f"OpenAI-compatible stream accumulated: {repr(accumulated)}")
+        result = _parse_tool_json(accumulated)
+        yield {"type": "tool_call", "tool_name": result.get("tool_name"), "params": result.get("params", {})}
+
     except Exception as e:
-        raise ValueError(
-            f"Failed to parse extracted JSON.\nRaw: {content}\nExtracted: {json_str}"
-        ) from e
+        import re as _re
+        user_message = str(e)
+        user_message = _re.sub(r"(provided|key):\s*\S+", r"\1: [REDACTED]", user_message, flags=_re.IGNORECASE)
+        logger.error(f"OpenAI-compatible stream error ({provider}): {user_message}")
+        yield {"type": "clarification", "message": user_message}
+
+
+async def _stream_anthropic(
+    api_key: str,
+    model: str,
+    messages: list,
+) -> AsyncGenerator[dict, None]:
+    import anthropic
+
+    # Anthropic requires system message separate from messages list
+    system_content = SYSTEM_PROMPT.strip()
+    filtered = [m for m in messages if m["role"] != "system"]
+    for m in messages:
+        if m["role"] == "system":
+            system_content = m["content"]
+            break
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    def _collect_tokens() -> list[str]:
+        tokens = []
+        with client.messages.stream(
+            model=model,
+            max_tokens=500,
+            system=system_content,
+            messages=filtered,
+        ) as stream:
+            for event in stream:
+                if (
+                    hasattr(event, "type")
+                    and event.type == "content_block_delta"
+                    and hasattr(event, "delta")
+                    and hasattr(event.delta, "text")
+                ):
+                    tokens.append(event.delta.text)
+        return tokens
+
+    try:
+        tokens = await asyncio.to_thread(_collect_tokens)
+
+        accumulated = ""
+        for token in tokens:
+            accumulated += token
+            yield {"type": "token", "content": token}
+
+        logger.info(f"Anthropic stream accumulated: {repr(accumulated)}")
+        result = _parse_tool_json(accumulated)
+        yield {"type": "tool_call", "tool_name": result.get("tool_name"), "params": result.get("params", {})}
+
+    except Exception as e:
+        import re as _re
+        user_message = str(e)
+        user_message = _re.sub(r"(provided|key):\s*\S+", r"\1: [REDACTED]", user_message, flags=_re.IGNORECASE)
+        logger.error(f"Anthropic stream error: {user_message}")
+        yield {"type": "clarification", "message": user_message}
+
+
+# ─── Non-streaming (kept for fallback) ────────────────────────────────────────
+
+async def choose_tool_with_llm(
+    message: str,
+    tools: list,
+    chat_history: list | None = None,
+    provider: str = "groq",
+    model: str | None = None,
+    api_key: str | None = None,
+    system_prompt: str | None = None,
+):
+    """Non-streaming fallback — collects the full stream and returns a single result dict."""
+    if not tools:
+        raise RuntimeError("No tools available")
+
+    tool_name = None
+    tool_params = {}
+    clarification = None
+
+    async for event in stream_tool_selection(
+        message=message,
+        tools=tools,
+        chat_history=chat_history,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        system_prompt=system_prompt,
+    ):
+        if event["type"] == "tool_call":
+            tool_name = event["tool_name"]
+            tool_params = event["params"]
+        elif event["type"] == "clarification":
+            clarification = event["message"]
+
+    if clarification:
+        raise ValueError(clarification)
+
+    return {"tool_name": tool_name, "params": tool_params}
