@@ -335,6 +335,56 @@ class ApiClient {
     });
   }
 
+  async *chatWithInspectorStream(
+    sessionId: string,
+    data: any,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{ type: string; content?: string; tool_name?: string; params?: Record<string, unknown>; message?: string }> {
+    const baseUrl = this.baseUrl || "";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+
+    const response = await fetch(`${baseUrl}/api/inspector/${sessionId}/chat/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(data),
+      signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream request failed: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              yield event;
+              if (event.type === "done") return;
+            } catch {
+              // malformed SSE line — skip
+            }
+          }
+        }
+      }
+    } finally {
+      reader.cancel();
+    }
+  }
+
   async exportInspectorServer(sessionId: string): Promise<any> {
     return this.request(`/api/inspector/${sessionId}/export`);
   }
