@@ -100,10 +100,50 @@ class InspectorSession:
 
     def _build_headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
-        if self.auth.get("type") == "bearer" and self.auth.get("token"):
+        auth_type = self.auth.get("type")
+        if auth_type == "bearer" and self.auth.get("token"):
             headers["Authorization"] = f"Bearer {self.auth['token']}"
+        elif auth_type == "oauth" and self.auth.get("access_token"):
+            headers["Authorization"] = f"Bearer {self.auth['access_token']}"
         headers.update(self.extra_headers)
         return headers
+
+    async def _auto_refresh(self) -> None:
+        """Exchange the refresh token for a new access token."""
+        refresh_token = self.auth.get("refresh_token")
+        token_url = self.auth.get("token_url")
+        client_id = self.auth.get("client_id")
+        if not (refresh_token and token_url and client_id):
+            return
+        client = self._get_client()
+        resp = await client.post(
+            token_url,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        self.auth["access_token"] = data["access_token"]
+        if "refresh_token" in data:
+            self.auth["refresh_token"] = data["refresh_token"]
+        if "expires_in" in data:
+            self.auth["expires_at"] = time.time() + data["expires_in"]
+        self.add_log("connect", "OAuth token refreshed")
+
+    async def _ensure_fresh_token(self) -> None:
+        """Proactively refresh the OAuth access token if it expires within 60 seconds."""
+        if self.auth.get("type") != "oauth":
+            return
+        expires_at = self.auth.get("expires_at")
+        if expires_at is not None and time.time() >= expires_at - 60:
+            try:
+                await self._auto_refresh()
+            except Exception as e:
+                logger.warning(f"Inspector: proactive OAuth refresh failed — {e}")
 
     MAX_LOGS = 250
 
@@ -414,8 +454,15 @@ class InspectorSession:
         if self.transport == "sse":
             return await self._sse_request(request)
 
+        await self._ensure_fresh_token()
         client = self._get_client()
         response = await client.post(self.url, json=request, headers=self._build_headers())
+        if response.status_code == 401 and self.auth.get("type") == "oauth":
+            try:
+                await self._auto_refresh()
+                response = await client.post(self.url, json=request, headers=self._build_headers())
+            except Exception as e:
+                logger.warning(f"Inspector: OAuth 401 retry failed — {e}")
         response.raise_for_status()
         return response.json()
 
