@@ -221,6 +221,7 @@ function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: Executi
     </div>
   );
 }
+
 // Type for server object
 interface MCPServer {
   id: string;
@@ -533,6 +534,8 @@ export default function MCPInspector() {
             : s
         )
       );
+      // Reset log offset so new logs from the restarted server aren't hidden
+      logsClearedOffsetRef.current[serverId] = 0;
       // Append reconnect notice to existing chat history (don't wipe it)
       setChatHistoryByServer(prev => ({
         ...prev,
