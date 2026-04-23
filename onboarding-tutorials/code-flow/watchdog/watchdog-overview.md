@@ -9,12 +9,12 @@
 
 Two background monitors:
 
-| Monitor | File | Purpose |
-|---------|------|---------|
-| `EventLoopWatchdog` | [`fluidmcp/cli/services/watchdog.py`](../../../fluidmcp/cli/services/watchdog.py) | Measures asyncio event loop lag — detects blocking calls |
-| `MCPHealthMonitor` | [`fluidmcp/cli/services/server_manager.py`](../../../fluidmcp/cli/services/server_manager.py) | Polls MCP subprocess liveness — auto-restarts crashed servers |
+| Monitor | File | Status |
+|---------|------|--------|
+| `EventLoopWatchdog` | [`fluidmcp/cli/services/watchdog.py`](../../../fluidmcp/cli/services/watchdog.py) | Implemented — not yet merged to main, not yet wired into `server.py` |
+| `MCPHealthMonitor` | [`fluidmcp/cli/services/server_manager.py`](../../../fluidmcp/cli/services/server_manager.py) | Implemented and wired into `server.py` |
 
-> **Integration status:** `MCPHealthMonitor` is started automatically when `fmcp serve` runs (wired into `server.py`). `EventLoopWatchdog` is implemented and ready to use but is not yet wired into `server.py`.
+> **Note on EventLoopWatchdog:** The implementation exists on feature branches but has not yet merged to `main`. The sections below document what was built. Once merged, it can be wired into `server.py` following the same lifecycle pattern as `MCPHealthMonitor`.
 
 ---
 
@@ -31,12 +31,13 @@ Two background monitors:
 |  |  Background asyncio  |    |  Background asyncio task.            |   |
 |  |  task -- measures    |    |  Polls every 30s. For each server:   |   |
 |  |  sleep() drift       |    |    * stdio: process.poll()           |   |
-|  |  every 10s.          |    |    * SSE: psutil check_process_alive |   |
-|  |                      |    |    * if dead -> _cleanup_server()    |   |
-|  |  lag > 0.5s -> WARN  |    |    * if restart policy allows ->     |   |
-|  |  lag > 2.0s -> ERROR |    |      backoff delay -> restart        |   |
-|  |                      |    |                                      |   |
-|  |  (not yet wired into |    |                                      |   |
+|  |  every 10s.          |    |    * SSE: HealthChecker              |   |
+|  |                      |    |      .check_process_alive(pid)       |   |
+|  |  lag > 0.5s -> WARN  |    |      (uses psutil internally)        |   |
+|  |  lag > 2.0s -> ERROR |    |    * if dead -> acquire op_lock      |   |
+|  |                      |    |      -> _cleanup_server()            |   |
+|  |  (not yet on main /  |    |    * if restart policy allows ->     |   |
+|  |   not yet wired into |    |      backoff delay -> restart        |   |
 |  |   server.py)         |    |                                      |   |
 |  +----------------------+    +--------------------------------------+   |
 |             |                               |                           |
@@ -51,6 +52,8 @@ Two background monitors:
 ---
 
 ## EventLoopWatchdog
+
+> **Status:** Implementation exists on feature branches, not yet merged to `main`.
 
 ### How it works
 
@@ -132,10 +135,14 @@ await watchdog.stop()  # cancels task, awaits CancelledError, sets _task = None
 
 ### How it works
 
-Every `check_interval` seconds (default 30s, overridden by `FMCP_HEALTH_CHECK_INTERVAL` env var) the monitor iterates all running MCP server processes and checks liveness:
+Every `check_interval` seconds (default 30s, overridden by `FMCP_HEALTH_CHECK_INTERVAL` env var) the monitor iterates all running MCP server processes and checks liveness. An additional env var `FMCP_RESTART_TIMEOUT_S` (default 60s) controls how long a restart attempt is allowed to run before it is cancelled:
 
 - **stdio servers** (`subprocess.Popen`): `process.poll()` — non-None return means the process has exited
-- **SSE servers** (`SseSubprocessHandle`): `health_checker.check_process_alive(pid)` via psutil
+- **SSE servers** (`SseSubprocessHandle`): `HealthChecker.check_process_alive(pid)` — a wrapper around psutil that checks the process is alive by PID
+
+### Restart count — in-memory vs database
+
+`MCPHealthMonitor` tracks restart attempts in `self._restart_counts` — an **in-memory dict** keyed by `server_id`. This is separate from any `restart_count` stored in the database instance state. The in-memory count is used solely to enforce `max_restarts` within the lifetime of the current monitor. It resets to zero (for a given server) after 5 minutes of sustained healthy uptime, or when the monitor process restarts.
 
 ### Flow
 
@@ -152,7 +159,7 @@ _monitor_loop() runs every 30s
     _check_server(server_id, process)
         |
         +-- stdio: process.poll() is None  ->  alive
-        +-- SSE:   check_process_alive()   ->  alive
+        +-- SSE:   HealthChecker.check_process_alive()  ->  alive
         |
         +-- process has exited
                 |
@@ -162,7 +169,9 @@ _monitor_loop() runs every 30s
                 v
             get config from DB
                 |
-                +-- config missing  ->  _cleanup_server() only, no restart
+                +-- config missing
+                |     acquire op_lock
+                |     _cleanup_server() only, no restart
                 |
                 +-- config found
                         |
@@ -173,7 +182,7 @@ _monitor_loop() runs every 30s
                     restart_policy == "on-failure" and exit_code == 0?  ->  cleanup only
                         |
                         v
-                    restart_count >= max_restarts?
+                    _restart_counts[server_id] >= max_restarts?
                         ->  cleanup only, log warning
                         ->  server stays stopped until operator manually restarts via API
                         |
@@ -186,9 +195,9 @@ _monitor_loop() runs every 30s
                     _cleanup_server(server_id, exit_code)
                     asyncio.wait_for(_start_server_unlocked(), timeout=60s)  <- FMCP_RESTART_TIMEOUT_S
                         |
-                        +-- success  ->  log info, increment restart_count
-                        +-- timeout  ->  log error, increment restart_count
-                        +-- failure  ->  log error, increment restart_count
+                        +-- success  ->  log info, increment _restart_counts[server_id]
+                        +-- timeout  ->  log error, increment _restart_counts[server_id]
+                        +-- failure  ->  log error, increment _restart_counts[server_id]
         |
         v
     await asyncio.sleep(check_interval)
@@ -196,18 +205,18 @@ _monitor_loop() runs every 30s
 
 ### Restart count reset
 
-The restart count for a server resets only after **5 minutes of sustained healthy uptime** (checked on the next poll cycle where the process is still alive). This prevents a flapping server from getting a "fresh start" too soon and exhausting `max_restarts` across many short-lived restart cycles.
+The in-memory `_restart_counts[server_id]` resets only after **5 minutes of sustained healthy uptime** (checked on the next poll cycle where the process is still alive). This prevents a flapping server from getting a "fresh start" too soon and exhausting `max_restarts` across many short-lived restart cycles.
 
 ### After max_restarts is hit
 
-Once `restart_count >= max_restarts`, the monitor stops attempting restarts. The server process stays stopped. **An operator must manually restart it** via the management API:
+Once `_restart_counts[server_id] >= max_restarts`, the monitor stops attempting restarts. The server process stays stopped. **An operator must manually restart it** via the management API:
 
 ```bash
 curl -X POST http://localhost:<port>/api/servers/<server_id>/start \
   -H "Authorization: Bearer <token>"
 ```
 
-The restart count does not automatically reset — the server will not self-recover without manual intervention.
+The in-memory restart count does not automatically reset — the server will not self-recover without manual intervention.
 
 ### Env vars
 
@@ -241,27 +250,34 @@ restart 5+ -> 160s  (maximum)
 
 ## Startup & Shutdown Integration (`server.py`)
 
-`MCPHealthMonitor` is integrated into `server.py`. The current startup order is:
+`MCPHealthMonitor` is integrated into `server.py`. The complete startup and shutdown order:
 
 ```python
 # server.py -- main()
 
-# 1. Start health monitor BEFORE create_app()
+# 1. Create ServerManager
+server_manager = ServerManager(persistence)
+
+# 2. Start idle cleanup task
+server_manager.start_idle_cleanup_task()
+
+# 3. Start health monitor
 health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
 health_monitor.start()
 
-# 2. Create FastAPI app
+# 4. Create FastAPI app
 app = await create_app(...)
 
 # ... server runs until shutdown signal ...
 
-# 3. Shutdown order
+# 5. Shutdown order
 await health_monitor.stop()                    # stop monitor first
 await server_manager.stop_idle_cleanup_task()  # stop idle cleanup
-await server_manager.shutdown_all()            # stop all MCP processes last
+await server_manager.shutdown_all()            # stop all MCP processes
+await persistence.disconnect()                 # close DB connection last
 ```
 
-> `EventLoopWatchdog` is not yet wired into `server.py`. The class is ready in `watchdog.py` and can be added to the lifecycle above when needed.
+> `EventLoopWatchdog` is not yet wired into `server.py`. Once `watchdog.py` is merged to `main`, it can be added between steps 3 and 4, with `await loop_watchdog.stop()` added to the shutdown sequence after `health_monitor.stop()`.
 
 ---
 
@@ -269,7 +285,7 @@ await server_manager.shutdown_all()            # stop all MCP processes last
 
 | File | Role |
 |------|------|
-| [`fluidmcp/cli/services/watchdog.py`](../../../fluidmcp/cli/services/watchdog.py) | `EventLoopWatchdog` + `_get_env_float()` |
+| [`fluidmcp/cli/services/watchdog.py`](../../../fluidmcp/cli/services/watchdog.py) | `EventLoopWatchdog` + `_get_env_float()` (not yet on main) |
 | [`fluidmcp/cli/services/server_manager.py`](../../../fluidmcp/cli/services/server_manager.py) | `MCPHealthMonitor` + `_check_server()` + `_calculate_restart_delay()` |
 | [`fluidmcp/cli/server.py`](../../../fluidmcp/cli/server.py) | `MCPHealthMonitor` start/stop integration in `main()` |
 | [`tests/test_server_manager_cleanup.py`](../../../tests/test_server_manager_cleanup.py) | Tests for `ServerManager` shutdown and process cleanup |
