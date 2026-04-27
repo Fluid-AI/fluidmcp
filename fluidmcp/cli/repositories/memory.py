@@ -112,6 +112,28 @@ class InMemoryBackend(PersistenceBackend):
             return dict(state)
         return None
 
+    async def get_instance_env(self, server_id: str) -> Optional[Dict[str, str]]:
+        """
+        Get environment variables from server instance.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Dict of environment variables or None if instance not found
+        """
+        instance = await self.get_instance_state(server_id)
+        if instance:
+            env = instance.get("env")
+            if env:
+                # Filter out placeholder and empty values
+                filtered_env = {
+                    k: v for k, v in env.items()
+                    if v and not (isinstance(v, str) and v.startswith("${"))
+                }
+                return filtered_env
+        return None
+
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """Save log to memory (capped at 1000 lines per server)."""
         server_name = log_entry.get("server_name")
