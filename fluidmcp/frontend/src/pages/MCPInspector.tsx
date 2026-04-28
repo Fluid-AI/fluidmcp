@@ -12,6 +12,7 @@ import { PromptsPanel } from '../components/inspector/PromptsPanel';
 import { ManualToolPanel } from '../components/inspector/ManualToolPanel';
 import { ChatPanel } from '../components/inspector/ChatPanel';
 import { type ChatMessage, type ExecutionRun } from '../components/inspector/chat-types';
+import { toJSON, toMarkdown, downloadFile } from '../lib/trace-export';
 
 // Type for server object
 interface MCPServer {
@@ -104,6 +105,7 @@ export default function MCPInspector() {
   const [toolSubTab, setToolSubTab] = useState<"tools" | "saved">("tools")
   const [savedRequests, setSavedRequests] = useState<SavedRequest[]>([])
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [traceDropdownOpen, setTraceDropdownOpen] = useState(false)
   const [saveTitle, setSaveTitle] = useState("")
   const [formPrefill, setFormPrefill] = useState<Record<string, any> | undefined>(undefined)
   // 3A-4: typed per-server execution history
@@ -1076,31 +1078,88 @@ export default function MCPInspector() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
                   <h2 style={{ fontSize: "1.1rem", fontWeight: "600" }}>Tool Execution</h2>
                   {selectedServer?.status === "connected" && selectedServer.session_id && (
-                    <button
-                      onClick={async () => {
-                        try {
-                          const data = await apiClient.exportInspectorServer(selectedServer.session_id!);
-                          // Merge in the display name from local state since backend doesn't store it
-                          data.serverInfo = { ...data.serverInfo, name: selectedServer.name || selectedServer.server_info?.name };
-                          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-                          const a = document.createElement("a");
-                          a.href = URL.createObjectURL(blob);
-                          a.download = `${(selectedServer.name || selectedServer.server_info?.name || "mcp-server").replace(/\s+/g, "-").toLowerCase()}-export.json`;
-                          a.click();
-                          URL.revokeObjectURL(a.href);
-                        } catch (e) {
-                          console.error("Export failed", e);
-                        }
-                      }}
-                      title="Export server config + tools as JSON"
-                      style={{
-                        fontSize: "0.72rem", padding: "0.25rem 0.65rem", borderRadius: "6px",
-                        background: "rgba(39,39,42,0.8)", border: "1px solid rgba(63,63,70,0.6)",
-                        color: "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem",
-                      }}
-                    >
-                      ↓ Export
-                    </button>
+                    <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const data = await apiClient.exportInspectorServer(selectedServer.session_id!);
+                            // Merge in the display name from local state since backend doesn't store it
+                            data.serverInfo = { ...data.serverInfo, name: selectedServer.name || selectedServer.server_info?.name };
+                            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                            const a = document.createElement("a");
+                            a.href = URL.createObjectURL(blob);
+                            a.download = `${(selectedServer.name || selectedServer.server_info?.name || "mcp-server").replace(/\s+/g, "-").toLowerCase()}-export.json`;
+                            a.click();
+                            URL.revokeObjectURL(a.href);
+                          } catch (e) {
+                            console.error("Export failed", e);
+                          }
+                        }}
+                        title="Export server config + tools as JSON"
+                        style={{
+                          fontSize: "0.72rem", padding: "0.25rem 0.65rem", borderRadius: "6px",
+                          background: "rgba(39,39,42,0.8)", border: "1px solid rgba(63,63,70,0.6)",
+                          color: "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem",
+                        }}
+                      >
+                        ↓ Export
+                      </button>
+
+                      {executionHistory.length > 0 && (
+                        <div style={{ position: "relative" }}>
+                          <button
+                            onClick={() => setTraceDropdownOpen(o => !o)}
+                            title="Export execution trace"
+                            style={{
+                              fontSize: "0.72rem", padding: "0.25rem 0.65rem", borderRadius: "6px",
+                              background: "rgba(39,39,42,0.8)", border: "1px solid rgba(63,63,70,0.6)",
+                              color: "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem",
+                            }}
+                          >
+                            ↓ Trace ▾
+                          </button>
+                          {traceDropdownOpen && (
+                            <div
+                              onMouseLeave={() => setTraceDropdownOpen(false)}
+                              style={{
+                                position: "absolute", top: "calc(100% + 4px)", right: 0,
+                                background: "#18181b", border: "1px solid rgba(63,63,70,0.7)",
+                                borderRadius: "6px", overflow: "hidden", zIndex: 50, minWidth: "130px",
+                              }}
+                            >
+                              {[
+                                { label: "JSON", ext: "json", mime: "application/json" },
+                                { label: "Markdown", ext: "md", mime: "text/markdown" },
+                              ].map(({ label, ext, mime }) => (
+                                <button
+                                  key={ext}
+                                  onClick={() => {
+                                    setTraceDropdownOpen(false);
+                                    const serverName = selectedServer.name || selectedServer.server_info?.name || "mcp-server";
+                                    const slug = serverName.replace(/\s+/g, "-").toLowerCase();
+                                    const opts = { serverName, serverUrl: selectedServer.url };
+                                    const content = ext === "json"
+                                      ? toJSON(executionHistory, opts)
+                                      : toMarkdown(executionHistory, opts);
+                                    downloadFile(content, `${slug}-trace.${ext}`, mime);
+                                  }}
+                                  style={{
+                                    display: "block", width: "100%", textAlign: "left",
+                                    padding: "0.45rem 0.75rem", background: "transparent",
+                                    border: "none", color: "rgba(255,255,255,0.7)",
+                                    fontSize: "0.75rem", cursor: "pointer",
+                                  }}
+                                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(99,102,241,0.15)")}
+                                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
