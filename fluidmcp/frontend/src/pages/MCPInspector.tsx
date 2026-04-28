@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/services/api";
+import type { OAuthToken } from "@/components/inspector/AddServerModal";
 import { type SavedRequest, loadSavedRequests } from "@/lib/saved-requests";
 import { ServerListPanel } from '../components/inspector/ServerListPanel';
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
@@ -26,10 +27,15 @@ interface MCPServer {
   connectedAt?: number; // timestamp (ms) when status became "connected"
   error?: string;
   auth?: {
-    type: "none" | "bearer" | "header"
+    type: "none" | "bearer" | "header" | "oauth"
     token?: string
     headerKey?: string
     headerValue?: string
+    access_token?: string
+    refresh_token?: string
+    expires_at?: number
+    token_url?: string
+    client_id?: string
   };
 }
 
@@ -54,11 +60,12 @@ const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36
 
 export default function MCPInspector() {
 
-  const [authType, setAuthType] = useState<"none" | "bearer" | "header">("none")
+  const [authType, setAuthType] = useState<"none" | "bearer" | "header" | "oauth">("none")
 
   const [token, setToken] = useState("")
   const [headerKey, setHeaderKey] = useState("")
   const [headerValue, setHeaderValue] = useState("")
+  const [oauthToken, setOAuthToken] = useState<OAuthToken | null>(null)
 
   const [inspectorFullscreen, setInspectorFullscreen] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -208,6 +215,10 @@ export default function MCPInspector() {
         alert("Please enter header key and value")
         return
       }
+      if (authType === "oauth" && !oauthToken) {
+        alert("Please complete the OAuth authorization flow first")
+        return
+      }
       if (servers.some(s => s.url === url && s.status !== "failed")) {
         alert("Server already added");
         return;
@@ -234,12 +245,21 @@ export default function MCPInspector() {
 
     const serverId = generateServerId();
 
-    const authConfig = {
-      type: authType,
-      token: token,
-      headerKey: headerKey,
-      headerValue: headerValue
-    };
+    const authConfig = authType === "oauth" && oauthToken ? {
+      type: "oauth" as const,
+      access_token: oauthToken.access_token,
+      refresh_token: oauthToken.refresh_token,
+      expires_at: oauthToken.expires_at,
+      token_url: oauthToken.token_url,
+      client_id: oauthToken.client_id,
+    } : authType === "bearer" ? {
+      type: "bearer" as const,
+      token,
+    } : authType === "header" ? {
+      type: "header" as const,
+      headerKey,
+      headerValue,
+    } : { type: "none" as const };
 
     try {
       setConnecting(true);
@@ -271,6 +291,18 @@ export default function MCPInspector() {
       // Header Token (not applicable for stdio)
       if (transport !== "stdio" && authType === "header" && headerKey && headerValue) {
         payload.headers = { [headerKey]: headerValue }
+      }
+
+      // OAuth (not applicable for stdio)
+      if (transport !== "stdio" && authType === "oauth" && oauthToken) {
+        payload.auth = {
+          type: "oauth",
+          access_token: oauthToken.access_token,
+          refresh_token: oauthToken.refresh_token,
+          expires_at: oauthToken.expires_at,
+          token_url: oauthToken.token_url,
+          client_id: oauthToken.client_id,
+        }
       }
 
       const res = await apiClient.connectInspectorServer(payload)
@@ -312,6 +344,7 @@ export default function MCPInspector() {
       setToken("")
       setHeaderKey("")
       setHeaderValue("")
+      setOAuthToken(null)
       setCustomName("")
       setCommand("")
       setEnvVars([])
@@ -404,7 +437,32 @@ export default function MCPInspector() {
           [server.auth.headerKey]: server.auth.headerValue,
         };
       }
-      
+
+      // OAuth (not applicable for stdio) — token stored on server.auth
+      if (server.transport !== "stdio" && server.auth?.type === "oauth" && server.auth.access_token) {
+        let oauthAuth = { ...server.auth };
+
+        // Proactively refresh if token is expired or within 60s of expiry
+        if (server.session_id && oauthAuth.expires_at && Date.now() / 1000 > oauthAuth.expires_at - 60) {
+          try {
+            const refreshed = await apiClient.refreshOAuthToken(server.session_id);
+            oauthAuth = { ...oauthAuth, access_token: refreshed.access_token, expires_at: refreshed.expires_at };
+            setServers(prev => prev.map(s => s.id === serverId ? { ...s, auth: oauthAuth } : s));
+          } catch {
+            // Refresh failed — proceed with stale token, backend 401 will surface the error
+          }
+        }
+
+        payload.auth = {
+          type: "oauth",
+          access_token: oauthAuth.access_token,
+          refresh_token: oauthAuth.refresh_token,
+          expires_at: oauthAuth.expires_at,
+          token_url: oauthAuth.token_url,
+          client_id: oauthAuth.client_id,
+        };
+      }
+
       const res = await apiClient.connectInspectorServer(payload);
       // Reset log offset — reconnect starts a new session with a fresh log stream
       logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [serverId]: 0 };
@@ -808,6 +866,7 @@ export default function MCPInspector() {
     setToken("")
     setHeaderKey("")
     setHeaderValue("")
+    setOAuthToken(null)
   }, [authType])
 
   return (
@@ -1256,8 +1315,9 @@ export default function MCPInspector() {
           customName={customName} setCustomName={setCustomName}
           envVars={envVars} setEnvVars={setEnvVars}
           recentUrls={recentUrls}
+          oauthToken={oauthToken} setOAuthToken={setOAuthToken}
           onConnect={handleConnect}
-          onClose={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
+          onClose={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); setOAuthToken(null); }}
         />
       )}
 

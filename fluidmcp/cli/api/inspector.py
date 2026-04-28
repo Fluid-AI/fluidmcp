@@ -501,7 +501,10 @@ async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None
                     "client_id": entry["client_id"],
                     "code_verifier": entry["verifier"],
                 },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
             )
             resp.raise_for_status()
             token_data = resp.json()
