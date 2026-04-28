@@ -12,6 +12,17 @@ interface MCPServer {
   status: 'connecting' | 'connected' | 'disconnected' | 'failed';
   connectedAt?: number;
   error?: string;
+  auth?: { type: string; expires_at?: number };
+}
+
+function oauthBadge(auth: MCPServer["auth"]): { label: string; color: string; bg: string } | null {
+  if (auth?.type !== "oauth") return null;
+  const now = Date.now() / 1000;
+  const expiresAt = auth.expires_at;
+  if (!expiresAt) return { label: "OAuth", color: "#6366f1", bg: "rgba(99,102,241,0.15)" };
+  if (now >= expiresAt) return { label: "Token expired", color: "#ef4444", bg: "rgba(239,68,68,0.12)" };
+  if (now >= expiresAt - 300) return { label: "Expiring soon", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" };
+  return { label: "OAuth ✓", color: "#10b981", bg: "rgba(16,185,129,0.12)" };
 }
 
 function relativeTime(ts: number): string {
@@ -147,16 +158,23 @@ export const ServerListPanel: React.FC<ServerListPanelProps> = ({
                 }}
               >
                 {/* Header row */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: "600", fontSize: "0.9rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.4rem" }}>
+                  <div style={{ fontWeight: "600", fontSize: "0.9rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {server.name || server.server_info?.name || "MCP Server"}
                   </div>
-                  <span style={{
-                    fontSize: "0.7rem", padding: "0.2rem 0.5rem", borderRadius: "0.3rem",
-                    background: statusInfo.bg, color: statusInfo.color, flexShrink: 0,
-                  }}>
-                    {statusInfo.text}
-                  </span>
+                  <div style={{ display: "flex", gap: "0.3rem", flexShrink: 0, alignItems: "center" }}>
+                    {(() => { const b = oauthBadge(server.auth); return b ? (
+                      <span style={{ fontSize: "0.65rem", padding: "0.15rem 0.45rem", borderRadius: "0.3rem", background: b.bg, color: b.color, fontWeight: 600 }}>
+                        {b.label}
+                      </span>
+                    ) : null; })()}
+                    <span style={{
+                      fontSize: "0.7rem", padding: "0.2rem 0.5rem", borderRadius: "0.3rem",
+                      background: statusInfo.bg, color: statusInfo.color,
+                    }}>
+                      {statusInfo.text}
+                    </span>
+                  </div>
                 </div>
 
                 {/* URL + meta */}

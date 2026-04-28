@@ -72,6 +72,9 @@ class InspectorSession:
         # Auto-incrementing request ID (avoids hardcoded 1/2/3 collisions)
         self._req_id = 0
 
+        # FastMCP streamable-HTTP session ID (returned in mcp-session-id header)
+        self._mcp_session_id: Optional[str] = None
+
         # SSE state
         self._sse_post_url: Optional[str] = None
         self._sse_ready = asyncio.Event()      # set once endpoint URL is known
@@ -99,12 +102,14 @@ class InspectorSession:
         return self._client
 
     def _build_headers(self) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
         auth_type = self.auth.get("type")
         if auth_type == "bearer" and self.auth.get("token"):
             headers["Authorization"] = f"Bearer {self.auth['token']}"
         elif auth_type == "oauth" and self.auth.get("access_token"):
             headers["Authorization"] = f"Bearer {self.auth['access_token']}"
+        if self._mcp_session_id:
+            headers["mcp-session-id"] = self._mcp_session_id
         headers.update(self.extra_headers)
         return headers
 
@@ -464,6 +469,23 @@ class InspectorSession:
             except Exception as e:
                 logger.warning(f"Inspector: OAuth 401 retry failed — {e}")
         response.raise_for_status()
+
+        # Capture FastMCP streamable-HTTP session ID on first response
+        session_id_header = response.headers.get("mcp-session-id")
+        if session_id_header and not self._mcp_session_id:
+            self._mcp_session_id = session_id_header
+            logger.debug(f"Inspector: captured mcp-session-id={session_id_header}")
+
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            # FastMCP streamable-HTTP returns SSE. Extract the first data: line.
+            for line in response.text.splitlines():
+                if line.startswith("data:"):
+                    payload = line[len("data:"):].strip()
+                    if payload:
+                        return json.loads(payload)
+            raise Exception("No data event found in SSE response")
+
         return response.json()
 
     # ── Public API ────────────────────────────────────────────────────────────

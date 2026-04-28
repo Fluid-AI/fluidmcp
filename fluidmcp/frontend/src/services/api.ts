@@ -23,7 +23,7 @@ import type {
   ReplicateModelConfig,
 } from '../types/llm';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
 /** Error subclass that preserves the HTTP status code from API responses. */
 export class ApiHttpError extends Error {
@@ -387,6 +387,27 @@ class ApiClient {
 
   async exportInspectorServer(sessionId: string): Promise<any> {
     return this.request(`/api/inspector/${sessionId}/export`);
+  }
+
+  async startOAuthFlow(params: {
+    authorization_url: string;
+    token_url: string;
+    client_id: string;
+    redirect_uri: string;
+    scopes?: string;
+  }): Promise<{ redirect_url: string; state: string }> {
+    return this.request(`/api/inspector/oauth/authorize`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+
+  async pollOAuthResult(state: string): Promise<{ status: "pending" | "complete"; token?: any }> {
+    return this.request(`/api/inspector/oauth/result/${state}`);
+  }
+
+  async refreshOAuthToken(sessionId: string): Promise<{ access_token: string; expires_at: number }> {
+    return this.request(`/api/inspector/${sessionId}/oauth/refresh`, { method: "POST" });
   }
 
   async listInspectorResources(sessionId: string): Promise<any> {

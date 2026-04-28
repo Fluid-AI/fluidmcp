@@ -10,7 +10,8 @@ This module provides functionality to:
 from pathlib import Path
 from typing import Optional
 from loguru import logger
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -135,6 +136,15 @@ def setup_frontend_routes(
         return False
 
     try:
+        # Starlette's StaticFiles issues a 301 to "/ui/" when "/ui" is requested,
+        # building the Location from the raw Host header. In proxied environments
+        # (GitHub Codespaces, ngrok, Railway) that header is often "localhost",
+        # so the browser gets redirected to localhost instead of the tunnel URL.
+        # Fix: intercept GET /ui before the mount and redirect with a relative path.
+        @app.get("/ui")
+        async def _ui_root_redirect(_req: Request):
+            return RedirectResponse(url="/ui/", status_code=301)
+
         # Mount StaticFiles for serving built assets (JS, CSS, images)
         # The html=True parameter enables SPA mode:
         # - Serves static files normally (app.js, styles.css, etc.)
