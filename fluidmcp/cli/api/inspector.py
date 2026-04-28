@@ -557,6 +557,7 @@ async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None
                 },
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
                     "Host": original_host,
                 },
                 extensions={"sni_hostname": original_host},
