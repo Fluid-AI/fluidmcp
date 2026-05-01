@@ -19,21 +19,96 @@ from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
-# Per-server asyncio locks for stdio serialization.
-# MCP over stdio is a single-threaded request/response channel: concurrent writes
-# to stdin or reads from stdout will interleave bytes and return responses to the
-# wrong caller. Each server_id gets its own lock so different servers still run
-# in parallel, but calls to the SAME server are serialized per-process.
-_stdio_locks: Dict[str, asyncio.Lock] = {}
+# ── Per-server stdio dispatcher ────────────────────────────────────────────────
+# MCP over stdio is fundamentally single-tenant: one process, one pipe, one
+# request at a time. A simple asyncio.Lock serialises writes but callers still
+# read from shared stdout, so response N+1 can be stolen by the waiter for N.
+#
+# Solution: one asyncio.Queue per server. Each caller drops a (request_json,
+# Future) tuple into the queue and awaits its Future. A single background
+# worker drains the queue: write → readline → set_result. That guarantees every
+# caller gets exactly its own response. Requests that arrive when the queue is
+# full receive an immediate 429.
+#
+# Queue depth = 200 gives ≈4s of buffering at 50 req/s before we start
+# rejecting, which is a reasonable backpressure point.
+_QUEUE_DEPTH = int(os.getenv("FMCP_STDIO_QUEUE_DEPTH", "200"))
+
+# server_name → asyncio.Queue[tuple[str, asyncio.Future]]
+_stdio_queues: Dict[str, asyncio.Queue] = {}
+# server_name → asyncio.Task (the background worker)
+_stdio_workers: Dict[str, asyncio.Task] = {}
 
 
-def _get_stdio_lock(server_name: str) -> asyncio.Lock:
-    """Return (creating if needed) the asyncio lock guarding stdio for this server."""
-    lock = _stdio_locks.get(server_name)
-    if lock is None:
-        lock = asyncio.Lock()
-        _stdio_locks[server_name] = lock
-    return lock
+def _get_stdio_queue(server_name: str) -> asyncio.Queue:
+    """Return (creating if needed) the request queue for this server."""
+    q = _stdio_queues.get(server_name)
+    if q is None:
+        q = asyncio.Queue(maxsize=_QUEUE_DEPTH)
+        _stdio_queues[server_name] = q
+    return q
+
+
+async def _stdio_worker(server_name: str, process) -> None:
+    """
+    Background coroutine that serialises all stdio traffic for one server.
+    Runs until it receives a sentinel (None) or the process dies.
+    """
+    q = _get_stdio_queue(server_name)
+    while True:
+        item = await q.get()
+        if item is None:          # shutdown sentinel
+            q.task_done()
+            break
+        msg, fut = item
+        try:
+            if process.poll() is not None:
+                fut.set_exception(RuntimeError("process exited"))
+                q.task_done()
+                continue
+            process.stdin.write(msg + "\n")
+            process.stdin.flush()
+            response_line = await asyncio.to_thread(process.stdout.readline)
+            if not fut.done():
+                fut.set_result(response_line)
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+        finally:
+            q.task_done()
+
+
+def _ensure_stdio_worker(server_name: str, process) -> None:
+    """Start the background worker for a server if not already running."""
+    task = _stdio_workers.get(server_name)
+    if task is None or task.done():
+        task = asyncio.create_task(_stdio_worker(server_name, process))
+        _stdio_workers[server_name] = task
+
+
+async def _dispatch_stdio(server_name: str, process, msg: str) -> str:
+    """
+    Submit msg to the server's worker queue and wait for the response line.
+    Raises HTTPException(429) if the queue is full, HTTPException(503) on
+    pipe/process errors.
+    """
+    _ensure_stdio_worker(server_name, process)
+    q = _get_stdio_queue(server_name)
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    try:
+        q.put_nowait((msg, fut))
+    except asyncio.QueueFull:
+        raise HTTPException(
+            429,
+            f"Server '{server_name}' is busy (queue full). Retry after a moment."
+        )
+    try:
+        return await fut
+    except RuntimeError as exc:
+        raise HTTPException(503, f"Server '{server_name}': {exc}")
+    except (BrokenPipeError, OSError) as exc:
+        raise HTTPException(503, f"Server '{server_name}' pipe broken: {exc}")
 
 
 def find_metadata_file(base_dir: Path) -> Path:
@@ -682,18 +757,11 @@ def create_dynamic_router(server_manager):
             # ── stdio transport continues below ─────────────────────────────
 
             try:
-                # Send request to MCP server.
-                # Lock stdio per-server so concurrent requests cannot interleave
-                # bytes on stdin or steal each other's responses from stdout.
+                # Dispatch through the per-server queue worker.
+                # The worker is the only coroutine that writes to stdin and reads
+                # from stdout, so each caller gets exactly its own response line.
                 msg = json.dumps(request)
-                async with _get_stdio_lock(server_name):
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
-
-                    response_line = await asyncio.to_thread(process.stdout.readline)
+                response_line = await _dispatch_stdio(server_name, process, msg)
 
                 response_data = json.loads(response_line)
 
@@ -783,52 +851,27 @@ def create_dynamic_router(server_manager):
                     return  # done for SSE — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
+                # Dispatch through the shared per-server queue worker so this
+                # SSE request doesn't race with concurrent proxy_jsonrpc calls
+                # for the same server's stdin/stdout pipe.
                 msg = json.dumps(request)
-                # Hold the per-server stdio lock across the full write + read loop:
-                # two concurrent SSE streams for the same server would otherwise
-                # interleave stdin bytes and read each other's stdout lines.
-                async with _get_stdio_lock(server_name):
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                        #
-                        # IMPORTANT: This intentionally differs from the error_type used in
-                        # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                        # Here we use "broken_pipe" so operators can:
-                        #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                        #     overall rate of I/O-related failures across the service, and
-                        #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                        #     why individual streaming sessions terminated (client disconnects,
-                        #     broken pipes, etc.).
-                        #
-                        # In other words, both labels refer to the same underlying condition but are
-                        # scoped for different troubleshooting workflows: global error rates versus
-                        # per-stream termination reasons.
+                try:
+                    response_line = await _dispatch_stdio(server_name, process, msg)
+                except HTTPException as e:
+                    if e.status_code == 429:
+                        completion_status = "queue_full"
+                        collector.record_error("queue_full")
+                    else:
                         completion_status = "broken_pipe"
-                        # Record in global error metric for monitoring
                         collector.record_error("io_error")
-                        yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                        return
+                    yield f"data: {json.dumps({'error': e.detail})}\n\n"
+                    return
 
-                    while True:
-                        # Non-blocking I/O with asyncio.to_thread
-                        response_line = await asyncio.to_thread(process.stdout.readline)
-                        if not response_line:
-                            break
+                if not response_line:
+                    return
 
-                        logger.debug(f"Received from MCP: {response_line.strip()}")
-                        yield f"data: {response_line.strip()}\n\n"
-
-                        # Check if response is final
-                        try:
-                            response_data = json.loads(response_line)
-                            if "result" in response_data:
-                                break
-                        except json.JSONDecodeError:
-                            # Non-JSON lines are expected in the stream; ignore them but continue reading
-                            logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
+                logger.debug(f"Received from MCP: {response_line.strip()}")
+                yield f"data: {response_line.strip()}\n\n"
 
             except Exception as e:
                 completion_status = "error"

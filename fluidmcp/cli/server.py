@@ -648,7 +648,30 @@ async def main(args):
     health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
     health_monitor.start()
 
-    # 4. Create FastAPI app (without MCP servers)
+    # 4. Eagerly restore servers that were running before container restart.
+    #    Without this, the first request after a Railway restart triggers a cold
+    #    ~3s subprocess spawn instead of hitting a live process.
+    if db_connected:
+        try:
+            running_instances = await persistence.list_instances_by_state("running")
+            if running_instances:
+                logger.info(f"Restoring {len(running_instances)} server(s) from previous container...")
+                restore_tasks = [
+                    asyncio.create_task(server_manager.start_server(inst["server_id"]))
+                    for inst in running_instances
+                    if inst.get("server_id")
+                ]
+                if restore_tasks:
+                    results = await asyncio.gather(*restore_tasks, return_exceptions=True)
+                    restored = sum(1 for r in results if r is True)
+                    failed = sum(1 for r in results if isinstance(r, Exception))
+                    logger.info(f"Server restore complete: {restored} started, {failed} failed")
+            else:
+                logger.info("No servers to restore from previous container")
+        except Exception as e:
+            logger.error(f"Error during server restore on startup: {e}")
+
+    # 5. Create FastAPI app (without MCP servers)
     app = await create_app(
         db_manager=persistence,
         server_manager=server_manager,
@@ -665,7 +688,7 @@ async def main(args):
     else:
         logger.info("Skipping MongoDB model loading (not connected)")
 
-    # 5. Setup graceful shutdown with comprehensive signal handlers
+    # 6. Setup graceful shutdown with comprehensive signal handlers
     shutdown_event = asyncio.Event()
 
     def signal_handler(sig, frame):
@@ -682,7 +705,7 @@ async def main(args):
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, signal_handler)  # Hangup (terminal closed)
 
-    # 6. Run server
+    # 7. Run server
     # Get max request size from env var (same as middleware, for consistency)
     max_request_size_mb = 10
     max_request_size_env = os.getenv("MAX_REQUEST_SIZE_MB")
