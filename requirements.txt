@@ -1,6 +1,5 @@
 annotated-types==0.7.0
 anyio==4.9.0
-asyncio==3.4.3
 boto3==1.38.10
 botocore==1.38.10
 certifi==2025.4.26
@@ -21,7 +20,6 @@ loguru==0.7.3
 mcp==1.7.1
 motor==3.7.1
 openai==1.77.0
-pathlib==1.0.1
 prometheus-client==0.21.0
 psutil==7.0.0
 redis==5.0.0
