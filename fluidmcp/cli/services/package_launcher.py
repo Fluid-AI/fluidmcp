@@ -19,6 +19,23 @@ from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
+# Per-server asyncio locks for stdio serialization.
+# MCP over stdio is a single-threaded request/response channel: concurrent writes
+# to stdin or reads from stdout will interleave bytes and return responses to the
+# wrong caller. Each server_id gets its own lock so different servers still run
+# in parallel, but calls to the SAME server are serialized per-process.
+_stdio_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_stdio_lock(server_name: str) -> asyncio.Lock:
+    """Return (creating if needed) the asyncio lock guarding stdio for this server."""
+    lock = _stdio_locks.get(server_name)
+    if lock is None:
+        lock = asyncio.Lock()
+        _stdio_locks[server_name] = lock
+    return lock
+
+
 def find_metadata_file(base_dir: Path) -> Path:
     """
     Find metadata.json in repo.
@@ -665,16 +682,19 @@ def create_dynamic_router(server_manager):
             # ── stdio transport continues below ─────────────────────────────
 
             try:
-                # Send request to MCP server
+                # Send request to MCP server.
+                # Lock stdio per-server so concurrent requests cannot interleave
+                # bytes on stdin or steal each other's responses from stdout.
                 msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                async with _get_stdio_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Read response (non-blocking with asyncio.to_thread)
-                response_line = await asyncio.to_thread(process.stdout.readline)
+                    response_line = await asyncio.to_thread(process.stdout.readline)
+
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -764,47 +784,51 @@ def create_dynamic_router(server_manager):
                 # ── stdio transport continues below ──────────────────────────
 
                 msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
-                    completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
-                    collector.record_error("io_error")
-                    yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                    return
-
-                while True:
-                    # Non-blocking I/O with asyncio.to_thread
-                    response_line = await asyncio.to_thread(process.stdout.readline)
-                    if not response_line:
-                        break
-
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
-                    yield f"data: {response_line.strip()}\n\n"
-
-                    # Check if response is final
+                # Hold the per-server stdio lock across the full write + read loop:
+                # two concurrent SSE streams for the same server would otherwise
+                # interleave stdin bytes and read each other's stdout lines.
+                async with _get_stdio_lock(server_name):
                     try:
-                        response_data = json.loads(response_line)
-                        if "result" in response_data:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                        #
+                        # IMPORTANT: This intentionally differs from the error_type used in
+                        # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                        # Here we use "broken_pipe" so operators can:
+                        #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                        #     overall rate of I/O-related failures across the service, and
+                        #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                        #     why individual streaming sessions terminated (client disconnects,
+                        #     broken pipes, etc.).
+                        #
+                        # In other words, both labels refer to the same underlying condition but are
+                        # scoped for different troubleshooting workflows: global error rates versus
+                        # per-stream termination reasons.
+                        completion_status = "broken_pipe"
+                        # Record in global error metric for monitoring
+                        collector.record_error("io_error")
+                        yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                        return
+
+                    while True:
+                        # Non-blocking I/O with asyncio.to_thread
+                        response_line = await asyncio.to_thread(process.stdout.readline)
+                        if not response_line:
                             break
-                    except json.JSONDecodeError:
-                        # Non-JSON lines are expected in the stream; ignore them but continue reading
-                        logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
+
+                        logger.debug(f"Received from MCP: {response_line.strip()}")
+                        yield f"data: {response_line.strip()}\n\n"
+
+                        # Check if response is final
+                        try:
+                            response_data = json.loads(response_line)
+                            if "result" in response_data:
+                                break
+                        except json.JSONDecodeError:
+                            # Non-JSON lines are expected in the stream; ignore them but continue reading
+                            logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
 
             except Exception as e:
                 completion_status = "error"
