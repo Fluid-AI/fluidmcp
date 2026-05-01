@@ -23,10 +23,10 @@ security = HTTPBearer(auto_error=False)
 # Overridable via the MCP_READ_TIMEOUT environment variable.
 #
 # Why select() and not asyncio.wait_for():
-#   wait_for cancels the coroutine but leaves the OS thread blocked on readline().
-#   ThreadPoolExecutor can only reclaim a slot when the thread *returns*, so the
-#   slot stays consumed forever. select() puts the timeout inside the thread itself —
-#   if nothing arrives in time, the thread returns "" immediately and frees its slot.
+# wait_for cancels the coroutine but leaves the OS thread blocked on readline().
+# ThreadPoolExecutor can only reclaim a slot when the thread *returns*, so the
+# slot stays consumed forever. select() puts the timeout inside the thread itself —
+# if nothing arrives in time, the thread returns "" immediately and frees its slot.
 _MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "45"))
 
 
