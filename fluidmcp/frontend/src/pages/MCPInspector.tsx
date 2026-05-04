@@ -269,6 +269,7 @@ interface MCPServer {
   server_info?: any;
   tools: any[];
   url: string;
+  command?: string;    // stdio only — the full command string used to spawn the process
   transport: string;
   status: 'connecting' | 'connected' | 'disconnected' | 'failed';
   connectedAt?: number; // timestamp (ms) when status became "connected"
@@ -341,6 +342,8 @@ export default function MCPInspector() {
   const [inspectorFullscreen, setInspectorFullscreen] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [url, setUrl] = useState("");
+  const [command, setCommand] = useState("");
+  const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [customName, setCustomName] = useState("");
   const [transport, setTransport] = useState("http");
 
@@ -451,19 +454,22 @@ export default function MCPInspector() {
 
   const handleConnect = async () => {
 
-    if (!url) return;
-    if (authType === "bearer" && !token) {
-      alert("Please enter bearer token")
-      return
-    }
-
-    if (authType === "header" && (!headerKey || !headerValue)) {
-      alert("Please enter header key and value")
-      return
-    }
-    if (servers.some(s => s.url === url && s.status !== "failed")) {
-      alert("Server already added");
-      return;
+    if (transport === "stdio") {
+      if (!command.trim()) return;
+    } else {
+      if (!url) return;
+      if (authType === "bearer" && !token) {
+        alert("Please enter bearer token")
+        return
+      }
+      if (authType === "header" && (!headerKey || !headerValue)) {
+        alert("Please enter header key and value")
+        return
+      }
+      if (servers.some(s => s.url === url && s.status !== "failed")) {
+        alert("Server already added");
+        return;
+      }
     }
 
     // Disconnect any currently connected server before adding a new one
@@ -496,22 +502,32 @@ export default function MCPInspector() {
     try {
       setConnecting(true);
 
+      const serverUrl = transport === "stdio" ? `stdio://${command.trim().split(" ")[0]}` : url;
+
       setServers(prev => [
-        ...prev.filter(s => !(s.url === url && s.status === "failed")),
-        { id: serverId, session_id: null, url, transport, tools: [], status: "connecting" as const, auth: authConfig,
-          ...(customName.trim() ? { name: customName.trim() } : {})
+        ...prev.filter(s => !(s.url === serverUrl && s.status === "failed")),
+        { id: serverId, session_id: null, url: serverUrl, transport, tools: [], status: "connecting" as const, auth: authConfig,
+          ...(customName.trim() ? { name: customName.trim() } : {}),
+          ...(transport === "stdio" ? { name: customName.trim() || command.trim().split(" ").slice(0, 3).join(" "), command: command.trim() } : {}),
         },
       ]);
 
-      const payload: any = { url, transport }
+      const envVarsObj = envVars.reduce((acc, { key, value }) => {
+        if (key.trim()) acc[key.trim()] = value;
+        return acc;
+      }, {} as Record<string, string>);
 
-      // Bearer Token
-      if (authType === "bearer" && token) {
-        payload.auth = {type: "bearer", token: token }
+      const payload: any = transport === "stdio"
+        ? { command: command.trim(), transport, ...(Object.keys(envVarsObj).length ? { env_vars: envVarsObj } : {}) }
+        : { url, transport }
+
+      // Bearer Token (not applicable for stdio)
+      if (transport !== "stdio" && authType === "bearer" && token) {
+        payload.auth = { type: "bearer", token: token }
       }
 
-      // Header Token
-      if (authType === "header" && headerKey && headerValue) {
+      // Header Token (not applicable for stdio)
+      if (transport !== "stdio" && authType === "header" && headerKey && headerValue) {
         payload.headers = { [headerKey]: headerValue }
       }
 
@@ -549,12 +565,14 @@ export default function MCPInspector() {
         }]
       }));
 
-      addRecentUrl(url);
+      if (transport !== "stdio") addRecentUrl(url);
       setAuthType("none")
       setToken("")
       setHeaderKey("")
       setHeaderValue("")
       setCustomName("")
+      setCommand("")
+      setEnvVars([])
       setShowAddModal(false);
       setUrl("");
       setTransport("http");
@@ -620,22 +638,22 @@ export default function MCPInspector() {
             : s
         )
       );
-      // Build payload with auth
-      const payload: any = {
-        url: server.url,
-        transport: server.transport,
-      };
+      // Build payload — stdio uses command, http/sse use url
+      const payload: any = server.transport === "stdio"
+        ? { command: server.command, transport: server.transport }
+        : { url: server.url, transport: server.transport };
 
-      // Bearer
-      if (server.auth?.type === "bearer" && server.auth.token) {
+      // Bearer (not applicable for stdio)
+      if (server.transport !== "stdio" && server.auth?.type === "bearer" && server.auth.token) {
         payload.auth = {
           type: "bearer",
           token: server.auth.token,
         };
       }
 
-      // Header
+      // Header (not applicable for stdio)
       if (
+        server.transport !== "stdio" &&
         server.auth?.type === "header" &&
         server.auth.headerKey &&
         server.auth.headerValue
@@ -1001,7 +1019,10 @@ export default function MCPInspector() {
         : { height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", maxWidth: "100%", padding: 0 }
       }
     >
-      <style>{`@keyframes thinking-blink{0%,100%{opacity:0.2}50%{opacity:1}}`}</style>
+      <style>{`
+        @keyframes thinking-blink{0%,100%{opacity:0.2}50%{opacity:1}}
+        html, body { overflow: hidden; height: 100%; }
+      `}</style>
       {!inspectorFullscreen && <Navbar />}
 
       <div style={{ paddingTop: inspectorFullscreen ? "0" : "64px", flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -1631,9 +1652,9 @@ export default function MCPInspector() {
                 </div>
 
                 {/* ── MANUAL MODE ─── */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", marginTop: "1rem", minHeight: 0 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
                   {mode === "manual" && selectedServer && selectedTool && (
-                    <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: "0.5rem" }}>
+                    <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: "0.5rem", marginTop: "1rem" }}>
                       <h3 style={{ marginBottom: "1rem" }}>{selectedTool.name}</h3>
 
                       {selectedServer.status === "connected" ? (
@@ -2128,7 +2149,7 @@ export default function MCPInspector() {
                   {/* Empty states */}
                   {mode === "manual" && (!selectedServer || !selectedTool) && (
                     <div style={{
-                      padding: "1rem", border: "1px dashed rgba(63,63,70,0.6)",
+                      marginTop: "1rem", padding: "1rem", border: "1px dashed rgba(63,63,70,0.6)",
                       borderRadius: "0.5rem", textAlign: "center", color: "rgba(255,255,255,0.6)",
                     }}>
                       Select a tool to execute
@@ -2380,8 +2401,8 @@ export default function MCPInspector() {
       {/* ── ADD SERVER MODAL ─────────────────────────────────────────────── */}
       {showAddModal && (
         <div
-          onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
-          onKeyDown={(e) => { if (e.key === "Escape") { setShowAddModal(false); setCustomName(""); setUrl(""); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); } }}
+          onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
+          onKeyDown={(e) => { if (e.key === "Escape") { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); } }}
           style={{
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
             display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
@@ -2415,51 +2436,16 @@ export default function MCPInspector() {
               </div>
 
               <div>
-                <input
-                  placeholder="Server URL"
-                  style={{
-                    width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
-                    border: "1px solid rgba(63,63,70,0.6)",
-                    background: "#09090b", color: "#fff", boxSizing: "border-box",
-                  }}
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                />
-                {recentUrls.length > 0 && (
-                  <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                    <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>Recent:</span>
-                    {recentUrls.map(u => (
-                      <button
-                        key={u}
-                        type="button"
-                        onClick={() => setUrl(u)}
-                        style={{
-                          fontSize: "0.72rem", padding: "0.15rem 0.5rem",
-                          borderRadius: "999px", border: "1px solid rgba(99,102,241,0.35)",
-                          background: url === u ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.07)",
-                          color: "rgba(200,200,255,0.75)", cursor: "pointer",
-                          maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                        }}
-                        title={u}
-                      >
-                        {u.replace(/^https?:\/\//, "").slice(0, 35)}{u.replace(/^https?:\/\//, "").length > 35 ? "…" : ""}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.3rem" }}>
                   <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>Transport</label>
                   <span
-                    title="HTTP: stateless request/response, simpler. SSE: persistent connection (Server-Sent Events), required for servers that push notifications."
+                    title="HTTP: stateless request/response. SSE: persistent connection for servers that push notifications. stdio: spawn a local MCP server by command (e.g. npx -y @modelcontextprotocol/server-filesystem /tmp)."
                     style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", cursor: "help", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "50%", width: "14px", height: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
                   >?</span>
                 </div>
                 <select
                   value={transport}
-                  onChange={(e) => setTransport(e.target.value)}
+                  onChange={(e) => { setTransport(e.target.value); setUrl(""); setCommand(""); }}
                   style={{
                     width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
                     border: "1px solid rgba(63,63,70,0.6)",
@@ -2468,102 +2454,205 @@ export default function MCPInspector() {
                 >
                   <option value="http">HTTP</option>
                   <option value="sse">SSE</option>
+                  <option value="stdio">STDIO (local subprocess)</option>
                 </select>
               </div>
 
-              {/* Auth Type */}
-              <div style={{ marginTop: "1rem" }}>
-                <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
-                  Auth Type
-                </label>
-
-                <select
-                  value={authType}
-                  onChange={(e) => setAuthType(e.target.value as any)}
-                  style={{
-                    width: "100%",
-                    marginTop: "0.3rem",
-                    padding: "0.5rem",
-                    borderRadius: "0.4rem",
-                    background: "#18181b",
-                    color: "#fff",
-                    border: "1px solid rgba(63,63,70,0.6)"
-                  }}
-                >
-                  <option value="none">None</option>
-                  <option value="bearer">Bearer Token</option>
-                  <option value="header">Header Token</option>
-                </select>
-              </div>
-
-              {authType === "bearer" && (
-                <div style={{ marginTop: "0.8rem" }}>
-                  <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
-                    Token
+              {transport === "stdio" ? (
+                <div>
+                  <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.3rem", display: "block" }}>
+                    Command
                   </label>
                   <input
-                    type="password"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    placeholder="Enter bearer token"
+                    placeholder="npx -y @modelcontextprotocol/server-filesystem /tmp"
                     style={{
-                      width: "100%",
-                      marginTop: "0.3rem",
-                      padding: "0.5rem",
-                      borderRadius: "0.4rem",
-                      background: "#18181b",
-                      color: "#fff",
-                      border: "1px solid rgba(63,63,70,0.6)"
+                      width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
+                      border: "1px solid rgba(63,63,70,0.6)",
+                      background: "#09090b", color: "#fff", boxSizing: "border-box",
+                      fontFamily: "ui-monospace, monospace", fontSize: "0.8rem",
                     }}
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
                   />
+                  <p style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.3)", marginTop: "0.3rem", marginBottom: 0 }}>
+                    The server will be spawned as a subprocess on the FluidMCP backend machine.
+                  </p>
+
+                  {/* Environment Variables */}
+                  <div style={{ marginTop: "0.9rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
+                      <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>
+                        Environment Variables <span style={{ color: "rgba(255,255,255,0.25)", fontWeight: 400 }}>(optional)</span>
+                        <span
+                          title="Env vars are passed to the subprocess at spawn time and cannot be changed while the server is running. Reconnect to update them."
+                          style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", cursor: "help", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "50%", width: "14px", height: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: "0.3rem", flexShrink: 0 }}
+                        >?</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setEnvVars(prev => [...prev, { key: "", value: "" }])}
+                        style={{
+                          fontSize: "0.72rem", padding: "0.2rem 0.55rem",
+                          borderRadius: "0.3rem", border: "1px solid rgba(99,102,241,0.4)",
+                          background: "rgba(99,102,241,0.1)", color: "rgba(200,200,255,0.8)",
+                          cursor: "pointer",
+                        }}
+                      >+ Add</button>
+                    </div>
+                    {envVars.map((ev, i) => (
+                      <div key={i} style={{ display: "flex", gap: "0.4rem", marginBottom: "0.35rem", alignItems: "center" }}>
+                        <input
+                          placeholder="KEY"
+                          value={ev.key}
+                          onChange={(e) => setEnvVars(prev => prev.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
+                          style={{
+                            flex: "0 0 38%", padding: "0.4rem 0.5rem", borderRadius: "0.3rem",
+                            border: "1px solid rgba(63,63,70,0.6)", background: "#09090b",
+                            color: "#fff", fontSize: "0.78rem", fontFamily: "ui-monospace, monospace",
+                          }}
+                        />
+                        <input
+                          placeholder="value"
+                          value={ev.value}
+                          onChange={(e) => setEnvVars(prev => prev.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                          style={{
+                            flex: 1, padding: "0.4rem 0.5rem", borderRadius: "0.3rem",
+                            border: "1px solid rgba(63,63,70,0.6)", background: "#09090b",
+                            color: "#fff", fontSize: "0.78rem",
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setEnvVars(prev => prev.filter((_, j) => j !== i))}
+                          style={{
+                            background: "transparent", border: "none", color: "rgba(255,100,100,0.6)",
+                            cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0 0.2rem",
+                          }}
+                        >×</button>
+                      </div>
+                    ))}
+                    {envVars.length === 0 && (
+                      <p style={{ fontSize: "0.71rem", color: "rgba(255,255,255,0.2)", marginTop: "0.2rem", marginBottom: 0 }}>
+                        e.g. API_KEY, OPENAI_API_KEY, …
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    placeholder="Server URL"
+                    style={{
+                      width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
+                      border: "1px solid rgba(63,63,70,0.6)",
+                      background: "#09090b", color: "#fff", boxSizing: "border-box",
+                    }}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                  />
+                  {recentUrls.length > 0 && (
+                    <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                      <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>Recent:</span>
+                      {recentUrls.map(u => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setUrl(u)}
+                          style={{
+                            fontSize: "0.72rem", padding: "0.15rem 0.5rem",
+                            borderRadius: "999px", border: "1px solid rgba(99,102,241,0.35)",
+                            background: url === u ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.07)",
+                            color: "rgba(200,200,255,0.75)", cursor: "pointer",
+                            maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}
+                          title={u}
+                        >
+                          {u.replace(/^https?:\/\//, "").slice(0, 35)}{u.replace(/^https?:\/\//, "").length > 35 ? "…" : ""}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {authType === "header" && (
-                <div style={{ marginTop: "0.8rem" }}>
-                  
-                  <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
-                    Header Key
-                  </label>
-                  <input
-                    value={headerKey}
-                    onChange={(e) => setHeaderKey(e.target.value)}
-                    placeholder="X-Api-Key"
-                    style={{
-                      width: "100%",
-                      marginTop: "0.3rem",
-                      padding: "0.5rem",
-                      borderRadius: "0.4rem",
-                      background: "#18181b",
-                      color: "#fff",
-                      border: "1px solid rgba(63,63,70,0.6)"
-                    }}
-                  />
+              {/* Auth — not shown for stdio (local subprocess, no auth needed) */}
+              {transport !== "stdio" && (
+                <>
+                  <div style={{ marginTop: "1rem" }}>
+                    <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                      Auth Type
+                    </label>
+                    <select
+                      value={authType}
+                      onChange={(e) => setAuthType(e.target.value as any)}
+                      style={{
+                        width: "100%", marginTop: "0.3rem", padding: "0.5rem",
+                        borderRadius: "0.4rem", background: "#18181b", color: "#fff",
+                        border: "1px solid rgba(63,63,70,0.6)"
+                      }}
+                    >
+                      <option value="none">None</option>
+                      <option value="bearer">Bearer Token</option>
+                      <option value="header">Header Token</option>
+                    </select>
+                  </div>
 
-                  <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)", marginTop: "0.5rem", display: "block" }}>
-                    Header Value
-                  </label>
-                  <input
-                    type="password"
-                    value={headerValue}
-                    onChange={(e) => setHeaderValue(e.target.value)}
-                    placeholder="Enter token"
-                    style={{
-                      width: "100%",
-                      marginTop: "0.3rem",
-                      padding: "0.5rem",
-                      borderRadius: "0.4rem",
-                      background: "#18181b",
-                      color: "#fff",
-                      border: "1px solid rgba(63,63,70,0.6)"
-                    }}
-                  />
-                </div>
+                  {authType === "bearer" && (
+                    <div style={{ marginTop: "0.8rem" }}>
+                      <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                        Token
+                      </label>
+                      <input
+                        type="password"
+                        value={token}
+                        onChange={(e) => setToken(e.target.value)}
+                        placeholder="Enter bearer token"
+                        style={{
+                          width: "100%", marginTop: "0.3rem", padding: "0.5rem",
+                          borderRadius: "0.4rem", background: "#18181b", color: "#fff",
+                          border: "1px solid rgba(63,63,70,0.6)"
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {authType === "header" && (
+                    <div style={{ marginTop: "0.8rem" }}>
+                      <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
+                        Header Key
+                      </label>
+                      <input
+                        value={headerKey}
+                        onChange={(e) => setHeaderKey(e.target.value)}
+                        placeholder="X-Api-Key"
+                        style={{
+                          width: "100%", marginTop: "0.3rem", padding: "0.5rem",
+                          borderRadius: "0.4rem", background: "#18181b", color: "#fff",
+                          border: "1px solid rgba(63,63,70,0.6)"
+                        }}
+                      />
+                      <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)", marginTop: "0.5rem", display: "block" }}>
+                        Header Value
+                      </label>
+                      <input
+                        type="password"
+                        value={headerValue}
+                        onChange={(e) => setHeaderValue(e.target.value)}
+                        placeholder="Enter token"
+                        style={{
+                          width: "100%", marginTop: "0.3rem", padding: "0.5rem",
+                          borderRadius: "0.4rem", background: "#18181b", color: "#fff",
+                          border: "1px solid rgba(63,63,70,0.6)"
+                        }}
+                      />
+                    </div>
+                  )}
+                </>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
                 <button
                   type="button"
-                  onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
+                  onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
                   style={{
                     background: "transparent", border: "1px solid rgba(63,63,70,0.6)",
                     padding: "0.5rem 1rem", borderRadius: "0.4rem", color: "#fff",
