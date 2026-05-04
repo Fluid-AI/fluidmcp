@@ -9,8 +9,8 @@ import uuid
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
-from fastapi import Request, APIRouter, Body, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
@@ -421,7 +421,7 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                         headers={"mcp-session-id": str(uuid.uuid4())}
                     )
                 if method == "notifications/initialized":
-                    return JSONResponse(content={"jsonrpc": "2.0", "result": {}})
+                    return Response(status_code=204)
 
                 # Thread-safe communication with MCP server
                 with process_lock:
@@ -702,7 +702,7 @@ def create_dynamic_router(server_manager):
                     headers={"mcp-session-id": str(uuid.uuid4())}
                 )
             if method == "notifications/initialized":
-                return JSONResponse(content={"jsonrpc": "2.0", "result": {}})
+                return Response(status_code=204)
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):
