@@ -10,11 +10,18 @@ import subprocess
 import json
 import time
 import atexit
+from collections import deque
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional, List, IO
+from typing import Dict, Any, Optional, List, IO, Deque
 from pathlib import Path
 from datetime import datetime, timedelta
 from loguru import logger
+
+try:
+    import psutil
+    _psutil_available = True
+except ImportError:
+    _psutil_available = False
 
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
@@ -22,6 +29,28 @@ from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
 from .network_utils import find_free_port
+
+
+def classify_exit_code(exit_code: int) -> Dict[str, str]:
+    """Return a human-readable classification for a process exit code."""
+    table = {
+        0:    ("clean",    "clean_exit",          "Process exited normally"),
+        1:    ("error",    "generic_error",        "Unhandled error"),
+        126:  ("config",   "permission_denied",    "Cannot execute — check file permissions"),
+        127:  ("config",   "command_not_found",    "Binary/command not found — check command path"),
+        137:  ("resource", "oom_killed",           "Killed by OS (likely OOM) — check memory limits"),
+        139:  ("crash",    "segfault",             "Segmentation fault"),
+        143:  ("shutdown", "sigterm_container",    "SIGTERM from container runtime (Railway/Docker stop)"),
+        255:  ("error",    "unknown_fatal",        "Unknown fatal error — check stderr for details"),
+        -1:   ("resource", "killed_by_fluidmcp",   "Killed by FluidMCP resource monitor (OOM or CPU stuck)"),
+        -9:   ("resource", "sigkill",              "Force-killed (SIGKILL)"),
+        -15:  ("shutdown", "sigterm",              "Graceful shutdown (SIGTERM)"),
+    }
+    if exit_code in table:
+        category, label, description = table[exit_code]
+    else:
+        category, label, description = "error", "unknown", f"Unknown exit code {exit_code}"
+    return {"category": category, "label": label, "description": description}
 
 
 class ServerManager:
@@ -1207,18 +1236,35 @@ class ServerManager:
         # Persist crash event for non-intentional failures
         if state == "failed":
             stderr_tail = self._read_crash_stderr(id)
+            exit_info = classify_exit_code(exit_code)
+            config = self.configs.get(id) or {}
+            server_name = config.get("name", id)
+            # Pull resource snapshot captured by MCPHealthMonitor (may be None if monitor not running)
+            resource_snapshot = getattr(self, "_health_monitor", None)
+            resource_snapshot = resource_snapshot._last_resource_snapshot.get(id) if resource_snapshot else None
             try:
-                await self.db.save_crash_event({
+                crash_event: Dict[str, Any] = {
                     "server_id": id,
+                    "server_name": server_name,
                     "exit_code": exit_code,
+                    "exit_category": exit_info["category"],
+                    "exit_label": exit_info["label"],
+                    "exit_description": exit_info["description"],
                     "stderr_tail": stderr_tail,
                     "uptime_seconds": uptime,
-                    "timestamp": datetime.utcnow()
-                })
+                    "timestamp": datetime.utcnow(),
+                }
+                if resource_snapshot:
+                    crash_event["memory_bytes_at_crash"] = resource_snapshot.get("memory_rss_bytes")
+                    crash_event["cpu_percent_at_crash"] = resource_snapshot.get("cpu_percent")
+                    crash_event["active_requests_at_crash"] = resource_snapshot.get("active_requests")
+                await self.db.save_crash_event(crash_event)
             except Exception as e:
                 logger.error(f"Failed to save crash event for server '{id}': {e}")
             uptime_str = f"{uptime:.1f}s" if uptime is not None else "unknown"
-            logger.warning(f"Server '{id}' crashed (exit_code={exit_code}, uptime={uptime_str})")
+            logger.warning(
+                f"Server '{id}' crashed (exit_code={exit_code} [{exit_info['label']}], uptime={uptime_str})"
+            )
         else:
             logger.info(f"Cleaned up server '{id}'")
 
@@ -1522,6 +1568,14 @@ class MCPHealthMonitor:
         self._restarts_in_progress: set = set()
         self._restart_counts: Dict[str, int] = {}
 
+        # Resource snapshot cache: server_id -> {memory_rss_bytes, cpu_percent, active_requests}
+        # Updated every health check cycle; used at crash time and by /resources endpoint
+        self._last_resource_snapshot: Dict[str, Dict[str, Any]] = {}
+        # Ring buffer of last 3 RSS readings per server for memory_trend computation
+        self._memory_history: Dict[str, Deque[int]] = {}
+        # Tracks whether cpu_percent has been warmed up for each PID (first call returns 0.0)
+        self._cpu_warmed_pids: set = set()
+
     def start(self) -> None:
         """Start the background health monitor."""
         if self._running:
@@ -1604,7 +1658,25 @@ class MCPHealthMonitor:
                 uptime = self._sm.get_uptime(server_id)
                 if uptime and uptime > 300:
                     self._restart_counts.pop(server_id, None)
+            # Update resource snapshot while process is alive
+            self._update_resource_snapshot(server_id, process)
             return
+
+        # Snapshot fired here — process just detected dead, PID may still exist briefly
+        pid = getattr(process, "pid", None)
+        if _psutil_available and pid and pid not in self._cpu_warmed_pids:
+            # Process died before warm-up cycle completed; snapshot already cached or unavailable
+            pass
+        elif _psutil_available and pid:
+            try:
+                proc = psutil.Process(pid)
+                rss = proc.memory_info().rss
+                cpu = proc.cpu_percent(interval=None)
+                snapshot = {"memory_rss_bytes": rss, "cpu_percent": cpu}
+                snapshot["active_requests"] = self._get_active_requests(server_id)
+                self._last_resource_snapshot[server_id] = snapshot
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass  # fall back to last cached snapshot — set above during alive cycles
 
         # Process is dead — always clean up DB state
         rc = getattr(process, "returncode", None)
@@ -1686,3 +1758,60 @@ class MCPHealthMonitor:
             logger.error(f"Error restarting MCP server '{server_id}': {e}")
         finally:
             self._restarts_in_progress.discard(server_id)
+
+    def _update_resource_snapshot(self, server_id: str, process) -> None:
+        """Update cached resource snapshot for a live process."""
+        if not _psutil_available:
+            return
+        pid = getattr(process, "pid", None)
+        if not pid:
+            return
+        try:
+            proc = psutil.Process(pid)
+            # Warm up cpu_percent on first encounter — first call always returns 0.0
+            if pid not in self._cpu_warmed_pids:
+                proc.cpu_percent(interval=None)
+                self._cpu_warmed_pids.add(pid)
+                return  # skip this cycle; next cycle will have a real reading
+            rss = proc.memory_info().rss
+            cpu = proc.cpu_percent(interval=None)
+            # Update ring buffer for memory trend
+            if server_id not in self._memory_history:
+                self._memory_history[server_id] = deque(maxlen=3)
+            self._memory_history[server_id].append(rss)
+            snapshot = {
+                "memory_rss_bytes": rss,
+                "cpu_percent": cpu,
+                "active_requests": self._get_active_requests(server_id),
+            }
+            self._last_resource_snapshot[server_id] = snapshot
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def _get_active_requests(self, server_id: str) -> int:
+        """Read active request count directly from the metrics gauge samples dict."""
+        try:
+            registry = getattr(self._sm, "_metrics_registry", None)
+            if registry is None:
+                return 0
+            gauge = registry.get_metric("fluidmcp_active_requests")
+            if gauge is None:
+                return 0
+            key = gauge._get_label_key({"server_id": server_id})
+            return int(gauge.samples.get(key, 0))
+        except Exception:
+            return 0
+
+    def get_memory_trend(self, server_id: str) -> str:
+        """Derive memory trend from the last 3 RSS readings."""
+        history = self._memory_history.get(server_id)
+        if not history or len(history) < 2:
+            return "unknown"
+        readings = list(history)
+        if all(readings[i] < readings[i + 1] for i in range(len(readings) - 1)):
+            return "increasing"
+        if all(readings[i] > readings[i + 1] for i in range(len(readings) - 1)):
+            return "decreasing"
+        if len(set(readings)) == 1:
+            return "stable"
+        return "fluctuating"
