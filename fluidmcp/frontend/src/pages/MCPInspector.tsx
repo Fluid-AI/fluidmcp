@@ -265,11 +265,13 @@ import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels';
 interface MCPServer {
   id: string;
   session_id: string | null;
+  name?: string;       // optional custom display name (overrides server_info.name)
   server_info?: any;
   tools: any[];
   url: string;
   transport: string;
   status: 'connecting' | 'connected' | 'disconnected' | 'failed';
+  connectedAt?: number; // timestamp (ms) when status became "connected"
   error?: string;
   auth?: {
     type: "none" | "bearer" | "header"
@@ -317,6 +319,17 @@ interface MCPResource {
 // Helper to generate unique server IDs
 const generateServerId = () => `server_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
+/** Returns a compact relative time string, e.g. "2m ago", "1h ago", "just now" */
+function relativeTime(ts: number): string {
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 10) return "just now";
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ago`;
+}
+
 export default function MCPInspector() {
 
   const [authType, setAuthType] = useState<"none" | "bearer" | "header">("none")
@@ -328,7 +341,21 @@ export default function MCPInspector() {
   const [inspectorFullscreen, setInspectorFullscreen] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [url, setUrl] = useState("");
+  const [customName, setCustomName] = useState("");
   const [transport, setTransport] = useState("http");
+
+  // Recently connected URLs (up to 3) — persisted in localStorage, no auth data stored
+  const [recentUrls, setRecentUrls] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem("mcp_inspector_recent_urls") || "[]"); }
+    catch { return []; }
+  });
+  const addRecentUrl = (newUrl: string) => {
+    setRecentUrls(prev => {
+      const updated = [newUrl, ...prev.filter(u => u !== newUrl)].slice(0, 3);
+      try { localStorage.setItem("mcp_inspector_recent_urls", JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  };
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [connecting, setConnecting] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -375,11 +402,16 @@ export default function MCPInspector() {
   const logsClearedOffsetRef = useRef<Record<string, number>>({})
   // 5B: Log filter pill state
   const [logFilter, setLogFilter] = useState<'all' | 'connect' | 'tool_call' | 'tool_error' | 'chat'>('all')
-  const filteredLogs = logFilter === 'all' ? logs : logs.filter(l =>
-    logFilter === 'tool_error' ? (l.type === 'tool_error') :
-    logFilter === 'tool_call' ? (l.type === 'tool_call' || l.type === 'tool_result') :
-    l.type === logFilter
-  )
+  const [logSearch, setLogSearch] = useState('')
+  const [toolSearch, setToolSearch] = useState('')
+  const filteredLogs = logs.filter(l => {
+    const matchesType = logFilter === 'all' ? true
+      : logFilter === 'tool_error' ? l.type === 'tool_error'
+      : logFilter === 'tool_call' ? (l.type === 'tool_call' || l.type === 'tool_result')
+      : l.type === logFilter;
+    const matchesSearch = logSearch.trim() === '' || l.message.toLowerCase().includes(logSearch.toLowerCase());
+    return matchesType && matchesSearch;
+  })
 
   // 3A-3: Per-server chat memory
   const [chatHistoryByServer, setChatHistoryByServer] = useState<Record<string, ChatMessage[]>>({})
@@ -400,6 +432,13 @@ export default function MCPInspector() {
         : updater
     }));
   };
+
+  // Tick every 30s to refresh relative timestamps on server cards
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   const [chatLoading, setChatLoading] = useState(false)
   const [panelSizes, setPanelSizes] = useState({
@@ -459,7 +498,8 @@ export default function MCPInspector() {
 
       setServers(prev => [
         ...prev.filter(s => !(s.url === url && s.status === "failed")),
-        { id: serverId, session_id: null, url, transport, tools: [], status: "connecting" as const, auth : authConfig
+        { id: serverId, session_id: null, url, transport, tools: [], status: "connecting" as const, auth: authConfig,
+          ...(customName.trim() ? { name: customName.trim() } : {})
         },
       ]);
 
@@ -481,10 +521,14 @@ export default function MCPInspector() {
       // Reset log offset for this server — new session, fresh log stream
       logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [serverId]: 0 };
 
+      const displayName = customName.trim() || res.server_info?.name || "new server";
+
       setServers(prev =>
         prev.map(s =>
           s.id === serverId
-            ? { ...s, session_id: res.session_id, server_info: res.server_info, tools: res.tools || [], status: "connected" as const }
+            ? { ...s, session_id: res.session_id, server_info: res.server_info, tools: res.tools || [], status: "connected" as const,
+                connectedAt: Date.now(),
+                ...(customName.trim() ? { name: customName.trim() } : {}) }
             : s
         )
       );
@@ -500,15 +544,17 @@ export default function MCPInspector() {
         [serverId]: [{
           id: crypto.randomUUID(),
           type: "assistant",
-          content: `Connected to ${res.server_info?.name || "new server"}. Chat cleared — ready to go!`,
+          content: `Connected to ${displayName}. Chat cleared — ready to go!`,
           timestamp: Date.now(),
         }]
       }));
 
+      addRecentUrl(url);
       setAuthType("none")
       setToken("")
       setHeaderKey("")
       setHeaderValue("")
+      setCustomName("")
       setShowAddModal(false);
       setUrl("");
       setTransport("http");
@@ -612,6 +658,7 @@ export default function MCPInspector() {
                 server_info: res.server_info,
                 tools: res.tools || [],
                 status: 'connected' as const,
+                connectedAt: Date.now(),
               }
             : s
         )
@@ -1128,6 +1175,7 @@ export default function MCPInspector() {
                                 setSelectedTool(null);
                                 setToolResult(null);
                                 setToolError(null);
+                                setToolSearch('');
                                 // 3A-3: preserve chat history on switch (no reset)
                                 
                               }}
@@ -1145,7 +1193,7 @@ export default function MCPInspector() {
                               {/* HEADER */}
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                 <div style={{ fontWeight: "600", fontSize: "0.9rem" }}>
-                                  {server?.server_info?.name || "MCP Server"}
+                                  {server?.name || server?.server_info?.name || "MCP Server"}
                                 </div>
                                 <span
                                   style={{
@@ -1172,8 +1220,14 @@ export default function MCPInspector() {
                               >
                                 {server.url}
                               </div>
-                              <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>
-                                transport: {server.transport}
+                              <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "0.15rem" }}>
+                                <span>transport: {server.transport}</span>
+                                {server.status === "connected" && server.tools.length > 0 && (
+                                  <span style={{ color: "rgba(99,102,241,0.8)" }}>{server.tools.length} tool{server.tools.length !== 1 ? "s" : ""}</span>
+                                )}
+                                {server.status === "connected" && server.connectedAt && (
+                                  <span style={{ color: "rgba(34,197,94,0.6)" }}>● {relativeTime(server.connectedAt)}</span>
+                                )}
                               </div>
 
                               {/* ERROR */}
@@ -1250,7 +1304,33 @@ export default function MCPInspector() {
                               </div>
 
                               {/* TOOLS (only show when selected) */}
-                              {isSelected && server?.tools?.map((tool: any) => (
+                              {isSelected && (server?.tools?.length ?? 0) > 0 && (
+                                <div style={{ margin: "0.4rem 0.5rem 0.2rem", position: "relative" }}>
+                                  <input
+                                    value={toolSearch}
+                                    onChange={e => setToolSearch(e.target.value)}
+                                    placeholder="Search tools..."
+                                    onClick={e => e.stopPropagation()}
+                                    style={{
+                                      width: "100%", boxSizing: "border-box",
+                                      padding: "0.25rem 1.4rem 0.25rem 1.5rem",
+                                      fontSize: "0.7rem", borderRadius: "4px",
+                                      border: "1px solid rgba(63,63,70,0.5)",
+                                      background: "rgba(0,0,0,0.25)", color: "#fff",
+                                    }}
+                                  />
+                                  <span style={{ position: "absolute", left: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", pointerEvents: "none" }}>⌕</span>
+                                  {toolSearch && (
+                                    <span
+                                      onClick={e => { e.stopPropagation(); setToolSearch(''); }}
+                                      style={{ position: "absolute", right: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", cursor: "pointer", lineHeight: 1 }}
+                                    >✕</span>
+                                  )}
+                                </div>
+                              )}
+                              {isSelected && server?.tools?.filter((t: any) =>
+                                toolSearch.trim() === '' || t.name.toLowerCase().includes(toolSearch.toLowerCase()) || (t.description ?? '').toLowerCase().includes(toolSearch.toLowerCase())
+                              ).map((tool: any) => (
                                 <div
                                   key={tool.name}
                                   onClick={(e) => {
@@ -1340,6 +1420,28 @@ export default function MCPInspector() {
                           </button>
                         )}
                       </div>
+                      {/* Log search input */}
+                      <div style={{ position: "relative", marginBottom: "0.35rem" }}>
+                        <input
+                          value={logSearch}
+                          onChange={e => setLogSearch(e.target.value)}
+                          placeholder="Search logs..."
+                          style={{
+                            width: "100%", boxSizing: "border-box",
+                            padding: "0.2rem 1.4rem 0.2rem 1.5rem",
+                            fontSize: "0.68rem", borderRadius: "4px",
+                            border: "1px solid rgba(63,63,70,0.5)",
+                            background: "rgba(0,0,0,0.25)", color: "#fff",
+                          }}
+                        />
+                        <span style={{ position: "absolute", left: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", pointerEvents: "none" }}>⌕</span>
+                        {logSearch && (
+                          <span
+                            onClick={() => setLogSearch('')}
+                            style={{ position: "absolute", right: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", cursor: "pointer", lineHeight: 1 }}
+                          >✕</span>
+                        )}
+                      </div>
                       {/* Filter pills */}
                       <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
                         {([
@@ -1385,7 +1487,7 @@ export default function MCPInspector() {
                           display: "flex", alignItems: "center", justifyContent: "center",
                           height: "100%", color: "rgba(255,255,255,0.35)", fontSize: "0.8rem",
                         }}>
-                          {selectedServer?.session_id ? (logFilter !== 'all' ? "No matching logs" : "No logs yet") : "Connect to a server to see logs"}
+                          {selectedServer?.session_id ? (logFilter !== 'all' || logSearch ? "No matching logs" : "No logs yet") : "Connect to a server to see logs"}
                         </div>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -2278,12 +2380,15 @@ export default function MCPInspector() {
       {/* ── ADD SERVER MODAL ─────────────────────────────────────────────── */}
       {showAddModal && (
         <div
+          onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
+          onKeyDown={(e) => { if (e.key === "Escape") { setShowAddModal(false); setCustomName(""); setUrl(""); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); } }}
           style={{
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
             display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
           }}
         >
           <div
+            onClick={(e) => e.stopPropagation()}
             style={{
               background: "#18181b", padding: "2rem", borderRadius: "0.75rem",
               width: "420px", border: "1px solid rgba(63,63,70,0.6)",
@@ -2291,30 +2396,80 @@ export default function MCPInspector() {
           >
             <h2 style={{ fontSize: "1.3rem", marginBottom: "1rem" }}>Connect MCP Server</h2>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <input
-                placeholder="Server URL"
-                style={{
-                  padding: "0.6rem", borderRadius: "0.4rem",
-                  border: "1px solid rgba(63,63,70,0.6)",
-                  background: "#09090b", color: "#fff",
-                }}
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-              />
+            <form onSubmit={(e) => { e.preventDefault(); handleConnect(); }} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div>
+                <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.3rem", display: "block" }}>
+                  Server Name <span style={{ color: "rgba(255,255,255,0.3)" }}>(optional)</span>
+                </label>
+                <input
+                  autoFocus
+                  placeholder="e.g. My Weather Server"
+                  style={{
+                    width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
+                    border: "1px solid rgba(63,63,70,0.6)",
+                    background: "#09090b", color: "#fff", boxSizing: "border-box",
+                  }}
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                />
+              </div>
 
-              <select
-                value={transport}
-                onChange={(e) => setTransport(e.target.value)}
-                style={{
-                  padding: "0.6rem", borderRadius: "0.4rem",
-                  border: "1px solid rgba(63,63,70,0.6)",
-                  background: "#09090b", color: "#fff",
-                }}
-              >
-                <option value="http">HTTP</option>
-                <option value="sse">SSE</option>
-              </select>
+              <div>
+                <input
+                  placeholder="Server URL"
+                  style={{
+                    width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
+                    border: "1px solid rgba(63,63,70,0.6)",
+                    background: "#09090b", color: "#fff", boxSizing: "border-box",
+                  }}
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                />
+                {recentUrls.length > 0 && (
+                  <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                    <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>Recent:</span>
+                    {recentUrls.map(u => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setUrl(u)}
+                        style={{
+                          fontSize: "0.72rem", padding: "0.15rem 0.5rem",
+                          borderRadius: "999px", border: "1px solid rgba(99,102,241,0.35)",
+                          background: url === u ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.07)",
+                          color: "rgba(200,200,255,0.75)", cursor: "pointer",
+                          maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}
+                        title={u}
+                      >
+                        {u.replace(/^https?:\/\//, "").slice(0, 35)}{u.replace(/^https?:\/\//, "").length > 35 ? "…" : ""}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.3rem" }}>
+                  <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>Transport</label>
+                  <span
+                    title="HTTP: stateless request/response, simpler. SSE: persistent connection (Server-Sent Events), required for servers that push notifications."
+                    style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", cursor: "help", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "50%", width: "14px", height: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
+                  >?</span>
+                </div>
+                <select
+                  value={transport}
+                  onChange={(e) => setTransport(e.target.value)}
+                  style={{
+                    width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
+                    border: "1px solid rgba(63,63,70,0.6)",
+                    background: "#09090b", color: "#fff",
+                  }}
+                >
+                  <option value="http">HTTP</option>
+                  <option value="sse">SSE</option>
+                </select>
+              </div>
 
               {/* Auth Type */}
               <div style={{ marginTop: "1rem" }}>
@@ -2407,7 +2562,8 @@ export default function MCPInspector() {
               )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
                 <button
-                  onClick={() => setShowAddModal(false)}
+                  type="button"
+                  onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
                   style={{
                     background: "transparent", border: "1px solid rgba(63,63,70,0.6)",
                     padding: "0.5rem 1rem", borderRadius: "0.4rem", color: "#fff",
@@ -2417,7 +2573,7 @@ export default function MCPInspector() {
                 </button>
 
                 <button
-                  onClick={handleConnect}
+                  type="submit"
                   disabled={connecting}
                   style={{
                     background: "#fff", color: "#000",
@@ -2427,7 +2583,7 @@ export default function MCPInspector() {
                   {connecting ? "Connecting..." : "Connect"}
                 </button>
               </div>
-            </div>
+            </form>
           </div>
         </div>
       )}
