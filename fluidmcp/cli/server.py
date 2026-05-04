@@ -646,6 +646,7 @@ async def main(args):
         logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
         health_check_interval = 30
     health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
+    server_manager._health_monitor = health_monitor
     health_monitor.start()
 
     # 4. Create FastAPI app (without MCP servers)
