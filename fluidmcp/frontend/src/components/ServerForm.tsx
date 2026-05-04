@@ -77,13 +77,14 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
 
     // Validate ID format (lowercase alphanumeric + hyphens)
     if (mode === 'create') {
-      const idRegex = /^[a-z0-9-]+$/;
+      const idRegex = /^[a-z0-9_-]+$/;
       if (!idRegex.test(formData.id)) {
-        alert('Server ID must contain only lowercase letters, numbers, and hyphens');
+        alert('Server ID must contain only lowercase letters, numbers, hyphens, and underscores');
         return;
       }
-      if (formData.id.startsWith('-') || formData.id.endsWith('-')) {
-        alert('Server ID cannot start or end with a hyphen');
+      if (formData.id.startsWith('-') || formData.id.endsWith('-') ||
+          formData.id.startsWith('_') || formData.id.endsWith('_')) {
+        alert('Server ID cannot start or end with a hyphen or underscore');
         return;
       }
     }
@@ -170,7 +171,7 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
               ? 'border-red-500 focus:ring-red-500 focus:border-red-500'
               : 'border-zinc-700 focus:ring-blue-500 focus:border-blue-500'
           }`}
-          placeholder="my-server-id"
+          placeholder="my-server-id or my_server_id"
           required
         />
         {idConflict ? (
@@ -179,7 +180,7 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
           </p>
         ) : (
           <p className="mt-1 text-xs text-zinc-400">
-            Lowercase letters, numbers, hyphens only. Cannot be changed after creation.
+            Lowercase letters, numbers, hyphens, and underscores. Cannot be changed after creation.
           </p>
         )}
       </div>
