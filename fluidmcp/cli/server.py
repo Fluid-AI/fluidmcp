@@ -14,6 +14,10 @@ import os
 import signal
 import secrets
 from pathlib import Path
+from loguru import logger
+from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
@@ -24,6 +28,7 @@ from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
+from .services.opentelemetry_manager import init_opentelemetry, shutdown_opentelemetry
 
 
 import sentry_sdk
@@ -92,21 +97,43 @@ def save_token_to_file(token: str) -> Path:
     logger.info(f"Token saved to: {token_file}")
     return token_file
 
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099, auth0_mode: bool = False) -> FastAPI:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context for startup/shutdown.
-    
-    Ensures graceful cleanup of resources including database connections.
+
+    Ensures graceful cleanup of resources including database connections and OpenTelemetry.
     """
     # Startup phase
     logger.info("FastAPI application starting up...")
+
+    # Initialize OpenTelemetry (do this early in startup)
+    try:
+        init_opentelemetry(
+            service_name="fluidmcp",
+            service_version="2.0.0",
+            enable_tracing=os.getenv("OTEL_TRACING_ENABLED", "true").lower() == "true",
+            enable_metrics=os.getenv("OTEL_METRICS_ENABLED", "true").lower() == "true",
+            enable_logs=os.getenv("OTEL_LOGS_ENABLED", "true").lower() == "true",
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenTelemetry: {e}")
+        # Continue startup even if telemetry fails
+
     yield
-    
-    # Shutdown phase - FIX #2: Graceful MongoDB disconnect
+
+    # Shutdown phase
     logger.info("FastAPI application shutting down...")
-    
+
+    # Shutdown OpenTelemetry first
+    try:
+        shutdown_opentelemetry()
+    except Exception as e:
+        logger.error(f"Error during OpenTelemetry shutdown: {e}")
+
+    # Then disconnect database
     if hasattr(app.state, "persistence") and app.state.persistence:
         try:
             logger.info("Disconnecting from database...")
@@ -126,6 +153,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         secure_mode: Enable bearer token authentication
         token: Bearer token for secure mode
         allowed_origins: List of allowed CORS origins (default: localhost only)
+        auth0_mode: Enable OAuth0 (Auth0) authentication
+        host: Host address for URL logging (default: 0.0.0.0)
+        port: Port number for URL logging (default: 8099)
 
     Returns:
         FastAPI application
@@ -150,12 +180,19 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             "http://localhost:8080",
         ]
     
+    # Auto-expand CORS for OAuth environments
+    if auth0_mode:
+        from .auth.url_utils import get_cors_origins
+        auto_origins = get_cors_origins(port)
+        allowed_origins = list(set((allowed_origins or []) + auto_origins))
+        logger.info(f"OAuth mode: Auto-detected CORS origins: {auto_origins}")
+
     if "*" in allowed_origins:
         logger.warning("⚠️  WARNING: CORS wildcard enabled - any website can access this API!")
         logger.warning("⚠️  This is a SECURITY RISK and should only be used for development!")
-    
+
     logger.info(f"CORS allowed origins: {allowed_origins}")
-    
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
@@ -164,75 +201,36 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_headers=["*"],
     )
 
-    # Add request size limiting middleware for security (prevent DoS via large payloads)
-    # Max 10MB request body size (configurable via MAX_REQUEST_SIZE_MB env var)
-    # Uses Starlette's exception to ensure proper handling and prevent bypassing
-    default_request_size_mb = 10
-    max_request_size_env = os.getenv("MAX_REQUEST_SIZE_MB")
-    if max_request_size_env is None:
-        max_request_size_mb = default_request_size_mb
-    else:
-        try:
-            max_request_size_mb = int(max_request_size_env)
-        except ValueError:
-            logger.warning(
-                f"Invalid MAX_REQUEST_SIZE_MB value '{max_request_size_env}', "
-                f"falling back to default {default_request_size_mb}MB."
-            )
-            max_request_size_mb = default_request_size_mb
-    max_request_size = max_request_size_mb * 1024 * 1024  # bytes
-
+    # Add security headers middleware
     @app.middleware("http")
-    async def limit_request_size(request, call_next):
-        """
-        Middleware to limit request body size and prevent memory exhaustion attacks.
+    async def add_security_headers(request: Request, call_next):
+        """Add security headers to all responses"""
+        response = await call_next(request)
 
-        Checks Content-Length header when present to provide early rejection.
+        # Content Security Policy (CSP) - prevent XSS
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "  # Allow inline scripts for docs
+            "style-src 'self' 'unsafe-inline'; "   # Allow inline styles
+            "img-src 'self' data: https:; "
+            "font-src 'self' data:;"
+        )
 
-        IMPORTANT: This middleware only enforces limits when Content-Length is present.
-        Chunked transfer encoding (no Content-Length header) can bypass this check.
-        For production deployments, ALWAYS configure server-level limits:
-        - Uvicorn: Use --limit-max-requests parameter (e.g., --limit-max-requests 10485760)
-        - Nginx: Set client_max_body_size directive in nginx.conf
-        - Apache: Set LimitRequestBody directive in httpd.conf
-        - Cloudflare/CDN: Configure maximum upload size at edge
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
 
-        Without server-level limits, attackers can stream large bodies via chunked
-        encoding to cause memory exhaustion.
+        # Prevent clickjacking
+        response.headers["X-Frame-Options"] = "DENY"
 
-        Raises HTTPException 413 to ensure FastAPI's exception handling is triggered,
-        preventing bypasses through direct body reading.
-        """
-        from starlette.exceptions import HTTPException as StarletteHTTPException
+        # XSS protection (legacy browsers)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
 
-        if request.method in ["POST", "PUT", "PATCH"]:
-            content_length = request.headers.get("content-length")
-            if content_length is not None:
-                try:
-                    content_length_value = int(content_length)
-                except (TypeError, ValueError):
-                    raise StarletteHTTPException(
-                        status_code=400,
-                        detail="Invalid Content-Length header"
-                    )
-                if content_length_value < 0:
-                    raise StarletteHTTPException(
-                        status_code=400,
-                        detail="Invalid Content-Length header"
-                    )
-                if content_length_value > max_request_size:
-                    raise StarletteHTTPException(
-                        status_code=413,
-                        detail=f"Request body too large (max {max_request_size // (1024*1024)}MB)"
-                    )
-        return await call_next(request)
+        # Referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
-    logger.info(f"Request size limit (Content-Length check): {max_request_size // (1024*1024)}MB")
-    logger.warning(
-        "SECURITY: Content-Length-based limit does not protect against chunked transfer encoding. "
-        "Configure server-level limits (Uvicorn --limit-max-requests, Nginx client_max_body_size, etc.) "
-        "for production deployments."
-    )
+        return response
+
+    logger.info("Security headers middleware enabled")
 
     # Store managers in app state for dependency injection
     app.state.db_manager = db_manager
@@ -267,6 +265,13 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(mcp_router, tags=["mcp"])
     logger.info("Dynamic MCP router mounted")
 
+    # Mount OAuth routes if enabled
+    if auth0_mode:
+        from .auth import auth_router, init_auth_routes, Auth0Config
+        auth_config = Auth0Config.from_env(port=8099)
+        init_auth_routes(auth_config)
+        app.include_router(auth_router, tags=["Authentication"])
+        logger.info("✓ OAuth routes mounted at /auth")
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
 
@@ -635,6 +640,8 @@ async def main(args):
     logger.info("Creating ServerManager...")
     server_manager = ServerManager(persistence)
 
+    # 3. Create FastAPI app (without MCP servers)
+    auth0_mode = getattr(args, 'auth0', False)
     # 3. Start background tasks
     logger.info("Starting background tasks...")
     server_manager.start_idle_cleanup_task()
@@ -655,6 +662,8 @@ async def main(args):
         secure_mode=args.secure,
         token=args.token,
         allowed_origins=allowed_origins,
+        auth0_mode=auth0_mode,
+        host=args.host,
         port=args.port
     )
 
@@ -791,6 +800,11 @@ def run():
         help="Bearer token for secure mode (will be generated if not provided)"
     )
     parser.add_argument(
+        "--auth0",
+        action="store_true",
+        help="Enable OAuth0 (Auth0) authentication (mutually exclusive with --secure)"
+    )
+    parser.add_argument(
         "--allowed-origins",
         type=str,
         help="Comma-separated list of allowed CORS origins (default: localhost only)"
@@ -808,15 +822,39 @@ def run():
 
     args = parser.parse_args()
 
-    # Handle token for secure mode: CLI arg > env var > generate new
-    if args.secure and not args.token:
-        # Try environment variable first (more secure than CLI arg)
-        args.token = os.getenv("FMCP_BEARER_TOKEN")
+    # Validate authentication modes (mutually exclusive)
+    if args.secure and args.auth0:
+        logger.error("❌ Cannot use --secure and --auth0 together. Choose one authentication method.")
+        logger.info("   --secure: Bearer token authentication (simple, for CI/CD)")
+        logger.info("   --auth0:  OAuth0 authentication (multi-user, SSO)")
+        return
 
-        # Generate new token if still not provided
-        if not args.token:
+    # Validate Auth0 configuration if enabled
+    if args.auth0:
+        required_vars = ["FMCP_AUTH0_DOMAIN", "FMCP_AUTH0_CLIENT_ID", "FMCP_AUTH0_CLIENT_SECRET"]
+        missing = [v for v in required_vars if not os.getenv(v)]
+        if missing:
+            logger.error(f"❌ Auth0 mode requires environment variables: {', '.join(missing)}")
+            logger.info("   Set these environment variables or create auth0-config.json")
+            logger.info("   See .env.example for configuration template")
+            return
+        os.environ["FMCP_AUTH0_MODE"] = "true"
+        logger.info(f"✓ OAuth0 enabled with domain: {os.getenv('FMCP_AUTH0_DOMAIN')}")
+
+    # Generate and save token if secure mode enabled but no token provided
+    if args.secure and not args.token:
+        # Check if token file exists first (for persistence across restarts)
+        token_file = Path.home() / ".fmcp" / "tokens" / "current_token.txt"
+
+        if token_file.exists():
+            # Use existing token
+            args.token = token_file.read_text().strip()
+            logger.info(f"Using existing bearer token from: {token_file}")
+            logger.info(f"Token (starts with: {args.token[:4]}****)")
+        else:
+            # Generate new token
             args.token = secrets.token_urlsafe(32)
-            logger.info("Generated new bearer token (see console output for full token)")
+            logger.info(f"Generated bearer token: {args.token}")
 
             # Save to secure file
             token_file = save_token_to_file(args.token)
@@ -831,8 +869,8 @@ def run():
             print("To retrieve later: fluidmcp token show")
             print("="*70 + "\n")
 
-            # Only log masked version (show first 8 chars for better identification)
-            logger.info(f"Bearer token generated (starts with: {args.token[:8]}{'*' * (len(args.token) - 8)})")
+            # Only log masked version
+            logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
 
     try:
         asyncio.run(main(args))
