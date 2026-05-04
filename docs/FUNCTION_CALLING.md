@@ -127,7 +127,7 @@ fluidmcp run config.json --file --start-server
 ### 2. Send Request with Tools
 
 ```bash
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-3-70b",
@@ -200,7 +200,7 @@ if function_name == "get_weather":
 ### 5. Send Tool Result Back
 
 ```bash
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-3-70b",
@@ -396,7 +396,7 @@ When model responds normally:
 import httpx
 import json
 
-FLUIDMCP_URL = "http://localhost:8099"
+FLUIDMCP_URL = "http://localhost:8499"
 MODEL_ID = "llama-3-70b"
 
 # Define tool schema
@@ -539,7 +539,7 @@ async def filesystem_read(path: str) -> dict:
     """Read file using FluidMCP filesystem MCP server."""
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "http://localhost:8099/filesystem/mcp",
+            "http://localhost:8499/filesystem/mcp",
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -586,7 +586,7 @@ async def get_mcp_tools_schema() -> list:
     async with httpx.AsyncClient() as client:
         # List available MCP tools
         response = await client.post(
-            "http://localhost:8099/filesystem/mcp",
+            "http://localhost:8499/filesystem/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
         )
         mcp_tools = response.json()["result"]["tools"]
