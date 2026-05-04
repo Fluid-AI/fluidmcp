@@ -5,11 +5,12 @@ import shutil
 import asyncio
 import time
 import threading
+import uuid
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
-from fastapi import Request, APIRouter, Body, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
@@ -355,6 +356,266 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
         return False
     
 
+def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock: threading.Lock = None) -> APIRouter:
+    
+
+    # Create a lock if not provided
+    if process_lock is None:
+        process_lock = threading.Lock()
+
+    router = APIRouter()
+
+    @router.post(f"/{package_name}/mcp", tags=[package_name])
+    async def proxy_jsonrpc(
+        http_request: Request,
+        request: Dict[str, Any] = Body(
+            ...,
+            example={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "",
+                "params": {}
+            }
+        ), token: str = Depends(get_token)
+    ):
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+        method = request.get("method", "unknown")
+
+        # Track request with metrics
+        with RequestTimer(collector, method):
+            try:
+                # Extract all headers from incoming HTTP request
+                all_headers = dict(http_request.headers)
+
+                logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
+
+                # Only inject headers if this is a tools/call request
+                if request.get("method") == "tools/call" and all_headers:
+                    params = request.get("params", {})
+                    if "arguments" not in params:
+                        params["arguments"] = {}
+
+                    logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
+                    logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
+
+                    params["arguments"]["headers"] = all_headers
+                    request["params"] = params
+
+                    logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
+
+                # The subprocess is already initialized at startup by initialize_mcp_server().
+                # Forwarding initialize again would cause readline() to block forever (deadlock).
+                # Handle these at the gateway level and never forward to the subprocess.
+                if method == "initialize":
+                    return JSONResponse(
+                        content={
+                            "jsonrpc": "2.0",
+                            "id": request.get("id", 0),
+                            "result": {
+                                "protocolVersion": request.get("params", {}).get("protocolVersion", "2025-03-26"),
+                                "capabilities": {"experimental": {}, "prompts": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "tools": {"listChanged": False}},
+                                "serverInfo": {"name": package_name, "version": "1.0.0"}
+                            }
+                        },
+                        headers={"mcp-session-id": str(uuid.uuid4())}
+                    )
+                if method == "notifications/initialized":
+                    return Response(status_code=204)
+
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    msg = json.dumps(request)
+                    logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
+
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+
+                    logger.debug(f"[{package_name}] Waiting for response from stdout...")
+                    response_line = process.stdout.readline()
+                    logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
+
+                return JSONResponse(content=json.loads(response_line))
+            except Exception as e:
+                logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
+                return JSONResponse(status_code=500, content={"error": str(e)})
+    
+    # New SSE endpoint
+    @router.post(f"/{package_name}/sse", tags=[package_name])
+    async def sse_stream(
+        http_request: Request,
+        request: Dict[str, Any] = Body(
+            ...,
+            example={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "",
+                "params": {}
+            }
+        ), token: str = Depends(get_token)
+    ):
+        # Extract all headers from incoming HTTP request
+        all_headers = dict(http_request.headers)
+
+        # Only inject headers if this is a tools/call request
+        if request.get("method") == "tools/call" and all_headers:
+            params = request.get("params", {})
+            if "arguments" not in params:
+                params["arguments"] = {}
+            params["arguments"]["headers"] = all_headers
+            request["params"] = params
+
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+
+        async def event_generator() -> Iterator[str]:
+            completion_status = "success"
+            try:
+                # Track streaming session when generator starts
+                collector.increment_active_streams()
+
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    # Convert dict to JSON string and send to MCP server
+                    msg = json.dumps(request)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+
+                    # Read from stdout and stream as SSE events
+                    while True:
+                        response_line = process.stdout.readline()
+                        if not response_line:
+                            break
+
+                        # Add logging
+                        logger.debug(f"Received from MCP: {response_line.strip()}")
+
+                        # Format as SSE event
+                        yield f"data: {response_line.strip()}\n\n"
+
+                        # Check if response contains "result" which indicates completion
+                        try:
+                            response_data = json.loads(response_line)
+                            if "result" in response_data:
+                                # If it's a final result, we can stop the stream
+                                break
+                        except json.JSONDecodeError:
+                            # If it's not valid JSON, just stream it as-is
+                            pass
+
+            except (BrokenPipeError, OSError) as e:
+                completion_status = "broken_pipe"
+                collector.record_error("io_error")
+                yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+            except Exception as e:
+                completion_status = "error"
+                # Send error as SSE event
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            finally:
+                # Record streaming metrics
+                collector.record_streaming_request(completion_status)
+                collector.decrement_active_streams()
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream"
+        )
+        
+    @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
+    async def list_tools(token: str = Depends(get_token)):
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+
+        # Track request with metrics
+        with RequestTimer(collector, "tools/list"):
+            try:
+                # Pre-filled JSON-RPC request for tools/list
+                request_payload = {
+                    "id": 1,
+                    "jsonrpc": "2.0",
+                    "method": "tools/list"
+                }
+
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    msg = json.dumps(request_payload)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                    response_line = process.stdout.readline()
+
+                response_data = json.loads(response_line)
+                return JSONResponse(content=response_data)
+
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"error": str(e)})
+        
+    
+    @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
+    async def call_tool(
+        http_request: Request,
+        request_body: Dict[str, Any] = Body(
+            ...,
+            alias="params",
+            example={
+                "name": "",
+            }
+        ), token: str = Depends(get_token)
+    ):
+        params = request_body
+
+        # Initialize metrics collector
+        collector = MetricsCollector(package_name)
+        tool_name = params.get("name", "unknown")
+
+        # Track request with metrics
+        with RequestTimer(collector, f"tools/call:{tool_name}"):
+            try:
+                # Validate required fields
+                if "name" not in params:
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Tool name is required"}
+                    )
+
+                # Extract all headers from incoming HTTP request
+                all_headers = dict(http_request.headers)
+
+                # Only inject if headers actually exist
+                if all_headers:
+                    if "arguments" not in params:
+                        params["arguments"] = {}
+                    params["arguments"]["headers"] = all_headers
+
+                # Construct complete JSON-RPC request
+                request_payload = {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": params
+                }
+
+                # Thread-safe communication with MCP server
+                with process_lock:
+                    msg = json.dumps(request_payload)
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                    response_line = process.stdout.readline()
+
+                response_data = json.loads(response_line)
+                return JSONResponse(content=response_data)
+
+            except json.JSONDecodeError:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "Invalid JSON in request body"}
+                )
+            except Exception as e:
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": str(e)}
+                )
+    return router
+
 def create_dynamic_router(server_manager):
     """
     Create a dynamic router that dispatches MCP requests to running servers.
@@ -423,6 +684,25 @@ def create_dynamic_router(server_manager):
             if process.poll() is not None:
                 logger.debug(f"[{server_name}] t+{time.time() - start_time:.3f}s: Process is dead")
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
+            # The subprocess is already initialized at startup by initialize_mcp_server().
+            # Forwarding initialize again would cause readline() to block forever (deadlock).
+            # Handle these at the gateway level and never forward to the subprocess.
+            if method == "initialize":
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": request.get("id", 0),
+                        "result": {
+                            "protocolVersion": request.get("params", {}).get("protocolVersion", "2025-03-26"),
+                            "capabilities": {"experimental": {}, "prompts": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "tools": {"listChanged": False}},
+                            "serverInfo": {"name": server_name, "version": "1.0.0"}
+                        }
+                    },
+                    headers={"mcp-session-id": str(uuid.uuid4())}
+                )
+            if method == "notifications/initialized":
+                return Response(status_code=204)
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):
