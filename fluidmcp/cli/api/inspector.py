@@ -243,7 +243,9 @@ async def list_resources(session_id: str):
 
     try:
         resources = await session.list_resources()
-        return {"resources": resources, "count": len(resources)}
+        templates = await session.list_resource_templates()
+        combined = resources + templates
+        return {"resources": combined, "count": len(combined)}
     except Exception as e:
         logger.error(f"Inspector: list_resources failed for session {session_id} — {e}")
         raise HTTPException(500, f"Failed to fetch resources: {str(e)}")
@@ -269,6 +271,39 @@ async def read_resource(session_id: str, body: ReadResourceRequest):
     except Exception as e:
         logger.error(f"Inspector: read_resource failed for session {session_id} — {e}")
         raise HTTPException(500, f"Failed to read resource: {str(e)}")
+
+
+class GetPromptRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=512)
+    arguments: Optional[dict] = Field(default_factory=dict)
+
+
+@router.get("/inspector/{session_id}/prompts")
+async def list_prompts(session_id: str):
+    """List all prompts available on the connected MCP server."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    try:
+        prompts = await session.list_prompts()
+        return {"prompts": prompts, "count": len(prompts)}
+    except Exception as e:
+        logger.error(f"Inspector: list_prompts failed for session {session_id} — {e}")
+        raise HTTPException(500, "Failed to fetch prompts")
+
+
+@router.post("/inspector/{session_id}/prompts/get")
+async def get_prompt(session_id: str, body: GetPromptRequest):
+    """Get a prompt by name with optional arguments."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    try:
+        result = await session.get_prompt(body.name, body.arguments or {})
+        return result
+    except Exception as e:
+        logger.error(f"Inspector: get_prompt failed for session {session_id} — {e}")
+        raise HTTPException(500, "Failed to get prompt")
 
 
 @router.post("/inspector/{session_id}/chat")
