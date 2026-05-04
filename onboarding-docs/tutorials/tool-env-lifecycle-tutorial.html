@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FluidMCP Onboarding: Tool Execution, Env Variables & Server Lifecycle</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3245;
+      --accent: #6c63ff;
+      --accent2: #4ade80;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --muted: #8892a4;
+      --code-bg: #0d1117;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    /* ─── Sidebar ─────────────────────────────────────────────── */
+    #sidebar {
+      width: 260px;
+      min-width: 260px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-header {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .sidebar-header h2 {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+
+    .sidebar-header p {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .progress-bar-wrap {
+      padding: 12px 20px 0;
+    }
+
+    .progress-bar-wrap label {
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .progress-bar {
+      height: 4px;
+      background: var(--surface2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width .3s ease;
+    }
+
+    nav ul { list-style: none; padding: 8px 0; }
+
+    nav ul li a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 20px;
+      font-size: 13px;
+      color: var(--muted);
+      text-decoration: none;
+      border-left: 3px solid transparent;
+      transition: all .15s;
+    }
+
+    nav ul li a:hover { color: var(--text); background: var(--surface2); }
+
+    nav ul li a.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(108,99,255,.08);
+      font-weight: 600;
+    }
+
+    nav ul li a.done { color: var(--accent2); }
+    nav ul li a.done .lesson-num { background: var(--accent2); color: #000; }
+
+    .lesson-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--surface2);
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    /* ─── Main content ────────────────────────────────────────── */
+    #main {
+      flex: 1;
+      padding: 48px 56px;
+      max-width: 900px;
+    }
+
+    .lesson { display: none; }
+    .lesson.active { display: block; }
+
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+    h2 { font-size: 20px; font-weight: 600; margin: 32px 0 12px; color: var(--text); }
+    h3 { font-size: 15px; font-weight: 600; margin: 24px 0 8px; color: var(--accent); }
+
+    .lesson-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 28px;
+      display: flex;
+      gap: 16px;
+    }
+
+    p { margin-bottom: 14px; color: var(--text); font-size: 14px; }
+
+    /* Code blocks */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      margin: 12px 0 20px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    code {
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    }
+
+    p code, li code {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 12px;
+    }
+
+    /* Callout boxes */
+    .callout {
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 13px;
+      border-left: 4px solid;
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .callout .icon { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .callout .body { flex: 1; }
+    .callout strong { display: block; margin-bottom: 4px; }
+
+    .callout.info    { background: rgba(108,99,255,.1); border-color: var(--accent); }
+    .callout.warn    { background: rgba(245,158,11,.1); border-color: var(--warn); }
+    .callout.danger  { background: rgba(239,68,68,.1);  border-color: var(--danger); }
+    .callout.success { background: rgba(74,222,128,.1); border-color: var(--accent2); }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 12px 0 20px;
+    }
+
+    th {
+      background: var(--surface2);
+      padding: 9px 14px;
+      text-align: left;
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+
+    /* Steps */
+    .steps { counter-reset: step; padding: 0; list-style: none; }
+
+    .steps li {
+      counter-increment: step;
+      display: flex;
+      gap: 14px;
+      margin-bottom: 16px;
+      font-size: 14px;
+      align-items: flex-start;
+    }
+
+    .steps li::before {
+      content: counter(step);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      min-width: 24px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    /* Layer diagram */
+    .layer-stack { display: flex; flex-direction: column; gap: 4px; margin: 16px 0 24px; }
+
+    .layer {
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .layer .label { font-weight: 600; }
+    .layer .files { font-size: 11px; color: var(--muted); font-family: monospace; }
+
+    .layer.l1 { background: rgba(108,99,255,.18); border: 1px solid rgba(108,99,255,.4); }
+    .layer.l2 { background: rgba(56,189,248,.12); border: 1px solid rgba(56,189,248,.3); }
+    .layer.l3 { background: rgba(74,222,128,.12); border: 1px solid rgba(74,222,128,.3); }
+    .layer.l4 { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.3); }
+    .layer.l5 { background: rgba(239,68,68,.12);  border: 1px solid rgba(239,68,68,.3); }
+
+    .arrow-down {
+      text-align: center;
+      color: var(--muted);
+      font-size: 16px;
+      margin: -2px 0;
+    }
+
+    /* State badge */
+    .badge {
+      display: inline-block;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+
+    .badge.running  { background: rgba(74,222,128,.2);  color: #4ade80; }
+    .badge.stopped  { background: rgba(148,163,184,.15); color: #94a3b8; }
+    .badge.starting { background: rgba(245,158,11,.2);  color: #f59e0b; }
+    .badge.error    { background: rgba(239,68,68,.2);   color: #ef4444; }
+
+    /* nav buttons */
+    .nav-btns {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+
+    .btn {
+      padding: 9px 20px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: opacity .15s;
+    }
+
+    .btn:disabled { opacity: .3; cursor: default; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn:not(:disabled):hover { opacity: .85; }
+
+    /* syntax highlighting helpers */
+    .hl-comment { color: #6a737d; }
+    .hl-key     { color: #79b8ff; }
+    .hl-str     { color: #9ecbff; }
+    .hl-num     { color: #f8c555; }
+    .hl-kw      { color: #f97583; }
+    .hl-fn      { color: #b392f0; }
+
+    /* divider */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+  </style>
+</head>
+<body>
+
+<!-- ─── Sidebar ──────────────────────────────────────────────────── -->
+<aside id="sidebar">
+  <div class="sidebar-header">
+    <h2>FluidMCP Onboarding</h2>
+    <p>Tool Execution · Env Variables · Server Lifecycle</p>
+  </div>
+  <div class="progress-bar-wrap">
+    <label><span>Progress</span><span id="progress-label">0 / 6</span></label>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+  </div>
+  <nav>
+    <ul id="lesson-nav">
+      <li><a href="#" data-lesson="0" class="active"><span class="lesson-num">1</span>Architecture Overview</a></li>
+      <li><a href="#" data-lesson="1"><span class="lesson-num">2</span>Server Lifecycle</a></li>
+      <li><a href="#" data-lesson="2"><span class="lesson-num">3</span>Tool Execution</a></li>
+      <li><a href="#" data-lesson="3"><span class="lesson-num">4</span>Environment Variables</a></li>
+      <li><a href="#" data-lesson="4"><span class="lesson-num">5</span>State &amp; Error Patterns</a></li>
+      <li><a href="#" data-lesson="5"><span class="lesson-num">6</span>Developer Quick Reference</a></li>
+    </ul>
+  </nav>
+</aside>
+
+<!-- ─── Main ─────────────────────────────────────────────────────── -->
+<main id="main">
+
+  <!-- ══════════════════════════════════════════════════════════════
+       LESSON 1 — Architecture Overview
+  ═══════════════════════════════════════════════════════════════════ -->
+  <section class="lesson active" id="lesson-0">
+    <h1>Architecture Overview</h1>
+    <div class="lesson-meta">
+      <span>Lesson 1 of 6</span>
+      <span>~8 min read</span>
+    </div>
+
+    <p>
+      FluidMCP's UI and backend form a five-layer stack. Every user action — adding a server,
+      running a tool, editing an env var — flows through all five layers. Understanding the
+      stack makes the individual flows in later lessons easy to follow.
+    </p>
+
+    <h2>The Five Layers</h2>
+
+    <div class="layer-stack">
+      <div class="layer l1">
+        <span class="label">React SPA (Browser)</span>
+        <span class="files">src/pages/ · src/hooks/ · src/services/api.ts</span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer l2">
+        <span class="label">FastAPI Gateway</span>
+        <span class="files">fluidmcp/cli/api/management.py</span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer l3">
+        <span class="label">ServerManager</span>
+        <span class="files">fluidmcp/cli/services/server_manager.py</span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer l4">
+        <span class="label">Persistence (MongoDB / In-Memory)</span>
+        <span class="files">fluidmcp/cli/repositories/database.py · memory.py</span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer l5">
+        <span class="label">MCP Subprocess</span>
+        <span class="files">npx / python / uvx — child process managed by ServerManager</span>
+      </div>
+    </div>
+
+    <h2>Key Concepts</h2>
+
+    <h3>Flat config format</h3>
+    <p>
+      The REST API and <code>ServerManager</code> always work with a <strong>flat</strong> config dict:
+      <code>id</code>, <code>name</code>, <code>command</code>, <code>args</code>, <code>env</code>
+      at the root level. When saving to MongoDB, <code>DatabaseManager</code> nests these under
+      <code>mcp_config</code> internally. This nesting never appears in API requests or responses.
+    </p>
+
+    <h3>Two storage layers for env vars</h3>
+    <p>
+      Every server has two separate env namespaces in MongoDB:
+    </p>
+    <table>
+      <thead><tr><th>Layer</th><th>Collection</th><th>When written</th><th>Survives restart?</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Server config</strong></td><td><code>fluidmcp_servers</code></td><td>POST /api/servers (add time)</td><td>Yes — this is the template</td></tr>
+        <tr><td><strong>Instance env</strong></td><td><code>fluidmcp_server_instances</code></td><td>PUT /api/servers/:id/instance/env</td><td>Yes — persisted, triggers auto-restart</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Transport types</h3>
+    <p>
+      MCP servers communicate with FluidMCP over one of two transports. The transport is set
+      in <code>metadata.json</code> (or defaults to <code>stdio</code>):
+    </p>
+    <table>
+      <thead><tr><th>Transport</th><th>How it works</th><th>Init check</th></tr></thead>
+      <tbody>
+        <tr><td><code>stdio</code> (default)</td><td>JSON-RPC over stdin/stdout pipes</td><td>JSON-RPC <code>initialize</code> handshake (30 s timeout)</td></tr>
+        <tr><td><code>sse</code> / <code>http</code></td><td>HTTP server (uvicorn/starlette)</td><td>TCP port poll via <code>asyncio.open_connection()</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>MongoDB Collections</h2>
+    <table>
+      <thead><tr><th>Collection</th><th>What it stores</th></tr></thead>
+      <tbody>
+        <tr><td><code>fluidmcp_servers</code></td><td>Server configs (command, args, env template, restart policy)</td></tr>
+        <tr><td><code>fluidmcp_server_instances</code></td><td>Runtime state: PID, status, instance env overrides, tool cache</td></tr>
+        <tr><td><code>fluidmcp_server_logs</code></td><td>Captured stderr / log lines per server</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Source Map</h2>
+    <table>
+      <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/pages/ManageServers.tsx</code></td><td>Add / edit / delete server configs; Start/Stop buttons</td></tr>
+        <tr><td><code>src/pages/Dashboard.tsx</code></td><td>Server cards with quick Start/Stop/Restart actions</td></tr>
+        <tr><td><code>src/pages/ToolRunner.tsx</code></td><td>Mounts tool form, fires tool execution, renders result</td></tr>
+        <tr><td><code>src/pages/ServerDetails.tsx</code></td><td>Hosts Tools / Logs / Environment tabs for a single server</td></tr>
+        <tr><td><code>src/hooks/useServers.ts</code></td><td>Start/Stop — calls API, refreshes server list</td></tr>
+        <tr><td><code>src/hooks/useServerManagement.ts</code></td><td>Add / delete server CRUD operations</td></tr>
+        <tr><td><code>src/hooks/useToolRunner.ts</code></td><td>Tool execution, timing, localStorage history</td></tr>
+        <tr><td><code>src/hooks/useServerEnv.ts</code></td><td>Env metadata fetch and update</td></tr>
+        <tr><td><code>src/services/api.ts</code></td><td>Typed HTTP client — all <code>apiClient.*</code> calls</td></tr>
+        <tr><td><code>src/services/toolHistory.ts</code></td><td>localStorage persistence for tool execution history</td></tr>
+        <tr><td><code>fluidmcp/cli/api/management.py</code></td><td>All REST endpoints (add, start, stop, run tool, env, …)</td></tr>
+        <tr><td><code>fluidmcp/cli/services/server_manager.py</code></td><td>Process lifecycle: spawn, initialize, stop, restart</td></tr>
+        <tr><td><code>fluidmcp/cli/repositories/database.py</code></td><td>MongoDB layer (motor async driver)</td></tr>
+        <tr><td><code>fluidmcp/cli/repositories/memory.py</code></td><td>In-memory fallback (used only with <code>--in-memory</code> flag)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="nav-btns">
+      <button class="btn btn-secondary" disabled>← Previous</button>
+      <button class="btn btn-primary" onclick="goTo(1)">Server Lifecycle →</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       LESSON 2 — Server Lifecycle
+  ═══════════════════════════════════════════════════════════════════ -->
+  <section class="lesson" id="lesson-1">
+    <h1>Server Lifecycle</h1>
+    <div class="lesson-meta">
+      <span>Lesson 2 of 6</span>
+      <span>~12 min read</span>
+    </div>
+
+    <p>
+      This lesson traces how an MCP server moves from first registration through
+      Start → Running → Stop, and what happens in each layer along the way.
+    </p>
+
+    <h2>Adding a Server</h2>
+
+    <p>
+      The user fills the "Add Server" form in <code>ManageServers.tsx</code> and clicks Save.
+      The hook calls <code>apiClient.addServer()</code> which fires:
+    </p>
+
+    <pre><code><span class="hl-comment"># POST /api/servers</span>
+<span class="hl-comment"># Body is FLAT — command/args/env at the root, not nested</span>
+curl -X POST http://localhost:8099/api/servers \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    <span class="hl-str">"id"</span>: <span class="hl-str">"filesystem"</span>,
+    <span class="hl-str">"name"</span>: <span class="hl-str">"Filesystem Server"</span>,
+    <span class="hl-str">"command"</span>: <span class="hl-str">"npx"</span>,
+    <span class="hl-str">"args"</span>: [<span class="hl-str">"-y"</span>, <span class="hl-str">"@modelcontextprotocol/server-filesystem"</span>, <span class="hl-str">"/tmp"</span>],
+    <span class="hl-str">"env"</span>: {},
+    <span class="hl-str">"restart_policy"</span>: <span class="hl-str">"on-failure"</span>,
+    <span class="hl-str">"max_restarts"</span>: <span class="hl-num">3</span>
+  }'</code></pre>
+
+    <div class="callout warn">
+      <span class="icon">⚠️</span>
+      <div class="body">
+        <strong>Flat format only</strong>
+        The field is <code>"id"</code>, not <code>"server_id"</code>. Do not nest config under
+        <code>mcp_config</code> — that is an internal MongoDB storage detail only. Sending nested
+        format returns a 422 or silently drops the command.
+      </div>
+    </div>
+
+    <p>What happens in the backend (<code>management.py → add_server()</code>):</p>
+    <ol class="steps">
+      <li>Sanitises input to prevent MongoDB injection</li>
+      <li>Validates <code>id</code> and <code>name</code> are present</li>
+      <li>Calls <code>validate_server_config()</code> — checks command against the allowlist (<code>npx</code>, <code>node</code>, <code>python</code>, <code>python3</code>, <code>uvx</code>, <code>docker</code>, <code>deno</code>, <code>bun</code>)</li>
+      <li>Checks for duplicate <code>id</code> — raises HTTP 409 if already in DB or in-memory registry</li>
+      <li>Calls <code>DatabaseManager.save_server_config(config)</code> — persists to MongoDB; falls back to in-memory on DB failure</li>
+      <li>Registers config in <code>ServerManager.configs[id]</code> for immediate in-memory access</li>
+      <li>Returns <code>{ "id": "...", "name": "...", "message": "..." }</code> — status is implicitly <code>stopped</code></li>
+    </ol>
+
+    <h2>Starting a Server</h2>
+
+    <pre><code><span class="hl-comment"># POST /api/servers/:id/start</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/start \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
+
+    <p>What <code>ServerManager.start_server()</code> does:</p>
+    <ol class="steps">
+      <li>Loads flat config from <code>manager.configs[id]</code> (originally loaded from MongoDB)</li>
+      <li>Merges any persisted instance env from <code>fluidmcp_server_instances</code></li>
+      <li>Spawns: <code>subprocess.Popen([command] + args, stdin=PIPE, stdout=PIPE, env=merged_env)</code></li>
+      <li><strong>Initialization handshake</strong> — depends on transport:
+        <ul style="margin-top:8px;padding-left:20px;font-size:13px;line-height:1.8">
+          <li><code>stdio</code>: writes JSON-RPC <code>initialize</code> to stdin → reads response (30 s timeout) → sends <code>notifications/initialized</code></li>
+          <li><code>sse/http</code>: polls TCP port via <code>asyncio.open_connection()</code> until uvicorn accepts connections</li>
+        </ul>
+      </li>
+      <li>Calls <code>tools/list</code> → caches tool schemas in <code>fluidmcp_server_instances</code></li>
+      <li>Records PID in <code>manager.processes[id]</code> and updates status to <code>running</code></li>
+    </ol>
+
+    <div class="callout info">
+      <span class="icon">ℹ️</span>
+      <div class="body">
+        <strong>30-second init timeout</strong>
+        If the MCP subprocess doesn't respond to the initialize handshake within 30 seconds,
+        the start call returns HTTP 500. This is the most common cause of start failures
+        for new or misconfigured servers.
+      </div>
+    </div>
+
+    <h2>Stopping a Server</h2>
+
+    <pre><code><span class="hl-comment"># POST /api/servers/:id/stop</span>
+<span class="hl-comment"># Optional: ?force=true to send SIGKILL immediately (skip SIGTERM)</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/stop \
+  -H "Authorization: Bearer $TOKEN"
+
+<span class="hl-comment"># Force kill (SIGKILL) — use when SIGTERM doesn't work</span>
+curl -X POST "http://localhost:8099/api/servers/filesystem/stop?force=true" \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
+
+    <p>The shutdown sequence in <code>ServerManager._stop_server_unlocked()</code>:</p>
+    <ol class="steps">
+      <li>Sends <code>SIGTERM</code> to the process (or <code>SIGKILL</code> if <code>force=true</code>)</li>
+      <li>Waits up to <strong>10 seconds</strong> for the process to exit</li>
+      <li>If still running after 10 s, sends <code>SIGKILL</code> (force kill)</li>
+      <li>Removes PID from <code>manager.processes</code> and updates status to <code>stopped</code></li>
+    </ol>
+
+    <div class="callout warn">
+      <span class="icon">⚠️</span>
+      <div class="body">
+        <strong>Authorization check on stop</strong>
+        The stop endpoint checks that the requesting user is the same user who started the server
+        (matched by token hash). A different user gets HTTP 403 unless no owner was recorded
+        (backward-compatibility) or the server runs in anonymous mode.
+      </div>
+    </div>
+
+    <h2>Restarting a Server</h2>
+
+    <pre><code><span class="hl-comment"># POST /api/servers/:id/restart</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/restart \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
+
+    <p>
+      Restart is a sequential <strong>Stop → Start</strong> under the same operation lock.
+      The config is re-read from <code>manager.configs[id]</code> (originally from MongoDB), so
+      the server always restarts with the canonical stored config.
+    </p>
+
+    <div class="callout info">
+      <span class="icon">ℹ️</span>
+      <div class="body">
+        <strong>Instance env persists across restarts</strong>
+        Env overrides written via <code>PUT /api/servers/:id/instance/env</code> are stored in
+        <code>fluidmcp_server_instances</code> and are merged back in on every start.
+        See Lesson 4 for details.
+      </div>
+    </div>
+
+    <h2>State Transitions</h2>
+
+    <pre><code>[Stopped] ──── Start ────► [Starting] ──── initialized ────► [Running]
+                               │                                  │
+                               │ spawn / init failure             │
+                               ▼                                  │
+                           [Error]                                │
+                                                                  │
+[Stopped] ◄─────────────────── Stop ──────────────────────────────┘
+
+[Running] ──── Restart ───► [Stopping] ──► [Starting] ──► [Running]</code></pre>
+
+    <div class="nav-btns">
+      <button class="btn btn-secondary" onclick="goTo(0)">← Architecture Overview</button>
+      <button class="btn btn-primary" onclick="goTo(2)">Tool Execution →</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       LESSON 3 — Tool Execution
+  ═══════════════════════════════════════════════════════════════════ -->
+  <section class="lesson" id="lesson-2">
+    <h1>Tool Execution</h1>
+    <div class="lesson-meta">
+      <span>Lesson 3 of 6</span>
+      <span>~10 min read</span>
+    </div>
+
+    <p>
+      This lesson traces what happens from the moment a user clicks "Run Tool" in the
+      ToolRunner page all the way down to the MCP subprocess and back.
+    </p>
+
+    <h2>Navigation to ToolRunner</h2>
+
+    <pre><code>/ui
+  → Dashboard
+  → click "View Details" on a server card
+  → ServerDetails (/servers/:id)
+  → Tools tab
+  → click "Run" next to a tool name
+  → ToolRunner (/servers/:id/tools/:toolName)</code></pre>
+
+    <h2>On Mount</h2>
+
+    <p>
+      When <code>ToolRunner.tsx</code> mounts, <code>useEffect</code> fires two parallel fetches:
+    </p>
+
+    <pre><code><span class="hl-comment"># 1. Load server details (name, config)</span>
+GET /api/servers/:id
+
+<span class="hl-comment"># 2. Load tool schemas for this server</span>
+GET /api/servers/:id/tools</code></pre>
+
+    <p>
+      The tool matching <code>toolName</code> from the URL is found in the returned array.
+      Its <code>inputSchema</code> (JSON Schema) is passed to
+      <code>&lt;JsonSchemaForm&gt;</code> which auto-generates form fields —
+      one input per property, with type-appropriate widgets (text, number, checkbox, etc.).
+    </p>
+
+    <h2>Executing a Tool</h2>
+
+    <p>When the user fills the form and clicks "Run Tool":</p>
+
+    <ol class="steps">
+      <li><code>handleSubmit(values)</code> in <code>ToolRunner.tsx</code> calls <code>useToolRunner.execute(values)</code></li>
+      <li>Hook sets <code>loading=true</code>, records <code>startTime = performance.now()</code></li>
+      <li>Calls <code>apiClient.runTool(serverId, toolName, args)</code></li>
+    </ol>
+
+    <pre><code><span class="hl-comment"># POST /api/servers/:id/tools/:toolName/run</span>
+curl -X POST http://localhost:8099/api/servers/filesystem/tools/read_file/run \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    <span class="hl-str">"arguments"</span>: {
+      <span class="hl-str">"path"</span>: <span class="hl-str">"/tmp/hello.txt"</span>
+    }
+  }'</code></pre>
+
+    <h2>FastAPI → ServerManager → MCP Subprocess</h2>
+
+    <p>Inside <code>management.py</code>:</p>
+    <ol class="steps">
+      <li>Validates bearer token (if secure mode)</li>
+      <li>Looks up the server in <code>ServerManager</code></li>
+      <li>Calls <code>server_manager.run_tool(server_id, tool_name, args)</code></li>
+    </ol>
+
+    <p>Inside <code>server_manager.run_tool()</code>:</p>
+    <ol class="steps">
+      <li>Acquires per-server <code>threading.Lock</code> to serialise concurrent tool calls</li>
+      <li>Builds the JSON-RPC request:
+        <pre style="margin:8px 0"><code>{
+  <span class="hl-str">"jsonrpc"</span>: <span class="hl-str">"2.0"</span>,
+  <span class="hl-str">"id"</span>: N,
+  <span class="hl-str">"method"</span>: <span class="hl-str">"tools/call"</span>,
+  <span class="hl-str">"params"</span>: { <span class="hl-str">"name"</span>: toolName, <span class="hl-str">"arguments"</span>: args }
+}</code></pre>
+      </li>
+      <li>Writes to <code>process.stdin</code> and flushes</li>
+      <li>Reads one line from <code>process.stdout</code> (the JSON-RPC response)</li>
+      <li>Releases the lock and returns the parsed response</li>
+    </ol>
+
+    <p>The MCP subprocess response format:</p>
+    <pre><code>{
+  <span class="hl-str">"jsonrpc"</span>: <span class="hl-str">"2.0"</span>,
+  <span class="hl-str">"id"</span>: N,
+  <span class="hl-str">"result"</span>: {
+    <span class="hl-str">"content"</span>: [
+      { <span class="hl-str">"type"</span>: <span class="hl-str">"text"</span>, <span class="hl-str">"text"</span>: <span class="hl-str">"file contents here"</span> }
+    ]
+  }
+}</code></pre>
+
+    <h2>Back in the Browser</h2>
+
+    <ol class="steps">
+      <li>Hook calculates <code>executionTime = (performance.now() - startTime) / 1000</code> in seconds</li>
+      <li>Calls <code>setResult(response)</code>, <code>setLoading(false)</code></li>
+      <li>Saves execution to localStorage via <code>toolHistoryService.saveExecution()</code></li>
+      <li>ToolRunner re-renders: layout switches to a 2-column grid — form on the left, result on the right</li>
+    </ol>
+
+    <h2>Result Format Detection (<code>ToolResult.tsx</code>)</h2>
+
+    <p>
+      <code>ToolResult</code> receives the raw HTTP response and picks a renderer automatically:
+    </p>
+    <table>
+      <thead><tr><th>Condition</th><th>Renderer</th></tr></thead>
+      <tbody>
+        <tr><td>Response has MCP <code>content[]</code> array</td><td><code>McpContentView</code> — handles text / image / resource blocks</td></tr>
+        <tr><td>Response is an array of objects</td><td><code>TableResultView</code> — sortable table</td></tr>
+        <tr><td>Response is a plain object or complex JSON</td><td><code>JsonResultView</code> — syntax-highlighted JSON</td></tr>
+        <tr><td>Response is a string or number</td><td><code>TextResultView</code> — monospace text</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Tool Execution History</h2>
+
+    <p>
+      <code>toolHistoryService</code> (<code>src/services/toolHistory.ts</code>) persists executions
+      to <code>localStorage</code> under a key of <code>serverId + toolName</code>:
+    </p>
+    <ul style="font-size:14px;padding-left:20px;line-height:1.9">
+      <li>Max 50 entries per tool (LRU eviction)</li>
+      <li>Both successful and failed executions are stored</li>
+      <li>"Load Parameters" in the history drawer calls <code>loadFromHistory(id)</code> and re-populates the form</li>
+      <li>History survives browser sessions until <code>localStorage</code> is cleared</li>
+    </ul>
+
+    <h2>Error Path</h2>
+
+    <p>If the tool call fails (network error, MCP error, timeout):</p>
+
+    <pre><code><span class="hl-comment">// useToolRunner catch block</span>
+setError(errorMessage)
+setExecutionTime(duration)    <span class="hl-comment">// still recorded</span>
+setLoading(false)
+toolHistoryService.saveExecution({ ..., success: false, error: errorMessage })</code></pre>
+
+    <p>
+      The right column renders <code>&lt;ToolResult error={executionError} /&gt;</code> and the
+      history entry is marked with a red "✗ Failed" badge.
+    </p>
+
+    <div class="nav-btns">
+      <button class="btn btn-secondary" onclick="goTo(1)">← Server Lifecycle</button>
+      <button class="btn btn-primary" onclick="goTo(3)">Environment Variables →</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       LESSON 4 — Environment Variables
+  ═══════════════════════════════════════════════════════════════════ -->
+  <section class="lesson" id="lesson-3">
+    <h1>Environment Variables</h1>
+    <div class="lesson-meta">
+      <span>Lesson 4 of 6</span>
+      <span>~10 min read</span>
+    </div>
+
+    <p>
+      The Environment tab in <code>ServerDetails</code> lets users view and update env vars
+      for a running server. Understanding how env changes persist — and what happens when you
+      save them — is critical for avoiding surprises.
+    </p>
+
+    <h2>Navigation to the Environment Tab</h2>
+
+    <pre><code>/ui
+  → Dashboard
+  → click "View Details" on a server card
+  → ServerDetails (/servers/:id)
+  → "Environment" tab</code></pre>
+
+    <h2>The Data Model</h2>
+
+    <p>
+      The backend never sends actual secret values to the frontend. Each env var is returned
+      as metadata only:
+    </p>
+
+    <pre><code><span class="hl-comment">// src/types/server.ts</span>
+<span class="hl-kw">interface</span> <span class="hl-fn">EnvMetadata</span> {
+  present:     boolean;        <span class="hl-comment">// Is a value set on the running instance?</span>
+  required:    boolean;        <span class="hl-comment">// Is this var required for the server to work?</span>
+  masked:      string | null;  <span class="hl-comment">// "****" if present, null if not set</span>
+  description: string;         <span class="hl-comment">// Help text shown in the UI</span>
+}</code></pre>
+
+    <div class="callout success">
+      <span class="icon">🔒</span>
+      <div class="body">
+        <strong>Values never leave the server</strong>
+        The backend only ever returns <code>"****"</code> for set values. The actual secret is
+        never transmitted to the browser — it cannot appear in DevTools, logs, or network traces.
+      </div>
+    </div>
+
+    <h2>Read Flow</h2>
+
+    <p>When the Environment tab activates, <code>useServerEnv(serverId)</code> fires:</p>
+
+    <pre><code><span class="hl-comment"># GET /api/servers/:id/instance/env</span>
+curl http://localhost:8099/api/servers/filesystem/instance/env \
+  -H "Authorization: Bearer $TOKEN"</code></pre>
+
+    <p>The backend response:</p>
+    <pre><code>{
+  <span class="hl-str">"API_KEY"</span>: { <span class="hl-str">"present"</span>: <span class="hl-kw">true</span>,  <span class="hl-str">"required"</span>: <span class="hl-kw">true</span>,  <span class="hl-str">"masked"</span>: <span class="hl-str">"****"</span>, <span class="hl-str">"description"</span>: <span class="hl-str">"Your API key"</span> },
+  <span class="hl-str">"DEBUG"</span>:   { <span class="hl-str">"present"</span>: <span class="hl-kw">false</span>, <span class="hl-str">"required"</span>: <span class="hl-kw">false</span>, <span class="hl-str">"masked"</span>: <span class="hl-kw">null</span>,   <span class="hl-str">"description"</span>: <span class="hl-str">"Enable debug logging"</span> }
+}</code></pre>
+
+    <p>
+      The UI renders each key as a row with a <code>[required]</code> badge where applicable.
+      The masked value <code>****</code> is shown where a value is present.
+    </p>
+
+    <h2>Write Flow</h2>
+
+    <p>When the user edits a value and clicks Save:</p>
+
+    <pre><code><span class="hl-comment"># PUT /api/servers/:id/instance/env</span>
+<span class="hl-comment"># Body: flat dict of key → new-value pairs</span>
+curl -X PUT http://localhost:8099/api/servers/filesystem/instance/env \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    <span class="hl-str">"API_KEY"</span>: <span class="hl-str">"sk-new-value"</span>
+  }'</code></pre>
+
+    <p>What the backend does in <code>management.py → update_server_instance_env()</code>:</p>
+    <ol class="steps">
+      <li>Validates the env dict (security + DoS checks via <code>validate_env_variables()</code>)</li>
+      <li>Filters out placeholder values like <code>"YOUR_API_KEY_HERE"</code> or empty strings</li>
+      <li>Calls <code>manager.db.update_instance_env(id, filtered_env)</code> — <strong>persists to MongoDB</strong> in <code>fluidmcp_server_instances</code></li>
+      <li>Checks if the server is currently running</li>
+      <li><strong>If running: automatically restarts the server</strong> to apply the new values</li>
+      <li>If restart fails: rolls back the env change in MongoDB and returns HTTP 500</li>
+    </ol>
+
+    <div class="callout danger">
+      <span class="icon">🚨</span>
+      <div class="body">
+        <strong>Saving env vars restarts a running server</strong>
+        Unlike what the flow diagram comment suggests, saving env vars via
+        <code>PUT /instance/env</code> <em>does</em> restart the server if it is currently running.
+        This is intentional — env vars must be injected at process spawn time and can't be
+        hot-patched into a running process. Plan accordingly in production environments.
+      </div>
+    </div>
+
+    <h2>Env Persistence Model</h2>
+
+    <table>
+      <thead><tr><th>Action</th><th>Where saved</th><th>Survives restart?</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Env declared in <code>POST /api/servers</code> body</td>
+          <td><code>fluidmcp_servers</code> (config template)</td>
+          <td>Yes — always used as the base</td>
+        </tr>
+        <tr>
+          <td>Env set via <code>PUT /instance/env</code></td>
+          <td><code>fluidmcp_server_instances</code> (instance overrides)</td>
+          <td>Yes — merged on every start, overrides template values</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>
+      On every <code>start_server()</code>, both layers are merged:
+      instance env takes precedence over the config template.
+    </p>
+
+    <h2>Required Fields</h2>
+
+    <p>
+      Fields marked <code>required: true</code> in the metadata show a badge in the UI.
+      If a required var is not <code>present</code>, the UI surfaces it visually so the user
+      knows the server may not function correctly — but the backend does not block start.
+    </p>
+
+    <div class="nav-btns">
+      <button class="btn btn-secondary" onclick="goTo(2)">← Tool Execution</button>
+      <button class="btn btn-primary" onclick="goTo(4)">State &amp; Error Patterns →</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       LESSON 5 — State & Error Patterns
+  ═══════════════════════════════════════════════════════════════════ -->
+  <section class="lesson" id="lesson-4">
+    <h1>State &amp; Error Patterns</h1>
+    <div class="lesson-meta">
+      <span>Lesson 5 of 6</span>
+      <span>~8 min read</span>
+    </div>
+
+    <p>
+      This lesson covers how server status is tracked, common error scenarios and their HTTP
+      codes, and how the UI stays current without requiring manual refreshes.
+    </p>
+
+    <h2>Server States</h2>
+
+    <table>
+      <thead><tr><th>State</th><th>UI badge</th><th>What it means</th></tr></thead>
+      <tbody>
+        <tr><td><code>stopped</code></td><td><span class="badge stopped">Stopped</span></td><td>Not running; Start button shown</td></tr>
+        <tr><td><code>starting</code></td><td><span class="badge starting">Starting</span></td><td>Process spawned, init handshake in progress</td></tr>
+        <tr><td><code>running</code></td><td><span class="badge running">Running</span></td><td>Handshake complete; tools available; Stop + Restart shown</td></tr>
+        <tr><td><code>error</code></td><td><span class="badge error">Error</span></td><td>Spawn failed or init timed out; last_error is set</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Status Polling</h2>
+
+    <p>
+      Dashboard cards call <code>GET /api/servers</code> on a short polling interval so status
+      badges stay current. There is no WebSocket push — polling is intentional to keep the
+      connection model simple.
+    </p>
+
+    <pre><code><span class="hl-comment"># Check a single server's status</span>
+GET /api/servers/:id/status
+
+<span class="hl-comment"># List all servers with their current state</span>
+GET /api/servers</code></pre>
+
+    <h2>Error Cases</h2>
+
+    <table>
+      <thead><tr><th>Error</th><th>HTTP code</th><th>Cause</th></tr></thead>
+      <tbody>
+        <tr><td>Duplicate <code>id</code> on Add</td><td>409</td><td>Server with that ID already in DB</td></tr>
+        <tr><td>Missing <code>command</code> field</td><td>400</td><td>Validation failure (required field absent)</td></tr>
+        <tr><td>Command not on allowlist</td><td>400</td><td><code>validate_server_config()</code> — only npx/node/python/python3/uvx/docker/deno/bun allowed</td></tr>
+        <tr><td>Command not found at spawn</td><td>500</td><td><code>npx</code> / <code>python</code> not on PATH in subprocess env</td></tr>
+        <tr><td>Init timeout (30 s)</td><td>500</td><td>MCP subprocess didn't respond to JSON-RPC <code>initialize</code></td></tr>
+        <tr><td>Stop on non-running server</td><td>400</td><td>Server not in <code>manager.processes</code></td></tr>
+        <tr><td>Stop by wrong user</td><td>403</td><td>Token doesn't match the user who started the server</td></tr>
+        <tr><td>Env placeholder values only</td><td>400</td><td>All submitted env values were empty or placeholder strings</td></tr>
+        <tr><td>Env update restart failure</td><td>500</td><td>Restart failed after env update; env rolled back</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Auto-Restart Policy</h2>
+
+    <p>
+      Servers can be configured to restart automatically on failure. The policy is set at
+      add time and stored in the server config:
+    </p>
+
+    <table>
+      <thead><tr><th>Policy</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td><code>never</code> (default)</td><td>No automatic restart on failure</td></tr>
+        <tr><td><code>on-failure</code></td><td>Restart on non-zero exit code</td></tr>
+        <tr><td><code>always</code></td><td>Restart on any termination</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      Restart delays use exponential backoff:
+      <code>delay = 5s × 2^min(restart_count, MAX_BACKOFF_EXPONENT)</code>
+      where <code>MAX_BACKOFF_EXPONENT = 5</code>, giving a maximum delay of
+      <code>5 × 32 = 160 s</code>.
+      At restart count 0 (first crash), the delay is 5 s.
+    </p>
+
+    <h2>Concurrent Operation Safety</h2>
+
+    <p>
+      <code>ServerManager</code> uses a per-server <code>asyncio.Lock</code> to prevent concurrent
+      Start/Stop/Restart operations on the same server. If a server is already being modified,
+      a second request returns immediately with <code>False</code> (fast-fail). The lock is also
+      used for tool calls (<code>threading.Lock</code> for the stdio read/write cycle).
+    </p>
+
+    <h2>localStorage Tool History</h2>
+
+    <p>
+      <code>toolHistoryService</code> stores the last 50 executions per server+tool combination
+      in <code>localStorage</code>. This is entirely client-side — nothing is sent to the backend.
+      Clearing browser storage wipes the history.
+    </p>
+
+    <div class="nav-btns">
+      <button class="btn btn-secondary" onclick="goTo(3)">← Environment Variables</button>
+      <button class="btn btn-primary" onclick="goTo(5)">Developer Quick Reference →</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════
+       LESSON 6 — Developer Quick Reference
+  ═══════════════════════════════════════════════════════════════════ -->
+  <section class="lesson" id="lesson-5">
+    <h1>Developer Quick Reference</h1>
+    <div class="lesson-meta">
+      <span>Lesson 6 of 6</span>
+      <span>~5 min read</span>
+    </div>
+
+    <p>
+      A cheat sheet for the endpoints and source locations covered in this tutorial.
+    </p>
+
+    <h2>API Endpoints</h2>
+
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>POST</code></td><td><code>/api/servers</code></td><td>Add a server (flat body: id, name, command, args, env)</td></tr>
+        <tr><td><code>GET</code></td><td><code>/api/servers</code></td><td>List all servers with state</td></tr>
+        <tr><td><code>GET</code></td><td><code>/api/servers/:id</code></td><td>Get single server config + tools</td></tr>
+        <tr><td><code>PUT</code></td><td><code>/api/servers/:id</code></td><td>Update server config (flat body, same shape as POST)</td></tr>
+        <tr><td><code>DELETE</code></td><td><code>/api/servers/:id</code></td><td>Remove server config</td></tr>
+        <tr><td><code>POST</code></td><td><code>/api/servers/:id/start</code></td><td>Start a stopped server</td></tr>
+        <tr><td><code>POST</code></td><td><code>/api/servers/:id/stop</code></td><td>Stop a running server (<code>?force=true</code> for SIGKILL)</td></tr>
+        <tr><td><code>POST</code></td><td><code>/api/servers/:id/restart</code></td><td>Restart (stop + start under a single lock)</td></tr>
+        <tr><td><code>GET</code></td><td><code>/api/servers/:id/status</code></td><td>Get current state, PID, uptime, last_error</td></tr>
+        <tr><td><code>GET</code></td><td><code>/api/servers/:id/tools</code></td><td>List available tools (from MongoDB cache)</td></tr>
+        <tr><td><code>POST</code></td><td><code>/api/servers/:id/tools/:name/run</code></td><td>Execute a tool (<code>{ "arguments": {...} }</code>)</td></tr>
+        <tr><td><code>GET</code></td><td><code>/api/servers/:id/instance/env</code></td><td>Get env metadata (masked, never plaintext)</td></tr>
+        <tr><td><code>PUT</code></td><td><code>/api/servers/:id/instance/env</code></td><td>Update instance env — persists to MongoDB, auto-restarts if running</td></tr>
+        <tr><td><code>DELETE</code></td><td><code>/api/servers/:id/instance/env</code></td><td>Clear all instance env overrides</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Key Behaviours to Remember</h2>
+
+    <table>
+      <thead><tr><th>Behaviour</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>API body format</td><td>Always flat — <code>command</code>/<code>args</code>/<code>env</code> at root. Never nested under <code>mcp_config</code>.</td></tr>
+        <tr><td>Add server field name</td><td><code>"id"</code> not <code>"server_id"</code></td></tr>
+        <tr><td>SIGTERM wait</td><td>10 seconds before SIGKILL fallback</td></tr>
+        <tr><td>Init timeout</td><td>30 seconds for JSON-RPC <code>initialize</code> handshake</td></tr>
+        <tr><td>Env update + running server</td><td>Triggers auto-restart. Fails with rollback if restart fails.</td></tr>
+        <tr><td>Env secrets</td><td>Never returned in API responses — masked as <code>****</code> only</td></tr>
+        <tr><td>Tool history</td><td>Client-side localStorage only — max 50 per tool, lost if storage cleared</td></tr>
+        <tr><td>Stop authorization</td><td>Must be the user who started the server (or anonymous mode)</td></tr>
+        <tr><td>Restart backoff</td><td><code>5s × 2^min(count, 5)</code> — max 160 s</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Common Debugging Patterns</h2>
+
+    <h3>Server won't start — "Init timeout after 30 s"</h3>
+    <ul style="font-size:14px;padding-left:20px;line-height:1.9">
+      <li>Check the server's stderr logs: <code>GET /api/servers/:id/logs</code></li>
+      <li>Verify the command is on PATH: run it manually in a terminal</li>
+      <li>For SSE/HTTP servers: check the <code>url</code> field in <code>metadata.json</code> matches the port the server binds to</li>
+    </ul>
+
+    <h3>Env update fails with 400 "No valid environment variables"</h3>
+    <ul style="font-size:14px;padding-left:20px;line-height:1.9">
+      <li>All submitted values were empty or matched a placeholder pattern (e.g. <code>YOUR_KEY_HERE</code>)</li>
+      <li>Make sure actual values are set before submitting</li>
+    </ul>
+
+    <h3>Tool call returns error / no result</h3>
+    <ul style="font-size:14px;padding-left:20px;line-height:1.9">
+      <li>Confirm the server is in <code>running</code> state before calling tools</li>
+      <li>Check <code>inputSchema</code> — required parameters must be present in <code>arguments</code></li>
+      <li>For concurrent calls: only one tool call runs at a time per server (serialised by lock); others queue behind it</li>
+    </ul>
+
+    <h3>Stop returns 403</h3>
+    <ul style="font-size:14px;padding-left:20px;line-height:1.9">
+      <li>The token you're using doesn't match the user who started the server</li>
+      <li>Use the same token, or run the server in <code>--allow-insecure</code> mode for anonymous access</li>
+    </ul>
+
+    <h2>Companion Docs</h2>
+    <table>
+      <thead><tr><th>File</th><th>What it covers</th></tr></thead>
+      <tbody>
+        <tr><td><a href="../onboarding/tool-execution-flow.md" style="color:var(--accent)">tool-execution-flow.md</a></td><td>Detailed ASCII flow diagram for tool execution</td></tr>
+        <tr><td><a href="../onboarding/env-variables-flow.md" style="color:var(--accent)">env-variables-flow.md</a></td><td>Detailed ASCII flow diagram for env variable management</td></tr>
+        <tr><td><a href="../onboarding/server-lifecycle-flow.md" style="color:var(--accent)">server-lifecycle-flow.md</a></td><td>Detailed ASCII flow diagram for server add/start/stop/restart</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout success">
+      <span class="icon">🎉</span>
+      <div class="body">
+        <strong>Tutorial complete!</strong>
+        You now have a working mental model of how FluidMCP's UI, API, and MCP subprocesses
+        fit together. The three companion flow diagrams have the full step-by-step details
+        if you need to trace a specific path deeper.
+      </div>
+    </div>
+
+    <div class="nav-btns">
+      <button class="btn btn-secondary" onclick="goTo(4)">← State &amp; Error Patterns</button>
+      <button class="btn btn-primary" disabled>Complete ✓</button>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  const TOTAL = 6;
+  let completed = new Set();
+
+  function goTo(idx) {
+    // Mark current as done
+    const current = document.querySelector('.lesson.active');
+    if (current) {
+      const cIdx = parseInt(current.id.replace('lesson-', ''));
+      completed.add(cIdx);
+    }
+
+    // Switch lesson
+    document.querySelectorAll('.lesson').forEach(l => l.classList.remove('active'));
+    document.getElementById('lesson-' + idx).classList.add('active');
+
+    // Update nav
+    document.querySelectorAll('#lesson-nav a').forEach(a => {
+      a.classList.remove('active', 'done');
+      const i = parseInt(a.dataset.lesson);
+      if (i === idx) a.classList.add('active');
+      else if (completed.has(i)) a.classList.add('done');
+    });
+
+    // Progress
+    const pct = Math.round((completed.size / TOTAL) * 100);
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-label').textContent = completed.size + ' / ' + TOTAL;
+
+    window.scrollTo(0, 0);
+  }
+
+  // Sidebar nav clicks
+  document.querySelectorAll('#lesson-nav a').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      goTo(parseInt(a.dataset.lesson));
+    });
+  });
+</script>
+
+</body>
+</html>
