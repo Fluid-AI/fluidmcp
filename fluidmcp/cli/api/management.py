@@ -22,7 +22,7 @@ import json
 import threading
 from collections import defaultdict
 from time import time as current_time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Import centralized validators
 from .validators import (
@@ -1699,6 +1699,120 @@ async def get_server_logs(
         "server": id,
         "logs": logs,
         "count": len(logs)
+    }
+
+
+# ==================== Debugging Endpoints ====================
+
+@router.get("/servers/{id}/crashes")
+async def get_server_crashes(
+    request: Request,
+    id: str,
+    limit: int = Query(20, ge=1, le=100, description="Max crash events to return"),
+):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    crashes = await manager.db.list_crash_events(id, limit=limit)
+
+    # Annotate with human-readable exit classification if not already present
+    from ..services.server_manager import classify_exit_code
+    for crash in crashes:
+        if "exit_category" not in crash and "exit_code" in crash:
+            info = classify_exit_code(crash["exit_code"])
+            crash["exit_category"] = info["category"]
+            crash["exit_label"] = info["label"]
+            crash["exit_description"] = info["description"]
+
+    # Compute crashes_per_hour from timestamps in the returned set
+    now = datetime.utcnow()
+    one_hour_ago = (now - timedelta(hours=1)).timestamp()
+    crashes_last_hour = sum(
+        1 for c in crashes
+        if c.get("timestamp") and (
+            c["timestamp"].timestamp() if hasattr(c["timestamp"], "timestamp")
+            else float(c["timestamp"])
+        ) > one_hour_ago
+    )
+
+    # restart_count from live status (falls back to 0)
+    status = await manager.get_server_status(id)
+    restart_count = status.get("restart_count", 0)
+
+    return {
+        "server": id,
+        "restart_count": restart_count,
+        "crashes_per_hour": crashes_last_hour,
+        "crashes": crashes,
+    }
+
+
+@router.get("/servers/{id}/stderr")
+async def get_server_stderr(
+    request: Request,
+    id: str,
+    lines: int = Query(50, ge=1, le=500, description="Number of recent lines to read"),
+    contains: Optional[str] = Query(None, description="Case-insensitive substring filter"),
+):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    log_path = manager._get_stderr_log_path(id)
+
+    if not os.path.exists(log_path):
+        return {
+            "server": id,
+            "file": log_path,
+            "lines": [],
+            "line_count": 0,
+            "truncated": False,
+        }
+
+    # Read last N lines from disk using byte-seek (same approach as _read_crash_stderr)
+    try:
+        # Estimate bytes needed: avg 120 bytes/line with 2x headroom
+        read_bytes = lines * 240
+        file_size = os.path.getsize(log_path)
+        truncated = file_size > read_bytes
+
+        with open(log_path, "rb") as f:
+            if truncated:
+                f.seek(-read_bytes, os.SEEK_END)
+            data = f.read()
+
+        text = data.decode("utf-8", errors="replace")
+        all_lines = text.splitlines()
+
+        # Drop first line if truncated (may be a partial line from the seek)
+        if truncated and len(all_lines) > 1:
+            all_lines = all_lines[1:]
+
+        # Take last N lines
+        tail = all_lines[-lines:]
+
+        # Apply optional contains filter (post-read, keeps file I/O simple)
+        if contains:
+            tail = [line for line in tail if contains.lower() in line.lower()]
+
+    except OSError as e:
+        raise HTTPException(500, f"Failed to read stderr log: {truncate_error(str(e))}")
+
+    return {
+        "server": id,
+        "file": log_path,
+        "lines": tail,
+        "line_count": len(tail),
+        "truncated": truncated,
     }
 
 
