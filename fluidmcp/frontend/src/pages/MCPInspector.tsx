@@ -1,13 +1,5 @@
+// import React from "react";
 import { useState, useEffect, useRef } from "react";
-import { Navbar } from "@/components/Navbar";
-import { Footer } from "@/components/Footer";
-import { apiClient } from "@/services/api";
-import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
-import { ToolResult } from '../components/result/ToolResult';
-import { JsonResultView } from '../components/result/JsonResultView';
-import { McpContentView } from '../components/result/McpContentView';
-import { WidgetSandbox } from '../components/WidgetSandbox';
-import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 
 // Compact collapsible result bubble for chat mode
 function ChatResultBubble({ result }: { result: unknown }) {
@@ -84,14 +76,13 @@ function ChatResultBubble({ result }: { result: unknown }) {
 // ── Animated thinking indicator ──────────────────────────────────────────────
 function ThinkingDots() {
   return (
-    <span style={{ display: "inline-flex", gap: "3px", alignItems: "center", marginLeft: "4px" }}>
-      {[0, 1, 2].map(i => (
-        <span key={i} style={{
-          width: "4px", height: "4px", borderRadius: "50%",
-          background: "rgba(255,255,255,0.55)", display: "inline-block",
-          animation: `thinking-blink 1.4s infinite ${i * 0.2}s`,
-        }} />
-      ))}
+    <span style={{ fontStyle: "italic", color: "rgba(255,255,255,0.4)", fontSize: "0.72rem" }}>
+      Thinking
+      <span style={{ display: "inline-flex", gap: "1px" }}>
+        {[0, 1, 2].map(i => (
+          <span key={i} style={{ animation: `thinking-blink 1.4s ease-in-out ${i * 0.2}s infinite` }}>.</span>
+        ))}
+      </span>
     </span>
   );
 }
@@ -103,17 +94,6 @@ type DisplayGroup =
 
 function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): DisplayGroup[] {
   const runMap = new Map(execHistory.map(r => [r.runId, r]));
-
-  // Pre-build runId → steps map in a single pass to avoid O(n²) inner filter
-  const stepsByRunId = new Map<string, ChatMessage[]>();
-  for (const msg of messages) {
-    if (msg.runId) {
-      const arr = stepsByRunId.get(msg.runId);
-      if (arr) arr.push(msg);
-      else stepsByRunId.set(msg.runId, [msg]);
-    }
-  }
-
   const seen = new Set<string>();
   return messages.reduce<DisplayGroup[]>((acc, msg) => {
     if (!msg.runId) {
@@ -123,7 +103,7 @@ function groupMessages(messages: ChatMessage[], execHistory: ExecutionRun[]): Di
       acc.push({
         kind: "run",
         runId: msg.runId,
-        steps: stepsByRunId.get(msg.runId) ?? [],
+        steps: messages.filter(m => m.runId === msg.runId),
         run: runMap.get(msg.runId),
       });
     }
@@ -138,7 +118,7 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
   const toolCall  = steps.find(s => s.type === "tool_call");
   const toolResult = steps.find(s => s.type === "tool_result");
   const errorStep = steps.find(s => s.type === "error");
-  const isActive  = run ? !run.endTime : !toolResult && !errorStep; // use run.endTime when available
+  const isActive  = !toolResult && !errorStep; // run still in progress
 
   const totalMs    = run?.endTime ? run.endTime - run.startTime : null;
   const thinkingMs = (toolCall?.perfMark && thinking?.perfMark)
@@ -201,14 +181,25 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
                 <div style={{ fontSize: "0.72rem", color: "#fbbf24", fontWeight: 600 }}>
                   Tool: {toolCall.toolName}
                 </div>
-                <pre style={{
-                  margin: "0.2rem 0 0", padding: "0.35rem 0.5rem",
-                  background: "rgba(0,0,0,0.3)", borderRadius: "6px",
-                  fontSize: "0.7rem", overflowX: "auto", whiteSpace: "pre-wrap",
-                  wordBreak: "break-all", color: "#e5e7eb", fontFamily: "ui-monospace,monospace",
-                }}>
-                  {JSON.stringify(toolCall.params, null, 2)}
-                </pre>
+                {toolCall.params && Object.keys(toolCall.params).length > 0 ? (
+                  <div style={{ marginTop: "0.25rem", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                    {Object.entries(toolCall.params).map(([k, v]) => (
+                      <div key={k} style={{ display: "flex", gap: "0.4rem", alignItems: "baseline", fontSize: "0.7rem" }}>
+                        <span style={{ color: "#fbbf24", opacity: 0.7, fontFamily: "monospace", flexShrink: 0 }}>{k}</span>
+                        <span style={{ color: "rgba(255,255,255,0.2)", flexShrink: 0 }}>→</span>
+                        <span style={{
+                          background: "rgba(0,0,0,0.25)", borderRadius: "4px",
+                          padding: "0.05rem 0.35rem", color: "#e5e7eb", fontFamily: "monospace",
+                          wordBreak: "break-all",
+                        }}>
+                          {typeof v === "string" ? v : JSON.stringify(v)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", fontStyle: "italic" }}>no params</span>
+                )}
               </div>
             </div>
           )}
@@ -254,6 +245,17 @@ function ExecutionRunBlock({ steps, run, sessionId }: { steps: ChatMessage[]; ru
     </div>
   );
 }
+
+import { Navbar } from "@/components/Navbar";
+import { Footer } from "@/components/Footer";
+import { apiClient } from "@/services/api";
+import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
+import { ToolResult } from '../components/result/ToolResult';
+import { JsonResultView } from '../components/result/JsonResultView';
+import { McpContentView } from '../components/result/McpContentView';
+import { WidgetSandbox } from '../components/WidgetSandbox';
+import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels';
+
 // Type for server object
 interface MCPServer {
   id: string;
@@ -335,22 +337,33 @@ export default function MCPInspector() {
   // 3A-2: Per-server logs
   const [logsByServer, setLogsByServer] = useState<Record<string, LogEntry[]>>({})
   const logs = logsByServer[selectedServerId ?? ""] ?? []
+  // Tracks how many backend logs to skip per server after a manual clear.
+  // Using a ref so the polling closure always reads the latest value.
+  const logsClearedOffsetRef = useRef<Record<string, number>>({})
+  // 5B: Log filter pill state
+  const [logFilter, setLogFilter] = useState<'all' | 'connect' | 'tool_call' | 'tool_error' | 'chat'>('all')
+  const filteredLogs = logFilter === 'all' ? logs : logs.filter(l =>
+    logFilter === 'tool_error' ? (l.type === 'tool_error') :
+    logFilter === 'tool_call' ? (l.type === 'tool_call' || l.type === 'tool_result') :
+    l.type === logFilter
+  )
 
   // 3A-3: Per-server chat memory
   const [chatHistoryByServer, setChatHistoryByServer] = useState<Record<string, ChatMessage[]>>({})
   const chatHistory = chatHistoryByServer[selectedServerId ?? ""] ?? []
 
-  // Helper to update chat — accepts explicit serverId so async flows
-  // (runChatTool) stay pinned to the originating server even if the user
-  // switches selection while the request is in-flight.
-  const updateChat = (
-    serverId: string,
-    updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])
-  ) => {
+  // 5A: System prompt + dialog state
+  const [systemPrompt, setSystemPrompt] = useState("")
+  const [systemPromptDraft, setSystemPromptDraft] = useState("")
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false)
+
+  // Helper to update chat for the currently selected server
+  const updateChat = (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+    if (!selectedServerId) return;
     setChatHistoryByServer(prev => ({
       ...prev,
-      [serverId]: typeof updater === "function"
-        ? updater(prev[serverId] ?? [])
+      [selectedServerId]: typeof updater === "function"
+        ? updater(prev[selectedServerId] ?? [])
         : updater
     }));
   };
@@ -363,8 +376,6 @@ export default function MCPInspector() {
   const logsRef = useRef<HTMLDivElement>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
-  // Tracks how many backend log entries existed when the user last cleared, per server
-  const logsClearedOffsetRef = useRef<Record<string, number>>({});
 
   const handleConnect = async () => {
 
@@ -434,6 +445,9 @@ export default function MCPInspector() {
       const res = await apiClient.connectInspectorServer(payload)
 
 
+      // Reset log offset for this server — new session, fresh log stream
+      logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [serverId]: 0 };
+
       setServers(prev =>
         prev.map(s =>
           s.id === serverId
@@ -451,7 +465,7 @@ export default function MCPInspector() {
       setChatHistoryByServer(prev => ({
         ...prev,
         [serverId]: [{
-          id: generateId(),
+          id: crypto.randomUUID(),
           type: "assistant",
           content: `Connected to ${res.server_info?.name || "new server"}. Chat cleared — ready to go!`,
           timestamp: Date.now(),
@@ -553,6 +567,8 @@ export default function MCPInspector() {
       }
       
       const res = await apiClient.connectInspectorServer(payload);
+      // Reset log offset — reconnect starts a new session with a fresh log stream
+      logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [serverId]: 0 };
       // Update with connected state and new session
       setServers((prev) =>
         prev.map((s) =>
@@ -573,7 +589,7 @@ export default function MCPInspector() {
         [serverId]: [
           ...(prev[serverId] ?? []),
           {
-            id: generateId(),
+            id: crypto.randomUUID(),
             type: "assistant" as const,
             content: `Reconnected to ${res.server_info?.name || "server"}.`,
             timestamp: Date.now(),
@@ -607,12 +623,6 @@ export default function MCPInspector() {
     if (selectedServerId === serverId) setSelectedServerId(null);
   };
 
-  // Stable UUID helper — falls back for non-secure contexts (e.g. plain HTTP)
-  const generateId = () =>
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-
   const runTool = async (params: any) => {
     if (!selectedServer?.session_id || !selectedTool || executing) return;
 
@@ -633,15 +643,15 @@ export default function MCPInspector() {
       setToolResult(res);
       setExecutionTime((end - start) / 1000);
       if (selectedServerId) {
-        const runId = generateId();
+        const runId = crypto.randomUUID();
         const run: ExecutionRun = {
           runId,
           serverId: selectedServerId,
           startTime: Date.now() - Math.round(end - start),
           endTime: Date.now(),
           steps: [
-            { id: generateId(), runId, type: "tool_call", toolName: selectedTool.name, params, timestamp: Date.now(), perfMark: start },
-            { id: generateId(), runId, type: "tool_result", result: res, timestamp: Date.now(), perfMark: end },
+            { id: crypto.randomUUID(), runId, type: "tool_call", toolName: selectedTool.name, params, timestamp: Date.now(), perfMark: start },
+            { id: crypto.randomUUID(), runId, type: "tool_result", result: res, timestamp: Date.now(), perfMark: end },
           ]
         };
         setExecutionHistoryByServer(prev => ({ ...prev, [selectedServerId]: [run, ...(prev[selectedServerId] ?? [])] }));
@@ -653,6 +663,12 @@ export default function MCPInspector() {
       setExecuting(false);
     }
   };
+
+  // Stable UUID helper — falls back for non-secure contexts (e.g. plain HTTP)
+  const generateId = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
  const runChatTool = async () => {
   // Guard against concurrent requests
@@ -672,14 +688,14 @@ export default function MCPInspector() {
   // Capture history with userMsg before any state updates — used below to
   // send an accurate chat_history to the backend (avoids stale closure).
   const nextHistory = [...chatHistory, userMsg]
-  const capturedServerId = selectedServerId
 
-  updateChat(capturedServerId, prev => [...prev, userMsg])
+  setChatHistory(prev => [...prev, userMsg])
 
   // 3A-4: start an ExecutionRun for this agent turn
-  const runId = generateId()
+  const runId = crypto.randomUUID()
   const runStartTime = Date.now()
   const runSteps: ChatMessage[] = []
+  const capturedServerId = selectedServerId
 
   try {
     setChatLoading(true)
@@ -693,29 +709,33 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(capturedServerId, prev => [...prev, thinkingMsg])
+    updateChat(prev => [...prev, thinkingMsg])
     runSteps.push(thinkingMsg)
 
     const res = await apiClient.chatWithInspector(
       selectedServer.session_id,
       {
         message,
-        chat_history: nextHistory.slice(-8).map((m: ChatMessage) => ({
+        chat_history: nextHistory.slice(-8).map(m => ({
           type: m.type,
           content: m.content
-        }))
+        })),
+        ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {})
       }
     )
+
+    updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
 
     if (res.clarification_needed) {
       const assistantMsg: ChatMessage = {
         id: generateId(),
+        runId,
         type: "assistant",
         content: res.message,
         timestamp: Date.now(),
         perfMark: performance.now()
       }
-      updateChat(capturedServerId, prev => [...prev, assistantMsg])
+      updateChat(prev => [...prev, assistantMsg])
       // save run (no tool call — just clarification)
       setExecutionHistoryByServer(prev => ({
         ...prev,
@@ -734,7 +754,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(capturedServerId, prev => [...prev, toolCallMsg])
+    updateChat(prev => [...prev, toolCallMsg])
     runSteps.push(toolCallMsg)
 
     const result = await apiClient.runInspectorTool(
@@ -763,7 +783,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(capturedServerId, prev => [...prev, resultMsg])
+    updateChat(prev => [...prev, resultMsg])
     runSteps.push(resultMsg)
 
     // save completed run
@@ -783,7 +803,7 @@ export default function MCPInspector() {
       perfMark: performance.now()
     }
 
-    updateChat(capturedServerId, prev => [...prev, errorMsg])
+    updateChat(prev => [...prev, errorMsg])
     runSteps.push(errorMsg)
 
     // save failed run
@@ -801,48 +821,6 @@ export default function MCPInspector() {
     setToolError(null)
     setExecutionTime(null)
   }, [selectedTool])
-
-  // ── Session persistence ────────────────────────────────────────────────────
-  // Restore servers + selected server on mount (survives page navigation)
-  useEffect(() => {
-    const savedServers = sessionStorage.getItem('inspector-servers')
-    const savedSelectedId = sessionStorage.getItem('inspector-selected-server-id')
-
-    if (savedServers) {
-      try {
-        const parsed: MCPServer[] = JSON.parse(savedServers)
-        // Any mid-connect server was interrupted — treat as disconnected on restore
-        const restored = parsed.map(s =>
-          s.status === 'connecting'
-            ? { ...s, status: 'disconnected' as const, session_id: null }
-            : s
-        )
-        setServers(restored)
-      } catch {
-        // ignore malformed storage
-      }
-    }
-
-    if (savedSelectedId) setSelectedServerId(savedSelectedId)
-  }, [])
-
-  // Persist servers list — strip auth secrets (tokens/header values) before writing
-  useEffect(() => {
-    const safeServers = servers.map(s => ({
-      ...s,
-      auth: s.auth ? { type: s.auth.type } : undefined,
-    }));
-    sessionStorage.setItem('inspector-servers', JSON.stringify(safeServers))
-  }, [servers])
-
-  // Persist selected server ID whenever it changes
-  useEffect(() => {
-    if (selectedServerId) {
-      sessionStorage.setItem('inspector-selected-server-id', selectedServerId)
-    } else {
-      sessionStorage.removeItem('inspector-selected-server-id')
-    }
-  }, [selectedServerId])
 
   useEffect(() => {
     const saved = sessionStorage.getItem('inspector-panel-sizes')
@@ -904,7 +882,7 @@ export default function MCPInspector() {
       className="dashboard"
       style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}
     >
-      <style>{`@keyframes thinking-blink{0%,80%,100%{opacity:0}40%{opacity:1}}`}</style>
+      <style>{`@keyframes thinking-blink{0%,100%{opacity:0.2}50%{opacity:1}}`}</style>
       <Navbar />
 
       <div style={{ paddingTop: "64px", flex: 1, display: "flex", flexDirection: "column" }}>
@@ -1057,10 +1035,12 @@ export default function MCPInspector() {
                               style={{
                                 marginTop: "0.75rem",
                                 padding: "0.9rem",
-                                border: "1px solid rgba(63,63,70,0.6)",
+                                border: isSelected ? "1px solid rgba(99,102,241,0.5)" : "1px solid rgba(63,63,70,0.6)",
+                                borderLeft: isSelected ? "3px solid rgba(99,102,241,0.9)" : "3px solid transparent",
                                 borderRadius: "0.6rem",
                                 cursor: "pointer",
-                                background: isSelected ? "rgba(255,255,255,0.08)" : "transparent",
+                                background: isSelected ? "rgba(99,102,241,0.08)" : "transparent",
+                                transition: "background 0.15s, border-color 0.15s",
                               }}
                             >
                               {/* HEADER */}
@@ -1236,29 +1216,57 @@ export default function MCPInspector() {
                     }}
                   >
                     {/* Logs header */}
-                    <div style={{ padding: "0.75rem 1rem 0.5rem", flexShrink: 0, borderBottom: "1px solid rgba(63,63,70,0.3)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <div>
-                        <span style={{ fontSize: "0.8rem", fontWeight: "600", color: "rgba(255,255,255,0.7)", fontFamily: "monospace" }}>
-                          LOGS
-                        </span>
-                        {logs.length > 0 && (
-                          <span style={{ marginLeft: "0.5rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.35)" }}>
-                            {logs.length} entries
-                          </span>
+                    <div style={{ padding: "0.6rem 0.75rem 0.4rem", flexShrink: 0, borderBottom: "1px solid rgba(63,63,70,0.3)" }}>
+                      {/* Title row */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <span style={{ fontSize: "0.75rem", fontWeight: "600", color: "rgba(255,255,255,0.7)", fontFamily: "monospace" }}>LOGS</span>
+                          {logs.length > 0 && (
+                            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)" }}>
+                              {filteredLogs.length}{logFilter !== 'all' ? `/${logs.length}` : ''}
+                            </span>
+                          )}
+                        </div>
+                        {logs.length > 0 && selectedServerId && (
+                          <button
+                            onClick={() => {
+                              if (!selectedServerId) return;
+                              const currentOffset = logsClearedOffsetRef.current[selectedServerId] ?? 0;
+                              logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [selectedServerId]: currentOffset + logs.length };
+                              setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }));
+                            }}
+                            style={{ fontSize: "0.65rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.35)", cursor: "pointer", padding: "0.1rem 0.35rem" }}
+                          >
+                            Clear
+                          </button>
                         )}
                       </div>
-                      {logs.length > 0 && selectedServerId && (
-                        <button
-                          onClick={() => {
-                            const currentTotal = (logsClearedOffsetRef.current[selectedServerId] ?? 0) + logs.length;
-                            logsClearedOffsetRef.current[selectedServerId] = currentTotal;
-                            setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }));
-                          }}
-                          style={{ fontSize: "0.7rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0.15rem 0.4rem" }}
-                        >
-                          Clear
-                        </button>
-                      )}
+                      {/* Filter pills */}
+                      <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+                        {([
+                          { key: 'all', label: 'All', count: logs.length },
+                          { key: 'connect', label: 'Connect', count: logs.filter(l => l.type === 'connect').length },
+                          { key: 'tool_call', label: 'Tool', count: logs.filter(l => l.type === 'tool_call' || l.type === 'tool_result').length },
+                          { key: 'tool_error', label: 'Error', count: logs.filter(l => l.type === 'tool_error').length },
+                          { key: 'chat', label: 'Chat', count: logs.filter(l => l.type === 'chat').length },
+                        ] as const).map(pill => (
+                          <button
+                            key={pill.key}
+                            onClick={() => setLogFilter(pill.key)}
+                            style={{
+                              fontSize: "0.65rem", padding: "0.1rem 0.45rem",
+                              borderRadius: "999px", cursor: "pointer",
+                              border: logFilter === pill.key ? "1px solid rgba(99,102,241,0.7)" : "1px solid rgba(63,63,70,0.5)",
+                              background: logFilter === pill.key ? "rgba(99,102,241,0.2)" : "transparent",
+                              color: logFilter === pill.key ? "rgba(165,180,252,1)" : "rgba(255,255,255,0.4)",
+                              fontFamily: "monospace",
+                              transition: "all 0.1s",
+                            }}
+                          >
+                            {pill.label}{pill.count > 0 ? ` (${pill.count})` : ''}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     {/* Logs content */}
@@ -1273,28 +1281,28 @@ export default function MCPInspector() {
                         fontSize: "0.78rem",
                       }}
                     >
-                      {logs.length === 0 ? (
+                      {filteredLogs.length === 0 ? (
                         <div style={{
                           display: "flex", alignItems: "center", justifyContent: "center",
                           height: "100%", color: "rgba(255,255,255,0.35)", fontSize: "0.8rem",
                         }}>
-                          {selectedServer?.session_id ? "No logs yet" : "Connect to a server to see logs"}
+                          {selectedServer?.session_id ? (logFilter !== 'all' ? "No matching logs" : "No logs yet") : "Connect to a server to see logs"}
                         </div>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                          {[...logs].reverse().map((log, i) => {
+                          {[...filteredLogs].reverse().map((log, i) => {
                             const color = logColors[log.type] || "#9ca3af";
                             return (
                               <div
                                 key={i}
                                 style={{
                                   display: "grid",
-                                  // Fixed columns: time | type | message
-                                  // time ~70px, type ~90px, message gets rest
                                   gridTemplateColumns: "70px 90px 1fr",
                                   gap: "0.5rem",
                                   paddingBottom: "3px",
                                   borderBottom: "1px solid rgba(63,63,70,0.2)",
+                                  borderLeft: `2px solid ${color}`,
+                                  paddingLeft: "0.4rem",
                                   alignItems: "start",
                                 }}
                               >
@@ -1306,7 +1314,7 @@ export default function MCPInspector() {
                                 <span style={{ color, fontWeight: "700", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                                   {log.type.toUpperCase()}
                                 </span>
-                                {/* Message — grid child auto-constrains width, word-break works correctly */}
+                                {/* Message */}
                                 <span style={{ color: "rgba(255,255,255,0.75)", wordBreak: "break-word", overflowWrap: "break-word" }}>
                                   {log.message}
                                 </span>
@@ -1456,10 +1464,12 @@ export default function MCPInspector() {
                                 return (
                                   <div key={msg.id} style={{ display: "flex", justifyContent: "flex-end" }}>
                                     <div style={{
-                                      background: "#2563eb", color: "#fff",
-                                      padding: "0.6rem 0.75rem",
-                                      borderRadius: "12px 12px 4px 12px",
-                                      maxWidth: "70%", fontSize: "0.9rem", lineHeight: 1.4
+                                      background: "rgba(37,99,235,0.85)",
+                                      border: "1px solid rgba(59,130,246,0.4)",
+                                      color: "#fff",
+                                      padding: "0.55rem 0.85rem",
+                                      borderRadius: "16px 16px 4px 16px",
+                                      maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
                                     }}>
                                       {msg.content}
                                     </div>
@@ -1469,13 +1479,20 @@ export default function MCPInspector() {
 
                               if (msg.type === "assistant") {
                                 return (
-                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start" }}>
+                                  <div key={msg.id} style={{ display: "flex", justifyContent: "flex-start", gap: "0.5rem", alignItems: "flex-start" }}>
                                     <div style={{
-                                      background: "rgba(99,102,241,0.15)",
-                                      border: "1px solid rgba(99,102,241,0.3)",
-                                      padding: "0.6rem 0.75rem",
-                                      borderRadius: "12px 12px 12px 4px",
-                                      maxWidth: "70%", fontSize: "0.9rem"
+                                      width: "22px", height: "22px", borderRadius: "50%", flexShrink: 0, marginTop: "2px",
+                                      background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)",
+                                      display: "flex", alignItems: "center", justifyContent: "center",
+                                      fontSize: "0.65rem",
+                                    }}>🤖</div>
+                                    <div style={{
+                                      background: "rgba(39,39,42,0.8)",
+                                      border: "1px solid rgba(63,63,70,0.6)",
+                                      padding: "0.55rem 0.85rem",
+                                      borderRadius: "4px 16px 16px 16px",
+                                      maxWidth: "75%", fontSize: "0.875rem", lineHeight: 1.5,
+                                      color: "rgba(255,255,255,0.85)",
                                     }}>
                                       {msg.content}
                                     </div>
@@ -1489,48 +1506,125 @@ export default function MCPInspector() {
                           </div>
 
                           {/* Chat Input — grid row 2 (auto height, always at bottom) */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", paddingTop: "0.5rem" }}>
-                          {chatHistory.length > 1 && selectedServerId && (
-                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(63,63,70,0.3)" }}>
+
+                            {/* ── Toolbar row: model badge · system prompt · clear ── */}
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", paddingTop: "0.3rem" }}>
+                              {/* Model badge */}
+                              <span style={{
+                                fontSize: "0.65rem", padding: "0.15rem 0.5rem", borderRadius: "999px",
+                                background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
+                                color: "rgba(165,180,252,0.9)", fontFamily: "monospace", flexShrink: 0,
+                              }}>
+                                Groq · llama-3.1-8b
+                              </span>
+
+                              {/* System prompt button */}
                               <button
-                                onClick={() => setChatHistoryByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
-                                style={{ fontSize: "0.7rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: "0.15rem 0.4rem" }}
+                                onClick={() => { setSystemPromptDraft(systemPrompt); setSystemPromptOpen(true); }}
+                                title="System prompt"
+                                style={{
+                                  fontSize: "0.65rem", padding: "0.15rem 0.5rem", borderRadius: "999px",
+                                  background: systemPrompt ? "rgba(99,102,241,0.15)" : "transparent",
+                                  border: systemPrompt ? "1px solid rgba(99,102,241,0.4)" : "1px solid rgba(63,63,70,0.5)",
+                                  color: systemPrompt ? "rgba(165,180,252,0.9)" : "rgba(255,255,255,0.35)",
+                                  cursor: "pointer", flexShrink: 0,
+                                }}
                               >
-                                Clear Chat
+                                ⚙ {systemPrompt ? "Prompt set" : "System prompt"}
                               </button>
+
+                              {/* Spacer */}
+                              <div style={{ flex: 1 }} />
+
+                              {/* Clear chat */}
+                              {chatHistory.length > 1 && selectedServerId && (
+                                <button
+                                  onClick={() => setChatHistoryByServer(prev => ({ ...prev, [selectedServerId]: [] }))}
+                                  style={{ fontSize: "0.65rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.35)", cursor: "pointer", padding: "0.1rem 0.4rem", flexShrink: 0 }}
+                                >
+                                  Clear Chat
+                                </button>
+                              )}
                             </div>
-                          )}
+
+                            {/* ── System prompt dialog overlay ── */}
+                            {systemPromptOpen && (
+                              <div style={{
+                                position: "fixed", inset: 0, zIndex: 50,
+                                background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center",
+                              }}
+                                onClick={(e) => { if (e.target === e.currentTarget) setSystemPromptOpen(false); }}
+                              >
+                                <div style={{
+                                  background: "#18181b", border: "1px solid rgba(63,63,70,0.7)",
+                                  borderRadius: "12px", padding: "1.25rem", width: "420px", maxWidth: "90vw",
+                                  display: "flex", flexDirection: "column", gap: "0.75rem",
+                                }}>
+                                  <div style={{ fontSize: "0.9rem", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>System Prompt</div>
+                                  <textarea
+                                    value={systemPromptDraft}
+                                    onChange={e => setSystemPromptDraft(e.target.value)}
+                                    placeholder="You are a helpful assistant with access to MCP tools."
+                                    rows={5}
+                                    style={{
+                                      background: "#09090b", border: "1px solid rgba(63,63,70,0.6)",
+                                      borderRadius: "6px", padding: "0.5rem 0.6rem",
+                                      color: "#fff", fontSize: "0.8rem", resize: "vertical",
+                                      fontFamily: "inherit", lineHeight: 1.5,
+                                    }}
+                                  />
+                                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+                                    <button
+                                      onClick={() => setSystemPromptOpen(false)}
+                                      style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem", borderRadius: "6px", background: "transparent", border: "1px solid rgba(63,63,70,0.5)", color: "rgba(255,255,255,0.5)", cursor: "pointer" }}
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      onClick={() => { setSystemPrompt(systemPromptDraft); setSystemPromptOpen(false); }}
+                                      style={{ fontSize: "0.75rem", padding: "0.35rem 0.75rem", borderRadius: "6px", background: "rgba(99,102,241,0.8)", border: "none", color: "#fff", cursor: "pointer", fontWeight: 600 }}
+                                    >
+                                      Save
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* ── Message input row ── */}
                           <div style={{ display: "flex", gap: "0.5rem" }}>
                             <input
                               value={chatInput}
                               disabled={chatLoading}
                               onChange={(e) => setChatInput(e.target.value)}
                               placeholder="Ask something..."
-                              onKeyDown={(e) => { 
+                              onKeyDown={(e) => {
                                 if (e.key === "Enter" && !e.shiftKey && chatInput.trim()) {
-                                  e.preventDefault(); 
+                                  e.preventDefault();
                                   runChatTool();
-                                } 
+                                }
                               }}
                               style={{
-                                flex: 1, minWidth: 0, padding: "0.5rem",
-                                borderRadius: "0.35rem", border: "1px solid rgba(63,63,70,0.6)",
-                                background: "#09090b", color: "#fff", opacity: chatLoading ? 0.6 : 1,
+                                flex: 1, minWidth: 0, padding: "0.5rem 0.75rem",
+                                borderRadius: "0.5rem", border: "1px solid rgba(63,63,70,0.6)",
+                                background: "rgba(24,24,27,0.8)", color: "#fff", opacity: chatLoading ? 0.6 : 1,
+                                fontSize: "0.875rem",
                               }}
                             />
                             <button
-                              onClick={()=>{
-                                if (chatInput.trim()) runChatTool();
-                              }}
+                              onClick={()=>{ if (chatInput.trim()) runChatTool(); }}
                               disabled={chatLoading || !chatInput.trim()}
                               style={{
-                                padding: "0.5rem 0.75rem", borderRadius: "0.35rem",
-                                background: "#fff", color: "#000", fontWeight: "600", flexShrink: 0,
-                                opacity: chatLoading || !chatInput.trim() ? 0.6 : 1,
-                                cursor: chatLoading || !chatInput.trim() ? "not-allowed" : "pointer"
+                                padding: "0.5rem 1rem", borderRadius: "0.5rem",
+                                background: "rgba(99,102,241,0.9)", color: "#fff", fontWeight: "600", flexShrink: 0,
+                                border: "none",
+                                opacity: chatLoading || !chatInput.trim() ? 0.45 : 1,
+                                cursor: chatLoading || !chatInput.trim() ? "not-allowed" : "pointer",
+                                fontSize: "0.875rem",
                               }}
                             >
-                              {chatLoading ? "Thinking..." : "Send"}
+                              {chatLoading ? <ThinkingDots /> : "Send"}
                             </button>
                           </div>
                           </div>
