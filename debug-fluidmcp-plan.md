@@ -24,7 +24,7 @@ Both Railway and codespace use `fmcp serve` + MongoDB, so the same tooling appli
 ### Crash Persistence (database.py + server_manager.py:1105–1154)
 - `db.save_crash_event()` — writes to `fluidmcp_crash_events` MongoDB collection
 - `db.list_crash_events(server_id, limit)` — queries crash history
-- Fields stored per crash: `server_id`, `exit_code`, `stderr_tail` (last 2KB), `uptime_seconds`, `timestamp`
+- Fields stored per crash: `server_id`, `server_name`, `exit_code`, `stderr_tail` (last 2KB), `uptime_seconds`, `timestamp`
 - TTL index: auto-deleted after 30 days (env: `FMCP_CRASH_EVENT_TTL_DAYS`)
 - Stderr log files on disk: `~/.fluidmcp/logs/mcp_{server_id}_stderr.log` (10MB max, 5 rotations)
 
@@ -107,6 +107,7 @@ This avoids a round-trip through the metrics render path during a crash cleanup.
   "crashes": [
     {
       "timestamp": "2026-04-30T14:23:01Z",
+      "server_name": "my filesystem server",
       "exit_code": 137,
       "exit_category": "resource",
       "exit_label": "oom_killed",
@@ -379,6 +380,7 @@ Default behavior: drop immediately with `Retry-After: 1` header. Can be made con
   },
   "last_crash": {
     "timestamp": "2026-04-30T14:23:01Z",
+    "server_name": "my filesystem server",
     "exit_code": 137,
     "exit_category": "resource",
     "exit_label": "oom_killed",
