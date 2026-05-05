@@ -5,11 +5,12 @@ import shutil
 import asyncio
 import time
 import threading
+import uuid
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
-from fastapi import Request, APIRouter, Body, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
@@ -334,7 +335,7 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
     except Exception:
         logger.exception("Initialization error")
         return False
-    
+
 
 def create_dynamic_router(server_manager):
     """
@@ -395,6 +396,25 @@ def create_dynamic_router(server_manager):
             # Check if process is alive
             if process.poll() is not None:
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
+            # The subprocess is already initialized at startup by initialize_mcp_server().
+            # Forwarding initialize again would cause readline() to block forever (deadlock).
+            # Handle these at the gateway level and never forward to the subprocess.
+            if method == "initialize":
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": request.get("id", 0),
+                        "result": {
+                            "protocolVersion": request.get("params", {}).get("protocolVersion", "2025-03-26"),
+                            "capabilities": {"experimental": {}, "prompts": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "tools": {"listChanged": False}},
+                            "serverInfo": {"name": server_name, "version": "1.0.0"}
+                        }
+                    },
+                    headers={"mcp-session-id": str(uuid.uuid4())}
+                )
+            if method == "notifications/initialized":
+                return Response(status_code=204)
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):
