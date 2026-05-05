@@ -6,11 +6,12 @@ import asyncio
 import time
 import threading
 from collections import deque
+import uuid
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
 from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
@@ -521,6 +522,25 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
                     logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
 
+                # The subprocess is already initialized at startup by initialize_mcp_server().
+                # Forwarding initialize again would cause readline() to block forever (deadlock).
+                # Handle these at the gateway level and never forward to the subprocess.
+                if method == "initialize":
+                    return JSONResponse(
+                        content={
+                            "jsonrpc": "2.0",
+                            "id": request.get("id", 0),
+                            "result": {
+                                "protocolVersion": request.get("params", {}).get("protocolVersion", "2025-03-26"),
+                                "capabilities": {"experimental": {}, "prompts": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "tools": {"listChanged": False}},
+                                "serverInfo": {"name": package_name, "version": "1.0.0"}
+                            }
+                        },
+                        headers={"mcp-session-id": str(uuid.uuid4())}
+                    )
+                if method == "notifications/initialized":
+                    return Response(status_code=204)
+
                 # Offload blocking stdin/stdout I/O to a worker thread
                 msg = json.dumps(request)
                 logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
@@ -779,6 +799,25 @@ def create_dynamic_router(server_manager):
             # Check if process is alive
             if process.poll() is not None:
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
+            # The subprocess is already initialized at startup by initialize_mcp_server().
+            # Forwarding initialize again would cause readline() to block forever (deadlock).
+            # Handle these at the gateway level and never forward to the subprocess.
+            if method == "initialize":
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": request.get("id", 0),
+                        "result": {
+                            "protocolVersion": request.get("params", {}).get("protocolVersion", "2025-03-26"),
+                            "capabilities": {"experimental": {}, "prompts": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "tools": {"listChanged": False}},
+                            "serverInfo": {"name": server_name, "version": "1.0.0"}
+                        }
+                    },
+                    headers={"mcp-session-id": str(uuid.uuid4())}
+                )
+            if method == "notifications/initialized":
+                return Response(status_code=204)
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):

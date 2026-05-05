@@ -315,6 +315,19 @@ class ApiClient {
       body: JSON.stringify({ message }),
     });
   }
+
+  async getInspectorLogs(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/logs`, {
+      method: "GET",
+    });
+  }
+  async chatWithInspector(sessionId: string, data: any): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
   /**
    * Clone a GitHub repository and register its MCP server(s).
    *
