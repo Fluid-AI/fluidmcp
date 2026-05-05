@@ -1803,6 +1803,12 @@ class MCPHealthMonitor:
         # Tracks whether cpu_percent has been warmed up for each PID (first call returns 0.0)
         self._cpu_warmed_pids: set = set()
 
+        # Resource throttling state
+        # Consecutive cycles where cpu_percent exceeded cpu_warn_pct
+        self._high_cpu_cycles: Dict[str, int] = {}
+        # Timestamp of last resource-triggered kill per server (cooldown guard)
+        self._last_kill_time: Dict[str, float] = {}
+
     def start(self) -> None:
         """Start the background health monitor."""
         if self._running:
@@ -1887,6 +1893,8 @@ class MCPHealthMonitor:
                     self._restart_counts.pop(server_id, None)
             # Update resource snapshot while process is alive
             self._update_resource_snapshot(server_id, process)
+            # Check resource thresholds and kill/restart if exceeded
+            await self._check_resource_thresholds(server_id, process)
             return
 
         # Evict stale PID from warm-up tracking so the next restart gets a fresh warm-up
@@ -2031,3 +2039,90 @@ class MCPHealthMonitor:
         if len(set(readings)) == 1:
             return "stable"
         return "fluctuating"
+
+    async def _check_resource_thresholds(self, server_id: str, process) -> None:
+        """Kill or restart a server if it exceeds memory or CPU thresholds."""
+        snapshot = self._last_resource_snapshot.get(server_id)
+        if not snapshot:
+            return
+
+        config = self._sm.configs.get(server_id) or {}
+
+        # --- Memory kill policy ---
+        memory_warn_pct = float(config.get("memory_warn_pct",
+            os.getenv("FMCP_MEMORY_WARN_PCT", "90")))
+        memory_kill_pct = float(config.get("memory_kill_pct",
+            os.getenv("FMCP_MEMORY_KILL_PCT", "98")))
+
+        memory_limit_mb = config.get("memory_limit_mb",
+            int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+        memory_limit_bytes = memory_limit_mb * 1024 * 1024 if memory_limit_mb > 0 else None
+
+        if memory_limit_bytes and snapshot.get("memory_rss_bytes"):
+            mem_pct = snapshot["memory_rss_bytes"] / memory_limit_bytes * 100
+
+            if mem_pct >= memory_kill_pct:
+                # Cooldown guard: at most one resource kill per 60s per server
+                now = time.monotonic()
+                last_kill = self._last_kill_time.get(server_id)
+                if last_kill and (now - last_kill) < 60:
+                    elapsed = now - last_kill
+                    logger.warning(
+                        f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% — "
+                        f"kill skipped, cooldown active ({60 - elapsed:.0f}s remaining)"
+                    )
+                    return
+                self._last_kill_time[server_id] = now
+                logger.error(
+                    f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
+                    f"(>= {memory_kill_pct}%), killing to protect other servers"
+                )
+                op_lock = self._sm._get_operation_lock(server_id)
+                async with op_lock:
+                    if self._sm.processes.get(server_id) is process:
+                        await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
+                return
+
+            elif mem_pct >= memory_warn_pct:
+                logger.warning(
+                    f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
+                    f"(>= {memory_warn_pct}%) — approaching kill threshold"
+                )
+
+        # --- CPU stuck policy ---
+        cpu_warn_pct = float(config.get("cpu_warn_pct",
+            os.getenv("FMCP_CPU_WARN_PCT", "90")))
+        cpu_kill_cycles = int(config.get("cpu_kill_cycles",
+            os.getenv("FMCP_CPU_KILL_CYCLES", "3")))
+
+        cpu_pct = snapshot.get("cpu_percent", 0) or 0
+        if cpu_pct >= cpu_warn_pct:
+            self._high_cpu_cycles[server_id] = self._high_cpu_cycles.get(server_id, 0) + 1
+            cycles = self._high_cpu_cycles[server_id]
+            logger.warning(
+                f"[RESOURCE] {server_id} CPU at {cpu_pct:.1f}% "
+                f"(cycle {cycles}/{cpu_kill_cycles})"
+            )
+            if cycles >= cpu_kill_cycles:
+                now = time.monotonic()
+                last_kill = self._last_kill_time.get(server_id)
+                if last_kill and (now - last_kill) < 60:
+                    elapsed = now - last_kill
+                    logger.warning(
+                        f"[RESOURCE] {server_id} CPU stuck — "
+                        f"kill skipped, cooldown active ({60 - elapsed:.0f}s remaining)"
+                    )
+                    return
+                self._last_kill_time[server_id] = now
+                self._high_cpu_cycles.pop(server_id, None)
+                logger.error(
+                    f"[RESOURCE] {server_id} CPU stuck at {cpu_pct:.1f}% "
+                    f"for {cpu_kill_cycles} consecutive cycles, restarting"
+                )
+                op_lock = self._sm._get_operation_lock(server_id)
+                async with op_lock:
+                    if self._sm.processes.get(server_id) is process:
+                        await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
+        else:
+            # Reset counter on any healthy cycle
+            self._high_cpu_cycles.pop(server_id, None)
