@@ -80,6 +80,7 @@ class InspectorSession:
         self._req_id += 1
         return self._req_id
 
+
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(

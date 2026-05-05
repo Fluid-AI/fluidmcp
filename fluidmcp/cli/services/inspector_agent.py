@@ -50,6 +50,7 @@ async def choose_tool_with_llm(message: str, tools: list, chat_history: list | N
     if chat_history is None:
         chat_history = []
 
+
     if not tools:
         raise RuntimeError("No tools available")
 
