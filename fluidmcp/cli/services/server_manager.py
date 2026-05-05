@@ -550,6 +550,7 @@ class ServerManager:
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
+                    "stability": instance.get("stability", "stable") if instance else "stable",
                     "exit_code": None
                 }
             else:
@@ -560,6 +561,7 @@ class ServerManager:
                     "pid": None,
                     "uptime": None,
                     "restart_count": 0,
+                    "stability": "stable",
                     "exit_code": process.returncode
                 }
 
@@ -586,6 +588,7 @@ class ServerManager:
                             "pid": None,
                             "uptime": None,
                             "restart_count": instance.get("restart_count", 0),
+                            "stability": instance.get("stability", "stable"),
                             "exit_code": -1
                         }
 
@@ -618,6 +621,7 @@ class ServerManager:
                         "pid": None,
                         "uptime": None,
                         "restart_count": instance.get("restart_count", 0),
+                        "stability": instance.get("stability", "stable"),
                         "exit_code": -1
                     }
 
@@ -628,6 +632,7 @@ class ServerManager:
                 "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
+                "stability": instance.get("stability", "stable"),
                 "exit_code": instance.get("exit_code")
             }
 
@@ -638,6 +643,7 @@ class ServerManager:
             "pid": None,
             "uptime": None,
             "restart_count": 0,
+            "stability": "stable",
             "exit_code": None
         }
 
@@ -1809,6 +1815,9 @@ class MCPHealthMonitor:
         # Timestamp of last resource-triggered kill per server (cooldown guard)
         self._last_kill_time: Dict[str, float] = {}
 
+        # Stability tracking: sliding window of restart timestamps (10 min)
+        self._restart_timestamps: Dict[str, List[float]] = {}
+
     def start(self) -> None:
         """Start the background health monitor."""
         if self._running:
@@ -1891,6 +1900,8 @@ class MCPHealthMonitor:
                 uptime = self._sm.get_uptime(server_id)
                 if uptime and uptime > 300:
                     self._restart_counts.pop(server_id, None)
+                    self._restart_timestamps.pop(server_id, None)
+                    asyncio.ensure_future(self._clear_stability(server_id))
             # Update resource snapshot while process is alive
             self._update_resource_snapshot(server_id, process)
             # Check resource thresholds and kill/restart if exceeded
@@ -1986,6 +1997,7 @@ class MCPHealthMonitor:
                     )
                     success = False
             self._restart_counts[server_id] = count + 1
+            await self._check_stability(server_id)
             if success:
                 logger.info(f"MCP server '{server_id}' restarted successfully")
             else:
@@ -2176,3 +2188,39 @@ class MCPHealthMonitor:
         else:
             # Reset counter on any healthy cycle
             self._high_cpu_cycles.pop(server_id, None)
+
+    async def _check_stability(self, server_id: str) -> None:
+        """Record a restart timestamp and flag server as unstable if flapping."""
+        now = time.monotonic()
+        window = 600  # 10 minutes
+        storm_threshold = int(os.getenv("FMCP_RESTART_STORM_THRESHOLD", "5"))
+
+        timestamps = self._restart_timestamps.get(server_id, [])
+        timestamps.append(now)
+        # Keep only timestamps within the sliding window
+        timestamps = [t for t in timestamps if now - t <= window]
+        self._restart_timestamps[server_id] = timestamps
+
+        if len(timestamps) >= storm_threshold:
+            logger.warning(
+                f"[ALERT] {server_id} has restarted {len(timestamps)} times "
+                f"in the last 10 minutes — marking unstable"
+            )
+            try:
+                instance = await self._sm.db.get_instance_state(server_id) or {}
+                instance["server_id"] = server_id
+                instance["stability"] = "unstable"
+                await self._sm.db.save_instance_state(instance)
+            except Exception as e:
+                logger.error(f"Failed to update stability flag for '{server_id}': {e}")
+
+    async def _clear_stability(self, server_id: str) -> None:
+        """Clear the unstable flag after sustained healthy operation."""
+        try:
+            instance = await self._sm.db.get_instance_state(server_id)
+            if instance and instance.get("stability") == "unstable":
+                instance["stability"] = "stable"
+                await self._sm.db.save_instance_state(instance)
+                logger.info(f"[ALERT] {server_id} stability cleared after 5 minutes of healthy operation")
+        except Exception as e:
+            logger.error(f"Failed to clear stability flag for '{server_id}': {e}")
