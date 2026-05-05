@@ -94,7 +94,7 @@ class ApiClient {
         const error: ApiError = await response.json().catch(() => ({
           detail: `HTTP ${response.status}: ${response.statusText}`,
         }));
-        throw new Error(error.detail);
+        throw new ApiHttpError(error.detail, response.status);
       }
 
       return response.json();
@@ -328,6 +328,16 @@ class ApiClient {
     });
   }
 
+  async listInspectorResources(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources`);
+  }
+
+  async readInspectorResource(sessionId: string, uri: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources/read`, {
+      method: "POST",
+      body: JSON.stringify({ uri }),
+    });
+  }
 
   /**
    * Clone a GitHub repository and register its MCP server(s).
@@ -349,6 +359,7 @@ class ApiClient {
         headers: {
           'Content-Type': 'application/json',
           'X-GitHub-Token': githubToken,
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         },
         body: JSON.stringify(payload),
         signal: timeoutController.signal,

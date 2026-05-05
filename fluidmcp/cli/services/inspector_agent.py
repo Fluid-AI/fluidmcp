@@ -38,7 +38,7 @@ Parameters:
     return "\n".join(formatted)
 
 
-async def choose_tool_with_llm(message: str, tools: list, chat_history: list = []):
+async def choose_tool_with_llm(message: str, tools: list, chat_history: list | None = None):
     """
     Universal MCP agent powered by Groq.
 
@@ -46,6 +46,9 @@ async def choose_tool_with_llm(message: str, tools: list, chat_history: list = [
     even when GROQ_API_KEY is absent — the error surfaces only when the chat
     endpoint is actually called.
     """
+
+    if chat_history is None:
+        chat_history = []
 
     if not tools:
         raise RuntimeError("No tools available")
@@ -74,15 +77,12 @@ async def choose_tool_with_llm(message: str, tools: list, chat_history: list = [
 Available tools:
 {tool_description}
 
-User request:
-{message}
+User request: {message}
 
 Instructions:
 1. Choose the BEST tool to fulfill the request.
 2. Extract parameters from the request.
-3. If parameters are missing:
-   - Infer reasonable defaults OR leave them empty
-   - DO NOT explain anything
+3. If parameters are missing, infer reasonable defaults or leave them empty. DO NOT explain anything.
 
 Return ONLY JSON.
 """
@@ -129,8 +129,7 @@ Rules:
                     }
                 ],
                 temperature=0,
-                max_tokens=200,
-                stop=["\n\n"]
+                max_tokens=200
             )
 
         response = await asyncio.to_thread(_call_llm)
