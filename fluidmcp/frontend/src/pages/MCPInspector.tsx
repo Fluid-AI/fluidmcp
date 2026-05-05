@@ -1,4 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
+import { Navbar } from "@/components/Navbar";
+import { apiClient } from "@/services/api";
+import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
+import { ToolResult } from '../components/result/ToolResult';
+import { JsonResultView } from '../components/result/JsonResultView';
+import { McpContentView } from '../components/result/McpContentView';
+import { WidgetSandbox } from '../components/WidgetSandbox';
+import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels';
 
 // Compact collapsible result bubble for chat mode
 function ChatResultBubble({ result, initialView = "formatted", hideTabSwitcher = false }: { result: unknown; initialView?: "formatted" | "raw"; hideTabSwitcher?: boolean }) {
@@ -252,14 +260,6 @@ function ExecutionRunBlock({ steps, run }: { steps: ChatMessage[]; run?: Executi
   );
 }
 
-import { Navbar } from "@/components/Navbar";
-import { apiClient } from "@/services/api";
-import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
-import { ToolResult } from '../components/result/ToolResult';
-import { JsonResultView } from '../components/result/JsonResultView';
-import { McpContentView } from '../components/result/McpContentView';
-import { WidgetSandbox } from '../components/WidgetSandbox';
-import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels';
 
 // Type for server object
 interface MCPServer {
@@ -744,6 +744,8 @@ export default function MCPInspector() {
             : s
         )
       );
+      // Reset log offset so new logs from the restarted server aren't hidden
+      logsClearedOffsetRef.current[serverId] = 0;
       // Append reconnect notice to existing chat history (don't wipe it)
       setChatHistoryByServer(prev => ({
         ...prev,

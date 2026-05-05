@@ -353,6 +353,11 @@ button:disabled {
   to { transform: rotate(360deg); }
 }
 
+@keyframes thinking-blink {
+  0%, 80%, 100% { opacity: 0.15; }
+  40% { opacity: 1; }
+}
+
 .loading-message {
   margin-top: 1rem;
   color: #94a3b8;

@@ -87,7 +87,7 @@ User request: {message}
 Instructions:
 1. Choose the BEST tool to fulfill the request.
 2. Extract parameters from the request.
-3. If parameters are missing, infer reasonable defaults or leave them empty.
+3. If parameters are missing, infer reasonable defaults or leave them empty. DO NOT explain anything.
 
 Return ONLY JSON.
 """

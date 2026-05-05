@@ -94,7 +94,7 @@ class ApiClient {
         const error: ApiError = await response.json().catch(() => ({
           detail: `HTTP ${response.status}: ${response.statusText}`,
         }));
-        throw new Error(error.detail);
+        throw new ApiHttpError(error.detail, response.status);
       }
 
       return response.json();
@@ -377,6 +377,7 @@ class ApiClient {
         headers: {
           'Content-Type': 'application/json',
           'X-GitHub-Token': githubToken,
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         },
         body: JSON.stringify(payload),
         signal: timeoutController.signal,
