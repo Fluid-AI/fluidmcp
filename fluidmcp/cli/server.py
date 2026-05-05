@@ -25,51 +25,6 @@ from .services.frontend_utils import setup_frontend_routes
 from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
 
-
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.asyncio import AsyncioIntegration
-
-# Initialize Sentry for production error tracking (opt-in via SENTRY_DSN env var)
-def init_sentry() -> None:
-    """
-    Initialize Sentry for production error tracking.
-    This function is intended to be called explicitly during server startup
-    (e.g., from main()/run()/create_app()) rather than at module import time,
-    to avoid import-time side effects.
-    """
-    sentry_dsn = os.getenv("SENTRY_DSN")
-    if not sentry_dsn:
-        logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
-        return
-    
-    try:
-        sentry_sdk.init(
-            dsn=sentry_dsn,
-            environment=os.getenv("ENVIRONMENT", "production"),
-            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
-            integrations=[
-                FastApiIntegration(),
-                AsyncioIntegration(),
-            ],
-            # Filter out health check and metrics noise from error tracking
-            before_send=lambda event, hint: (
-                None
-                if any(
-                    path in event.get("request", {}).get("url", "")
-                    for path in ["/health", "/metrics"]
-                )
-                else event
-            ),
-        )
-        logger.info(
-            f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})"
-        )
-    except Exception as e:
-        logger.error(f"❌ Sentry initialization failed: {e}")
-
-
-
 def save_token_to_file(token: str) -> Path:
     """
     Save bearer token to secure file.
@@ -627,9 +582,6 @@ async def main(args):
             max_retries=3,
             require_persistence=require_persistence
         )
-
-    # Initialize Sentry (after persistence is set up)
-    init_sentry()
 
     # 2. Create ServerManager
     logger.info("Creating ServerManager...")
