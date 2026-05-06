@@ -1,14 +1,17 @@
 import os
+import re
 import time
 import json
 import shlex
 import asyncio
 import ipaddress
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 import httpx
 from loguru import logger
+from fastapi import HTTPException
 
 
 def _validate_url(url: str) -> None:
@@ -32,6 +35,72 @@ def _validate_url(url: str) -> None:
 
     if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
         raise ValueError("Connections to private/internal addresses are not allowed")
+
+
+# ── Per-binary argument schemas ───────────────────────────────────────────────
+# Each entry defines which flags are permitted and whether non-flag args are
+# package names or local file paths. Anything not in allowed_flags is rejected.
+# URL arguments (http://, https://) are always blocked — remote fetch is not a
+# supported MCP use case and would allow deno/bun to pull attacker-controlled code.
+
+_BINARY_SCHEMAS = {
+    "npx":     {"allowed_flags": {"-y", "--yes", "--package"}, "arg_type": "package"},
+    "uvx":     {"allowed_flags": {"--from", "--with"},         "arg_type": "package"},
+    "node":    {"allowed_flags": set(),                        "arg_type": "filepath"},
+    "python":  {"allowed_flags": set(),                        "arg_type": "filepath"},
+    "python3": {"allowed_flags": set(),                        "arg_type": "filepath"},
+    "deno":    {"allowed_flags": {"run"},                      "arg_type": "filepath"},
+    "bun":     {"allowed_flags": set(),                        "arg_type": "filepath"},
+}
+
+_PACKAGE_RE = re.compile(r'^[@a-zA-Z0-9][\w.\-/]*$')
+
+_ALLOWED_ROOTS = [Path("/home"), Path("/app"), Path("/workspace"), Path("/workspaces"), Path("/tmp")]
+
+
+def _validate_stdio_args(binary: str, parts: list) -> None:
+    """Validate flags and non-flag arguments for a stdio command against its per-binary schema.
+
+    For package-type binaries (npx, uvx), validation stops once the package name is
+    consumed — remaining args are passthrough to the MCP server package and are not
+    interpreted by node/python, so interpreter flag injection is not possible there.
+    """
+    schema = _BINARY_SCHEMAS[binary]
+    package_consumed = False  # only relevant for arg_type == "package"
+
+    for arg in parts[1:]:
+        # Block remote URLs unconditionally — remote fetch via deno/bun is not a
+        # supported MCP use case and would allow execution of attacker-controlled code.
+        if arg.startswith("http://") or arg.startswith("https://"):
+            raise HTTPException(400, "Remote URLs are not permitted as arguments")
+
+        # Once the package name has been seen for npx/uvx, remaining args are
+        # passthrough to the MCP server package — stop validating them.
+        if schema["arg_type"] == "package" and package_consumed:
+            continue
+
+        if arg.startswith("-") or arg in schema["allowed_flags"]:
+            # Flag or subcommand (e.g. deno's "run")
+            if arg not in schema["allowed_flags"]:
+                raise HTTPException(400, f"Flag '{arg}' is not permitted for '{binary}'")
+        elif schema["arg_type"] == "filepath":
+            _validate_stdio_filepath(arg)
+        else:
+            # Package name — validate then mark as consumed
+            if not _PACKAGE_RE.match(arg):
+                raise HTTPException(400, f"Invalid package name: '{arg}'")
+            package_consumed = True
+
+
+def _validate_stdio_filepath(path_str: str) -> None:
+    """Resolve path and ensure it stays within an allowed root directory."""
+    try:
+        resolved = Path(path_str).resolve()
+    except Exception:
+        raise HTTPException(400, f"Invalid path: '{path_str}'")
+
+    if not any(str(resolved).startswith(str(root)) for root in _ALLOWED_ROOTS):
+        raise HTTPException(400, f"Path '{path_str}' is outside allowed directories")
 
 
 class InspectorSession:
@@ -255,13 +324,19 @@ class InspectorSession:
         # ── Command allowlist ─────────────────────────────────────────────────
         # Only permit known MCP server launchers. Check basename so full paths
         # like /usr/local/bin/npx still pass.
-        _ALLOWED_EXECUTABLES = {"npx", "uvx", "node", "python", "python3", "deno", "bun"}
         exe_basename = os.path.basename(parts[0])
-        if exe_basename not in _ALLOWED_EXECUTABLES:
-            raise Exception(
+        if exe_basename not in _BINARY_SCHEMAS:
+            raise HTTPException(
+                400,
                 f"Command '{exe_basename}' is not allowed. "
-                f"Permitted launchers: {', '.join(sorted(_ALLOWED_EXECUTABLES))}"
+                f"Permitted launchers: {', '.join(sorted(_BINARY_SCHEMAS))}"
             )
+
+        # ── Argument validation ───────────────────────────────────────────────
+        # Per-binary schema: validates flags against a per-interpreter allowlist
+        # and checks non-flag args as either safe package names or local file
+        # paths within allowed roots. Blocks -c/-e/--eval and remote URLs.
+        _validate_stdio_args(exe_basename, parts)
 
         # ── Subprocess environment ────────────────────────────────────────────
         # Build a minimal safe env from a fixed allowlist of system variables
