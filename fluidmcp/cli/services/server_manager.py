@@ -2062,6 +2062,7 @@ class MCPHealthMonitor:
                 return  # skip this cycle; next cycle will have a real reading
             rss = proc.memory_info().rss
             cpu = proc.cpu_percent(interval=None)
+            open_fds = proc.num_fds() if hasattr(proc, "num_fds") else None
             # Update ring buffer for memory trend
             if server_id not in self._memory_history:
                 self._memory_history[server_id] = deque(maxlen=3)
@@ -2069,9 +2070,16 @@ class MCPHealthMonitor:
             snapshot = {
                 "memory_rss_bytes": rss,
                 "cpu_percent": cpu,
+                "open_fds": open_fds,
                 "active_requests": self._get_active_requests(server_id),
             }
             self._last_resource_snapshot[server_id] = snapshot
+            # Emit per-server Prometheus gauges
+            collector = MetricsCollector(server_id)
+            collector.set_server_memory_rss(rss)
+            collector.set_server_cpu_percent(cpu)
+            if open_fds is not None:
+                collector.set_server_open_fds(open_fds)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
