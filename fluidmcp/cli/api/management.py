@@ -3294,6 +3294,33 @@ async def get_metrics_prometheus(
     )
 
 
+@router.get("/metrics/mcp")
+async def get_mcp_metrics_prometheus(
+    token: str = Depends(get_token)
+):
+    """
+    Get Prometheus-formatted metrics for all MCP servers.
+
+    Returns per-server metrics updated every health check cycle (~30s):
+    - fluidmcp_server_memory_rss_bytes{server_id} — RSS memory of the MCP process
+    - fluidmcp_server_cpu_percent{server_id} — CPU utilization of the MCP process
+    - fluidmcp_server_open_fds{server_id} — open file descriptors
+    - fluidmcp_active_requests{server_id} — requests currently in flight
+    - fluidmcp_requests_total{server_id, method, status} — total requests processed
+    - fluidmcp_requests_rejected_total{server_id, reason} — requests dropped by concurrency limit
+    - fluidmcp_server_restarts_total{server_id, reason} — total server restarts
+    - fluidmcp_server_status{server_id} — server state (0=stopped, 2=running, 3=error)
+    - fluidmcp_request_duration_seconds{server_id, method} — request latency histogram
+
+    Example:
+        curl http://localhost:8099/api/metrics/mcp
+    """
+    return Response(
+        content=_get_metrics_registry().render_all(),
+        media_type="text/plain; version=0.0.4"
+    )
+
+
 @router.get("/metrics/json")
 async def get_metrics_json(
     token: str = Depends(get_token)
