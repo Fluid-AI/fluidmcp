@@ -375,6 +375,12 @@ class MetricsRegistry:
             labels=[]
         ))
 
+        self.register(Counter(
+            "fluidmcp_requests_rejected_total",
+            "Total number of requests rejected due to concurrency limit",
+            labels=["server_id", "reason"]
+        ))
+
     def register(self, metric: Metric):
         """Register a metric."""
         with self._lock:
@@ -633,6 +639,12 @@ class MetricsCollector:
         tool_duration = self.registry.get_metric("fluidmcp_tool_execution_seconds")
         if tool_duration:
             tool_duration.observe(duration, {"server_id": self.server_id, "tool_name": tool_name})
+
+    def record_rejected_request(self, reason: str):
+        """Increment the concurrency-rejection counter."""
+        rejected = self.registry.get_metric("fluidmcp_requests_rejected_total")
+        if rejected:
+            rejected.inc({"server_id": self.server_id, "reason": reason})
 
     def record_streaming_request(self, completion_status: str):
         """Record a streaming request."""
