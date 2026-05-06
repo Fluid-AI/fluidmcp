@@ -1934,12 +1934,15 @@ async def run_tool(
         config = await manager.db.get_server_config(id)
         if not config or config.get("deleted_at") or not config.get("enabled", True):
             raise HTTPException(400, f"Server '{id}' is not running")
-        logger.info(f"Auto-starting server '{id}' on demand")
+        safe_id = id.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_id}' on demand")
         started = await manager.start_server(id)
         if not started:
             raise HTTPException(400, f"Server '{id}' failed to auto-start")
 
-    process = manager.processes[id]
+    process = manager.processes.get(id)
+    if process is None:
+        raise HTTPException(503, f"Server '{id}' failed to start")
 
     # Send tools/call request
     try:

@@ -379,7 +379,8 @@ def create_dynamic_router(server_manager):
         if not config.get("enabled", True):
             raise HTTPException(404, f"Server '{server_name}' is disabled")
 
-        logger.info(f"Auto-starting server '{server_name}' on demand")
+        safe_name = server_name.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_name}' on demand")
         started = await server_manager.start_server(server_name)
         if not started:
             raise HTTPException(503, f"Server '{server_name}' failed to auto-start")
@@ -415,7 +416,9 @@ def create_dynamic_router(server_manager):
         with RequestTimer(collector, method):
             await _ensure_server_running(server_name)
 
-            process = server_manager.processes[server_name]
+            process = server_manager.processes.get(server_name)
+            if process is None:
+                raise HTTPException(503, f"Server '{server_name}' failed to start")
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):
@@ -486,7 +489,9 @@ def create_dynamic_router(server_manager):
         # Update last_used_at for idle cleanup when SSE connection is opened
         await server_manager.update_last_used(server_name)
 
-        process = server_manager.processes[server_name]
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
@@ -590,7 +595,9 @@ def create_dynamic_router(server_manager):
         """
         await _ensure_server_running(server_name)
 
-        process = server_manager.processes[server_name]
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         # ── SSE transport ────────────────────────────────────────────────────
         if isinstance(process, SseSubprocessHandle):
@@ -646,7 +653,9 @@ def create_dynamic_router(server_manager):
         """
         await _ensure_server_running(server_name)
 
-        process = server_manager.processes[server_name]
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         # ── SSE transport ────────────────────────────────────────────────────
         if isinstance(process, SseSubprocessHandle):
