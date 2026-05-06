@@ -1133,11 +1133,9 @@ async def get_server(request: Request, id: str):
             try:
                 proc = _psutil.Process(process.pid)
                 rss = proc.memory_info().rss
-                cpu = proc.cpu_percent(interval=None)
                 resources["pid"] = process.pid
                 resources["memory_rss_bytes"] = rss
                 resources["memory_rss_human"] = f"{rss / (1024 * 1024):.1f} MB"
-                resources["cpu_percent"] = cpu
                 resources["open_fds"] = proc.num_fds() if hasattr(proc, "num_fds") else None
                 resources["threads"] = proc.num_threads()
                 limit_mb = int(config.get("memory_limit_mb", 0) or
@@ -1151,10 +1149,14 @@ async def get_server(request: Request, id: str):
                 pass
             except Exception as e:
                 logger.warning(f"Failed to read resources for '{id}': {e}")
-    # Attach memory trend from health monitor if available
+    # Use health monitor's cached snapshot for CPU (fresh psutil call always returns 0.0)
+    # and for memory trend
     monitor = getattr(manager, "_health_monitor", None)
     if monitor:
         resources["memory_trend"] = monitor.get_memory_trend(id)
+        snapshot = monitor._last_resource_snapshot.get(id)
+        if snapshot:
+            resources["cpu_percent"] = snapshot.get("cpu_percent")
 
     # ── Concurrency ───────────────────────────────────────────────────────────
     manager.get_concurrency_semaphore(id)  # ensure semaphore is initialized
