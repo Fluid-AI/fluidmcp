@@ -122,6 +122,23 @@ class PersistenceBackend(ABC):
         pass
 
     @abstractmethod
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """
+        Delete the instance state for a server.
+
+        Called when a server is soft-deleted so a subsequent re-clone starts
+        with a clean instance record (no stale PID, exit codes, etc.).
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            True if the state was removed (or did not exist)
+        """
+        pass
+
+    @abstractmethod
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """
         Save log entry.
