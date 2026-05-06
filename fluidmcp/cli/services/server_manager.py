@@ -2080,6 +2080,9 @@ class MCPHealthMonitor:
             collector.set_server_cpu_percent(cpu)
             if open_fds is not None:
                 collector.set_server_open_fds(open_fds)
+            uptime = self._sm.get_uptime(server_id)
+            if uptime is not None:
+                collector.set_uptime(uptime)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
