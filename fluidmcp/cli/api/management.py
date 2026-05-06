@@ -1865,6 +1865,45 @@ async def get_server_resources(request: Request, id: str):
     }
 
 
+# ==================== Concurrency Endpoint ====================
+
+@router.get("/servers/{id}/concurrency")
+async def get_server_concurrency(request: Request, id: str):
+    """
+    Return the concurrency limit and current active request count for a server.
+
+    - **max_concurrent_requests**: configured limit (null = unlimited)
+    - **active_requests**: requests currently holding a semaphore slot
+    - **available_slots**: free slots remaining (null = unlimited)
+    - **rejected_total**: lifetime rejected requests due to concurrency limit
+    """
+    server_manager = get_server_manager(request)
+
+    if id not in server_manager.configs:
+        raise HTTPException(status_code=404, detail=f"Server '{id}' not found")
+
+    # Ensure semaphore is initialized (lazy creation) before reading info
+    server_manager.get_concurrency_semaphore(id)
+    info = server_manager.get_concurrency_info(id)
+
+    # Attach lifetime rejection count from metrics
+    from ..services.metrics import get_registry
+    registry = get_registry()
+    counter = registry.get_metric("fluidmcp_requests_rejected_total")
+    rejected_total = 0
+    if counter is not None:
+        key = counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
+        rejected_total = int(counter.samples.get(key, 0))
+
+    return {
+        "server": id,
+        "max_concurrent_requests": info["max_concurrent_requests"],
+        "active_requests": info["active_requests"],
+        "available_slots": info["available_slots"],
+        "rejected_total": rejected_total,
+    }
+
+
 # ==================== Environment Variable Management ====================
 
 @router.get("/servers/{id}/instance/env")
