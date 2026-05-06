@@ -1990,6 +1990,157 @@ async def get_server_concurrency(request: Request, id: str):
     }
 
 
+# ==================== Debug Aggregator ====================
+
+@router.get("/servers/{id}/debug")
+async def get_server_debug(
+    request: Request,
+    id: str,
+    stderr_lines: int = Query(default=20, ge=1, le=200),
+):
+    """
+    Full debug snapshot for a server in a single request.
+
+    Combines:
+    - **status**: state, pid, uptime, restart_count, stability, exit_code, transport
+    - **resources**: live memory/CPU/FDs, memory trend, limit info
+    - **concurrency**: max limit, active slots, lifetime rejections
+    - **crashes**: recent history with exit classification, crashes_per_hour
+    - **stderr**: last N lines from the process log (default 20, max 200)
+    """
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    # ── Status ────────────────────────────────────────────────────────────────
+    status = await manager.get_server_status(id)
+
+    # ── Resources ─────────────────────────────────────────────────────────────
+    resources = {
+        "pid": None,
+        "memory_rss_bytes": None,
+        "memory_rss_human": None,
+        "memory_trend": "unknown",
+        "memory_limit_bytes": None,
+        "memory_limit_human": None,
+        "memory_usage_pct": None,
+        "cpu_percent": None,
+        "open_fds": None,
+        "threads": None,
+    }
+    if status.get("state") == "running" and _psutil_available:
+        process = manager.processes.get(id)
+        if process and process.poll() is None:
+            try:
+                proc = _psutil.Process(process.pid)
+                rss = proc.memory_info().rss
+                resources["pid"] = process.pid
+                resources["memory_rss_bytes"] = rss
+                resources["memory_rss_human"] = f"{rss / (1024 * 1024):.1f} MB"
+                resources["open_fds"] = proc.num_fds() if hasattr(proc, "num_fds") else None
+                resources["threads"] = proc.num_threads()
+                limit_mb = int(config.get("memory_limit_mb", 0) or
+                               int(os.environ.get("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+                if limit_mb > 0:
+                    limit_bytes = limit_mb * 1024 * 1024
+                    resources["memory_limit_bytes"] = limit_bytes
+                    resources["memory_limit_human"] = f"{limit_mb} MB"
+                    resources["memory_usage_pct"] = round(rss / limit_bytes * 100, 1)
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                pass
+            except Exception as e:
+                logger.warning(f"[debug] Failed to read resources for '{id}': {e}")
+    monitor = getattr(manager, "_health_monitor", None)
+    if monitor:
+        resources["memory_trend"] = monitor.get_memory_trend(id)
+        snapshot = monitor._last_resource_snapshot.get(id)
+        if snapshot and status.get("state") == "running":
+            resources["cpu_percent"] = snapshot.get("cpu_percent")
+
+    # ── Concurrency ───────────────────────────────────────────────────────────
+    manager.get_concurrency_semaphore(id)
+    conc_info = manager.get_concurrency_info(id)
+    _rej_counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
+    rejected_total = 0
+    if _rej_counter:
+        _key = _rej_counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
+        rejected_total = int(_rej_counter.samples.get(_key, 0))
+    concurrency = {
+        "max_concurrent_requests": conc_info["max_concurrent_requests"],
+        "active_requests": conc_info["active_requests"],
+        "available_slots": conc_info["available_slots"],
+        "rejected_total": rejected_total,
+    }
+
+    # ── Crashes ───────────────────────────────────────────────────────────────
+    crashes = []
+    crashes_per_hour = 0.0
+    recent_crash_count = 0
+    try:
+        from ..services.server_manager import classify_exit_code
+        raw_crashes = await manager.db.list_crash_events(id, limit=20)
+        now = datetime.utcnow()
+        one_hour_ago = (now - timedelta(hours=1)).timestamp()
+        for c in raw_crashes:
+            if "exit_category" not in c and "exit_code" in c:
+                info = classify_exit_code(c["exit_code"])
+                c["exit_category"] = info["category"]
+                c["exit_label"] = info["label"]
+                c["exit_description"] = info["description"]
+            crashes.append(c)
+        recent_crash_count = len(crashes)
+        crashes_per_hour = float(sum(
+            1 for c in crashes
+            if c.get("timestamp") and (
+                c["timestamp"].timestamp() if hasattr(c["timestamp"], "timestamp")
+                else float(c["timestamp"])
+            ) > one_hour_ago
+        ))
+    except Exception as e:
+        logger.warning(f"[debug] Failed to load crashes for '{id}': {e}")
+
+    # ── Stderr ────────────────────────────────────────────────────────────────
+    stderr = {"lines": [], "line_count": 0, "truncated": False, "file": None}
+    try:
+        log_path = manager._get_stderr_log_path(id)
+        stderr["file"] = log_path
+        if os.path.exists(log_path):
+            read_bytes = stderr_lines * 240
+            file_size = os.path.getsize(log_path)
+            truncated = file_size > read_bytes
+            with open(log_path, "rb") as f:
+                if truncated:
+                    f.seek(-read_bytes, os.SEEK_END)
+                data = f.read()
+            text = data.decode("utf-8", errors="replace")
+            all_lines = text.splitlines()
+            if truncated and len(all_lines) > 1:
+                all_lines = all_lines[1:]
+            tail = all_lines[-stderr_lines:]
+            stderr["lines"] = tail
+            stderr["line_count"] = len(tail)
+            stderr["truncated"] = truncated
+    except Exception as e:
+        logger.warning(f"[debug] Failed to read stderr for '{id}': {e}")
+
+    return {
+        "server": id,
+        "status": status,
+        "resources": resources,
+        "concurrency": concurrency,
+        "crashes": {
+            "recent_crash_count": recent_crash_count,
+            "crashes_per_hour": crashes_per_hour,
+            "events": crashes,
+        },
+        "stderr": stderr,
+    }
+
+
 # ==================== Environment Variable Management ====================
 
 @router.get("/servers/{id}/instance/env")
