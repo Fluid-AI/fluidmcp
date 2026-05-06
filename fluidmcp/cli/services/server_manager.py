@@ -586,6 +586,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "failed",
+                    "transport": None,
+                    "url": None,
                     "pid": None,
                     "uptime": None,
                     "restart_count": 0,
@@ -613,6 +615,8 @@ class ServerManager:
                         return {
                             "id": id,
                             "state": "failed",
+                            "transport": None,
+                            "url": None,
                             "pid": None,
                             "uptime": None,
                             "restart_count": instance.get("restart_count", 0),
@@ -646,6 +650,8 @@ class ServerManager:
                     return {
                         "id": id,
                         "state": "failed",
+                        "transport": None,
+                        "url": None,
                         "pid": None,
                         "uptime": None,
                         "restart_count": instance.get("restart_count", 0),
@@ -657,6 +663,8 @@ class ServerManager:
             return {
                 "id": id,
                 "state": state,
+                "transport": None,
+                "url": None,
                 "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
@@ -668,6 +676,8 @@ class ServerManager:
         return {
             "id": id,
             "state": "not_found",
+            "transport": None,
+            "url": None,
             "pid": None,
             "uptime": None,
             "restart_count": 0,
