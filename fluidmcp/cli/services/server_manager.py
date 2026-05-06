@@ -84,6 +84,10 @@ class ServerManager:
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
 
+        # Concurrency semaphores: server_id -> asyncio.Semaphore
+        # Created lazily when max_concurrent_requests is set in the server config.
+        self._concurrency_semaphores: Dict[str, asyncio.Semaphore] = {}
+
         # Event loop for async operations
         self._loop = None
 
@@ -436,6 +440,29 @@ class ServerManager:
         # Acquire lock for this operation
         async with lock:
             return await self._stop_server_unlocked(id, force)
+
+    def get_concurrency_semaphore(self, server_id: str) -> Optional[asyncio.Semaphore]:
+        """Return the semaphore for server_id, or None if no limit is configured."""
+        config = self.configs.get(server_id, {})
+        limit = int(config.get("max_concurrent_requests", 0))
+        if limit <= 0:
+            return None
+        if server_id not in self._concurrency_semaphores:
+            self._concurrency_semaphores[server_id] = asyncio.Semaphore(limit)
+        return self._concurrency_semaphores[server_id]
+
+    def get_concurrency_info(self, server_id: str) -> Dict[str, Any]:
+        """Return concurrency limit and current active count for a server."""
+        config = self.configs.get(server_id, {})
+        limit = int(config.get("max_concurrent_requests", 0))
+        sem = self._concurrency_semaphores.get(server_id)
+        active = (limit - sem._value) if sem and limit > 0 else None
+        return {
+            "server_id": server_id,
+            "max_concurrent_requests": limit if limit > 0 else None,
+            "active_requests": active,
+            "available_slots": sem._value if sem and limit > 0 else None,
+        }
 
     def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
         """

@@ -16,7 +16,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
+from fastapi.responses import Response
 from .network_handle import NetworkSubprocessHandle
+from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
@@ -548,40 +550,69 @@ def create_dynamic_router(server_manager):
                 return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
-            try:
-                # Send request to MCP server
-                msg = json.dumps(request)
-                async with _get_io_lock(server_name):
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            # Check if process is alive
+            if process.poll() is not None:
+                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
-                    # Wait for the MCP subprocess to write its JSON-RPC response.
-                    # _readline_with_timeout runs in a thread (via to_thread) and uses
-                    # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
-                    # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
-                    # A plain readline() here would block the thread forever on a hung server,
-                    # eventually exhausting the pool and making all healthy servers unreachable.
-                    response_line = await asyncio.to_thread(
-                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+            # Concurrency limiting — try a non-blocking acquire; drop with 429 if full
+            sem = server_manager.get_concurrency_semaphore(server_name)
+            if sem is not None:
+                acquired = sem._value > 0  # peek: True if a slot is free
+                if not acquired:
+                    collector.record_rejected_request("concurrency_limit")
+                    return Response(
+                        content='{"error":"too many concurrent requests"}',
+                        status_code=429,
+                        media_type="application/json",
+                        headers={"Retry-After": "1"},
                     )
-                    if not response_line:
-                        # Empty string means select() timed out — server did not respond.
-                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
-                response_data = json.loads(response_line)
+                await sem.acquire()
 
-                # Update last_used_at for idle cleanup
-                await server_manager.update_last_used(server_name)
+            try:
+                # ── SSE transport: forward via HTTP ─────────────────────────────
+                if isinstance(process, SseSubprocessHandle):
+                    with RequestTimer(collector, request.get("method", "unknown")):
+                        response = await _proxy_to_sse_server(process.sse_url, request)
+                        return JSONResponse(content=response)
+                # ── stdio transport continues below ─────────────────────────────
 
-                return JSONResponse(content=response_data)
+                try:
+                    # Send request to MCP server
+                    msg = json.dumps(request)
+                    async with _get_io_lock(server_name):
+                        try:
+                            process.stdin.write(msg + "\n")
+                            process.stdin.flush()
+                        except (BrokenPipeError, OSError) as e:
+                            raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Error proxying request to '{server_name}': {e}")
-                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                        # Wait for the MCP subprocess to write its JSON-RPC response.
+                        # _readline_with_timeout runs in a thread (via to_thread) and uses
+                        # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
+                        # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
+                        # A plain readline() here would block the thread forever on a hung server,
+                        # eventually exhausting the pool and making all healthy servers unreachable.
+                        response_line = await asyncio.to_thread(
+                            _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                        )
+                        if not response_line:
+                            # Empty string means select() timed out — server did not respond.
+                            raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
+                    response_data = json.loads(response_line)
+
+                    # Update last_used_at for idle cleanup
+                    await server_manager.update_last_used(server_name)
+
+                    return JSONResponse(content=response_data)
+
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error proxying request to '{server_name}': {e}")
+                    raise HTTPException(500, f"Error communicating with server: {str(e)}")
+            finally:
+                if sem is not None:
+                    sem.release()
 
     @router.post("/{server_name}/sse", tags=["mcp"])
     async def sse_stream(
