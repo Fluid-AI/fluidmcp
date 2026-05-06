@@ -39,8 +39,8 @@ fluidmcp run config.json --file --start-server
 This will:
 - Install and configure all MCP servers listed in your config
 - Launch them through a unified FastAPI gateway
-- Make them available at `http://localhost:8099`
-- Provide automatic API documentation at `http://localhost:8099/docs`
+- Make them available at `http://localhost:8499`
+- Provide automatic API documentation at `http://localhost:8499/docs`
 
 
 ![fluidmcp_file_](https://github.com/user-attachments/assets/56bac081-0027-48c5-9462-f06e83cabcf7)
@@ -342,7 +342,7 @@ Then call it using:
 import requests, json
 
 
-url = "http://localhost:8099/google-maps/mcp"
+url = "http://localhost:8499/google-maps/mcp"
 payload = {
   "jsonrpc": "2.0",
   "id": 1,
@@ -366,7 +366,7 @@ print(json.dumps(response.json(), indent=2))
 
 
 ```bash
-curl -N -X POST http://localhost:8099/package/sse \
+curl -N -X POST http://localhost:8499/package/sse \
   -H "Content-Type: application/json" \
   -d @payload.json
 ```

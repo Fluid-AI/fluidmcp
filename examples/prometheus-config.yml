@@ -7,7 +7,7 @@
 #      scrape_configs:
 #        - job_name: 'fluidmcp'
 #          static_configs:
-#            - targets: ['localhost:8099']
+#            - targets: ['localhost:8499']
 #
 #   2. Restart Prometheus
 #   3. Access Prometheus at http://localhost:9090
@@ -22,7 +22,7 @@ scrape_configs:
   - job_name: 'fluidmcp'
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['localhost:8099']
+      - targets: ['localhost:8499']
         labels:
           environment: 'production'
           service: 'fluidmcp-gateway'

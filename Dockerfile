@@ -58,7 +58,7 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/app \
     FMCP_HOME=/app/.fmcp \
-    PORT=8099
+    PORT=8499
 
 # Health check for Railway monitoring
 # Start period: 40s (allows MongoDB connection retry: 2s + 4s + 8s + startup time)
@@ -68,7 +68,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Expose port (informational only - Railway binds to $PORT env var)
 # Docker EXPOSE does not resolve env vars at build time
-EXPOSE 8099
+EXPOSE 8499
 
 # Production command with secure mode
 # ⚠️  CRITICAL: Set FMCP_BEARER_TOKEN in Railway dashboard to prevent token regeneration

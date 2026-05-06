@@ -30,7 +30,7 @@ FluidMCP exposes Prometheus-compatible metrics at the `/metrics` endpoint. This 
 **Architecture:**
 ```
 FluidMCP Server → Prometheus → Grafana
-   :8099/metrics    :9090        :3000
+   :8499/metrics    :9090        :3000
 ```
 
 ---
@@ -71,7 +71,7 @@ docker run -d \
   grafana/grafana:latest
 
 # 4. Access services
-# - FluidMCP metrics: http://localhost:8099/metrics
+# - FluidMCP metrics: http://localhost:8499/metrics
 # - Prometheus: http://localhost:9090
 # - Grafana: http://localhost:3000 (admin/admin - CHANGE PASSWORD!)
 ```
@@ -104,7 +104,7 @@ fluidmcp run all --start-server
 
 **Verify metrics endpoint:**
 ```bash
-curl http://localhost:8099/metrics
+curl http://localhost:8499/metrics
 ```
 
 You should see Prometheus-formatted metrics like:
@@ -126,7 +126,7 @@ fluidmcp_requests_total{server_id="filesystem",method="tools/list",status="succe
 cp examples/prometheus-config.yml /tmp/prometheus.yml
 
 # 2. Update the config if needed (FluidMCP server address)
-# The default config scrapes http://host.docker.internal:8099/metrics
+# The default config scrapes http://host.docker.internal:8499/metrics
 
 # 3. Run Prometheus
 docker run -d \
@@ -156,12 +156,12 @@ sudo apt-get install prometheus
    cp examples/prometheus-config.yml /etc/prometheus/prometheus.yml
    ```
 
-2. Update `targets` in the config if your FluidMCP server is not on `localhost:8099`:
+2. Update `targets` in the config if your FluidMCP server is not on `localhost:8499`:
    ```yaml
    scrape_configs:
      - job_name: 'fluidmcp'
        static_configs:
-         - targets: ['your-server:8099']  # Update this
+         - targets: ['your-server:8499']  # Update this
    ```
 
 3. Start Prometheus:
@@ -280,7 +280,7 @@ The dashboard includes:
 
 **Check FluidMCP metrics endpoint:**
 ```bash
-curl http://localhost:8099/metrics | grep fluidmcp_requests_total
+curl http://localhost:8499/metrics | grep fluidmcp_requests_total
 ```
 
 Expected output:
@@ -340,12 +340,12 @@ Expected output:
 
 ### Metrics endpoint returns 404
 
-**Problem:** `curl http://localhost:8099/metrics` returns 404
+**Problem:** `curl http://localhost:8499/metrics` returns 404
 
 **Solution:**
-- Verify FluidMCP server is running: `curl http://localhost:8099/health`
+- Verify FluidMCP server is running: `curl http://localhost:8499/health`
 - Check server logs for errors
-- Ensure you're using the correct port (default: 8099)
+- Ensure you're using the correct port (default: 8499)
 
 ### Prometheus target is DOWN
 
@@ -355,17 +355,17 @@ Expected output:
 1. Check FluidMCP is accessible from Prometheus:
    ```bash
    # From host
-   curl http://localhost:8099/metrics
+   curl http://localhost:8499/metrics
 
    # From Docker (if Prometheus is in Docker)
-   curl http://host.docker.internal:8099/metrics
+   curl http://host.docker.internal:8499/metrics
    ```
 
 2. Update `prometheus.yml` target if needed:
    ```yaml
-   targets: ['host.docker.internal:8099']  # For Docker
+   targets: ['host.docker.internal:8499']  # For Docker
    # OR
-   targets: ['localhost:8099']  # For local install
+   targets: ['localhost:8499']  # For local install
    ```
 
 3. Restart Prometheus after config changes
@@ -393,7 +393,7 @@ Expected output:
 4. **Generate traffic:**
    ```bash
    # Generate some metrics data
-   curl -X POST http://localhost:8099/api/servers
+   curl -X POST http://localhost:8499/api/servers
    python tests/manual/test_metrics.py
    ```
 
@@ -414,7 +414,7 @@ docker run --network monitoring --name fluidmcp ...
 docker run --network monitoring --name prometheus ...
 
 # Update prometheus.yml
-targets: ['fluidmcp:8099']
+targets: ['fluidmcp:8499']
 ```
 
 ---
@@ -449,7 +449,7 @@ scrape_configs:
       type: Bearer
       credentials: YOUR_SECRET_TOKEN  # Replace with your actual token
     static_configs:
-      - targets: ['localhost:8099']
+      - targets: ['localhost:8499']
 ```
 
 **Starting Prometheus with secure config:**
@@ -482,7 +482,7 @@ prometheus --config.file=prometheus-secure.yml
 
 3. **Use HTTPS in Production**: When deploying to production, use a reverse proxy (nginx, Caddy) with TLS to encrypt traffic:
    ```
-   FluidMCP (localhost:8099) → nginx (HTTPS) → Public Internet
+   FluidMCP (localhost:8499) → nginx (HTTPS) → Public Internet
    ```
 
 4. **Rotate Tokens Regularly**: Change bearer tokens periodically and update Prometheus configuration accordingly.
@@ -493,11 +493,11 @@ Verify that metrics endpoint requires authentication:
 
 ```bash
 # Without token - should fail with 401 Unauthorized
-curl http://localhost:8099/metrics
+curl http://localhost:8499/metrics
 # Response: {"detail":"Invalid or missing authorization token"}
 
 # With valid token - should succeed
-curl -H "Authorization: Bearer YOUR_SECRET_TOKEN" http://localhost:8099/metrics
+curl -H "Authorization: Bearer YOUR_SECRET_TOKEN" http://localhost:8499/metrics
 # Response: Prometheus metrics data
 ```
 
@@ -572,9 +572,9 @@ Topics covered:
 
 | Service | Port | Endpoint |
 |---------|------|----------|
-| FluidMCP | 8099 | http://localhost:8099 |
-| FluidMCP Health | 8099 | http://localhost:8099/health |
-| FluidMCP Metrics | 8099 | http://localhost:8099/metrics |
+| FluidMCP | 8499 | http://localhost:8499 |
+| FluidMCP Health | 8499 | http://localhost:8499/health |
+| FluidMCP Metrics | 8499 | http://localhost:8499/metrics |
 | Prometheus | 9090 | http://localhost:9090 |
 | Grafana | 3000 | http://localhost:3000 |
 
@@ -608,7 +608,7 @@ Returns the health status of FluidMCP server.
 
 **Example**:
 ```bash
-curl http://localhost:8099/health
+curl http://localhost:8499/health
 # Response: {"status":"healthy","servers":2,"running_servers":1}
 ```
 
@@ -638,13 +638,13 @@ Returns Prometheus-compatible metrics in text exposition format.
 **Example (Public Access)**:
 ```bash
 # No authentication required when secure mode is disabled
-curl http://localhost:8099/metrics
+curl http://localhost:8499/metrics
 ```
 
 **Example (Secure Mode)**:
 ```bash
 # Bearer token required when secure mode is enabled
-curl -H "Authorization: Bearer YOUR_TOKEN_HERE" http://localhost:8099/metrics
+curl -H "Authorization: Bearer YOUR_TOKEN_HERE" http://localhost:8499/metrics
 ```
 
 **Status Codes**:
@@ -655,10 +655,10 @@ curl -H "Authorization: Bearer YOUR_TOKEN_HERE" http://localhost:8099/metrics
 
 ```bash
 # Check FluidMCP health
-curl http://localhost:8099/health
+curl http://localhost:8499/health
 
 # Check FluidMCP metrics
-curl http://localhost:8099/metrics
+curl http://localhost:8499/metrics
 
 # Query Prometheus
 curl 'http://localhost:9090/api/v1/query?query=fluidmcp_requests_total'

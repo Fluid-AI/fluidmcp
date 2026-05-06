@@ -22,7 +22,7 @@ if [ -n "$METADATA_ENV_FILE_CONTENT" ]; then
 fi
 
 # Get port from environment (Railway sets this)
-PORT="${PORT:-8099}"
+PORT="${PORT:-8499}"
 
 # MongoDB URI (optional; fmcp serve will fall back to in-memory if not provided)
 # No default here - Railway deployments must provide MONGODB_URI explicitly
