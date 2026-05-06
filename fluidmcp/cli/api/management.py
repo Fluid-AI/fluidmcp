@@ -59,6 +59,13 @@ from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
+from ..services.metrics import get_registry as _get_metrics_registry
+
+try:
+    import psutil as _psutil
+    _psutil_available = True
+except ImportError:
+    _psutil_available = False
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1092,7 +1099,7 @@ async def get_server(request: Request, id: str):
     - status: state, pid, uptime, restart_count, stability, exit_code
     - resources: live memory/CPU/FD snapshot (null when not running)
     - concurrency: limit, active slots, lifetime rejected count
-    - crashes: recent crash count and crashes_per_hour from the last 10 minutes
+    - crashes: recent crash count and crashes in the last hour
     """
     manager = get_server_manager(request)
 
@@ -1121,26 +1128,28 @@ async def get_server(request: Request, id: str):
     }
     process = manager.processes.get(id)
     if process and process.poll() is None:
-        try:
-            import psutil as _psutil
-            proc = _psutil.Process(process.pid)
-            rss = proc.memory_info().rss
-            cpu = proc.cpu_percent(interval=None)
-            resources["pid"] = process.pid
-            resources["memory_rss_bytes"] = rss
-            resources["memory_rss_human"] = f"{rss / (1024 * 1024):.1f} MB"
-            resources["cpu_percent"] = cpu
-            resources["open_fds"] = proc.num_fds() if hasattr(proc, "num_fds") else None
-            resources["threads"] = proc.num_threads()
-            limit_mb = int(config.get("memory_limit_mb", 0) or
-                           int(os.environ.get("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
-            if limit_mb > 0:
-                limit_bytes = limit_mb * 1024 * 1024
-                resources["memory_limit_bytes"] = limit_bytes
-                resources["memory_limit_human"] = f"{limit_mb:.1f} MB"
-                resources["memory_usage_pct"] = round(rss / limit_bytes * 100, 1)
-        except Exception:
-            pass
+        if _psutil_available:
+            try:
+                proc = _psutil.Process(process.pid)
+                rss = proc.memory_info().rss
+                cpu = proc.cpu_percent(interval=None)
+                resources["pid"] = process.pid
+                resources["memory_rss_bytes"] = rss
+                resources["memory_rss_human"] = f"{rss / (1024 * 1024):.1f} MB"
+                resources["cpu_percent"] = cpu
+                resources["open_fds"] = proc.num_fds() if hasattr(proc, "num_fds") else None
+                resources["threads"] = proc.num_threads()
+                limit_mb = int(config.get("memory_limit_mb", 0) or
+                               int(os.environ.get("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+                if limit_mb > 0:
+                    limit_bytes = limit_mb * 1024 * 1024
+                    resources["memory_limit_bytes"] = limit_bytes
+                    resources["memory_limit_human"] = f"{limit_mb} MB"
+                    resources["memory_usage_pct"] = round(rss / limit_bytes * 100, 1)
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to read resources for '{id}': {e}")
     # Attach memory trend from health monitor if available
     monitor = getattr(manager, "_health_monitor", None)
     if monitor:
@@ -1149,9 +1158,7 @@ async def get_server(request: Request, id: str):
     # ── Concurrency ───────────────────────────────────────────────────────────
     manager.get_concurrency_semaphore(id)  # ensure semaphore is initialized
     conc_info = manager.get_concurrency_info(id)
-    from ..services.metrics import get_registry as _get_registry
-    _registry = _get_registry()
-    _rej_counter = _registry.get_metric("fluidmcp_requests_rejected_total")
+    _rej_counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
     rejected_total = 0
     if _rej_counter:
         _key = _rej_counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
@@ -1178,8 +1185,8 @@ async def get_server(request: Request, id: str):
             ) > one_hour_ago
         )
         crashes_summary["crashes_per_hour"] = float(crashes_last_hour)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to load crash summary for '{id}': {e}")
 
     return {
         "id": id,
@@ -1889,7 +1896,6 @@ async def get_server_resources(request: Request, id: str):
     rss = cpu = open_fds = threads = None
     status = "not_running"
     try:
-        import psutil as _psutil
         if pid and process and process.poll() is None:
             proc = _psutil.Process(pid)
             rss = proc.memory_info().rss
@@ -1963,9 +1969,7 @@ async def get_server_concurrency(request: Request, id: str):
     info = server_manager.get_concurrency_info(id)
 
     # Attach lifetime rejection count from metrics
-    from ..services.metrics import get_registry
-    registry = get_registry()
-    counter = registry.get_metric("fluidmcp_requests_rejected_total")
+    counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
     rejected_total = 0
     if counter is not None:
         key = counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
