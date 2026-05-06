@@ -1089,13 +1089,11 @@ async def list_servers(request: Request, enabled_only: bool = True, include_dele
 @router.get("/servers/{id}")
 async def get_server(request: Request, id: str):
     """
-    Get detailed information about a specific server.
-
-    Args:
-        id: Server identifier
-
-    Returns:
-        Server config and status
+    Get detailed information about a specific server, including debug fields:
+    - status: state, pid, uptime, restart_count, stability, exit_code
+    - resources: live memory/CPU/FD snapshot (null when not running)
+    - concurrency: limit, active slots, lifetime rejected count
+    - crashes: recent crash count and crashes_per_hour from the last 10 minutes
     """
     manager = get_server_manager(request)
 
@@ -1106,14 +1104,92 @@ async def get_server(request: Request, id: str):
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Get status
+    # Core status
     status = await manager.get_server_status(id)
+
+    # ── Resources ────────────────────────────────────────────────────────────
+    resources = {
+        "pid": None,
+        "memory_rss_bytes": None,
+        "memory_rss_human": None,
+        "memory_trend": "unknown",
+        "memory_limit_bytes": None,
+        "memory_limit_human": None,
+        "memory_usage_pct": None,
+        "cpu_percent": None,
+        "open_fds": None,
+        "threads": None,
+    }
+    process = manager.processes.get(id)
+    if process and process.poll() is None:
+        try:
+            import psutil as _psutil
+            proc = _psutil.Process(process.pid)
+            rss = proc.memory_info().rss
+            cpu = proc.cpu_percent(interval=None)
+            resources["pid"] = process.pid
+            resources["memory_rss_bytes"] = rss
+            resources["memory_rss_human"] = f"{rss / (1024 * 1024):.1f} MB"
+            resources["cpu_percent"] = cpu
+            resources["open_fds"] = proc.num_fds() if hasattr(proc, "num_fds") else None
+            resources["threads"] = proc.num_threads()
+            limit_mb = int(config.get("memory_limit_mb", 0) or
+                           int(os.environ.get("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+            if limit_mb > 0:
+                limit_bytes = limit_mb * 1024 * 1024
+                resources["memory_limit_bytes"] = limit_bytes
+                resources["memory_limit_human"] = f"{limit_mb:.1f} MB"
+                resources["memory_usage_pct"] = round(rss / limit_bytes * 100, 1)
+        except Exception:
+            pass
+    # Attach memory trend from health monitor if available
+    monitor = getattr(manager, "_health_monitor", None)
+    if monitor:
+        resources["memory_trend"] = monitor.get_memory_trend(id)
+
+    # ── Concurrency ───────────────────────────────────────────────────────────
+    manager.get_concurrency_semaphore(id)  # ensure semaphore is initialized
+    conc_info = manager.get_concurrency_info(id)
+    from ..services.metrics import get_registry as _get_registry
+    _registry = _get_registry()
+    _rej_counter = _registry.get_metric("fluidmcp_requests_rejected_total")
+    rejected_total = 0
+    if _rej_counter:
+        _key = _rej_counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
+        rejected_total = int(_rej_counter.samples.get(_key, 0))
+    concurrency = {
+        "max_concurrent_requests": conc_info["max_concurrent_requests"],
+        "active_requests": conc_info["active_requests"],
+        "available_slots": conc_info["available_slots"],
+        "rejected_total": rejected_total,
+    }
+
+    # ── Crash summary ─────────────────────────────────────────────────────────
+    crashes_summary = {"recent_crash_count": 0, "crashes_per_hour": 0.0}
+    try:
+        events = await manager.db.list_crash_events(id, limit=50)
+        crashes_summary["recent_crash_count"] = len(events)
+        now = datetime.utcnow()
+        one_hour_ago = (now - timedelta(hours=1)).timestamp()
+        crashes_last_hour = sum(
+            1 for e in events
+            if e.get("timestamp") and (
+                e["timestamp"].timestamp() if hasattr(e["timestamp"], "timestamp")
+                else float(e["timestamp"])
+            ) > one_hour_ago
+        )
+        crashes_summary["crashes_per_hour"] = float(crashes_last_hour)
+    except Exception:
+        pass
 
     return {
         "id": id,
         "name": config.get("name"),
         "config": config,
-        "status": status
+        "status": status,
+        "resources": resources,
+        "concurrency": concurrency,
+        "crashes": crashes_summary,
     }
 
 
