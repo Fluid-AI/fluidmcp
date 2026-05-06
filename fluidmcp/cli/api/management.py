@@ -1126,9 +1126,12 @@ async def get_server(request: Request, id: str):
         "open_fds": None,
         "threads": None,
     }
-    process = manager.processes.get(id)
-    if process and process.poll() is None:
-        if _psutil_available:
+    # Only read live resources when status agrees the process is running.
+    # This prevents a race where processes[] still has the handle but status
+    # already resolved to "failed" (stale PID path).
+    if status.get("state") == "running" and _psutil_available:
+        process = manager.processes.get(id)
+        if process and process.poll() is None:
             try:
                 proc = _psutil.Process(process.pid)
                 rss = proc.memory_info().rss
@@ -1148,13 +1151,14 @@ async def get_server(request: Request, id: str):
                 pass
             except Exception as e:
                 logger.warning(f"Failed to read resources for '{id}': {e}")
+
     # Use health monitor's cached snapshot for CPU (fresh psutil call always returns 0.0)
     # and for memory trend
     monitor = getattr(manager, "_health_monitor", None)
     if monitor:
         resources["memory_trend"] = monitor.get_memory_trend(id)
         snapshot = monitor._last_resource_snapshot.get(id)
-        if snapshot:
+        if snapshot and status.get("state") == "running":
             resources["cpu_percent"] = snapshot.get("cpu_percent")
 
     # ── Concurrency ───────────────────────────────────────────────────────────
