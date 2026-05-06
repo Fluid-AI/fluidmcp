@@ -381,6 +381,25 @@ class MetricsRegistry:
             labels=["server_id", "reason"]
         ))
 
+        # Per-MCP-server resource gauges (updated every health check cycle)
+        self.register(Gauge(
+            "fluidmcp_server_memory_rss_bytes",
+            "Resident set size of the MCP server process in bytes",
+            labels=["server_id"]
+        ))
+
+        self.register(Gauge(
+            "fluidmcp_server_cpu_percent",
+            "CPU utilization of the MCP server process (percent, may exceed 100 on multi-core)",
+            labels=["server_id"]
+        ))
+
+        self.register(Gauge(
+            "fluidmcp_server_open_fds",
+            "Number of open file descriptors for the MCP server process",
+            labels=["server_id"]
+        ))
+
     def register(self, metric: Metric):
         """Register a metric."""
         with self._lock:
@@ -639,6 +658,24 @@ class MetricsCollector:
         tool_duration = self.registry.get_metric("fluidmcp_tool_execution_seconds")
         if tool_duration:
             tool_duration.observe(duration, {"server_id": self.server_id, "tool_name": tool_name})
+
+    def set_server_memory_rss(self, rss_bytes: float):
+        """Set per-MCP-server RSS memory gauge."""
+        gauge = self.registry.get_metric("fluidmcp_server_memory_rss_bytes")
+        if gauge:
+            gauge.set(rss_bytes, {"server_id": self.server_id})
+
+    def set_server_cpu_percent(self, cpu: float):
+        """Set per-MCP-server CPU percent gauge."""
+        gauge = self.registry.get_metric("fluidmcp_server_cpu_percent")
+        if gauge:
+            gauge.set(cpu, {"server_id": self.server_id})
+
+    def set_server_open_fds(self, fds: int):
+        """Set per-MCP-server open file descriptor gauge."""
+        gauge = self.registry.get_metric("fluidmcp_server_open_fds")
+        if gauge:
+            gauge.set(fds, {"server_id": self.server_id})
 
     def record_rejected_request(self, reason: str):
         """Increment the concurrency-rejection counter."""
