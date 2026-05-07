@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { JsonSchemaForm } from "@/components/form/JsonSchemaForm";
 import { ToolResult } from "@/components/result/ToolResult";
 import { type SavedRequest, saveRequest, loadSavedRequests } from "@/lib/saved-requests";
@@ -7,6 +7,7 @@ interface MCPTool {
   name: string;
   description?: string;
   inputSchema?: any;
+  outputSchema?: any;
   annotations?: Record<string, boolean>;
 }
 
@@ -41,6 +42,38 @@ const ANNOTATION_META = [
   { key: "idempotentHint",  label: "Idempotent",  bg: "rgba(34,197,94,0.15)",  color: "rgba(134,239,172,0.9)",  tip: "Same call with same args always gives same result" },
   { key: "openWorldHint",   label: "External",    bg: "rgba(59,130,246,0.18)", color: "rgba(147,197,253,0.95)", tip: "Tool interacts with the external world (web, APIs, filesystem)" },
 ];
+
+function SchemaAccordion({ title, schema }: { title: string; schema: any }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: "0.75rem", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "6px", overflow: "hidden" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "0.45rem 0.75rem", background: "rgba(0,0,0,0.25)",
+          border: "none", cursor: "pointer", color: "rgba(255,255,255,0.7)",
+          fontSize: "0.75rem", fontWeight: 600,
+        }}
+      >
+        <span>{title}</span>
+        <span style={{ fontSize: "0.65rem", opacity: 0.6 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <pre style={{
+          margin: 0, padding: "0.75rem",
+          background: "rgba(0,0,0,0.2)", color: "#d4d4d8",
+          fontSize: "0.78rem", lineHeight: "1.6",
+          whiteSpace: "pre-wrap", wordBreak: "break-word",
+          fontFamily: "ui-monospace, monospace",
+          maxHeight: "300px", overflowY: "auto",
+        }}>
+          {JSON.stringify(schema, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 export const ManualToolPanel: React.FC<ManualToolPanelProps> = ({
   selectedTool,
@@ -86,6 +119,13 @@ export const ManualToolPanel: React.FC<ManualToolPanelProps> = ({
             submitLabel="Run Tool"
             loading={executing}
           />
+
+          {selectedTool.inputSchema && (
+            <SchemaAccordion title="Input Schema" schema={selectedTool.inputSchema} />
+          )}
+          {selectedTool.outputSchema && (
+            <SchemaAccordion title="Output Schema" schema={selectedTool.outputSchema} />
+          )}
 
           {lastRunParams && (
             <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -208,6 +248,7 @@ export const ManualToolPanel: React.FC<ManualToolPanelProps> = ({
                 result={toolResult}
                 error={toolError || undefined}
                 executionTime={executionTime}
+                outputSchema={selectedTool.outputSchema ?? null}
               />
             </div>
           )}
