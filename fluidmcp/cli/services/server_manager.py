@@ -10,6 +10,7 @@ import subprocess
 import json
 import time
 import atexit
+from urllib.parse import urlparse
 from typing import Dict, Any, Optional, List, IO
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
+from .network_utils import find_free_port
 
 
 class ServerManager:
@@ -59,6 +61,9 @@ class ServerManager:
         # Stderr log file handles (for file-based stderr capture)
         self._stderr_logs: Dict[str, IO] = {}
 
+        # Ports allocated to HTTP-transport (SSE / streamable-http) servers
+        self._allocated_ports: set = set()
+
         # Idle cleanup configuration
         self.idle_timeout_seconds = int(os.getenv("FMCP_IDLE_TIMEOUT", "3600"))  # Default 1 hour
         self.cleanup_interval_seconds = 300  # Run cleanup every 5 minutes
@@ -88,6 +93,15 @@ class ServerManager:
 
         for server_id, process in list(self.processes.items()):
             try:
+                # Release allocated port for HTTP-transport servers
+                if isinstance(process, SseSubprocessHandle):
+                    try:
+                        parsed = urlparse(process.sse_url)
+                        if parsed.port:
+                            self._release_port(parsed.port)
+                    except Exception:
+                        pass
+
                 if process.poll() is None:  # Process still running
                     logger.info(f"Terminating server '{server_id}' (PID: {process.pid})")
 
@@ -622,10 +636,12 @@ class ServerManager:
 
             # Separate MCP config fields from metadata fields
             transport = config.get("transport", "stdio")
-            if transport == "sse":
+            if transport in ("sse", "http"):
+                running_process = self.processes.get(id)
+                runtime_url = running_process.sse_url if isinstance(running_process, SseSubprocessHandle) else None
                 mcp_config = {
-                    "transport": "sse",
-                    "url": config.get("url"),
+                    "transport": transport,
+                    "url": runtime_url,
                     "command": config.get("command"),
                     "args": config.get("args", []),
                 }
@@ -674,6 +690,16 @@ class ServerManager:
         logger.info("All servers stopped")
 
     # ==================== Private Helper Methods ====================
+
+    def _allocate_port(self) -> int:
+        """Allocate a free port from the HTTP-transport reserved range (8500-8599)."""
+        port = find_free_port(start=8500, end=8599, taken_ports=self._allocated_ports)
+        self._allocated_ports.add(port)
+        return port
+
+    def _release_port(self, port: int) -> None:
+        """Release a previously allocated HTTP-transport port."""
+        self._allocated_ports.discard(port)
 
     async def _spawn_mcp_process(self, id: str, config: Dict[str, Any]) -> Optional[subprocess.Popen]:
         """
@@ -807,6 +833,17 @@ class ServerManager:
                 )
                 working_dir = install_path_resolved
                 
+            # ── HTTP transport: allocate a port and inject MCP_PORT ─────────
+            allocated_port: Optional[int] = None
+            if config.get("transport") in ("sse", "http"):
+                try:
+                    allocated_port = self._allocate_port()
+                except RuntimeError as e:
+                    logger.error(f"Port allocation failed for server '{name}' (id: {id}): {e}")
+                    return None
+                env["MCP_PORT"] = str(allocated_port)
+                logger.info(f"[{id}] Allocated port {allocated_port} for HTTP-transport server")
+
             logger.debug(f"Spawning process: {cmd_list}")
             logger.debug(f"Working directory: {working_dir}")
             logger.debug(f"COMMAND: {cmd_list}")
@@ -856,6 +893,8 @@ class ServerManager:
 
             # Check if process is still alive
             if process.poll() is not None:
+                if allocated_port is not None:
+                    self._release_port(allocated_port)
                 self._close_stderr_log(id)
                 if stderr_fh == subprocess.PIPE and process.stderr:
                     try:
@@ -872,8 +911,9 @@ class ServerManager:
 
             # ── SSE transport: skip stdio handshake, wait for HTTP instead ──
             if config.get("transport") == "sse":
-                handle = await self._handshake_sse_subprocess(id, config, process)
+                handle = await self._handshake_sse_subprocess(id, allocated_port, process)
                 if not handle:
+                    self._release_port(allocated_port)
                     self._close_stderr_log(id)
                     logger.error(f"SSE handshake failed for server '{name}' (id: {id})")
                     return None
@@ -980,7 +1020,7 @@ class ServerManager:
     async def _handshake_sse_subprocess(
         self,
         id: str,
-        config: Dict[str, Any],
+        port: int,
         process: subprocess.Popen,
     ) -> Optional["SseSubprocessHandle"]:
         """
@@ -993,7 +1033,7 @@ class ServerManager:
 
         Args:
             id:      Server identifier.
-            config:  Server config dict (must contain 'url').
+            port:    The port allocated by _allocate_port() for this server.
             process: The already-spawned subprocess.Popen.
 
         Returns:
@@ -1001,11 +1041,9 @@ class ServerManager:
         """
         import httpx
 
-        url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
-        name = config.get("name", id)
-        # Use custom health endpoint if specified, otherwise default to /sse
-        health_endpoint = config.get("health_endpoint", "/sse")
-        health_url = f"{url}{health_endpoint}"
+        url = f"http://127.0.0.1:{port}"
+        name = self.configs.get(id, {}).get("name", id)
+        health_url = f"{url}/sse"
 
         logger.info(
             f"[{id}] SSE server '{name}' spawned (PID {process.pid}), "
@@ -1112,6 +1150,16 @@ class ServerManager:
             intentional: True if this was a deliberate stop (not a crash)
         """
         uptime = self.get_uptime(id)
+
+        # Release allocated port for HTTP-transport servers before removing from registry
+        process = self.processes.get(id)
+        if isinstance(process, SseSubprocessHandle):
+            try:
+                parsed = urlparse(process.sse_url)
+                if parsed.port:
+                    self._release_port(parsed.port)
+            except Exception:
+                pass
 
         # Remove from registry
         if id in self.processes:
