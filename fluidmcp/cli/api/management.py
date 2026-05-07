@@ -1064,6 +1064,213 @@ async def add_server_from_github(
         logger.exception(f"Unexpected error adding server from GitHub: {e}")
         raise HTTPException(500, f"Internal error: {truncate_error(str(e))}")
 
+
+@router.post("/servers/from-config")
+async def add_servers_from_config(
+    request: Request,
+    config: Dict[str, Any] = Body(...),
+    auto_start: bool = True,
+    token: str = Depends(get_token),
+) -> Dict[str, Any]:
+    """
+    Load and start multiple MCP servers and LLM models from a config dict.
+    Equivalent to `fmcp run config.json --file` via API.
+
+    Body must match the existing fmcp config format:
+      { "mcpServers": {...}, "llmModels": {...} }
+
+    Query params:
+      auto_start (bool, default true): if false, register configs without launching
+    """
+    import json
+    import os
+    import tempfile
+    import threading
+    import time
+    import asyncio
+    from pathlib import Path
+
+    from ..services.config_resolver import resolve_from_file
+    from ..services.package_launcher import launch_mcp_using_fastapi_proxy
+    from ..services.run_servers import (
+        _register_server_process,
+        _initialize_server_metrics,
+        _llm_processes,
+        _llm_endpoints,
+        _llm_registry_lock,
+    )
+    from ..services.llm_launcher import launch_llm_models
+
+    MAX_RETRIES = 3
+    RETRY_DELAY = 1.0      # seconds between retries
+    HEALTH_CHECK_DELAY = 1.5  # seconds to wait before polling process health
+
+    manager = get_server_manager(request)
+    loop = asyncio.get_event_loop()
+
+    started_servers = []
+    failed_servers = []
+    started_models = []
+    failed_models = []
+
+    # --- Step 1: Resolve config via temp file ---
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(config, f)
+            tmp_path = f.name
+
+        resolved = await loop.run_in_executor(None, resolve_from_file, tmp_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid config: {e}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    # --- Step 2: Launch MCP servers ---
+    for server_name, server_cfg in resolved.servers.items():
+        # Register config only — do not start
+        if not auto_start:
+            manager.configs[server_name] = {
+                **server_cfg,
+                "id": server_name,
+                "name": server_name,
+                "enabled": True,
+            }
+            started_servers.append(
+                {"id": server_name, "name": server_name, "status": "configured"}
+            )
+            continue
+
+        # Skip if already running
+        existing = manager.processes.get(server_name)
+        if existing is not None and existing.poll() is None:
+            logger.info(f"Server '{server_name}' is already running, skipping")
+            started_servers.append(
+                {"id": server_name, "name": server_name, "status": "already_running"}
+            )
+            continue
+
+        install_path = Path(server_cfg.get("install_path", ""))
+        if not install_path.exists():
+            failed_servers.append({
+                "id": server_name,
+                "name": server_name,
+                "status": "failed",
+                "error": f"install_path not found: {install_path}",
+                "attempts": 0,
+            })
+            continue
+
+        # Retry loop
+        last_error = "server process did not start"
+        process = None
+        attempt = 0
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                logger.info(f"Starting server '{server_name}' (attempt {attempt}/{MAX_RETRIES})")
+                lock = threading.Lock()
+                _pkg, _router, process = await loop.run_in_executor(
+                    None, launch_mcp_using_fastapi_proxy, install_path, lock
+                )
+
+                if process is None:
+                    last_error = "launch returned no process"
+                    logger.warning(f"Server '{server_name}' attempt {attempt}: {last_error}")
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(RETRY_DELAY)
+                    continue
+
+                # Health check: wait briefly then poll exit code
+                await asyncio.sleep(HEALTH_CHECK_DELAY)
+                if process.poll() is not None:
+                    # Process exited — capture stderr for diagnosis
+                    try:
+                        stderr_output = process.stderr.read(500) if process.stderr else ""
+                    except Exception:
+                        stderr_output = ""
+                    last_error = f"process exited immediately (rc={process.returncode})"
+                    if stderr_output:
+                        last_error += f": {stderr_output.strip()}"
+                    logger.warning(f"Server '{server_name}' attempt {attempt}: {last_error}")
+                    process = None
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(RETRY_DELAY)
+                    continue
+
+                # Process is alive — register and break
+                break
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Server '{server_name}' attempt {attempt} raised: {last_error}")
+                process = None
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(RETRY_DELAY)
+
+        if process is not None and process.poll() is None:
+            manager.processes[server_name] = process
+            manager.start_times[server_name] = time.monotonic()
+            manager.configs[server_name] = {
+                **server_cfg,
+                "id": server_name,
+                "name": server_name,
+                "enabled": True,
+            }
+            _register_server_process(server_name, process)
+            _initialize_server_metrics(server_name)
+            logger.info(f"Server '{server_name}' started successfully (attempt {attempt})")
+            started_servers.append(
+                {"id": server_name, "name": server_name, "status": "running", "attempts": attempt}
+            )
+        else:
+            logger.error(f"Server '{server_name}' failed after {attempt} attempt(s): {last_error}")
+            failed_servers.append({
+                "id": server_name,
+                "name": server_name,
+                "status": "failed",
+                "error": last_error,
+                "attempts": attempt,
+            })
+
+    # --- Step 3: Launch LLM models ---
+    if resolved.llm_models and auto_start:
+        try:
+            llm_processes = await loop.run_in_executor(
+                None, launch_llm_models, resolved.llm_models
+            )
+            with _llm_registry_lock:
+                _llm_processes.update(llm_processes)
+                for model_id in llm_processes.keys():
+                    model_cfg = resolved.llm_models[model_id]
+                    endpoints = model_cfg.get("endpoints", {})
+                    base_url = endpoints.get("base_url", "http://localhost:8001/v1")
+                    _llm_endpoints[model_id] = {
+                        "base_url": base_url,
+                        "chat": endpoints.get("chat", "/chat/completions"),
+                        "completions": endpoints.get("completions", "/completions"),
+                        "models": endpoints.get("models", "/models"),
+                    }
+                    started_models.append({"id": model_id, "status": "running"})
+        except Exception as e:
+            for model_id in resolved.llm_models:
+                failed_models.append({
+                    "id": model_id,
+                    "status": "failed",
+                    "error": str(e),
+                })
+    elif resolved.llm_models and not auto_start:
+        for model_id in resolved.llm_models:
+            started_models.append({"id": model_id, "status": "configured"})
+
+    return {
+        "started_servers": started_servers,
+        "failed_servers": failed_servers,
+        "started_models": started_models,
+        "failed_models": failed_models,
+    }
+
+
 @router.get("/servers")
 async def list_servers(request: Request, enabled_only: bool = True, include_deleted: bool = False):
     """
