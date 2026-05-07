@@ -572,7 +572,8 @@ def _oauth_popup_html(token: Optional[dict], error: Optional[str]) -> str:
     Posts a message to the opener window then closes the popup.
     """
     if error:
-        payload = json.dumps({"error": error})
+        import html as _html
+        payload = json.dumps({"error": _html.escape(str(error))})
     else:
         payload = json.dumps({"token": token})
     return f"""<!DOCTYPE html>
