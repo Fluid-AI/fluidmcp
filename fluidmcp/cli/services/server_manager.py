@@ -919,6 +919,15 @@ class ServerManager:
                     return None
                 logger.info(f"[{id}] SSE server connected successfully")
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
+            elif config.get("transport") == "http":
+                handle = await self._handshake_http_subprocess(id, allocated_port, process)
+                if not handle:
+                    self._release_port(allocated_port)
+                    self._close_stderr_log(id)
+                    logger.error(f"HTTP handshake failed for server '{name}' (id: {id})")
+                    return None
+                logger.info(f"[{id}] HTTP server connected successfully")
+                return handle
             # ── stdio transport: normal handshake ───────────────────────────
 
             # Initialize MCP server with handshake (using shared utility)
@@ -1089,6 +1098,16 @@ class ServerManager:
         await self._discover_and_cache_tools_sse(id, url)
 
         return SseSubprocessHandle(process=process, sse_url=url)
+
+    async def _handshake_http_subprocess(
+        self,
+        id: str,
+        port: int,
+        process: subprocess.Popen,
+    ) -> Optional["SseSubprocessHandle"]:
+        """Handshake for streamable-http (POST /mcp) servers. Not yet implemented."""
+        logger.warning(f"[{id}] HTTP transport handshake not yet implemented")
+        return None
 
     async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
         """
