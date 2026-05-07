@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import Ajv from 'ajv';
 import { ResultActions } from './ResultActions';
 import { JsonResultView } from './JsonResultView';
 import { TextResultView } from './TextResultView';
@@ -6,6 +7,8 @@ import { TableResultView } from './TableResultView';
 import { McpContentView } from './McpContentView';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { showError } from '../../services/toast';
+
+const ajv = new Ajv({ allErrors: true });
 
 const ResultFormat = {
   MCP_CONTENT: 'mcp_content',
@@ -140,16 +143,41 @@ interface ToolResultProps {
   error?: string;
   loading?: boolean;
   executionTime?: number | null;
+  outputSchema?: Record<string, unknown> | null;
 }
 
 export const ToolResult: React.FC<ToolResultProps> = ({
   result,
   error,
   executionTime,
+  outputSchema,
 }) => {
   const format = result !== null && !error ? detectResultFormat(result) : ResultFormat.PRIMITIVE;
   const [expandAll, setExpandAll] = useState(false);
   const [viewMode, setViewMode] = useState<'formatted' | 'raw'>('formatted');
+  const [structuredContentOpen, setStructuredContentOpen] = useState(true);
+
+  // Extract structuredContent from result if present
+  // API wraps result as {success, result: <mcp_result>}, so check both levels
+  const structuredContent = useMemo(() => {
+    if (!result || typeof result !== 'object') return null;
+    const inner = (result as any).result ?? result;
+    return inner.structuredContent ?? null;
+  }, [result]);
+
+  // Validate structuredContent against outputSchema
+  const schemaValidation = useMemo(() => {
+    if (!outputSchema || structuredContent === null) return null;
+    try {
+      const validate = ajv.compile(outputSchema);
+      const valid = validate(structuredContent);
+      if (valid) return { ok: true, message: "Structured content matches output schema" };
+      const msg = ajv.errorsText(validate.errors);
+      return { ok: false, message: `Structured content does not match output schema: ${msg}` };
+    } catch {
+      return null;
+    }
+  }, [outputSchema, structuredContent]);
 
   const handleCopy = () => {
     try {
@@ -251,6 +279,48 @@ export const ToolResult: React.FC<ToolResultProps> = ({
           <span style={{ color: 'rgba(255, 255, 255, 0.7)' }}>
             Execution Time: <strong style={{ color: '#fff' }}>{executionTime.toFixed(2)}s</strong>
           </span>
+        </div>
+      )}
+
+      {/* Schema Validation Badge */}
+      {schemaValidation && (
+        <div style={{
+          padding: '0.4rem 0.75rem',
+          background: schemaValidation.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+          border: `1px solid ${schemaValidation.ok ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)'}`,
+          borderRadius: '0.375rem',
+          fontSize: '0.78rem',
+          color: schemaValidation.ok ? 'rgba(134,239,172,0.95)' : 'rgba(252,165,165,0.95)',
+        }}>
+          {schemaValidation.ok ? '✓ ' : '✗ '}{schemaValidation.message}
+        </div>
+      )}
+
+      {/* Structured Content (collapsible) */}
+      {structuredContent !== null && (
+        <div style={{ border: '1px solid rgba(99,102,241,0.3)', borderRadius: '0.5rem', overflow: 'hidden' }}>
+          <button
+            onClick={() => setStructuredContentOpen(o => !o)}
+            style={{
+              width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '0.45rem 0.75rem', background: 'rgba(99,102,241,0.1)',
+              border: 'none', cursor: 'pointer', color: 'rgba(165,180,252,0.9)',
+              fontSize: '0.75rem', fontWeight: 600,
+            }}
+          >
+            <span>Structured Content</span>
+            <span style={{ fontSize: '0.65rem', opacity: 0.6 }}>{structuredContentOpen ? '▲' : '▼'}</span>
+          </button>
+          {structuredContentOpen && (
+            <pre style={{
+              margin: 0, padding: '0.75rem', color: '#e5e7eb', fontSize: '0.85rem',
+              lineHeight: '1.6', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              fontFamily: 'ui-monospace, monospace', background: 'rgba(99,102,241,0.05)',
+              maxHeight: '300px', overflowY: 'auto',
+            }}>
+              {JSON.stringify(structuredContent, null, 2)}
+            </pre>
+          )}
         </div>
       )}
 
