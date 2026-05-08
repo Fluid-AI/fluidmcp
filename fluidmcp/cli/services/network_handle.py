@@ -24,10 +24,11 @@ class NetworkSubprocessHandle:
         returncode: Delegated to the underlying process.
     """
 
-    def __init__(self, process: subprocess.Popen, base_url: str, transport: str):
+    def __init__(self, process: subprocess.Popen, base_url: str, transport: str, session_id: str = None):
         self._process = process
         self.base_url = base_url
         self.transport = transport
+        self.session_id = session_id
 
     @property
     def pid(self):

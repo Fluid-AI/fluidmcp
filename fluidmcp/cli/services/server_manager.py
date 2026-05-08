@@ -24,6 +24,17 @@ from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
 
 
+def _parse_mcp_response(resp) -> dict:
+    """Parse an MCP HTTP response that may be plain JSON or SSE-framed."""
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        raise Exception(f"No data line found in SSE response: {resp.text!r}")
+    return resp.json()
+
+
 class ServerManager:
     """Manages MCP server processes and lifecycle."""
 
@@ -1095,9 +1106,9 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_network(id, url, endpoint_path="/messages/")
+        await self._discover_and_cache_tools_sse(id, url, session_id=None)
 
-        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
+        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
 
     async def _handshake_http_subprocess(
         self,
@@ -1125,6 +1136,11 @@ class ServerManager:
         name = self.configs.get(id, {}).get("name", id)
         mcp_url = f"{base_url}/mcp"
 
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
         init_payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -1143,6 +1159,7 @@ class ServerManager:
 
         loop = asyncio.get_event_loop()
         deadline = loop.time() + 30
+        session_id = None
 
         while loop.time() < deadline:
             if process.poll() is not None:
@@ -1155,12 +1172,27 @@ class ServerManager:
 
             try:
                 async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.post(mcp_url, json=init_payload)
+                    resp = await client.post(mcp_url, json=init_payload, headers=headers)
                     if resp.is_success:
                         elapsed = 30 - (deadline - loop.time())
                         logger.info(
                             f"[{id}] HTTP server is ready at {base_url} "
                             f"(took {elapsed:.1f}s)"
+                        )
+                        # Capture session ID for all subsequent requests
+                        session_id = resp.headers.get("mcp-session-id")
+
+                        # Parse SSE-framed initialize response
+                        _parse_mcp_response(resp)
+
+                        # Send notifications/initialized (required before any method calls)
+                        notif_headers = dict(headers)
+                        if session_id:
+                            notif_headers["Mcp-Session-Id"] = session_id
+                        await client.post(
+                            mcp_url,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                            headers=notif_headers,
                         )
                         break
             except (httpx.ConnectError, httpx.TimeoutException):
@@ -1176,34 +1208,51 @@ class ServerManager:
             return None
 
         # Discover and cache tools via POST /mcp
-        await self._discover_and_cache_tools_network(id, base_url, endpoint_path="/mcp")
+        await self._discover_and_cache_tools_sse(id, base_url, session_id=session_id)
 
-        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http")
+        return NetworkSubprocessHandle(
+            process=process, base_url=base_url, transport="http", session_id=session_id
+        )
 
-    async def _discover_and_cache_tools_network(
-        self, server_id: str, base_url: str, endpoint_path: str = "/messages/"
+    async def _discover_and_cache_tools_sse(
+        self, server_id: str, base_url: str, session_id: str = None
     ) -> None:
         """
-        Discover tools from an HTTP-based MCP server and cache in database.
+        Discover tools from an SSE or HTTP MCP server and cache in database.
 
-        Works for any HTTP transport (SSE via POST /messages/, streamable-http
-        via POST /mcp) — the JSON-RPC payload is identical across transports.
+        For SSE servers, posts to /messages/ with no special headers.
+        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
 
         Args:
-            server_id:     Server identifier.
-            base_url:      Base URL of the server (e.g. "http://127.0.0.1:8000").
-            endpoint_path: Path to POST tools/list to (default "/messages/" for SSE).
+            server_id:  Server identifier.
+            base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
+            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
         """
         import httpx
 
-        url = f"{base_url.rstrip('/')}{endpoint_path}"
+        if session_id is not None:
+            # HTTP (streamable-http) transport
+            url = f"{base_url.rstrip('/')}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": session_id,
+            }
+        else:
+            # SSE transport
+            url = f"{base_url.rstrip('/')}/messages/"
+            headers = {}
+
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=tools_request)
+                resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                response = resp.json()
+                if session_id is not None:
+                    response = _parse_mcp_response(resp)
+                else:
+                    response = resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
