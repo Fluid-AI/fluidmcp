@@ -10,6 +10,7 @@ from collections import deque, defaultdict
 from datetime import datetime
 from loguru import logger
 from .base import PersistenceBackend, DuplicateKeyError
+from ..utils.env_utils import is_placeholder
 
 
 class InMemoryBackend(PersistenceBackend):
@@ -116,22 +117,29 @@ class InMemoryBackend(PersistenceBackend):
         """
         Get environment variables from server instance.
 
+        Filters out placeholder values (e.g. ${VAR}, <your-token>, changeme)
+        and whitespace-only strings so callers receive only real configured values.
+
         Args:
             server_id: Server identifier
 
         Returns:
-            Dict of environment variables or None if instance not found
+            Dict of real environment variables, or None if the instance does
+            not exist or has no env block (or all values were placeholders).
         """
         instance = await self.get_instance_state(server_id)
         if instance:
             env = instance.get("env")
             if env:
-                # Filter out placeholder and empty values
                 filtered_env = {
                     k: v for k, v in env.items()
-                    if v and not (isinstance(v, str) and v.startswith("${"))
+                    if v
+                    and isinstance(v, str)
+                    and v.strip()
+                    and not v.strip().startswith("${")
+                    and not is_placeholder(v)
                 }
-                return filtered_env
+                return filtered_env if filtered_env else None
         return None
 
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
