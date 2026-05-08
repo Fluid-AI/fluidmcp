@@ -57,7 +57,7 @@ from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
-from ..services.sse_handle import SseSubprocessHandle
+from ..services.network_handle import NetworkSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
 
@@ -1481,11 +1481,11 @@ async def proxy_sse(
 
     # Resolve the dynamically allocated URL from the live process handle.
     # Port is not stored in config — it's assigned at spawn time and held on
-    # SseSubprocessHandle. If the process isn't running, there's no URL to proxy to.
+    # NetworkSubprocessHandle. If the process isn't running, there's no URL to proxy to.
     process = manager.processes.get(id)
-    if not isinstance(process, SseSubprocessHandle):
+    if not isinstance(process, NetworkSubprocessHandle):
         raise HTTPException(503, f"Server '{id}' is not currently running")
-    internal_url = process.sse_url.rstrip("/")
+    internal_url = process.base_url.rstrip("/")
     sse_url = f"{internal_url}/sse"
 
     async def event_stream():
@@ -1544,9 +1544,9 @@ async def proxy_sse_messages(
 
     # Same as proxy_sse: port lives on the handle, not in config.
     process = manager.processes.get(id)
-    if not isinstance(process, SseSubprocessHandle):
+    if not isinstance(process, NetworkSubprocessHandle):
         raise HTTPException(503, f"Server '{id}' is not currently running")
-    internal_url = process.sse_url.rstrip("/")
+    internal_url = process.base_url.rstrip("/")
     body = await request.body()
 
     try:

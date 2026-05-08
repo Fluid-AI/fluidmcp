@@ -1,5 +1,5 @@
 """
-SSE transport handle for MCP servers.
+Network transport handle for MCP servers (SSE and streamable-http).
 
 Kept in its own module to avoid circular imports between
 package_launcher.py and server_manager.py.
@@ -8,24 +8,26 @@ import subprocess
 from loguru import logger
 
 
-class SseSubprocessHandle:
+class NetworkSubprocessHandle:
     """
-    Wraps a subprocess.Popen for an SSE-transport MCP server.
+    Wraps a subprocess.Popen for a network-transport MCP server (SSE or streamable-http).
 
     We still OWN the process (spawned via uv/python/etc.) so we keep the
     real Popen for lifecycle management (kill/terminate/poll).
     Communication happens over HTTP instead of stdin/stdout.
 
     Attributes:
-        _process:  The real subprocess.Popen — used for kill/terminate/poll.
-        sse_url:   Base HTTP URL, e.g. "http://127.0.0.1:8000".
-        pid:       Delegated to the underlying process.
+        _process:   The real subprocess.Popen — used for kill/terminate/poll.
+        base_url:   Base HTTP URL, e.g. "http://127.0.0.1:8000".
+        transport:  Transport type: "sse" or "http".
+        pid:        Delegated to the underlying process.
         returncode: Delegated to the underlying process.
     """
 
-    def __init__(self, process: subprocess.Popen, sse_url: str):
+    def __init__(self, process: subprocess.Popen, base_url: str, transport: str):
         self._process = process
-        self.sse_url = sse_url
+        self.base_url = base_url
+        self.transport = transport
 
     @property
     def pid(self):
