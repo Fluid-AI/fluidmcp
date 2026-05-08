@@ -1936,7 +1936,8 @@ async def run_tool(
             raise HTTPException(400, f"Server '{id}' is not running")
         safe_id = id.replace('\n', '\\n').replace('\r', '\\r')
         logger.info(f"Auto-starting server '{safe_id}' on demand")
-        started = await manager.start_server(id)
+        # Pass config so start_server skips a redundant DB fetch
+        started = await manager.start_server(id, config=config)
         if not started:
             raise HTTPException(400, f"Server '{id}' failed to auto-start")
 

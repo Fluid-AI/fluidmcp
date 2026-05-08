@@ -357,7 +357,7 @@ def create_dynamic_router(server_manager):
             _io_locks[name] = asyncio.Lock()
         return _io_locks[name]
 
-    async def _ensure_server_running(server_name: str) -> None:
+    async def auto_start_stopped_server(server_name: str) -> None:
         """
         Auto-start a stopped/idle-cleaned server if it has a valid, enabled config in the DB.
 
@@ -365,9 +365,10 @@ def create_dynamic_router(server_manager):
         Raises HTTPException 503 if auto-start fails.
         Does nothing if the server is already running.
         """
+        # Fast path: process is alive, nothing to do
         process = server_manager.processes.get(server_name)
         if process is not None and process.poll() is None:
-            return  # already running
+            return
 
         # No running process — check DB for a valid, enabled config
         if server_manager.db is None:
@@ -381,7 +382,8 @@ def create_dynamic_router(server_manager):
 
         safe_name = server_name.replace('\n', '\\n').replace('\r', '\\r')
         logger.info(f"Auto-starting server '{safe_name}' on demand")
-        started = await server_manager.start_server(server_name)
+        # Pass config so start_server skips a redundant DB fetch
+        started = await server_manager.start_server(server_name, config=config)
         if not started:
             raise HTTPException(503, f"Server '{server_name}' failed to auto-start")
 
@@ -414,7 +416,7 @@ def create_dynamic_router(server_manager):
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
-            await _ensure_server_running(server_name)
+            await auto_start_stopped_server(server_name)
 
             process = server_manager.processes.get(server_name)
             if process is None:
@@ -469,7 +471,7 @@ def create_dynamic_router(server_manager):
         # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
         # in RequestTimer because they represent pre-flight validation failures that occur
         # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
-        # _ensure_server_running may auto-start a stopped server here; if it raises,
+        # auto_start_stopped_server may auto-start a stopped server here; if it raises,
         # the error is still a pre-flight failure before any streaming begins.
         #
         # These errors are observable through:
@@ -484,7 +486,7 @@ def create_dynamic_router(server_manager):
         #
         # Current implementation prioritizes clarity by separating HTTP validation from
         # MCP protocol errors tracked via RequestTimer.
-        await _ensure_server_running(server_name)
+        await auto_start_stopped_server(server_name)
 
         # Update last_used_at for idle cleanup when SSE connection is opened
         await server_manager.update_last_used(server_name)
@@ -593,7 +595,7 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
-        await _ensure_server_running(server_name)
+        await auto_start_stopped_server(server_name)
 
         process = server_manager.processes.get(server_name)
         if process is None:
@@ -651,7 +653,7 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
-        await _ensure_server_running(server_name)
+        await auto_start_stopped_server(server_name)
 
         process = server_manager.processes.get(server_name)
         if process is None:
