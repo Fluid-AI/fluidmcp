@@ -1106,7 +1106,7 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_network(id, url, endpoint_path="/messages/")
+        await self._discover_and_cache_tools_network(id, url, session_id=None)
 
         return NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
 
@@ -1203,34 +1203,44 @@ class ServerManager:
             return None
 
         # Discover and cache tools via POST /mcp
-        await self._discover_and_cache_tools_network(id, base_url, endpoint_path="/mcp")
+        await self._discover_and_cache_tools_network(id, base_url, session_id=session_id)
 
         return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
 
     async def _discover_and_cache_tools_network(
-        self, server_id: str, base_url: str, endpoint_path: str = "/messages/"
+        self, server_id: str, base_url: str, session_id: str = None
     ) -> None:
         """
-        Discover tools from an HTTP-based MCP server and cache in database.
+        Discover tools from an SSE or HTTP MCP server and cache in database.
 
-        Works for any HTTP transport (SSE via POST /messages/, streamable-http
-        via POST /mcp) — the JSON-RPC payload is identical across transports.
+        For SSE servers (session_id=None), posts to /messages/ with no special headers.
+        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
 
         Args:
-            server_id:     Server identifier.
-            base_url:      Base URL of the server (e.g. "http://127.0.0.1:8000").
-            endpoint_path: Path to POST tools/list to (default "/messages/" for SSE).
+            server_id:  Server identifier.
+            base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
+            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
         """
         import httpx
 
-        url = f"{base_url.rstrip('/')}{endpoint_path}"
+        if session_id is not None:
+            url = f"{base_url.rstrip('/')}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": session_id,
+            }
+        else:
+            url = f"{base_url.rstrip('/')}/messages/"
+            headers = {}
+
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=tools_request)
+                resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                response = resp.json()
+                response = _parse_mcp_response(resp) if session_id is not None else resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
