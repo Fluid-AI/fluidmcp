@@ -1095,7 +1095,7 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_sse(id, url)
+        await self._discover_and_cache_tools_network(id, url, endpoint_path="/messages/")
 
         return NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
 
@@ -1176,55 +1176,32 @@ class ServerManager:
             return None
 
         # Discover and cache tools via POST /mcp
-        tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(mcp_url, json=tools_request)
-                resp.raise_for_status()
-                response = resp.json()
-
-            if "result" in response and "tools" in response["result"]:
-                tools = response["result"]["tools"]
-                config = await self.db.get_server_config(id)
-                if config:
-                    config["tools"] = tools
-                    try:
-                        await self.db.save_server_config(config)
-                        logger.info(
-                            f"[HTTP] Discovered and cached {len(tools)} tool(s) "
-                            f"for server '{id}'"
-                        )
-                    except Exception as e:
-                        logger.warning(f"[HTTP] Failed to save tools for '{id}': {e}")
-                else:
-                    logger.warning(f"[HTTP] Config not found for '{id}', cannot cache tools")
-            else:
-                logger.warning(f"[HTTP] No tools in response for server '{id}': {response}")
-
-        except Exception as e:
-            logger.warning(f"[HTTP] Tool discovery failed for '{id}': {e}")
+        await self._discover_and_cache_tools_network(id, base_url, endpoint_path="/mcp")
 
         return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http")
 
-    async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
+    async def _discover_and_cache_tools_network(
+        self, server_id: str, base_url: str, endpoint_path: str = "/messages/"
+    ) -> None:
         """
-        Discover tools from an SSE MCP server via HTTP and cache in database.
+        Discover tools from an HTTP-based MCP server and cache in database.
 
-        SSE MCP servers expose a POST /messages/ endpoint that accepts
-        standard JSON-RPC 2.0 requests.
+        Works for any HTTP transport (SSE via POST /messages/, streamable-http
+        via POST /mcp) — the JSON-RPC payload is identical across transports.
 
         Args:
-            server_id: Server identifier.
-            base_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+            server_id:     Server identifier.
+            base_url:      Base URL of the server (e.g. "http://127.0.0.1:8000").
+            endpoint_path: Path to POST tools/list to (default "/messages/" for SSE).
         """
         import httpx
 
-        messages_url = f"{base_url.rstrip('/')}/messages/"
+        url = f"{base_url.rstrip('/')}{endpoint_path}"
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(messages_url, json=tools_request)
+                resp = await client.post(url, json=tools_request)
                 resp.raise_for_status()
                 response = resp.json()
 
@@ -1236,25 +1213,25 @@ class ServerManager:
                     try:
                         await self.db.save_server_config(config)
                         logger.info(
-                            f"[SSE] Discovered and cached {len(tools)} tool(s) "
+                            f"Discovered and cached {len(tools)} tool(s) "
                             f"for server '{server_id}'"
                         )
                     except Exception as e:
                         logger.warning(
-                            f"[SSE] Failed to save tools for '{server_id}': {e}"
+                            f"Failed to save tools for '{server_id}': {e}"
                         )
                 else:
                     logger.warning(
-                        f"[SSE] Config not found for '{server_id}', cannot cache tools"
+                        f"Config not found for '{server_id}', cannot cache tools"
                     )
             else:
                 logger.warning(
-                    f"[SSE] No tools in response for server '{server_id}': {response}"
+                    f"No tools in response for server '{server_id}': {response}"
                 )
 
         except Exception as e:
             # Tool discovery failure must never abort server startup
-            logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
+            logger.warning(f"Tool discovery failed for '{server_id}': {e}")
 
     async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
         """
