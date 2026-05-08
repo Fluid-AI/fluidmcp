@@ -91,6 +91,48 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
         logger.error(f"SSE proxy error → {messages_url}: {e}")
         raise HTTPException(500, f"SSE proxy error: {str(e)}")
 
+async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 60.0) -> dict:
+    """
+    Forward a JSON-RPC request to a streamable-http MCP server via POST /mcp.
+
+    Args:
+        base_url: Base URL of the HTTP server (e.g. "http://127.0.0.1:8000").
+        payload:  JSON-RPC 2.0 dict to send.
+        timeout:  HTTP request timeout in seconds.
+
+    Returns:
+        Parsed JSON response dict.
+
+    Raises:
+        HTTPException on any HTTP or connection error.
+    """
+    import httpx
+
+    mcp_url = f"{base_url.rstrip('/')}/mcp"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(mcp_url, json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            e.response.status_code,
+            f"HTTP server returned HTTP {e.response.status_code}"
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            503,
+            f"Cannot reach HTTP server at {base_url}. Is it still running?"
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            504,
+            f"HTTP server at {base_url} timed out after {timeout}s"
+        )
+    except Exception as e:
+        logger.error(f"HTTP proxy error → {mcp_url}: {e}")
+        raise HTTPException(500, f"HTTP proxy error: {str(e)}")
+
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
@@ -396,10 +438,13 @@ def create_dynamic_router(server_manager):
             if process.poll() is not None:
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
-            # ── SSE transport: forward via HTTP ─────────────────────────────
+            # ── Network transport: forward via HTTP ──────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
                 with RequestTimer(collector, request.get("method", "unknown")):
-                    response = await _proxy_to_sse_server(process.base_url, request)
+                    if process.transport == "http":
+                        response = await _proxy_to_http_server(process.base_url, request)
+                    else:
+                        response = await _proxy_to_sse_server(process.base_url, request)
                     return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
@@ -475,32 +520,41 @@ def create_dynamic_router(server_manager):
                 # Track streaming session when generator starts executing
                 collector.increment_active_streams()
 
-                # ── SSE transport: forward to external HTTP server ───────────
+                # ── Network transport: forward to external HTTP server ───────
                 if isinstance(process, NetworkSubprocessHandle):
-                    import httpx
-                    messages_url = f"{process.base_url.rstrip('/')}/messages/"
-                    sse_stream_url = f"{process.base_url.rstrip('/')}/sse"
-                    try:
-                        async with httpx.AsyncClient(
-                            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-                        ) as client:
-                            await client.post(messages_url, json=request)
-                            async with client.stream("GET", sse_stream_url) as resp:
-                                async for line in resp.aiter_lines():
-                                    if line.startswith("data: "):
-                                        data = line[6:]
-                                        yield f"data: {data}\n\n"
-                                        try:
-                                            parsed = json.loads(data)
-                                            if "result" in parsed:
-                                                break
-                                        except json.JSONDecodeError:
-                                            pass
-                    except Exception as e:
-                        completion_status = "error"
-                        collector.record_error("sse_proxy_error")
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                    return  # done for SSE — don't fall through to stdin path
+                    if process.transport == "http":
+                        try:
+                            response = await _proxy_to_http_server(process.base_url, request)
+                            yield f"data: {json.dumps(response)}\n\n"
+                        except Exception as e:
+                            completion_status = "error"
+                            collector.record_error("http_proxy_error")
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    else:
+                        import httpx
+                        messages_url = f"{process.base_url.rstrip('/')}/messages/"
+                        sse_stream_url = f"{process.base_url.rstrip('/')}/sse"
+                        try:
+                            async with httpx.AsyncClient(
+                                timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+                            ) as client:
+                                await client.post(messages_url, json=request)
+                                async with client.stream("GET", sse_stream_url) as resp:
+                                    async for line in resp.aiter_lines():
+                                        if line.startswith("data: "):
+                                            data = line[6:]
+                                            yield f"data: {data}\n\n"
+                                            try:
+                                                parsed = json.loads(data)
+                                                if "result" in parsed:
+                                                    break
+                                            except json.JSONDecodeError:
+                                                pass
+                        except Exception as e:
+                            completion_status = "error"
+                            collector.record_error("sse_proxy_error")
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    return  # done for network transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
                 msg = json.dumps(request)
@@ -577,13 +631,13 @@ def create_dynamic_router(server_manager):
         if process.poll() is not None:
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
-        # ── SSE transport ────────────────────────────────────────────────────
+        # ── Network transport ────────────────────────────────────────────────
         if isinstance(process, NetworkSubprocessHandle):
-            response = await _proxy_to_sse_server(
-                process.base_url,
-                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-                timeout=30.0
-            )
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            if process.transport == "http":
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0)
+            else:
+                response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
             return JSONResponse(content=response)
         # ── stdio transport continues below ──────────────────────────────────
 
@@ -637,20 +691,15 @@ def create_dynamic_router(server_manager):
         if process.poll() is not None:
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
-        # ── SSE transport ────────────────────────────────────────────────────
+        # ── Network transport ────────────────────────────────────────────────
         if isinstance(process, NetworkSubprocessHandle):
             if "name" not in request_body:
                 raise HTTPException(400, "Tool name is required")
-            response = await _proxy_to_sse_server(
-                process.base_url,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": request_body
-                },
-                timeout=60.0
-            )
+            payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
+            if process.transport == "http":
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0)
+            else:
+                response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
             return JSONResponse(content=response)
         # ── stdio transport continues below ──────────────────────────────────
 
