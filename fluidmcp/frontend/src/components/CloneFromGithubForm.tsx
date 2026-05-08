@@ -15,16 +15,6 @@ function slugify(text: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Normalize a raw server-id input into a valid slug (mirrors backend ServerBuilder.slugify). */
-function normalizeServerId(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
 /** Derive a server-id suggestion from a repo path like "awslabs/mcp". */
 function suggestServerId(repo: string): string {
   const cleaned = repo
@@ -415,7 +405,7 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
             value={serverId}
             onChange={(e) => {
               setServerIdTouched(true);
-              setServerId(normalizeServerId(e.target.value));
+              setServerId(slugify(e.target.value));
             }}
             className={inputClass('serverId')}
             autoComplete="off"

@@ -475,7 +475,7 @@ class GitHubService:
         server_name: Optional[str] = None,
         subdirectory: Optional[str] = None,
         env: Optional[Dict] = None,
-        restart_policy: str = "on-failure",
+        restart_policy: str = "never",
         max_restarts: int = 3,
         enabled: bool = True,
         created_by: Optional[str] = None,
