@@ -66,9 +66,11 @@ class InMemoryBackend(PersistenceBackend):
             return dict(config)
         return None
 
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """List configs from memory."""
         configs = list(self._servers.values())
+        if not include_deleted:
+            configs = [c for c in configs if "deleted_at" not in c]
         if enabled_only:
             configs = [c for c in configs if c.get("enabled", True)]
         # Return copies to avoid mutations
