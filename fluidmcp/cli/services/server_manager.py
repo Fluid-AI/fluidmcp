@@ -24,6 +24,17 @@ from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
 
 
+def _parse_mcp_response(resp) -> dict:
+    """Parse an MCP HTTP response that may be plain JSON or SSE-framed."""
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        raise Exception(f"No data line found in SSE response: {resp.text!r}")
+    return resp.json()
+
+
 class ServerManager:
     """Manages MCP server processes and lifecycle."""
 
@@ -1125,6 +1136,11 @@ class ServerManager:
         name = self.configs.get(id, {}).get("name", id)
         mcp_url = f"{base_url}/mcp"
 
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
         init_payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -1143,6 +1159,7 @@ class ServerManager:
 
         loop = asyncio.get_event_loop()
         deadline = loop.time() + 30
+        session_id = None
 
         while loop.time() < deadline:
             if process.poll() is not None:
@@ -1155,12 +1172,22 @@ class ServerManager:
 
             try:
                 async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.post(mcp_url, json=init_payload)
+                    resp = await client.post(mcp_url, json=init_payload, headers=headers)
                     if resp.is_success:
                         elapsed = 30 - (deadline - loop.time())
                         logger.info(
                             f"[{id}] HTTP server is ready at {base_url} "
                             f"(took {elapsed:.1f}s)"
+                        )
+                        session_id = resp.headers.get("mcp-session-id")
+                        _parse_mcp_response(resp)
+                        notif_headers = dict(headers)
+                        if session_id:
+                            notif_headers["Mcp-Session-Id"] = session_id
+                        await client.post(
+                            mcp_url,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                            headers=notif_headers,
                         )
                         break
             except (httpx.ConnectError, httpx.TimeoutException):
@@ -1204,7 +1231,7 @@ class ServerManager:
         except Exception as e:
             logger.warning(f"[HTTP] Tool discovery failed for '{id}': {e}")
 
-        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http")
+        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
 
     async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
         """
