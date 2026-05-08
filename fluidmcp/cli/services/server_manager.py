@@ -926,7 +926,7 @@ class ServerManager:
                     self._close_stderr_log(id)
                     logger.error(f"HTTP handshake failed for server '{name}' (id: {id})")
                     return None
-                logger.info(f"[{id}] HTTP server connected successfully")
+                logger.info(f"[{id}] HTTP (streamable-http) server connected successfully")
                 return handle
             # ── stdio transport: normal handshake ───────────────────────────
 
@@ -1105,9 +1105,106 @@ class ServerManager:
         port: int,
         process: subprocess.Popen,
     ) -> Optional["NetworkSubprocessHandle"]:
-        """Handshake for streamable-http (POST /mcp) servers. Not yet implemented."""
-        logger.warning(f"[{id}] HTTP transport handshake not yet implemented")
-        return None
+        """
+        Complete startup for a subprocess-owned streamable-http MCP server.
+
+        Polls POST {base_url}/mcp with an initialize request until the server
+        responds (max 30s, 1s interval), then discovers and caches tools.
+
+        Args:
+            id:      Server identifier.
+            port:    The port allocated by _allocate_port() for this server.
+            process: The already-spawned subprocess.Popen.
+
+        Returns:
+            NetworkSubprocessHandle on success, None on failure.
+        """
+        import httpx
+
+        base_url = f"http://127.0.0.1:{port}"
+        name = self.configs.get(id, {}).get("name", id)
+        mcp_url = f"{base_url}/mcp"
+
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "fluidmcp", "version": "1.0.0"},
+            },
+        }
+
+        logger.info(
+            f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+            f"waiting for HTTP readiness at {mcp_url}..."
+        )
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 30
+
+        while loop.time() < deadline:
+            if process.poll() is not None:
+                stderr_out = self._read_crash_stderr(id) or ""
+                logger.error(
+                    f"[{id}] HTTP server process died before becoming ready "
+                    f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                )
+                return None
+
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.post(mcp_url, json=init_payload)
+                    if resp.is_success:
+                        elapsed = 30 - (deadline - loop.time())
+                        logger.info(
+                            f"[{id}] HTTP server is ready at {base_url} "
+                            f"(took {elapsed:.1f}s)"
+                        )
+                        break
+            except (httpx.ConnectError, httpx.TimeoutException):
+                pass  # Server not up yet — keep polling
+
+            await asyncio.sleep(1.0)
+        else:
+            logger.error(f"[{id}] HTTP server did not become ready within 30s")
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return None
+
+        # Discover and cache tools via POST /mcp
+        tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(mcp_url, json=tools_request)
+                resp.raise_for_status()
+                response = resp.json()
+
+            if "result" in response and "tools" in response["result"]:
+                tools = response["result"]["tools"]
+                config = await self.db.get_server_config(id)
+                if config:
+                    config["tools"] = tools
+                    try:
+                        await self.db.save_server_config(config)
+                        logger.info(
+                            f"[HTTP] Discovered and cached {len(tools)} tool(s) "
+                            f"for server '{id}'"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[HTTP] Failed to save tools for '{id}': {e}")
+                else:
+                    logger.warning(f"[HTTP] Config not found for '{id}', cannot cache tools")
+            else:
+                logger.warning(f"[HTTP] No tools in response for server '{id}': {response}")
+
+        except Exception as e:
+            logger.warning(f"[HTTP] Tool discovery failed for '{id}': {e}")
+
+        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http")
 
     async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
         """
