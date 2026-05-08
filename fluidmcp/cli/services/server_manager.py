@@ -24,6 +24,17 @@ from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
 
 
+def _parse_mcp_response(resp) -> dict:
+    """Parse an MCP HTTP response that may be plain JSON or SSE-framed."""
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        raise Exception(f"No data line found in SSE response: {resp.text!r}")
+    return resp.json()
+
+
 class ServerManager:
     """Manages MCP server processes and lifecycle."""
 
@@ -1095,9 +1106,9 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_sse(id, url)
+        await self._discover_and_cache_tools_sse(id, url, session_id=None)
 
-        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
+        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
 
     async def _handshake_http_subprocess(
         self,
@@ -1125,6 +1136,11 @@ class ServerManager:
         name = self.configs.get(id, {}).get("name", id)
         mcp_url = f"{base_url}/mcp"
 
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
         init_payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -1143,6 +1159,7 @@ class ServerManager:
 
         loop = asyncio.get_event_loop()
         deadline = loop.time() + 30
+        session_id = None
 
         while loop.time() < deadline:
             if process.poll() is not None:
@@ -1155,12 +1172,27 @@ class ServerManager:
 
             try:
                 async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.post(mcp_url, json=init_payload)
+                    resp = await client.post(mcp_url, json=init_payload, headers=headers)
                     if resp.is_success:
                         elapsed = 30 - (deadline - loop.time())
                         logger.info(
                             f"[{id}] HTTP server is ready at {base_url} "
                             f"(took {elapsed:.1f}s)"
+                        )
+                        # Capture session ID for all subsequent requests
+                        session_id = resp.headers.get("mcp-session-id")
+
+                        # Parse SSE-framed initialize response
+                        _parse_mcp_response(resp)
+
+                        # Send notifications/initialized (required before any method calls)
+                        notif_headers = dict(headers)
+                        if session_id:
+                            notif_headers["Mcp-Session-Id"] = session_id
+                        await client.post(
+                            mcp_url,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                            headers=notif_headers,
                         )
                         break
             except (httpx.ConnectError, httpx.TimeoutException):
@@ -1176,57 +1208,51 @@ class ServerManager:
             return None
 
         # Discover and cache tools via POST /mcp
-        tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(mcp_url, json=tools_request)
-                resp.raise_for_status()
-                response = resp.json()
+        await self._discover_and_cache_tools_sse(id, base_url, session_id=session_id)
 
-            if "result" in response and "tools" in response["result"]:
-                tools = response["result"]["tools"]
-                config = await self.db.get_server_config(id)
-                if config:
-                    config["tools"] = tools
-                    try:
-                        await self.db.save_server_config(config)
-                        logger.info(
-                            f"[HTTP] Discovered and cached {len(tools)} tool(s) "
-                            f"for server '{id}'"
-                        )
-                    except Exception as e:
-                        logger.warning(f"[HTTP] Failed to save tools for '{id}': {e}")
-                else:
-                    logger.warning(f"[HTTP] Config not found for '{id}', cannot cache tools")
-            else:
-                logger.warning(f"[HTTP] No tools in response for server '{id}': {response}")
+        return NetworkSubprocessHandle(
+            process=process, base_url=base_url, transport="http", session_id=session_id
+        )
 
-        except Exception as e:
-            logger.warning(f"[HTTP] Tool discovery failed for '{id}': {e}")
-
-        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http")
-
-    async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
+    async def _discover_and_cache_tools_sse(
+        self, server_id: str, base_url: str, session_id: str = None
+    ) -> None:
         """
-        Discover tools from an SSE MCP server via HTTP and cache in database.
+        Discover tools from an SSE or HTTP MCP server and cache in database.
 
-        SSE MCP servers expose a POST /messages/ endpoint that accepts
-        standard JSON-RPC 2.0 requests.
+        For SSE servers, posts to /messages/ with no special headers.
+        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
 
         Args:
-            server_id: Server identifier.
-            base_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+            server_id:  Server identifier.
+            base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
+            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
         """
         import httpx
 
-        messages_url = f"{base_url.rstrip('/')}/messages/"
+        if session_id is not None:
+            # HTTP (streamable-http) transport
+            url = f"{base_url.rstrip('/')}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": session_id,
+            }
+        else:
+            # SSE transport
+            url = f"{base_url.rstrip('/')}/messages/"
+            headers = {}
+
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(messages_url, json=tools_request)
+                resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                response = resp.json()
+                if session_id is not None:
+                    response = _parse_mcp_response(resp)
+                else:
+                    response = resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
@@ -1236,25 +1262,25 @@ class ServerManager:
                     try:
                         await self.db.save_server_config(config)
                         logger.info(
-                            f"[SSE] Discovered and cached {len(tools)} tool(s) "
+                            f"Discovered and cached {len(tools)} tool(s) "
                             f"for server '{server_id}'"
                         )
                     except Exception as e:
                         logger.warning(
-                            f"[SSE] Failed to save tools for '{server_id}': {e}"
+                            f"Failed to save tools for '{server_id}': {e}"
                         )
                 else:
                     logger.warning(
-                        f"[SSE] Config not found for '{server_id}', cannot cache tools"
+                        f"Config not found for '{server_id}', cannot cache tools"
                     )
             else:
                 logger.warning(
-                    f"[SSE] No tools in response for server '{server_id}': {response}"
+                    f"No tools in response for server '{server_id}': {response}"
                 )
 
         except Exception as e:
             # Tool discovery failure must never abort server startup
-            logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
+            logger.warning(f"Tool discovery failed for '{server_id}': {e}")
 
     async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
         """
