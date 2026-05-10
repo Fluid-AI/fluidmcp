@@ -1106,7 +1106,7 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_sse(id, url, session_id=None)
+        await self._discover_and_cache_tools_network(id, url, session_id=None)
 
         return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
 
@@ -1179,13 +1179,8 @@ class ServerManager:
                             f"[{id}] HTTP server is ready at {base_url} "
                             f"(took {elapsed:.1f}s)"
                         )
-                        # Capture session ID for all subsequent requests
                         session_id = resp.headers.get("mcp-session-id")
-
-                        # Parse SSE-framed initialize response
                         _parse_mcp_response(resp)
-
-                        # Send notifications/initialized (required before any method calls)
                         notif_headers = dict(headers)
                         if session_id:
                             notif_headers["Mcp-Session-Id"] = session_id
@@ -1208,19 +1203,17 @@ class ServerManager:
             return None
 
         # Discover and cache tools via POST /mcp
-        await self._discover_and_cache_tools_sse(id, base_url, session_id=session_id)
+        await self._discover_and_cache_tools_network(id, base_url, session_id=session_id)
 
-        return NetworkSubprocessHandle(
-            process=process, base_url=base_url, transport="http", session_id=session_id
-        )
+        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
 
-    async def _discover_and_cache_tools_sse(
+    async def _discover_and_cache_tools_network(
         self, server_id: str, base_url: str, session_id: str = None
     ) -> None:
         """
         Discover tools from an SSE or HTTP MCP server and cache in database.
 
-        For SSE servers, posts to /messages/ with no special headers.
+        For SSE servers (session_id=None), posts to /messages/ with no special headers.
         For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
 
         Args:
@@ -1231,7 +1224,6 @@ class ServerManager:
         import httpx
 
         if session_id is not None:
-            # HTTP (streamable-http) transport
             url = f"{base_url.rstrip('/')}/mcp"
             headers = {
                 "Content-Type": "application/json",
@@ -1239,7 +1231,6 @@ class ServerManager:
                 "Mcp-Session-Id": session_id,
             }
         else:
-            # SSE transport
             url = f"{base_url.rstrip('/')}/messages/"
             headers = {}
 
@@ -1249,10 +1240,7 @@ class ServerManager:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                if session_id is not None:
-                    response = _parse_mcp_response(resp)
-                else:
-                    response = resp.json()
+                response = _parse_mcp_response(resp) if session_id is not None else resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
