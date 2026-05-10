@@ -5,6 +5,7 @@ import shutil
 import asyncio
 import time
 import threading
+import httpx
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
@@ -69,8 +70,6 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
     Raises:
         HTTPException on any HTTP or connection error.
     """
-    import httpx
-
     messages_url = f"{sse_url.rstrip('/')}/messages/"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -91,14 +90,15 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
         logger.error(f"SSE proxy error → {messages_url}: {e}")
         raise HTTPException(500, f"SSE proxy error: {str(e)}")
 
-async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 60.0) -> dict:
+async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 60.0, session_id: str = "") -> dict:
     """
     Forward a JSON-RPC request to a streamable-http MCP server via POST /mcp.
 
     Args:
-        base_url: Base URL of the HTTP server (e.g. "http://127.0.0.1:8000").
-        payload:  JSON-RPC 2.0 dict to send.
-        timeout:  HTTP request timeout in seconds.
+        base_url:   Base URL of the HTTP server (e.g. "http://127.0.0.1:8000").
+        payload:    JSON-RPC 2.0 dict to send.
+        timeout:    HTTP request timeout in seconds.
+        session_id: MCP session ID to include as mcp-session-id header.
 
     Returns:
         Parsed JSON response dict.
@@ -106,13 +106,20 @@ async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 6
     Raises:
         HTTPException on any HTTP or connection error.
     """
-    import httpx
-
     mcp_url = f"{base_url.rstrip('/')}/mcp"
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    if session_id:
+        headers["mcp-session-id"] = session_id
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(mcp_url, json=payload)
+            resp = await client.post(mcp_url, json=payload, headers=headers)
             resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                for line in resp.text.splitlines():
+                    if line.startswith("data: "):
+                        return json.loads(line[6:])
+                raise Exception(f"No data line in SSE response: {resp.text!r}")
             return resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(
@@ -442,7 +449,7 @@ def create_dynamic_router(server_manager):
             if isinstance(process, NetworkSubprocessHandle):
                 with RequestTimer(collector, request.get("method", "unknown")):
                     if process.transport == "http":
-                        response = await _proxy_to_http_server(process.base_url, request)
+                        response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id)
                     else:
                         response = await _proxy_to_sse_server(process.base_url, request)
                     return JSONResponse(content=response)
@@ -524,7 +531,7 @@ def create_dynamic_router(server_manager):
                 if isinstance(process, NetworkSubprocessHandle):
                     if process.transport == "http":
                         try:
-                            response = await _proxy_to_http_server(process.base_url, request)
+                            response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id)
                             yield f"data: {json.dumps(response)}\n\n"
                         except Exception as e:
                             completion_status = "error"
@@ -635,7 +642,7 @@ def create_dynamic_router(server_manager):
         if isinstance(process, NetworkSubprocessHandle):
             payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
             if process.transport == "http":
-                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0)
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id)
             else:
                 response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
             return JSONResponse(content=response)
@@ -697,7 +704,7 @@ def create_dynamic_router(server_manager):
                 raise HTTPException(400, "Tool name is required")
             payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
             if process.transport == "http":
-                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0)
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id)
             else:
                 response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
             return JSONResponse(content=response)
