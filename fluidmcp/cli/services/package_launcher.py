@@ -470,12 +470,11 @@ def create_dynamic_router(server_manager):
 
             # ── Network transport: forward via HTTP ──────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
-                with RequestTimer(collector, request.get("method", "unknown")):
-                    if process.transport == "http":
-                        response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
-                    else:
-                        response = await _proxy_to_sse_server(process.base_url, request)
-                    return JSONResponse(content=response)
+                if process.transport == "http":
+                    response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
+                else:
+                    response = await _proxy_to_sse_server(process.base_url, request)
+                return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
             try:

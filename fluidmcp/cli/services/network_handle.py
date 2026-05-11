@@ -45,13 +45,14 @@ class NetworkSubprocessHandle:
         # FastMCP to process them serially). SSE transport doesn't need this — it uses
         # a streaming GET, not repeated POSTs.
         if transport == "http":
+            import os
             self.http_client = httpx.AsyncClient(
                 limits=httpx.Limits(
-                    max_connections=200,
-                    max_keepalive_connections=100,
-                    keepalive_expiry=30,
+                    max_connections=int(os.getenv("FMCP_HTTP_POOL_MAX_CONNECTIONS", "200")),
+                    max_keepalive_connections=int(os.getenv("FMCP_HTTP_POOL_MAX_KEEPALIVE", "100")),
+                    keepalive_expiry=int(os.getenv("FMCP_HTTP_POOL_KEEPALIVE_EXPIRY", "30")),
                 ),
-                timeout=httpx.Timeout(60.0),
+                timeout=httpx.Timeout(float(os.getenv("FMCP_HTTP_POOL_TIMEOUT", "60.0"))),
             )
             logger.debug(f"Created shared httpx client pool for {base_url}")
         else:
