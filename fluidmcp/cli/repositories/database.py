@@ -181,8 +181,10 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
             
             # Get connection pool settings from environment with safe parsing
-            default_max_pool_size = 50
-            default_min_pool_size = 10
+            # max_pool_size=6: matches Atlas M0 free-tier practical limit per application.
+            # Increase via FMCP_MONGODB_MAX_POOL_SIZE if using a paid Atlas tier or self-hosted MongoDB.
+            default_max_pool_size = 6
+            default_min_pool_size = 1
             
             raw_max_pool_size = os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", str(default_max_pool_size))
             try:
@@ -209,9 +211,9 @@ class DatabaseManager(PersistenceBackend):
             if max_pool_size <= 0:
                 logger.warning(
                     f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={max_pool_size!r}; "
-                    "using default max pool size of 50."
+                    f"using default max pool size of {default_max_pool_size}."
                 )
-                max_pool_size = 50
+                max_pool_size = default_max_pool_size
             if min_pool_size <= 0:
                 logger.warning(
                     f"Invalid FMCP_MONGODB_MIN_POOL_SIZE={min_pool_size!r}; "
@@ -357,6 +359,19 @@ class DatabaseManager(PersistenceBackend):
                 ("archived_at", -1)  # Descending for most recent first
             ])
             logger.info("Created compound index on fluidmcp_llm_model_versions for rollback queries")
+
+            # Create indexes on fluidmcp_crash_events collection
+            await self.db.fluidmcp_crash_events.create_index([("server_id", 1), ("timestamp", -1)])
+            # TTL index: auto-delete crash events older than 30 days to prevent unbounded growth
+            try:
+                ttl_days = int(os.getenv("FMCP_CRASH_EVENT_TTL_DAYS", "30"))
+            except ValueError:
+                ttl_days = 30
+            ttl_seconds = ttl_days * 86400
+            await self.db.fluidmcp_crash_events.create_index(
+                "timestamp", expireAfterSeconds=ttl_seconds
+            )
+            logger.info(f"Created TTL index on fluidmcp_crash_events (expires after {ttl_days} days)")
 
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:
@@ -1150,6 +1165,34 @@ class DatabaseManager(PersistenceBackend):
             True (MongoDB backend supports versioning)
         """
         return True
+
+    # ==================== Crash Event Persistence ====================
+
+    async def save_crash_event(self, event: Dict[str, Any]) -> bool:
+        """Save a server crash event to MongoDB."""
+        try:
+            doc = dict(event)
+            doc["timestamp"] = doc.get("timestamp", datetime.utcnow())
+            await self.db.fluidmcp_crash_events.insert_one(doc)
+            logger.info(f"Saved crash event for server '{event.get('server_id')}' (exit_code={event.get('exit_code')})")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving crash event: {e}")
+            return False
+
+    async def list_crash_events(self, server_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """List recent crash events for a server from MongoDB."""
+        try:
+            cursor = self.db.fluidmcp_crash_events.find(
+                {"server_id": server_id}
+            ).sort("timestamp", -1).limit(limit)
+            events = await cursor.to_list(length=limit)
+            for event in events:
+                event.pop("_id", None)
+            return events
+        except Exception as e:
+            logger.error(f"Error listing crash events for '{server_id}': {e}")
+            return []
 
     # ==================== Connection Management ====================
 

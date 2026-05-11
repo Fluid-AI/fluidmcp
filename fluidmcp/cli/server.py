@@ -19,7 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
-from .services.server_manager import ServerManager
+from .services.server_manager import ServerManager, MCPHealthMonitor
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
@@ -56,51 +56,6 @@ class TraceContextMiddleware(BaseHTTPMiddleware):
 
 from .auth import get_optional_user
 from .services.opentelemetry_manager import init_opentelemetry, shutdown_opentelemetry
-
-
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sentry_sdk.integrations.asyncio import AsyncioIntegration
-
-# Initialize Sentry for production error tracking (opt-in via SENTRY_DSN env var)
-def init_sentry() -> None:
-    """
-    Initialize Sentry for production error tracking.
-    This function is intended to be called explicitly during server startup
-    (e.g., from main()/run()/create_app()) rather than at module import time,
-    to avoid import-time side effects.
-    """
-    sentry_dsn = os.getenv("SENTRY_DSN")
-    if not sentry_dsn:
-        logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
-        return
-    
-    try:
-        sentry_sdk.init(
-            dsn=sentry_dsn,
-            environment=os.getenv("ENVIRONMENT", "production"),
-            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
-            integrations=[
-                FastApiIntegration(),
-                AsyncioIntegration(),
-            ],
-            # Filter out health check and metrics noise from error tracking
-            before_send=lambda event, hint: (
-                None
-                if any(
-                    path in event.get("request", {}).get("url", "")
-                    for path in ["/health", "/metrics"]
-                )
-                else event
-            ),
-        )
-        logger.info(
-            f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})"
-        )
-    except Exception as e:
-        logger.error(f"❌ Sentry initialization failed: {e}")
-
-
 
 def save_token_to_file(token: str) -> Path:
     """
@@ -295,6 +250,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(mgmt_router, prefix="/api", tags=["management"])
     logger.info("Management API mounted at /api")
 
+    # Include Inspector API
+    app.include_router(inspector_router, prefix="/api", tags=["inspector"])
+    logger.info("Inspector API mounted at /api")
+
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
     app.include_router(mcp_router, tags=["mcp"])
@@ -425,6 +384,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 "mcp": "/{server_name}/mcp"
             }
         }
+
+    # Start Inspector session cleanup task
+    @app.on_event("startup")
+    async def start_inspector_cleanup():
+        asyncio.create_task(cleanup_sessions())
+        logger.info("Inspector session cleanup task started")
 
     # Register cleanup handler for HTTP client and Redis connections
     @app.on_event("shutdown")
@@ -670,9 +635,6 @@ async def main(args):
             require_persistence=require_persistence
         )
 
-    # Initialize Sentry (after persistence is set up)
-    init_sentry()
-
     # 2. Create ServerManager
     logger.info("Creating ServerManager...")
     server_manager = ServerManager(persistence)
@@ -682,6 +644,15 @@ async def main(args):
     # 3. Start background tasks
     logger.info("Starting background tasks...")
     server_manager.start_idle_cleanup_task()
+
+    # Start MCP server health monitor (detects crashes, triggers auto-restart)
+    try:
+        health_check_interval = int(os.getenv("FMCP_HEALTH_CHECK_INTERVAL", "30"))
+    except ValueError:
+        logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
+        health_check_interval = 30
+    health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
+    health_monitor.start()
 
     # 4. Create FastAPI app (without MCP servers)
     app = await create_app(
@@ -752,6 +723,13 @@ async def main(args):
 
     # Graceful cleanup
     logger.info("Initiating graceful shutdown...")
+
+    try:
+        # Stop health monitor
+        logger.info("Stopping MCP health monitor...")
+        await health_monitor.stop()
+    except Exception as e:
+        logger.error(f"Error stopping health monitor: {e}")
 
     try:
         # Stop idle cleanup task
