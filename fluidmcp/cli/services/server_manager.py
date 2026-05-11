@@ -20,6 +20,7 @@ from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
+from .mcp_queue import McpQueue
 
 
 class ServerManager:
@@ -41,6 +42,9 @@ class ServerManager:
 
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
+
+        # Per-server async I/O queues (stdio transport only)
+        self.queues: Dict[str, McpQueue] = {}
 
         # Event loop for async operations
         self._loop = None
@@ -209,6 +213,14 @@ class ServerManager:
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
+            # Start I/O queue for stdio-transport servers.
+            # SseSubprocessHandle communicates over HTTP, not stdio, so no queue needed.
+            if not isinstance(process, SseSubprocessHandle):
+                queue = McpQueue(id, process)
+                queue.start()
+                self.queues[id] = queue
+                logger.debug(f"[{id}] McpQueue started")
+
             # Clear stale PID cache entry (if any) since server is now running
             self._stale_pid_updates.pop(id, None)
 
@@ -322,6 +334,13 @@ class ServerManager:
                 logger.info(f"Server '{name}' (id: {id}) already stopped (exit code: {process.returncode})")
                 await self._cleanup_server(id, process.returncode, intentional=True)
                 return True
+
+            # Stop I/O queue before killing the process so in-flight requests
+            # receive clean errors rather than hanging indefinitely.
+            if id in self.queues:
+                await self.queues[id].stop()
+                del self.queues[id]
+                logger.debug(f"[{id}] McpQueue stopped")
 
             # Terminate process
             logger.info(f"Stopping server '{name}' (id: {id}, PID: {process.pid})...")
@@ -1119,14 +1138,12 @@ class ServerManager:
         if id in self.start_times:
             del self.start_times[id]
 
-        # Close stderr log file handle
-        self._close_stderr_log(id)
-
-        # Determine state
-        if intentional or exit_code == 0:
-            state = "stopped"
-        else:
-            state = "failed"
+        # Safety: stop queue if process died on its own (not via stop_server).
+        # This covers crash/self-exit paths that bypass _stop_server_unlocked.
+        if id in self.queues:
+            await self.queues[id].stop()
+            del self.queues[id]
+            logger.debug(f"[{id}] McpQueue cleaned up in _cleanup_server")
 
         # Update database
         await self.db.save_instance_state({
@@ -1168,6 +1185,22 @@ class ServerManager:
         if server_id not in self.start_times:
             return None
         return time.monotonic() - self.start_times[server_id]
+
+    def get_queue(self, server_id: str) -> Optional[McpQueue]:
+        """
+        Return the McpQueue for a running stdio-transport server, or None.
+
+        Returns None for SSE-transport servers (which communicate over HTTP
+        and have no stdio queue) and for servers that are not currently
+        running.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            McpQueue instance, or None if no queue exists for this server.
+        """
+        return self.queues.get(server_id)
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:
