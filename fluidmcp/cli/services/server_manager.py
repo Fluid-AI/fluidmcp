@@ -104,7 +104,8 @@ class ServerManager:
 
         for server_id, process in list(self.processes.items()):
             try:
-                # Release allocated port for HTTP-transport servers
+                # Free the port and schedule pool closure. close_nowait() is used
+                # here because cleanup_all() is synchronous — it can't await.
                 if isinstance(process, NetworkSubprocessHandle):
                     try:
                         parsed = urlparse(process.base_url)
@@ -112,6 +113,7 @@ class ServerManager:
                             self._release_port(parsed.port)
                     except Exception:
                         pass
+                    process.close_nowait()
 
                 if process.poll() is None:  # Process still running
                     logger.info(f"Terminating server '{server_id}' (PID: {process.pid})")
@@ -1152,55 +1154,112 @@ class ServerManager:
             },
         }
 
-        logger.info(
-            f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
-            f"waiting for HTTP readiness at {mcp_url}..."
+        # Check whether the server developer opted into FastMCP's stateless_http mode
+        # by setting FASTMCP_STATELESS_HTTP in the server's env config.
+        # Stateless mode means no initialize handshake and no session ID — every request
+        # is independent, which allows full concurrency. Any value other than "false"
+        # (including an empty string) is treated as opting in.
+        server_env = self.configs.get(id, {}).get("env") or {}
+        fastmcp_stateless_val = server_env.get("FASTMCP_STATELESS_HTTP")
+        stateless = (
+            fastmcp_stateless_val is not None
+            and str(fastmcp_stateless_val).lower() != "false"
         )
+
+        if stateless:
+            logger.info(
+                f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+                f"stateless mode — skipping initialize handshake, waiting for HTTP readiness..."
+            )
+        else:
+            logger.info(
+                f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+                f"waiting for HTTP readiness at {mcp_url}..."
+            )
 
         loop = asyncio.get_event_loop()
         deadline = loop.time() + 30
         session_id = None
 
-        while loop.time() < deadline:
-            if process.poll() is not None:
-                stderr_out = self._read_crash_stderr(id) or ""
-                logger.error(
-                    f"[{id}] HTTP server process died before becoming ready "
-                    f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
-                )
+        if stateless:
+            # Stateless mode: the server ignores session IDs, so we just wait until
+            # it responds to any valid request. tools/list is a safe probe that works
+            # without an initialized session.
+            readiness_payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            while loop.time() < deadline:
+                if process.poll() is not None:
+                    stderr_out = self._read_crash_stderr(id) or ""
+                    logger.error(
+                        f"[{id}] HTTP server process died before becoming ready "
+                        f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                    )
+                    return None
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.post(mcp_url, json=readiness_payload, headers=headers)
+                        if resp.is_success:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] Stateless HTTP server is ready at {base_url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            break
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"[{id}] HTTP server did not become ready within 30s")
+                try:
+                    process.kill()
+                except Exception:
+                    pass
                 return None
-
-            try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.post(mcp_url, json=init_payload, headers=headers)
-                    if resp.is_success:
-                        elapsed = 30 - (deadline - loop.time())
-                        logger.info(
-                            f"[{id}] HTTP server is ready at {base_url} "
-                            f"(took {elapsed:.1f}s)"
-                        )
-                        session_id = resp.headers.get("mcp-session-id")
-                        _parse_mcp_response(resp)
-                        notif_headers = dict(headers)
-                        if session_id:
-                            notif_headers["Mcp-Session-Id"] = session_id
-                        await client.post(
-                            mcp_url,
-                            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
-                            headers=notif_headers,
-                        )
-                        break
-            except (httpx.ConnectError, httpx.TimeoutException):
-                pass  # Server not up yet — keep polling
-
-            await asyncio.sleep(1.0)
         else:
-            logger.error(f"[{id}] HTTP server did not become ready within 30s")
-            try:
-                process.kill()
-            except Exception:
-                pass
-            return None
+            # Stateful mode: send the MCP initialize request and capture the
+            # mcp-session-id the server returns. Every subsequent request to this
+            # server must include that header or the server will reject it with 400.
+            # After a successful initialize, send the notifications/initialized
+            # notification to complete the handshake.
+            while loop.time() < deadline:
+                if process.poll() is not None:
+                    stderr_out = self._read_crash_stderr(id) or ""
+                    logger.error(
+                        f"[{id}] HTTP server process died before becoming ready "
+                        f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                    )
+                    return None
+
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.post(mcp_url, json=init_payload, headers=headers)
+                        if resp.is_success:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] HTTP server is ready at {base_url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            session_id = resp.headers.get("mcp-session-id")
+                            _parse_mcp_response(resp)
+                            notif_headers = dict(headers)
+                            if session_id:
+                                notif_headers["Mcp-Session-Id"] = session_id
+                            await client.post(
+                                mcp_url,
+                                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                                headers=notif_headers,
+                            )
+                            break
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass  # Server not up yet — keep polling
+
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"[{id}] HTTP server did not become ready within 30s")
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                return None
 
         # Discover and cache tools via POST /mcp
         await self._discover_and_cache_tools_network(id, base_url, session_id=session_id)
@@ -1281,13 +1340,18 @@ class ServerManager:
         """
         uptime = self.get_uptime(id)
 
-        # Release allocated port for HTTP-transport servers before removing from registry
+        # Free the port back to the pool and drain the shared httpx connection pool
+        # so stale TCP connections don't linger after the subprocess exits.
         process = self.processes.get(id)
         if isinstance(process, NetworkSubprocessHandle):
             try:
                 parsed = urlparse(process.base_url)
                 if parsed.port:
                     self._release_port(parsed.port)
+            except Exception:
+                pass
+            try:
+                await process.aclose()
             except Exception:
                 pass
 

@@ -90,7 +90,13 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
         logger.error(f"SSE proxy error → {messages_url}: {e}")
         raise HTTPException(500, f"SSE proxy error: {str(e)}")
 
-async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 60.0, session_id: str = "") -> dict:
+async def _proxy_to_http_server(
+    base_url: str,
+    payload: dict,
+    timeout: float = 60.0,
+    session_id: str = None,
+    client: httpx.AsyncClient = None,
+) -> dict:
     """
     Forward a JSON-RPC request to a streamable-http MCP server via POST /mcp.
 
@@ -99,6 +105,9 @@ async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 6
         payload:    JSON-RPC 2.0 dict to send.
         timeout:    HTTP request timeout in seconds.
         session_id: MCP session ID to include as mcp-session-id header.
+        client:     Optional shared httpx.AsyncClient. When provided the pool's
+                    pre-established connections are reused (no per-request TCP
+                    handshake). When None a fresh short-lived client is created.
 
     Returns:
         Parsed JSON response dict.
@@ -108,19 +117,30 @@ async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 6
     """
     mcp_url = f"{base_url.rstrip('/')}/mcp"
     headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    # Stateful servers require every request to carry the session ID negotiated
+    # during the initialize handshake. Stateless servers omit it entirely.
     if session_id:
         headers["mcp-session-id"] = session_id
+
+    # Use the caller-supplied shared pool when available. If not (e.g. tool
+    # discovery at startup, or SSE fallback paths), create a short-lived client
+    # and close it in the finally block so connections don't leak.
+    owned_client = client is None
+    if owned_client:
+        client = httpx.AsyncClient(timeout=timeout)
+
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(mcp_url, json=payload, headers=headers)
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if "text/event-stream" in content_type:
-                for line in resp.text.splitlines():
-                    if line.startswith("data: "):
-                        return json.loads(line[6:])
-                raise Exception(f"No data line in SSE response: {resp.text!r}")
-            return resp.json()
+        resp = await client.post(mcp_url, json=payload, headers=headers)
+        resp.raise_for_status()
+        # FastMCP returns text/event-stream even for non-streaming responses.
+        # Unwrap the SSE envelope to get the plain JSON-RPC payload.
+        content_type = resp.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            for line in resp.text.splitlines():
+                if line.startswith("data: "):
+                    return json.loads(line[6:])
+            raise Exception(f"No data line in SSE response: {resp.text!r}")
+        return resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(
             e.response.status_code,
@@ -139,6 +159,9 @@ async def _proxy_to_http_server(base_url: str, payload: dict, timeout: float = 6
     except Exception as e:
         logger.error(f"HTTP proxy error → {mcp_url}: {e}")
         raise HTTPException(500, f"HTTP proxy error: {str(e)}")
+    finally:
+        if owned_client:
+            await client.aclose()
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
@@ -449,7 +472,7 @@ def create_dynamic_router(server_manager):
             if isinstance(process, NetworkSubprocessHandle):
                 with RequestTimer(collector, request.get("method", "unknown")):
                     if process.transport == "http":
-                        response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id)
+                        response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
                     else:
                         response = await _proxy_to_sse_server(process.base_url, request)
                     return JSONResponse(content=response)
@@ -531,7 +554,7 @@ def create_dynamic_router(server_manager):
                 if isinstance(process, NetworkSubprocessHandle):
                     if process.transport == "http":
                         try:
-                            response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id)
+                            response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
                             yield f"data: {json.dumps(response)}\n\n"
                         except Exception as e:
                             completion_status = "error"
@@ -642,7 +665,7 @@ def create_dynamic_router(server_manager):
         if isinstance(process, NetworkSubprocessHandle):
             payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
             if process.transport == "http":
-                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id)
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
             else:
                 response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
             return JSONResponse(content=response)
@@ -704,7 +727,7 @@ def create_dynamic_router(server_manager):
                 raise HTTPException(400, "Tool name is required")
             payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
             if process.transport == "http":
-                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id)
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
             else:
                 response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
             return JSONResponse(content=response)
