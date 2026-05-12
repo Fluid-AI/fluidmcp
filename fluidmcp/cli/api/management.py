@@ -59,6 +59,11 @@ from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
+from ..services.package_launcher import readline_with_timeout
+
+# Per-server stdio locks — prevents concurrent requests from interleaving
+# stdin writes and stdout reads on the same JSON-RPC channel.
+_stdio_locks: Dict[str, threading.Lock] = {}
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1950,14 +1955,20 @@ async def run_tool(
         }
 
         logger.info(f"Executing tool '{tool_name}' on server '{id}'")
-        process.stdin.write(json.dumps(tool_request) + "\n")
-        process.stdin.flush()
 
-        # Read response with 30 second timeout
-        response_line = await asyncio.wait_for(
-            asyncio.to_thread(process.stdout.readline),
-            timeout=30.0
-        )
+        # Acquire per-server stdio lock to prevent interleaved write/read
+        stdio_lock = _stdio_locks.setdefault(id, threading.Lock())
+        msg = json.dumps(tool_request)
+
+        def _communicate_tool(payload: str) -> str:
+            with stdio_lock:
+                process.stdin.write(payload + "\n")
+                process.stdin.flush()
+                return readline_with_timeout(process, timeout=30.0)
+
+        response_line = await asyncio.to_thread(_communicate_tool, msg)
+        if not response_line:
+            raise HTTPException(504, "Tool execution timeout (>30s)")
 
         response = json.loads(response_line.strip())
 
@@ -1967,8 +1978,6 @@ async def run_tool(
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
 
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse tool response for '{tool_name}' on '{id}': {e}")
         raise HTTPException(500, "Failed to parse tool response")
