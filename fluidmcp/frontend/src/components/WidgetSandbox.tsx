@@ -233,7 +233,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
           <iframe
             ref={iframeRef}
             src={`${import.meta.env.BASE_URL}sandbox-proxy.html`}
-            sandbox="allow-scripts allow-same-origin allow-forms"
+            sandbox="allow-scripts allow-forms"
             title="MCP Widget"
             style={{
               width: '100%',
