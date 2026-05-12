@@ -91,6 +91,13 @@ export const ToolRunner: React.FC = () => {
 
   const handleSubmit = async (values: Record<string, any>) => {
     await execute(values);
+    // Refresh server status so the auto-start banner clears after the server starts
+    try {
+      const updated = await apiClient.getServerDetails(serverId!);
+      setServer(updated as Server);
+    } catch {
+      // ignore — banner will just stay until next navigation
+    }
   };
 
   const handleLoadFromHistory = (executionId: string) => {
@@ -231,6 +238,27 @@ export const ToolRunner: React.FC = () => {
               </button>
             )}
           </div>
+
+      {/* Auto-start notice when server is stopped */}
+      {server.status?.state && server.status.state !== 'running' && server.status.state !== 'starting' && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          padding: '0.875rem 1.25rem',
+          marginBottom: '1.5rem',
+          background: 'rgba(234, 179, 8, 0.08)',
+          border: '1px solid rgba(234, 179, 8, 0.25)',
+          borderRadius: '0.5rem',
+          fontSize: '0.875rem',
+          color: 'rgba(255, 255, 255, 0.8)',
+        }}>
+          <span style={{ fontSize: '1rem' }}>⚡</span>
+          <span>
+            Server is currently <strong style={{ color: '#fbbf24' }}>{server.status.state}</strong> — it will auto-start when you run a tool.
+          </span>
+        </div>
+      )}
 
       {/* Main Content */}
       <ErrorBoundary fallback={
