@@ -1,5 +1,6 @@
 import os
 import json
+import select as _select
 import subprocess
 import shutil
 import asyncio
@@ -20,6 +21,29 @@ from .metrics import MetricsCollector, RequestTimer
 from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
+
+# Max seconds to wait for an MCP subprocess to write a response line.
+# Overridable via the MCP_READ_TIMEOUT environment variable.
+#
+# Why select() and not asyncio.wait_for():
+# wait_for cancels the coroutine but leaves the OS thread blocked on readline().
+# ThreadPoolExecutor can only reclaim a slot when the thread *returns*, so the
+# slot stays consumed forever. select() puts the timeout inside the thread itself —
+# if nothing arrives in time, the thread returns "" immediately and frees its slot.
+_MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "45"))
+
+
+def _readline_with_timeout(stdout, timeout: float) -> str:
+    """Read one line from stdout with a hard thread-level timeout via select().
+
+    Returns the line if data arrived in time, or "" if the timeout elapsed.
+    Callers treat "" as a hung server and raise HTTPException(504).
+    """
+    ready, _, _ = _select.select([stdout], [], [], timeout)
+    if not ready:
+        return ""
+    return stdout.readline()
+
 
 # ── Per-server stdio dispatcher ────────────────────────────────────────────────
 # MCP over stdio is fundamentally single-tenant: one process, one pipe, one
@@ -70,8 +94,14 @@ async def _stdio_worker(server_name: str, process) -> None:
                 continue
             process.stdin.write(msg + "\n")
             process.stdin.flush()
-            response_line = await asyncio.to_thread(process.stdout.readline)
-            if not fut.done():
+            response_line = await asyncio.to_thread(
+                _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+            )
+            if not response_line:
+                fut.set_exception(RuntimeError(
+                    f"server did not respond within {_MCP_READ_TIMEOUT}s"
+                ))
+            elif not fut.done():
                 fut.set_result(response_line)
         except Exception as exc:
             if not fut.done():
@@ -108,7 +138,9 @@ async def _dispatch_stdio(server_name: str, process, msg: str) -> str:
     try:
         return await fut
     except RuntimeError as exc:
-        raise HTTPException(503, f"Server '{server_name}': {exc}")
+        msg = str(exc)
+        code = 504 if "did not respond" in msg else 503
+        raise HTTPException(code, f"Server '{server_name}': {msg}")
     except (BrokenPipeError, OSError) as exc:
         raise HTTPException(503, f"Server '{server_name}' pipe broken: {exc}")
 
