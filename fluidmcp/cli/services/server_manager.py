@@ -1927,7 +1927,11 @@ class MCPHealthMonitor:
         """Record a restart timestamp and flag server as unstable if flapping."""
         now = time.monotonic()
         window = 600  # 10 minutes
-        storm_threshold = int(os.getenv("FMCP_RESTART_STORM_THRESHOLD", "5"))
+        try:
+            storm_threshold = int(os.getenv("FMCP_RESTART_STORM_THRESHOLD", "5"))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_RESTART_STORM_THRESHOLD value, using default 5")
+            storm_threshold = 5
 
         timestamps = self._restart_timestamps.get(server_id, [])
         timestamps.append(now)
