@@ -256,7 +256,7 @@ class TestGetServerStderr:
         finally:
             os.unlink(tmp_path)
 
-    def test_response_includes_file_path(self, client, server_manager):
+    def test_response_does_not_expose_file_path(self, client, server_manager):
         self._register_server(server_manager, "srv1")
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as f:
@@ -267,6 +267,6 @@ class TestGetServerStderr:
             with patch.object(server_manager, "_get_stderr_log_path", return_value=tmp_path):
                 resp = client.get("/api/servers/srv1/stderr")
 
-            assert resp.json()["file"] == tmp_path
+            assert "file" not in resp.json()
         finally:
             os.unlink(tmp_path)

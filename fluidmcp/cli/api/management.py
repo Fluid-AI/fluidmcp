@@ -22,7 +22,7 @@ import json
 import threading
 from collections import defaultdict
 from time import time as current_time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Import centralized validators
 from .validators import (
@@ -53,6 +53,7 @@ except ImportError:
     _redis_available = False
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
+from ..services.server_manager import classify_exit_code
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
@@ -1721,7 +1722,6 @@ async def get_server_crashes(
     crashes = await manager.db.list_crash_events(id, limit=limit)
 
     # Annotate with human-readable exit classification if not already present
-    from ..services.server_manager import classify_exit_code
     for crash in crashes:
         if "exit_category" not in crash and "exit_code" in crash:
             info = classify_exit_code(crash["exit_code"])
@@ -1730,7 +1730,7 @@ async def get_server_crashes(
             crash["exit_description"] = info["description"]
 
     # Compute crashes_per_hour from timestamps in the returned set
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     one_hour_ago = (now - timedelta(hours=1)).timestamp()
     crashes_last_hour = sum(
         1 for c in crashes
@@ -1772,7 +1772,6 @@ async def get_server_stderr(
     if not os.path.exists(log_path):
         return {
             "server": id,
-            "file": log_path,
             "lines": [],
             "line_count": 0,
             "truncated": False,
@@ -1809,7 +1808,6 @@ async def get_server_stderr(
 
     return {
         "server": id,
-        "file": log_path,
         "lines": tail,
         "line_count": len(tail),
         "truncated": truncated,
