@@ -123,18 +123,17 @@ class ServerBuilder:
         effective_install_path = install_path if install_path is not None else clone_path
 
         # ── Detect transport type from metadata.json server block ────────────
-        # Repos declare SSE transport by adding "transport": "sse" (and
-        # optionally "url": "http://127.0.0.1:<port>") to their mcpServers block.
+        # Repos declare SSE (or http) transport by adding
+        # "transport": "sse" to their mcpServers block. No "url" field is
+        # needed — FluidMCP allocates a port at runtime and injects MCP_PORT.
         # Example metadata.json entry:
         #   "game-hub": {
         #     "command": "uv",
         #     "args": ["--directory", "game-hub-mcp/game-hub", "run", "server.py"],
         #     "env": {},
-        #     "transport": "sse",
-        #     "url": "http://127.0.0.1:8000"
+        #     "transport": "sse"
         #   }
         transport = server_config.get("transport", "stdio")
-        sse_url = server_config.get("url", "http://127.0.0.1:8000")
 
         config = {
             "id": server_id,
@@ -163,14 +162,14 @@ class ServerBuilder:
             "created_at": datetime.now(timezone.utc),
         }
 
-        # ── SSE-specific fields ───────────────────────────────────────────────
-        # Only written when transport is explicitly "sse" so that existing stdio
-        # configs are completely unaffected.
-        if transport == "sse":
-            config["transport"] = "sse"
-            config["url"] = sse_url
+        # ── HTTP transport field ──────────────────────────────────────────────
+        # Written when transport is "sse" or "streamable-http" so that
+        # ServerManager knows to use HTTP instead of stdio. No "url" is stored
+        # here — the port is allocated at runtime and injected via MCP_PORT.
+        if transport in ("sse", "http"):
+            config["transport"] = transport
             logger.info(
-                f"Server '{server_id}' configured with SSE transport at {sse_url}"
+                f"Server '{server_id}' configured with {transport} transport (port allocated at runtime)"
             )
 
         return config
