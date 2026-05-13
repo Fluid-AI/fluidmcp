@@ -10,7 +10,8 @@ This module provides functionality to:
 from pathlib import Path
 from typing import Optional
 from loguru import logger
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -134,18 +135,54 @@ def setup_frontend_routes(
 
         return False
 
+    # Known SPA routes that should redirect /route → /ui/route when hit bare
+    _SPA_ROUTES = {
+        "status", "servers", "documentation", "inspector",
+        "llm",
+    }
+
     try:
-        # Mount StaticFiles for serving built assets (JS, CSS, images)
-        # The html=True parameter enables SPA mode:
-        # - Serves static files normally (app.js, styles.css, etc.)
-        # - Falls back to index.html for non-file paths (SPA routing)
-        # This eliminates the need for separate route handlers
-        app.mount("/ui", StaticFiles(directory=str(frontend_dist), html=True), name="ui")
+        index_html = frontend_dist / "index.html"
+        assets_dir = frontend_dist / "assets"
+
+        # Mount /ui/assets separately so static asset requests are served directly
+        # without going through the SPA fallback handler.
+        if assets_dir.exists():
+            app.mount("/ui/assets", StaticFiles(directory=str(assets_dir)), name="ui-assets")
+
+        # Explicit /ui and /ui/ routes — Starlette's StaticFiles mount redirects
+        # /ui → /ui/ via an absolute Location header built from the raw Host header.
+        # Behind GitHub Codespaces / Railway that points at localhost:port instead of
+        # the public hostname. Serving index.html directly avoids the redirect entirely.
+        @app.get("/ui", include_in_schema=False)
+        @app.get("/ui/", include_in_schema=False)
+        async def ui_root():
+            return FileResponse(str(index_html))
+
+        # SPA catch-all: any /ui/{path} that isn't a real file gets index.html.
+        # Starlette's StaticFiles(html=True) falls back to 404.html (not index.html)
+        # when a path doesn't match a file, so deep-links like /ui/status would 404.
+        @app.get("/ui/{path:path}", include_in_schema=False)
+        async def ui_spa(path: str):
+            candidate = frontend_dist / path
+            if candidate.exists() and candidate.is_file():
+                return FileResponse(str(candidate))
+            return FileResponse(str(index_html))
+
+        # Redirect bare SPA routes (/status, /servers, etc.) → /ui/<route> so that
+        # copy-pasting a deep-link without the /ui prefix still works.
+        def _make_redirect_handler():
+            async def handler(request: Request):
+                return RedirectResponse(url="/ui" + str(request.url.path), status_code=302)
+            return handler
+
+        for _route in _SPA_ROUTES:
+            _handler = _make_redirect_handler()
+            app.add_api_route(f"/{_route}", _handler, include_in_schema=False)
+            app.add_api_route(f"/{_route}/{{rest:path}}", _handler, include_in_schema=False)
 
         logger.info("✓ Frontend UI routes registered")
 
-        # Log the URL with the correct host
-        # Use localhost for better UX if host is 0.0.0.0
         display_host = "localhost" if host == "0.0.0.0" else host
         logger.info(f"✓ Frontend UI available at http://{display_host}:{port}/ui")
 
