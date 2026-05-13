@@ -1108,7 +1108,7 @@ class ServerManager:
         # Discover and cache tools via HTTP
         await self._discover_and_cache_tools_network(id, url, session_id=None)
 
-        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
+        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
 
     async def _handshake_http_subprocess(
         self,
