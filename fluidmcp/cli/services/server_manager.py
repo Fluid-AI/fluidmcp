@@ -20,7 +20,7 @@ from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
-from .sse_handle import SseSubprocessHandle
+from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
 
 
@@ -94,9 +94,9 @@ class ServerManager:
         for server_id, process in list(self.processes.items()):
             try:
                 # Release allocated port for HTTP-transport servers
-                if isinstance(process, SseSubprocessHandle):
+                if isinstance(process, NetworkSubprocessHandle):
                     try:
-                        parsed = urlparse(process.sse_url)
+                        parsed = urlparse(process.base_url)
                         if parsed.port:
                             self._release_port(parsed.port)
                     except Exception:
@@ -503,8 +503,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "running",
-                    "transport": "sse" if isinstance(process, SseSubprocessHandle) else "stdio",
-                    "url": process.sse_url if isinstance(process, SseSubprocessHandle) else None,
+                    "transport": process.transport if isinstance(process, NetworkSubprocessHandle) else "stdio",
+                    "url": process.base_url if isinstance(process, NetworkSubprocessHandle) else None,
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
@@ -638,7 +638,7 @@ class ServerManager:
             transport = config.get("transport", "stdio")
             if transport in ("sse", "http"):
                 running_process = self.processes.get(id)
-                runtime_url = running_process.sse_url if isinstance(running_process, SseSubprocessHandle) else None
+                runtime_url = running_process.base_url if isinstance(running_process, NetworkSubprocessHandle) else None
                 mcp_config = {
                     "transport": transport,
                     "url": runtime_url,
@@ -1031,14 +1031,14 @@ class ServerManager:
         id: str,
         port: int,
         process: subprocess.Popen,
-    ) -> Optional["SseSubprocessHandle"]:
+    ) -> Optional["NetworkSubprocessHandle"]:
         """
         Complete startup for a subprocess-owned SSE MCP server.
 
         After the process is spawned we:
           1. Poll until the HTTP server is accepting connections (max 30 s).
           2. Discover and cache tools via POST /messages/.
-          3. Return an SseSubprocessHandle wrapping the real Popen.
+          3. Return a NetworkSubprocessHandle wrapping the real Popen.
 
         Args:
             id:      Server identifier.
@@ -1046,7 +1046,7 @@ class ServerManager:
             process: The already-spawned subprocess.Popen.
 
         Returns:
-            SseSubprocessHandle on success, None on failure.
+            NetworkSubprocessHandle on success, None on failure.
         """
         import httpx
 
@@ -1097,14 +1097,14 @@ class ServerManager:
         # Discover and cache tools via HTTP
         await self._discover_and_cache_tools_sse(id, url)
 
-        return SseSubprocessHandle(process=process, sse_url=url)
+        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
 
     async def _handshake_http_subprocess(
         self,
         id: str,
         port: int,
         process: subprocess.Popen,
-    ) -> Optional["SseSubprocessHandle"]:
+    ) -> Optional["NetworkSubprocessHandle"]:
         """Handshake for streamable-http (POST /mcp) servers. Not yet implemented."""
         logger.warning(f"[{id}] HTTP transport handshake not yet implemented")
         return None
@@ -1172,9 +1172,9 @@ class ServerManager:
 
         # Release allocated port for HTTP-transport servers before removing from registry
         process = self.processes.get(id)
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             try:
-                parsed = urlparse(process.sse_url)
+                parsed = urlparse(process.base_url)
                 if parsed.port:
                     self._release_port(parsed.port)
             except Exception:
@@ -1582,7 +1582,7 @@ class MCPHealthMonitor:
         is_alive = True
 
         # Check process liveness
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             alive, reason = self._sm.health_checker.check_process_alive(process.pid)
             if not alive:
                 is_alive = False
@@ -1591,7 +1591,7 @@ class MCPHealthMonitor:
                     process.poll()
                 except Exception:
                     pass
-                logger.warning(f"MCP server '{server_id}' SSE process dead: {reason}")
+                logger.warning(f"MCP server '{server_id}' network process dead: {reason}")
         else:
             if process.poll() is not None:
                 is_alive = False

@@ -14,7 +14,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
-from .sse_handle import SseSubprocessHandle
+from .network_handle import NetworkSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
@@ -397,9 +397,9 @@ def create_dynamic_router(server_manager):
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
-            if isinstance(process, SseSubprocessHandle):
+            if isinstance(process, NetworkSubprocessHandle):
                 with RequestTimer(collector, request.get("method", "unknown")):
-                    response = await _proxy_to_sse_server(process.sse_url, request)
+                    response = await _proxy_to_sse_server(process.base_url, request)
                     return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
@@ -476,10 +476,10 @@ def create_dynamic_router(server_manager):
                 collector.increment_active_streams()
 
                 # ── SSE transport: forward to external HTTP server ───────────
-                if isinstance(process, SseSubprocessHandle):
+                if isinstance(process, NetworkSubprocessHandle):
                     import httpx
-                    messages_url = f"{process.sse_url.rstrip('/')}/messages/"
-                    sse_stream_url = f"{process.sse_url.rstrip('/')}/sse"
+                    messages_url = f"{process.base_url.rstrip('/')}/messages/"
+                    sse_stream_url = f"{process.base_url.rstrip('/')}/sse"
                     try:
                         async with httpx.AsyncClient(
                             timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
@@ -578,9 +578,9 @@ def create_dynamic_router(server_manager):
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
         # ── SSE transport ────────────────────────────────────────────────────
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             response = await _proxy_to_sse_server(
-                process.sse_url,
+                process.base_url,
                 {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                 timeout=30.0
             )
@@ -638,11 +638,11 @@ def create_dynamic_router(server_manager):
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
         # ── SSE transport ────────────────────────────────────────────────────
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             if "name" not in request_body:
                 raise HTTPException(400, "Tool name is required")
             response = await _proxy_to_sse_server(
-                process.sse_url,
+                process.base_url,
                 {
                     "jsonrpc": "2.0",
                     "id": 2,
