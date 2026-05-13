@@ -1833,13 +1833,25 @@ class MCPHealthMonitor:
         config = self._sm.configs.get(server_id) or {}
 
         # --- Memory kill policy ---
-        memory_warn_pct = float(config.get("memory_warn_pct",
-            os.getenv("FMCP_MEMORY_WARN_PCT", "90")))
-        memory_kill_pct = float(config.get("memory_kill_pct",
-            os.getenv("FMCP_MEMORY_KILL_PCT", "98")))
+        try:
+            memory_warn_pct = float(config.get("memory_warn_pct",
+                os.getenv("FMCP_MEMORY_WARN_PCT", "90")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_MEMORY_WARN_PCT value, using default 90%")
+            memory_warn_pct = 90.0
+        try:
+            memory_kill_pct = float(config.get("memory_kill_pct",
+                os.getenv("FMCP_MEMORY_KILL_PCT", "98")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_MEMORY_KILL_PCT value, using default 98%")
+            memory_kill_pct = 98.0
 
-        memory_limit_mb = config.get("memory_limit_mb",
-            int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+        try:
+            memory_limit_mb = config.get("memory_limit_mb",
+                int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_DEFAULT_MEMORY_LIMIT_MB value, using default 0")
+            memory_limit_mb = 0
         memory_limit_bytes = memory_limit_mb * 1024 * 1024 if memory_limit_mb > 0 else None
 
         if memory_limit_bytes and snapshot.get("memory_rss_bytes"):
@@ -1874,10 +1886,18 @@ class MCPHealthMonitor:
                 )
 
         # --- CPU stuck policy ---
-        cpu_warn_pct = float(config.get("cpu_warn_pct",
-            os.getenv("FMCP_CPU_WARN_PCT", "90")))
-        cpu_kill_cycles = int(config.get("cpu_kill_cycles",
-            os.getenv("FMCP_CPU_KILL_CYCLES", "3")))
+        try:
+            cpu_warn_pct = float(config.get("cpu_warn_pct",
+                os.getenv("FMCP_CPU_WARN_PCT", "90")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_CPU_WARN_PCT value, using default 90%")
+            cpu_warn_pct = 90.0
+        try:
+            cpu_kill_cycles = int(config.get("cpu_kill_cycles",
+                os.getenv("FMCP_CPU_KILL_CYCLES", "3")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_CPU_KILL_CYCLES value, using default 3")
+            cpu_kill_cycles = 3
 
         cpu_pct = snapshot.get("cpu_percent", 0) or 0
         if cpu_pct >= cpu_warn_pct:
