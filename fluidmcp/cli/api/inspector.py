@@ -1,3 +1,4 @@
+import os
 import uuid
 import asyncio
 import time
@@ -113,6 +114,9 @@ async def connect_server(body: ConnectRequest):
     target = body.command if body.transport == "stdio" else body.url
 
     if body.transport == "stdio":
+        _val = os.getenv("FMCP_INSPECTOR_ALLOW_STDIO", "").strip().lower()
+        if _val not in ("1", "true", "yes"):
+            raise HTTPException(403, "stdio transport is disabled on this deployment")
         if not body.command:
             raise HTTPException(400, "command is required for stdio transport")
     else:
