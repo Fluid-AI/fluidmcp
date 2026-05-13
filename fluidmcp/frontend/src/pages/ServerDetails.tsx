@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useServerDetails } from "../hooks/useServerDetails";
 import { useServerEnv } from "../hooks/useServerEnv";
 import { useServerPolling } from "../hooks/useServerPolling";
@@ -17,6 +17,16 @@ export default function ServerDetails() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [envFormExpanded, setEnvFormExpanded] = useState(false);
   const [envSubmitting, setEnvSubmitting] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
+
+  const mcpUrl = `${window.location.origin}/${serverId}/mcp`;
+
+  const handleCopyUrl = useCallback(() => {
+    navigator.clipboard.writeText(mcpUrl).then(() => {
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 2000);
+    });
+  }, [mcpUrl]);
 
   const {
     serverDetails,
@@ -217,7 +227,28 @@ export default function ServerDetails() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
               <h1>{serverDetails.name}</h1>
-              <p style={{ margin: '4px 0 8px 0', fontSize: '0.875rem', fontFamily: 'monospace', color: '#a1a1a1' }}>{serverId}</p>
+              <p style={{ margin: '4px 0 6px 0', fontSize: '0.875rem', fontFamily: 'monospace', color: '#a1a1a1' }}>{serverId}</p>
+              {/* Copyable MCP connection URL */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', color: '#71717a', whiteSpace: 'nowrap' }}>MCP URL:</span>
+                <code style={{ fontSize: '0.8rem', fontFamily: 'monospace', color: '#a78bfa', background: 'rgba(139, 92, 246, 0.1)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.25)', wordBreak: 'break-all' }}>
+                  {mcpUrl}
+                </code>
+                <button
+                  onClick={handleCopyUrl}
+                  title="Copy MCP URL"
+                  style={{ background: urlCopied ? 'rgba(34, 197, 94, 0.15)' : 'rgba(39, 39, 42, 0.8)', border: `1px solid ${urlCopied ? 'rgba(34, 197, 94, 0.4)' : 'rgba(63, 63, 70, 0.6)'}`, color: urlCopied ? '#4ade80' : '#a1a1aa', padding: '3px 10px', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer', transition: 'all 0.2s', whiteSpace: 'nowrap' }}
+                >
+                  {urlCopied ? '✓ Copied' : 'Copy'}
+                </button>
+                <div style={{ position: 'relative', display: 'inline-flex' }} className="mcp-url-hint">
+                  <span style={{ width: '16px', height: '16px', borderRadius: '50%', border: '1px solid #52525b', color: '#71717a', fontSize: '0.65rem', fontWeight: '700', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'default', userSelect: 'none', flexShrink: 0 }}>?</span>
+                  <div style={{ position: 'absolute', left: '50%', bottom: 'calc(100% + 8px)', transform: 'translateX(-50%)', width: '260px', background: '#18181b', border: '1px solid rgba(82, 82, 91, 0.6)', borderRadius: '8px', padding: '10px 12px', fontSize: '0.75rem', color: '#d1d5db', lineHeight: '1.5', pointerEvents: 'none', opacity: 0, transition: 'opacity 0.15s', zIndex: 50 }} className="mcp-url-tooltip">
+                    Use this URL to connect with this MCP server from any MCP-compatible client — such as Claude Desktop, ChatGPT, Cursor, or the MCP Inspector.
+                  </div>
+                </div>
+              </div>
+              <style>{`.mcp-url-hint:hover .mcp-url-tooltip { opacity: 1 !important; }`}</style>
               <p className="subtitle">
                 {serverDetails.description || "No description available"}
               </p>
