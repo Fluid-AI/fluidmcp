@@ -54,6 +54,13 @@ except ImportError:
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.server_manager import classify_exit_code
+
+try:
+    import psutil as _psutil
+    _psutil_available = True
+except ImportError:
+    _psutil = None
+    _psutil_available = False
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
@@ -1801,7 +1808,8 @@ async def get_server_resources(request: Request, id: str):
     rss = cpu = open_fds = threads = None
     status = "not_running"
     try:
-        import psutil as _psutil
+        if not _psutil_available:
+            raise ImportError("psutil not available")
         if pid and process and process.poll() is None:
             proc = _psutil.Process(pid)
             rss = proc.memory_info().rss
@@ -1810,7 +1818,7 @@ async def get_server_resources(request: Request, id: str):
             threads = proc.num_threads()
             status = "running"
         else:
-            raise _psutil.NoSuchProcess(pid or 0)
+            raise RuntimeError("process not running")
     except Exception:
         if snapshot:
             rss = snapshot.get("memory_rss_bytes")
