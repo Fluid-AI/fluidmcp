@@ -130,7 +130,7 @@ async def _proxy_to_http_server(
         client = httpx.AsyncClient(timeout=timeout)
 
     try:
-        resp = await client.post(mcp_url, json=payload, headers=headers)
+        resp = await client.post(mcp_url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
         # FastMCP returns text/event-stream even for non-streaming responses.
         # Unwrap the SSE envelope to get the plain JSON-RPC payload.

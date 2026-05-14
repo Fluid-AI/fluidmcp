@@ -59,11 +59,6 @@ class NetworkSubprocessHandle:
             self.http_client = None
 
     @property
-    def is_stateless(self) -> bool:
-        # True when the server runs in FastMCP stateless_http=True mode (no session ID).
-        return self.session_id is None
-
-    @property
     def pid(self):
         return self._process.pid
 
