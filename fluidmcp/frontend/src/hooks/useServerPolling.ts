@@ -23,6 +23,10 @@ export function useServerPolling(serverId: string) {
 
           // Check state if specified
           if (expectedState && server.status?.state !== expectedState) {
+            // Server failed — no point waiting out the full timeout
+            if (server.status?.state === 'failed') {
+              throw new Error('Server failed to start. Check server logs for details.');
+            }
             return false;
           }
 
