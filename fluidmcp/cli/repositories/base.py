@@ -139,6 +139,24 @@ class PersistenceBackend(ABC):
         pass
 
     @abstractmethod
+    async def get_instance_env(self, server_id: str) -> Optional[Dict[str, str]]:
+        """
+        Get filtered environment variables from a server instance.
+
+        Placeholder values (e.g. ${VAR}, <your-token>, changeme) and
+        whitespace-only strings are excluded so callers always receive
+        only real, user-configured values.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Dict of real environment variables, or None if the instance
+            does not exist or has no env block.
+        """
+        pass
+
+    @abstractmethod
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """
         Save log entry.
