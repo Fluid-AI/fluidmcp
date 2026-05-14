@@ -274,8 +274,6 @@ export const ToolResult: React.FC<ToolResultProps> = ({
           border: '1px solid rgba(63, 63, 70, 0.5)',
           borderRadius: '0.5rem',
           padding: '1.5rem',
-          maxHeight: '70vh',
-          overflow: 'auto'
         }}>
           {viewMode === 'raw' ? (
             <pre style={{ 
