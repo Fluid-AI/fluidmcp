@@ -28,6 +28,39 @@ fi
 # Get port from environment (Railway sets this automatically)
 PORT="${PORT:-8099}"
 
+# Initialize SERVE_PID before signal handlers to prevent race condition on early signals
+SERVE_PID=""
+
+shutdown_with_timeout() {
+  local exit_code=$1
+  if [ -n "$SERVE_PID" ] && kill -0 "$SERVE_PID" 2>/dev/null; then
+    echo "Shutting down server (PID $SERVE_PID)..."
+    kill -TERM "$SERVE_PID"
+    for i in {1..30}; do
+      if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+        wait "$SERVE_PID" 2>/dev/null || true
+        exit "$exit_code"
+      fi
+      sleep 1
+    done
+    if kill -0 "$SERVE_PID" 2>/dev/null; then
+      echo "⚠ Server did not stop gracefully after 30s, forcing shutdown..."
+      kill -9 "$SERVE_PID" 2>/dev/null || true
+      exit 1
+    fi
+  else
+    if [ -z "$SERVE_PID" ]; then
+      echo "⚠ Shutdown requested but no server PID recorded (server may not have started)"
+    else
+      echo "⚠ Shutdown requested but server process (PID $SERVE_PID) is not running"
+    fi
+  fi
+  exit "$exit_code"
+}
+
+trap 'shutdown_with_timeout 130' INT
+trap 'shutdown_with_timeout 143' TERM
+
 # ============================================================================
 # ON_PREMISE mode: fmcp run (static config, no MongoDB, no auth)
 # ============================================================================
@@ -56,41 +89,8 @@ if [ "${ON_PREMISE}" = "true" ]; then
   echo "Config: $CONFIG_PATH"
   echo ""
 
-  # Initialize SERVE_PID before signal handlers to prevent race condition on early signals
-  SERVE_PID=""
-
-  shutdown_with_timeout() {
-    local exit_code=$1
-    if [ -n "$SERVE_PID" ] && kill -0 "$SERVE_PID" 2>/dev/null; then
-      echo "Shutting down server (PID $SERVE_PID)..."
-      kill -TERM "$SERVE_PID"
-      for i in {1..30}; do
-        if ! kill -0 "$SERVE_PID" 2>/dev/null; then
-          wait "$SERVE_PID" 2>/dev/null || true
-          exit "$exit_code"
-        fi
-        sleep 1
-      done
-      if kill -0 "$SERVE_PID" 2>/dev/null; then
-        echo "⚠ Server did not stop gracefully after 30s, forcing shutdown..."
-        kill -9 "$SERVE_PID" 2>/dev/null || true
-        exit 1
-      fi
-    else
-      if [ -z "$SERVE_PID" ]; then
-        echo "⚠ Shutdown requested but no server PID recorded (server may not have started)"
-      else
-        echo "⚠ Shutdown requested but server process (PID $SERVE_PID) is not running"
-      fi
-    fi
-    exit "$exit_code"
-  }
-
-  trap 'shutdown_with_timeout 130' INT
-  trap 'shutdown_with_timeout 143' TERM
-
   echo "Starting fmcp run..."
-  fmcp run "$CONFIG_PATH" --file --start-server --host 0.0.0.0 --port "$PORT" &
+  fmcp run "$CONFIG_PATH" --file --start-server --port "$PORT" &
   SERVE_PID=$!
 
   if ! kill -0 "$SERVE_PID" 2>/dev/null; then
@@ -151,50 +151,6 @@ echo "MongoDB: $MONGODB_REDACTED"
 echo "Config: $CONFIG_PATH"
 echo "Security: Bearer token authentication enabled"
 echo ""
-
-# CRITICAL FIX: Initialize SERVE_PID before signal handlers to prevent race condition
-# Without this, SIGTERM during startup (e.g., from Railway/K8s) would reference undefined variable
-SERVE_PID=""
-
-# Set up signal handlers BEFORE starting server to avoid race condition
-# This ensures signals during startup are properly forwarded
-# Exit with proper signal exit codes: 130 for SIGINT (128+2), 143 for SIGTERM (128+15)
-# Timeout after 30 seconds and force-kill if server doesn't stop gracefully
-shutdown_with_timeout() {
-  local exit_code=$1
-  if [ -n "$SERVE_PID" ] && kill -0 "$SERVE_PID" 2>/dev/null; then
-    echo "Shutting down server (PID $SERVE_PID)..."
-    kill -TERM "$SERVE_PID"
-
-    # Wait with timeout (30 seconds for graceful shutdown)
-    for i in {1..30}; do
-      if ! kill -0 "$SERVE_PID" 2>/dev/null; then
-        # Process exited gracefully
-        wait "$SERVE_PID" 2>/dev/null || true
-        exit "$exit_code"
-      fi
-      sleep 1
-    done
-
-    # If still running after 30s, force kill
-    if kill -0 "$SERVE_PID" 2>/dev/null; then
-      echo "⚠ Server did not stop gracefully after 30s, forcing shutdown..."
-      kill -9 "$SERVE_PID" 2>/dev/null || true
-      exit 1
-    fi
-  else
-    # COPILOT COMMENT 8 FIX: Add logging for shutdown without PID
-    if [ -z "$SERVE_PID" ]; then
-      echo "⚠ Shutdown requested but no server PID recorded (server may not have started)"
-    else
-      echo "⚠ Shutdown requested but server process (PID $SERVE_PID) is not running"
-    fi
-  fi
-  exit "$exit_code"
-}
-
-trap 'shutdown_with_timeout 130' INT
-trap 'shutdown_with_timeout 143' TERM
 
 # Start fmcp serve in background
 # Note: FMCP_BEARER_TOKEN is read from environment (more secure than CLI arg)
