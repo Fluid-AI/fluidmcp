@@ -2,8 +2,12 @@
 
 set -e
 
-# Railway deployment for FluidMCP Unified Platform
+# Railway/on-premise deployment for FluidMCP Unified Platform
 # Supports MCP servers, LLM models, image/video generation
+#
+# Deployment modes (controlled by ON_PREMISE env var):
+#   ON_PREMISE=true  → fmcp run (static config, no MongoDB, no auth required)
+#   unset/false      → fmcp serve (Railway/cloud, MongoDB, bearer token auth)
 
 # Support METADATA_ENV_FILE_CONTENT for serverless/Railway deployments
 # This is REQUIRED for platforms with read-only filesystems
@@ -21,11 +25,93 @@ if [ -n "$METADATA_ENV_FILE_CONTENT" ]; then
   echo "=========================================="
 fi
 
-# Get port from environment (Railway sets this)
+# Get port from environment (Railway sets this automatically)
 PORT="${PORT:-8099}"
 
-# MongoDB URI (optional; fmcp serve will fall back to in-memory if not provided)
-# No default here - Railway deployments must provide MONGODB_URI explicitly
+# ============================================================================
+# ON_PREMISE mode: fmcp run (static config, no MongoDB, no auth)
+# ============================================================================
+if [ "${ON_PREMISE}" = "true" ]; then
+  echo "=========================================="
+  echo "FluidMCP — On-Premise Mode"
+  echo "=========================================="
+
+  # Resolve config path
+  CONFIG_PATH="${FMCP_CONFIG_PATH:-}"
+  if [ -z "$CONFIG_PATH" ]; then
+    echo "ERROR: ON_PREMISE mode requires a config file."
+    echo "Set FMCP_CONFIG_PATH or provide config via METADATA_ENV_FILE_CONTENT."
+    exit 1
+  fi
+
+  # Validate path is under /app/ or /tmp/ (prevent path traversal)
+  REAL_PATH=$(realpath -m "$CONFIG_PATH" 2>/dev/null || echo "$CONFIG_PATH")
+  if [[ ! "$REAL_PATH" =~ ^/app/ ]] && [[ ! "$REAL_PATH" =~ ^/tmp/ ]]; then
+    echo "ERROR: CONFIG_PATH must be under /app/ or /tmp/ (security restriction)"
+    echo "Got: $REAL_PATH"
+    exit 1
+  fi
+
+  echo "Port:   $PORT"
+  echo "Config: $CONFIG_PATH"
+  echo ""
+
+  # Initialize SERVE_PID before signal handlers to prevent race condition on early signals
+  SERVE_PID=""
+
+  shutdown_with_timeout() {
+    local exit_code=$1
+    if [ -n "$SERVE_PID" ] && kill -0 "$SERVE_PID" 2>/dev/null; then
+      echo "Shutting down server (PID $SERVE_PID)..."
+      kill -TERM "$SERVE_PID"
+      for i in {1..30}; do
+        if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+          wait "$SERVE_PID" 2>/dev/null || true
+          exit "$exit_code"
+        fi
+        sleep 1
+      done
+      if kill -0 "$SERVE_PID" 2>/dev/null; then
+        echo "⚠ Server did not stop gracefully after 30s, forcing shutdown..."
+        kill -9 "$SERVE_PID" 2>/dev/null || true
+        exit 1
+      fi
+    else
+      if [ -z "$SERVE_PID" ]; then
+        echo "⚠ Shutdown requested but no server PID recorded (server may not have started)"
+      else
+        echo "⚠ Shutdown requested but server process (PID $SERVE_PID) is not running"
+      fi
+    fi
+    exit "$exit_code"
+  }
+
+  trap 'shutdown_with_timeout 130' INT
+  trap 'shutdown_with_timeout 143' TERM
+
+  echo "Starting fmcp run..."
+  fmcp run "$CONFIG_PATH" --file --start-server --host 0.0.0.0 --port "$PORT" &
+  SERVE_PID=$!
+
+  if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+    echo "✗ Server process terminated unexpectedly before wait (PID $SERVE_PID)"
+    exit 1
+  fi
+
+  set +e
+  wait "$SERVE_PID"
+  SERVER_EXIT_CODE=$?
+  set -e
+
+  if [ "$SERVER_EXIT_CODE" -ne 0 ]; then
+    echo "✗ Server process terminated unexpectedly (exit code: $SERVER_EXIT_CODE)"
+  fi
+  exit "$SERVER_EXIT_CODE"
+fi
+
+# ============================================================================
+# SERVE mode (default): fmcp serve — Railway/cloud with MongoDB and auth
+# ============================================================================
 
 # Bearer token for client authentication (required for security)
 if [ -z "$FMCP_BEARER_TOKEN" ]; then

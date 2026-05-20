@@ -55,4 +55,3 @@ docs/
 
 # Old Dockerfile
 Dockerfile.run-mode
-entrypoint.sh
