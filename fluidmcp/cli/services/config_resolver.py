@@ -222,9 +222,8 @@ def resolve_from_file(file_path: str) -> ServerConfig:
                 _handle_github_server(server_name, server_cfg, default_github_token)
 
             elif server_cfg.get("command"):
-                # Direct configuration - create temp directory with metadata.json
+                # Direct configuration
                 logger.debug(f"'{server_name}' is a direct configuration with command: {server_cfg.get('command')}")
-                _create_temp_server_dir(server_name, server_cfg)
                 # Use the config file's own directory as both install_path and
                 # working_dir so relative paths (e.g. "server.py") resolve correctly,
                 # and the _spawn_mcp_process safety check (working_dir ⊆ install_path) passes.

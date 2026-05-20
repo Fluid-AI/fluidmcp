@@ -286,14 +286,12 @@ def run_servers(
 
     # Launch each server via _spawn_mcp_process inside the FastAPI startup event so
     # we run on uvicorn's event loop (required for async HTTP handshakes and HTTP transport).
-    launched_servers = 0
     logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
 
     servers_to_launch = dict(config.servers)  # snapshot for startup closure
 
     @app.on_event("startup")
     async def _launch_mcp_servers():
-        nonlocal launched_servers
         for server_name, server_cfg in servers_to_launch.items():
             logger.debug(f"Processing server: {server_name}")
             install_path = server_cfg.get("install_path")
@@ -324,14 +322,12 @@ def run_servers(
                 process = await server_manager._spawn_mcp_process(server_name, spawn_cfg)
 
                 if process:
-                    server_manager.processes[server_name] = process
-                    server_manager.start_times[server_name] = time.monotonic()
-
+                    # _spawn_mcp_process already registers the process in server_manager.
+                    # Just wire up the module-level tracking used by health/tools endpoints.
                     _register_server_process(server_name, process)
                     _initialize_server_metrics(server_name)
 
-                    launched_servers += 1
-                    logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
+                    logger.debug(f"Successfully launched server {server_name}")
                 else:
                     logger.error(f"Failed to launch server '{server_name}'")
 
