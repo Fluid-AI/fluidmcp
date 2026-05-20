@@ -16,7 +16,7 @@ import uvicorn
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
 from .sse_handle import SseSubprocessHandle
-from .mcp_queue import SSE_MAX_LINES
+_SSE_MAX_LINES = 500
 
 security = HTTPBearer(auto_error=False)
 
@@ -666,19 +666,21 @@ def create_dynamic_router(server_manager):
             # ── stdio transport continues below ─────────────────────────────
 
             try:
-                queue = server_manager.get_queue(server_name)
-                if queue is None:
-                    raise HTTPException(503, f"No queue available for server '{server_name}'")
-                try:
-                    response_line = await queue.send(json.dumps(request), timeout=30.0)
-                except asyncio.QueueFull:
-                    logger.warning(f"Request queue full for server '{server_name}'")
-                    raise HTTPException(429, "Server request queue is full")
-                except asyncio.TimeoutError:
-                    logger.warning(f"Request timed out for server '{server_name}'")
-                    raise HTTPException(504, "Server request timed out")
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                io_lock = server_manager.get_io_lock(server_name)
+                if io_lock is None:
+                    raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
+
+                async with io_lock:
+                    try:
+                        await asyncio.to_thread(process.stdin.write, json.dumps(request) + "\n")
+                        await asyncio.to_thread(process.stdin.flush)
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+
+                    response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+
+                if not response_line:
+                    raise HTTPException(504, f"Server '{server_name}' timed out responding")
 
                 response_data = json.loads(response_line)
 
@@ -768,22 +770,19 @@ def create_dynamic_router(server_manager):
                     return  # done for SSE — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
-                # Acquire the queue's io_lock to serialize stdio access with
-                # the drain loop.  The SSE path reads multiple response lines
-                # (until "result" appears), so it cannot use queue.send()
-                # which is 1-in/1-out.  Holding io_lock gives the same
-                # mutual-exclusion guarantee while allowing the multi-line loop.
-                queue = server_manager.get_queue(server_name)
-                if queue is None:
+                # Acquire the per-server I/O lock to serialize stdin write +
+                # multi-line stdout read with any concurrent requests.
+                io_lock = server_manager.get_io_lock(server_name)
+                if io_lock is None:
                     completion_status = "error"
-                    yield f"data: {json.dumps({'error': f'No queue available for server {server_name!r}'})}\n\n"
+                    yield f"data: {json.dumps({'error': f'Server {server_name!r} has no I/O lock'})}\n\n"
                     return
 
                 msg = json.dumps(request)
-                async with queue.io_lock:
+                async with io_lock:
                     try:
-                        # write_stdin_only must be called with io_lock held
-                        await queue.write_stdin_only(msg)
+                        await asyncio.to_thread(process.stdin.write, msg + "\n")
+                        await asyncio.to_thread(process.stdin.flush)
                     except (BrokenPipeError, OSError) as e:
                         # Set streaming-specific completion_status label (tracks how the SSE stream ended).
                         #
@@ -806,7 +805,7 @@ def create_dynamic_router(server_manager):
                         return
 
                     lines_read = 0
-                    while lines_read < SSE_MAX_LINES:
+                    while lines_read < _SSE_MAX_LINES:
                         # Non-blocking I/O with asyncio.to_thread
                         response_line = await asyncio.to_thread(process.stdout.readline)
                         if not response_line:
@@ -826,7 +825,7 @@ def create_dynamic_router(server_manager):
                             logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
                     else:
                         logger.warning(
-                            f"[{server_name}] SSE stream hit {SSE_MAX_LINES}-line safety limit"
+                            f"[{server_name}] SSE stream hit {_SSE_MAX_LINES}-line safety limit"
                         )
 
             except Exception as e:
@@ -870,29 +869,25 @@ def create_dynamic_router(server_manager):
         # ── stdio transport continues below ──────────────────────────────────
 
         try:
-            request_payload = {
-                "id": 1,
-                "jsonrpc": "2.0",
-                "method": "tools/list"
-            }
+            request_payload = {"id": 1, "jsonrpc": "2.0", "method": "tools/list"}
 
-            queue = server_manager.get_queue(server_name)
-            if queue is None:
-                raise HTTPException(503, f"No queue available for server '{server_name}'")
-            try:
-                response_line = await queue.send(json.dumps(request_payload), timeout=30.0)
-            except asyncio.QueueFull:
-                logger.warning(f"Request queue full for server '{server_name}'")
-                raise HTTPException(429, "Server request queue is full")
-            except asyncio.TimeoutError:
-                logger.warning(f"tools/list timed out for server '{server_name}'")
-                raise HTTPException(504, "Server request timed out")
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            io_lock = server_manager.get_io_lock(server_name)
+            if io_lock is None:
+                raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
 
-            response_data = json.loads(response_line)
+            async with io_lock:
+                try:
+                    await asyncio.to_thread(process.stdin.write, json.dumps(request_payload) + "\n")
+                    await asyncio.to_thread(process.stdin.flush)
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            return JSONResponse(content=response_data)
+                response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+
+            if not response_line:
+                raise HTTPException(504, f"Server '{server_name}' timed out responding")
+
+            return JSONResponse(content=json.loads(response_line))
 
         except HTTPException:
             raise
@@ -951,25 +946,26 @@ def create_dynamic_router(server_manager):
                 "params": request_body
             }
 
-            queue = server_manager.get_queue(server_name)
-            if queue is None:
-                raise HTTPException(503, f"No queue available for server '{server_name}'")
-            try:
-                # Tool execution timeout kept at 60s to match original behavior
-                response_line = await queue.send(json.dumps(request_payload), timeout=60.0)
-            except asyncio.QueueFull:
-                logger.warning(f"Request queue full for server '{server_name}'")
-                raise HTTPException(429, "Server request queue is full")
-            except asyncio.TimeoutError:
-                # Log timeout failure
+            io_lock = server_manager.get_io_lock(server_name)
+            if io_lock is None:
+                raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
+
+            async with io_lock:
+                try:
+                    await asyncio.to_thread(process.stdin.write, json.dumps(request_payload) + "\n")
+                    await asyncio.to_thread(process.stdin.flush)
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+
+                response_line = await asyncio.to_thread(readline_with_timeout, process, 60.0)
+
+            if not response_line:
                 await server_manager.db.save_log_entry({
                     "server_name": server_name,
                     "stream": "error",
                     "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
                 })
                 raise HTTPException(504, "Tool execution timed out")
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
             response_data = json.loads(response_line)
 
