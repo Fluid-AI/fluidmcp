@@ -105,10 +105,13 @@ def resolve_from_package(package_str: str) -> ServerConfig:
     with open(metadata_path, "r") as f:
         metadata = json.load(f)
 
-    # Add install_path to each server config
+    # Add install_path and working_dir to each server config.
+    # All fields from mcpServers (including transport) are already in the dict.
     servers = metadata.get("mcpServers", {})
     for key in servers:
         servers[key]["install_path"] = str(dest_dir)
+        servers[key]["working_dir"] = str(dest_dir)
+        apply_transport(servers[key])
 
     return ServerConfig(
         servers=servers,
@@ -221,9 +224,14 @@ def resolve_from_file(file_path: str) -> ServerConfig:
             elif server_cfg.get("command"):
                 # Direct configuration - create temp directory with metadata.json
                 logger.debug(f"'{server_name}' is a direct configuration with command: {server_cfg.get('command')}")
-                temp_dir = _create_temp_server_dir(server_name, server_cfg)
-                servers[server_name]["install_path"] = str(temp_dir)
-                logger.debug(f"Created temp directory for '{server_name}': {temp_dir}")
+                _create_temp_server_dir(server_name, server_cfg)
+                # Use the config file's own directory as both install_path and
+                # working_dir so relative paths (e.g. "server.py") resolve correctly,
+                # and the _spawn_mcp_process safety check (working_dir ⊆ install_path) passes.
+                servers[server_name]["install_path"] = str(file_path.parent)
+                servers[server_name]["working_dir"] = str(file_path.parent)
+                apply_transport(servers[server_name])
+                logger.debug(f"Set working dir for '{server_name}' to: {file_path.parent}")
             else:
                 # Unknown format
                 logger.warning(f"Unknown format for server '{server_name}'")
@@ -371,6 +379,22 @@ def resolve_from_s3_master() -> ServerConfig:
 # ============================================================================
 # Helper functions
 # ============================================================================
+
+def apply_transport(cfg: dict) -> None:
+    """
+    Promote env.TRANSPORT_TYPE to a top-level 'transport' field in-place.
+
+    Servers declare their transport via the env block so the same metadata.json
+    works both as a direct FastMCP config and as a FluidMCP config:
+        "env": { "TRANSPORT_TYPE": "http" }  →  cfg["transport"] = "http"
+        "env": { "TRANSPORT_TYPE": "sse"  }  →  cfg["transport"] = "sse"
+        absent / empty                        →  no-op (stdio is the default)
+
+    This mirrors what ServerBuilder.build_config() does for the serve/API path.
+    """
+    transport = cfg.get("env", {}).get("TRANSPORT_TYPE", "") or ""
+    if transport in ("sse", "http"):
+        cfg["transport"] = transport
 
 def _merge_replicate_into_llm_models(llm_models: Dict[str, dict], replicate_models: Dict[str, dict]) -> Dict[str, dict]:
     """
@@ -524,8 +548,10 @@ def _handle_github_server(server_name: str, server_cfg: dict, default_github_tok
                 logger.debug(f"Applying environment variables to {server_name}")
                 apply_env_to_metadata(metadata_path, server_name, server_cfg["env"])
 
-        # Set install_path for the launcher
+        # Set install_path and working_dir for the launcher
         server_cfg["install_path"] = str(dest_dir)
+        server_cfg["working_dir"] = str(dest_dir)
+        apply_transport(server_cfg)
 
         logger.info(f"GitHub server '{server_name}' prepared from {github_repo}")
 
@@ -556,14 +582,18 @@ def _create_temp_server_dir(server_name: str, server_cfg: dict) -> Path:
     server_dir = temp_base / server_name
     server_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create metadata.json
+    # Create metadata.json — preserve transport so _spawn_mcp_process picks the right path
+    server_entry = {
+        "command": server_cfg.get("command"),
+        "args": server_cfg.get("args", []),
+        "env": server_cfg.get("env", {}),
+    }
+    if "transport" in server_cfg:
+        server_entry["transport"] = server_cfg["transport"]
+
     metadata = {
         "mcpServers": {
-            server_name: {
-                "command": server_cfg.get("command"),
-                "args": server_cfg.get("args", []),
-                "env": server_cfg.get("env", {})
-            }
+            server_name: server_entry
         }
     }
 
@@ -605,6 +635,8 @@ def _collect_installed_servers(install_dir: Path, taken_ports: set) -> Dict[str,
                 port = find_free_port(taken_ports=taken_ports)
                 cfg["port"] = str(port)
                 cfg["install_path"] = str(version_dir)
+                cfg["working_dir"] = str(version_dir)
+                apply_transport(cfg)
                 all_servers[key] = cfg
                 taken_ports.add(port)
 
