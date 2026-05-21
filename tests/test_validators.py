@@ -5,6 +5,12 @@ This test suite validates all validation functions to ensure they correctly
 identify valid and invalid inputs across various edge cases.
 """
 
+import re
+
+import pytest
+from pydantic import ValidationError
+
+from fluidmcp.cli.models.api import AddServerFromGitHubRequest
 from fluidmcp.cli.services.validators import (
     validate_package_string,
     validate_port_number,

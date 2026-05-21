@@ -43,6 +43,7 @@ class ChatRequest(BaseModel):
 class ReadResourceRequest(BaseModel):
     uri: str
 
+
 # ─── URL Validation ────────────────────────────────────────────────────────────
 
 def _validate_mcp_url(url: str) -> None:
@@ -269,6 +270,7 @@ async def read_resource(session_id: str, body: ReadResourceRequest):
     except Exception as e:
         logger.error(f"Inspector: read_resource failed for session {session_id} — {e}")
         raise HTTPException(500, f"Failed to read resource: {str(e)}")
+
 
 
 @router.post("/inspector/{session_id}/chat")
