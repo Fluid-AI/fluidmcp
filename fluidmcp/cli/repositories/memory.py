@@ -66,9 +66,11 @@ class InMemoryBackend(PersistenceBackend):
             return dict(config)
         return None
 
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """List configs from memory."""
         configs = list(self._servers.values())
+        if not include_deleted:
+            configs = [c for c in configs if "deleted_at" not in c]
         if enabled_only:
             configs = [c for c in configs if c.get("enabled", True)]
         # Return copies to avoid mutations
@@ -109,6 +111,12 @@ class InMemoryBackend(PersistenceBackend):
             # Return a copy to avoid mutations
             return dict(state)
         return None
+
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """Delete instance state for a server from memory."""
+        self._instances.pop(server_id, None)
+        return True
 
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """Save log to memory (capped at 1000 lines per server)."""

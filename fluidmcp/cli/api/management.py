@@ -57,6 +57,7 @@ from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
+from ..services.sse_handle import SseSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
 
@@ -1295,6 +1296,9 @@ async def delete_server(
     if id in manager.configs:
         del manager.configs[id]
 
+    # Clean up stale instance state so a re-clone of the same server ID starts fresh
+    await manager.db.reset_instance_state(id)
+
     from datetime import datetime
     deleted_at = datetime.utcnow().isoformat()
     logger.info(f"Soft deleted server configuration: {id}")
@@ -1492,7 +1496,13 @@ async def proxy_sse(
     if config.get("transport") != "sse":
         raise HTTPException(400, f"Server '{id}' is not an SSE server (transport={config.get('transport', 'stdio')})")
 
-    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    # Resolve the dynamically allocated URL from the live process handle.
+    # Port is not stored in config — it's assigned at spawn time and held on
+    # SseSubprocessHandle. If the process isn't running, there's no URL to proxy to.
+    process = manager.processes.get(id)
+    if not isinstance(process, SseSubprocessHandle):
+        raise HTTPException(503, f"Server '{id}' is not currently running")
+    internal_url = process.sse_url.rstrip("/")
     sse_url = f"{internal_url}/sse"
 
     async def event_stream():
@@ -1549,7 +1559,11 @@ async def proxy_sse_messages(
     if config.get("transport") != "sse":
         raise HTTPException(400, f"Server '{id}' is not an SSE server")
 
-    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    # Same as proxy_sse: port lives on the handle, not in config.
+    process = manager.processes.get(id)
+    if not isinstance(process, SseSubprocessHandle):
+        raise HTTPException(503, f"Server '{id}' is not currently running")
+    internal_url = process.sse_url.rstrip("/")
     body = await request.body()
 
     try:

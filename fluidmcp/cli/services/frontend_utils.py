@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 from loguru import logger
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -135,6 +136,14 @@ def setup_frontend_routes(
         return False
 
     try:
+        # StaticFiles redirects /ui → /ui/ using an absolute URL based on the Host header,
+        # which breaks in reverse-proxy environments (e.g. GitHub Codespaces) where the
+        # internal host differs from the public hostname. Adding a relative redirect here
+        # intercepts the bare /ui request before StaticFiles can issue an absolute one.
+        @app.get("/ui", include_in_schema=False)
+        async def _ui_redirect():
+            return RedirectResponse(url="/ui/")
+
         # Mount StaticFiles for serving built assets (JS, CSS, images)
         # The html=True parameter enables SPA mode:
         # - Serves static files normally (app.js, styles.css, etc.)

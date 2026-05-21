@@ -68,12 +68,13 @@ class PersistenceBackend(ABC):
         pass
 
     @abstractmethod
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
             enabled_only: If True, only return enabled servers
+            include_deleted: If True, include soft-deleted servers
 
         Returns:
             List of server configuration dicts
@@ -117,6 +118,23 @@ class PersistenceBackend(ABC):
 
         Returns:
             Instance state dict or None if not found
+        """
+        pass
+
+    @abstractmethod
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """
+        Delete the instance state for a server.
+
+        Called when a server is soft-deleted so a subsequent re-clone starts
+        with a clean instance record (no stale PID, exit codes, etc.).
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            True if the state was removed (or did not exist)
         """
         pass
 

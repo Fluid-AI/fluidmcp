@@ -1,5 +1,6 @@
 import os
 import json
+import select as _select
 import subprocess
 import shutil
 import asyncio
@@ -8,16 +9,59 @@ import threading
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
-from fastapi import FastAPI, Request, APIRouter, Body, Depends, HTTPException
+from fastapi import Request, APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import uvicorn
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
 from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
+
+# Max seconds to wait for an MCP subprocess to write a response line.
+# Overridable via the MCP_READ_TIMEOUT environment variable.
+#
+# Why select() and not asyncio.wait_for():
+# wait_for cancels the coroutine but leaves the OS thread blocked on readline().
+# ThreadPoolExecutor can only reclaim a slot when the thread *returns*, so the
+# slot stays consumed forever. select() puts the timeout inside the thread itself —
+# if nothing arrives in time, the thread returns "" immediately and frees its slot.
+_MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "45"))
+
+
+def _readline_with_timeout(stdout, timeout: float) -> str:
+    """Read one line from a subprocess stdout pipe, with a hard thread-level timeout.
+
+    This function is designed to be called via asyncio.to_thread() so that the
+    event loop is not blocked. The key guarantee it provides over a plain
+    readline() call is that it will always return within `timeout` seconds,
+    ensuring the ThreadPoolExecutor slot is freed even if the MCP subprocess
+    hangs indefinitely.
+
+    How it works:
+        select.select() is called first with the given timeout. It blocks the
+        OS thread until either data is available on stdout OR the timeout expires.
+        - If data arrives in time:  select returns stdout in the ready-list and
+          we call readline() which returns immediately (data is already buffered).
+        - If the timeout expires:   select returns an empty ready-list, and we
+          return "" without touching readline() at all.
+
+    Callers check for the empty-string return value and raise HTTPException(504).
+
+    Args:
+        stdout: The stdout pipe of a subprocess.Popen instance.
+        timeout: Maximum seconds to wait before giving up.
+
+    Returns:
+        The next line (including the trailing newline) if data arrived in time,
+        or "" if the timeout elapsed without any data.
+    """
+    ready, _, _ = _select.select([stdout], [], [], timeout)
+    if not ready:
+        return ""
+    return stdout.readline()
+
 
 def find_metadata_file(base_dir: Path) -> Path:
     """
@@ -220,9 +264,8 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
                 )
             logger.warning(error_msg)
 
-        router = create_mcp_router(pkg, process, process_lock)
-        logger.debug(f"Created router for package: {pkg}")
-        return pkg, router, process  # Return process for explicit registry
+        logger.debug(f"Launched MCP server process for package: {pkg}")
+        return pkg, None, process  # router is None — callers use create_dynamic_router(server_manager)
 
     except FileNotFoundError:
         logger.exception("Command not found")
@@ -232,30 +275,6 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
         return None, None, None
     
 
-
-def create_fastapi_jsonrpc_proxy(package_name: str, process: subprocess.Popen) -> FastAPI:
-    app = FastAPI()
-    @app.post(f"/{package_name}/mcp")
-    async def proxy_jsonrpc(request: Request):
-        try:
-            jsonrpc_request = await request.body()
-            jsonrpc_str = jsonrpc_request.decode() if isinstance(jsonrpc_request, bytes) else jsonrpc_request
-            # Send to MCP server via stdin
-            process.stdin.write(jsonrpc_str + "\n")
-            process.stdin.flush()
-            # Read from MCP server stdout
-            response_line = process.stdout.readline()
-            return JSONResponse(content=json.loads(response_line))
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
-    return app
-
-
-def start_fastapi_in_thread(app: FastAPI, port: int):
-    def run():
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
 
 
 def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
@@ -362,247 +381,6 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30) -> bool:
         return False
     
 
-def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock: threading.Lock = None) -> APIRouter:
-    
-
-    # Create a lock if not provided
-    if process_lock is None:
-        process_lock = threading.Lock()
-
-    router = APIRouter()
-
-    @router.post(f"/{package_name}/mcp", tags=[package_name])
-    async def proxy_jsonrpc(
-        http_request: Request,
-        request: Dict[str, Any] = Body(
-            ...,
-            example={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "",
-                "params": {}
-            }
-        ), token: str = Depends(get_token)
-    ):
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-        method = request.get("method", "unknown")
-
-        # Track request with metrics
-        with RequestTimer(collector, method):
-            try:
-                # Extract all headers from incoming HTTP request
-                all_headers = dict(http_request.headers)
-
-                logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
-
-                # Only inject headers if this is a tools/call request
-                if request.get("method") == "tools/call" and all_headers:
-                    params = request.get("params", {})
-                    if "arguments" not in params:
-                        params["arguments"] = {}
-
-                    logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
-                    logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
-
-                    params["arguments"]["headers"] = all_headers
-                    request["params"] = params
-
-                    logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    msg = json.dumps(request)
-                    logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
-
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-
-                    logger.debug(f"[{package_name}] Waiting for response from stdout...")
-                    response_line = process.stdout.readline()
-                    logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
-
-                return JSONResponse(content=json.loads(response_line))
-            except Exception as e:
-                logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
-                return JSONResponse(status_code=500, content={"error": str(e)})
-    
-    # New SSE endpoint
-    @router.post(f"/{package_name}/sse", tags=[package_name])
-    async def sse_stream(
-        http_request: Request,
-        request: Dict[str, Any] = Body(
-            ...,
-            example={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "",
-                "params": {}
-            }
-        ), token: str = Depends(get_token)
-    ):
-        # Extract all headers from incoming HTTP request
-        all_headers = dict(http_request.headers)
-
-        # Only inject headers if this is a tools/call request
-        if request.get("method") == "tools/call" and all_headers:
-            params = request.get("params", {})
-            if "arguments" not in params:
-                params["arguments"] = {}
-            params["arguments"]["headers"] = all_headers
-            request["params"] = params
-
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-
-        async def event_generator() -> Iterator[str]:
-            completion_status = "success"
-            try:
-                # Track streaming session when generator starts
-                collector.increment_active_streams()
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    # Convert dict to JSON string and send to MCP server
-                    msg = json.dumps(request)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-
-                    # Read from stdout and stream as SSE events
-                    while True:
-                        response_line = process.stdout.readline()
-                        if not response_line:
-                            break
-
-                        # Add logging
-                        logger.debug(f"Received from MCP: {response_line.strip()}")
-
-                        # Format as SSE event
-                        yield f"data: {response_line.strip()}\n\n"
-
-                        # Check if response contains "result" which indicates completion
-                        try:
-                            response_data = json.loads(response_line)
-                            if "result" in response_data:
-                                # If it's a final result, we can stop the stream
-                                break
-                        except json.JSONDecodeError:
-                            # If it's not valid JSON, just stream it as-is
-                            pass
-
-            except (BrokenPipeError, OSError) as e:
-                completion_status = "broken_pipe"
-                collector.record_error("io_error")
-                yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-            except Exception as e:
-                completion_status = "error"
-                # Send error as SSE event
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-            finally:
-                # Record streaming metrics
-                collector.record_streaming_request(completion_status)
-                collector.decrement_active_streams()
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream"
-        )
-        
-    @router.get(f"/{package_name}/mcp/tools/list", tags=[package_name])
-    async def list_tools(token: str = Depends(get_token)):
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-
-        # Track request with metrics
-        with RequestTimer(collector, "tools/list"):
-            try:
-                # Pre-filled JSON-RPC request for tools/list
-                request_payload = {
-                    "id": 1,
-                    "jsonrpc": "2.0",
-                    "method": "tools/list"
-                }
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    msg = json.dumps(request_payload)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                    response_line = process.stdout.readline()
-
-                response_data = json.loads(response_line)
-                return JSONResponse(content=response_data)
-
-            except Exception as e:
-                return JSONResponse(status_code=500, content={"error": str(e)})
-        
-    
-    @router.post(f"/{package_name}/mcp/tools/call", tags=[package_name])
-    async def call_tool(
-        http_request: Request,
-        request_body: Dict[str, Any] = Body(
-            ...,
-            alias="params",
-            example={
-                "name": "",
-            }
-        ), token: str = Depends(get_token)
-    ):
-        params = request_body
-
-        # Initialize metrics collector
-        collector = MetricsCollector(package_name)
-        tool_name = params.get("name", "unknown")
-
-        # Track request with metrics
-        with RequestTimer(collector, f"tools/call:{tool_name}"):
-            try:
-                # Validate required fields
-                if "name" not in params:
-                    return JSONResponse(
-                        status_code=400,
-                        content={"error": "Tool name is required"}
-                    )
-
-                # Extract all headers from incoming HTTP request
-                all_headers = dict(http_request.headers)
-
-                # Only inject if headers actually exist
-                if all_headers:
-                    if "arguments" not in params:
-                        params["arguments"] = {}
-                    params["arguments"]["headers"] = all_headers
-
-                # Construct complete JSON-RPC request
-                request_payload = {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": params
-                }
-
-                # Thread-safe communication with MCP server
-                with process_lock:
-                    msg = json.dumps(request_payload)
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                    response_line = process.stdout.readline()
-
-                response_data = json.loads(response_line)
-                return JSONResponse(content=response_data)
-
-            except json.JSONDecodeError:
-                return JSONResponse(
-                    status_code=400,
-                    content={"error": "Invalid JSON in request body"}
-                )
-            except Exception as e:
-                return JSONResponse(
-                    status_code=500,
-                    content={"error": str(e)}
-                )
-    return router
-
 def create_dynamic_router(server_manager):
     """
     Create a dynamic router that dispatches MCP requests to running servers.
@@ -617,6 +395,12 @@ def create_dynamic_router(server_manager):
         APIRouter with dynamic dispatch endpoints
     """
     router = APIRouter()
+    _io_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_io_lock(name: str) -> asyncio.Lock:
+        if name not in _io_locks:
+            _io_locks[name] = asyncio.Lock()
+        return _io_locks[name]
 
     @router.post("/{server_name}/mcp", tags=["mcp"])
     async def proxy_jsonrpc(
@@ -667,14 +451,25 @@ def create_dynamic_router(server_manager):
             try:
                 # Send request to MCP server
                 msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                async with _get_io_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Read response (non-blocking with asyncio.to_thread)
-                response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Wait for the MCP subprocess to write its JSON-RPC response.
+                    # _readline_with_timeout runs in a thread (via to_thread) and uses
+                    # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
+                    # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
+                    # A plain readline() here would block the thread forever on a hung server,
+                    # eventually exhausting the pool and making all healthy servers unreachable.
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
+                    if not response_line:
+                        # Empty string means select() timed out — server did not respond.
+                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -764,34 +559,47 @@ def create_dynamic_router(server_manager):
                 # ── stdio transport continues below ──────────────────────────
 
                 msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
-                    completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
-                    collector.record_error("io_error")
-                    yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                    return
+                async with _get_io_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                        #
+                        # IMPORTANT: This intentionally differs from the error_type used in
+                        # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                        # Here we use "broken_pipe" so operators can:
+                        #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                        #     overall rate of I/O-related failures across the service, and
+                        #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                        #     why individual streaming sessions terminated (client disconnects,
+                        #     broken pipes, etc.).
+                        #
+                        # In other words, both labels refer to the same underlying condition but are
+                        # scoped for different troubleshooting workflows: global error rates versus
+                        # per-stream termination reasons.
+                        completion_status = "broken_pipe"
+                        # Record in global error metric for monitoring
+                        collector.record_error("io_error")
+                        yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                        return
 
                 while True:
-                    # Non-blocking I/O with asyncio.to_thread
-                    response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Read the next line from the MCP subprocess for streaming.
+                    # Uses _readline_with_timeout (via to_thread) so the thread returns
+                    # after _MCP_READ_TIMEOUT seconds if no data arrives, keeping the
+                    # ThreadPoolExecutor pool healthy for other servers.
+                    # An empty string indicates a timeout (select() expired);
+                    # a None/falsy non-empty value indicates EOF (process closed stdout).
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
                     if not response_line:
+                        if response_line == "":
+                            # Timeout: server never wrote data within the deadline.
+                            logger.warning(f"SSE stream for '{server_name}' timed out waiting for stdout after {_MCP_READ_TIMEOUT}s")
+                            yield f"data: {json.dumps({'error': f'Server did not respond within {_MCP_READ_TIMEOUT} seconds'})}\n\n"
+                        # Either timeout or EOF — stop streaming either way.
                         break
 
                     logger.debug(f"Received from MCP: {response_line.strip()}")
@@ -854,14 +662,23 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            async with _get_io_lock(server_name):
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Non-blocking I/O with asyncio.to_thread
-            response_line = await asyncio.to_thread(process.stdout.readline)
+                # Wait for the tools/list response from the MCP subprocess.
+                # _readline_with_timeout runs inside the thread and uses select() to
+                # enforce the timeout at the OS level, ensuring the thread returns and
+                # its pool slot is freed if this server hangs.
+                response_line = await asyncio.to_thread(
+                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                )
+                if not response_line:
+                    # select() timed out — no response received within the deadline.
+                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
@@ -924,26 +741,30 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            async with _get_io_lock(server_name):
+                try:
+                    process.stdin.write(msg + "\n")
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            # Tool execution with timeout
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=60.0  # 60 second tool execution timeout
+                # Wait for the tool execution response from the MCP subprocess.
+                # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
+                # _readline_with_timeout uses select() inside the thread so the thread
+                # exits on timeout rather than blocking the ThreadPoolExecutor slot forever.
+                # Without this, a single hanging tool call occupies a thread indefinitely;
+                # enough concurrent hangs will exhaust the pool and block all other servers.
+                response_line = await asyncio.to_thread(
+                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
                 )
-            except asyncio.TimeoutError:
-                # Log timeout failure
-                await server_manager.db.save_log_entry({
-                    "server_name": server_name,
-                    "stream": "error",
-                    "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
-                })
-                raise HTTPException(504, "Tool execution timed out")
+                if not response_line:
+                    # select() timed out — persist the failure for observability before raising.
+                    await server_manager.db.save_log_entry({
+                        "server_name": server_name,
+                        "stream": "error",
+                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
+                    })
+                    raise HTTPException(504, "Tool execution timed out")
 
             response_data = json.loads(response_line)
 
@@ -959,19 +780,3 @@ def create_dynamic_router(server_manager):
             raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     return router
-
-
-if __name__ == '__main__':
-    app = FastAPI()
-    install_paths = [
-        "/workspaces/fluid-ai-gpt-mcp/fluidmcp/.fmcp-packages/Perplexity/perplexity-ask/0.1.0",
-        "/workspaces/fluid-ai-gpt-mcp/fluidmcp/.fmcp-packages/Airbnb/airbnb/0.1.0"
-    ]
-    for install_path in install_paths:
-        logger.info(f"Launching MCP server for {install_path}")
-        package_name, router = launch_mcp_using_fastapi_proxy(install_path)
-        if package_name is not None and router is not None:
-            app.include_router(router)
-        else:
-            logger.warning(f"Skipping {install_path} due to missing metadata or launch error")
-    uvicorn.run(app, host="0.0.0.0", port=8099)
