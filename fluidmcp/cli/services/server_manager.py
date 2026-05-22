@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from ..repositories.database import DatabaseManager
-from .package_launcher import initialize_mcp_server, start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, readline_with_timeout
+from .package_launcher import initialize_mcp_server, start_stderr_drainer, get_stderr_tail, clear_stderr_buffer, readline_with_timeout, _readline_with_timeout, _reset_stdio_queue
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .sse_handle import SseSubprocessHandle
@@ -1004,7 +1004,7 @@ class ServerManager:
 
             # Read response with timeout — uses select()/thread-join so no stuck workers
             try:
-                response_line = await asyncio.to_thread(readline_with_timeout, process, 5.0)
+                response_line = await asyncio.to_thread(_readline_with_timeout, process.stdout, 5.0)
 
                 response_line = response_line.strip()
                 if not response_line:
@@ -1190,6 +1190,10 @@ class ServerManager:
             del self.processes[id]
         if id in self.start_times:
             del self.start_times[id]
+
+        # Drain and cancel any in-flight stdio queue items so they don't bleed
+        # into a future process if this server is restarted.
+        _reset_stdio_queue(id)
 
         # Close stderr log file handle
         self._close_stderr_log(id)
