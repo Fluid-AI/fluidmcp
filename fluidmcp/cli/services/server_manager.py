@@ -1218,6 +1218,10 @@ class ServerManager:
         # Close stderr log file handle
         self._close_stderr_log(id)
 
+        # Capture resource snapshot before clearing (used in crash event below)
+        health_monitor = getattr(self, "_health_monitor", None)
+        resource_snapshot = health_monitor._last_resource_snapshot.get(id) if health_monitor else None
+
         # Determine state
         if intentional or exit_code == 0:
             state = "stopped"
@@ -1239,9 +1243,6 @@ class ServerManager:
             exit_info = classify_exit_code(exit_code)
             config = self.configs.get(id) or {}
             server_name = config.get("name", id)
-            # Pull resource snapshot captured by MCPHealthMonitor (may be None if monitor not running)
-            resource_snapshot = getattr(self, "_health_monitor", None)
-            resource_snapshot = resource_snapshot._last_resource_snapshot.get(id) if resource_snapshot else None
             try:
                 crash_event: Dict[str, Any] = {
                     "server_id": id,
@@ -1267,6 +1268,11 @@ class ServerManager:
             )
         else:
             logger.info(f"Cleaned up server '{id}'")
+
+        # Clean up health monitor per-server state after crash event is saved
+        if health_monitor is not None:
+            health_monitor._last_resource_snapshot.pop(id, None)
+            health_monitor._memory_history.pop(id, None)
 
     def get_uptime(self, server_id: str) -> Optional[float]:
         """
@@ -1662,21 +1668,10 @@ class MCPHealthMonitor:
             self._update_resource_snapshot(server_id, process)
             return
 
-        # Snapshot fired here — process just detected dead, PID may still exist briefly
+        # Evict stale PID from warm-up tracking so the next restart gets a fresh warm-up
         pid = getattr(process, "pid", None)
-        if _psutil_available and pid and pid not in self._cpu_warmed_pids:
-            # Process died before warm-up cycle completed; snapshot already cached or unavailable
-            pass
-        elif _psutil_available and pid:
-            try:
-                proc = psutil.Process(pid)
-                rss = proc.memory_info().rss
-                cpu = proc.cpu_percent(interval=None)
-                snapshot = {"memory_rss_bytes": rss, "cpu_percent": cpu}
-                snapshot["active_requests"] = self._get_active_requests(server_id)
-                self._last_resource_snapshot[server_id] = snapshot
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass  # fall back to last cached snapshot — set above during alive cycles
+        if pid:
+            self._cpu_warmed_pids.discard(pid)
 
         # Process is dead — always clean up DB state
         rc = getattr(process, "returncode", None)
