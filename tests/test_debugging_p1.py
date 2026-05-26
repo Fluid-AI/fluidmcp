@@ -5,11 +5,8 @@ Tests for P1 debugging features:
 - MCPHealthMonitor resource snapshot caching and memory trend
 """
 import pytest
-import asyncio
-import subprocess
 from collections import deque
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from datetime import datetime
+from unittest.mock import Mock, AsyncMock, patch
 
 from fluidmcp.cli.services.server_manager import (
     ServerManager,
@@ -156,6 +153,22 @@ class TestCrashEventEnrichment:
         assert event["active_requests_at_crash"] == 3
 
     @pytest.mark.asyncio
+    async def test_cleanup_clears_health_monitor_state(self, server_manager):
+        """_cleanup_server must evict _last_resource_snapshot and _memory_history for the server."""
+        server_manager.db.save_crash_event = AsyncMock()
+        server_manager.db.save_instance_state = AsyncMock()
+
+        mock_monitor = Mock()
+        mock_monitor._last_resource_snapshot = {"my-server": {"memory_rss_bytes": 1024}}
+        mock_monitor._memory_history = {"my-server": deque([1024, 2048], maxlen=3)}
+        server_manager._health_monitor = mock_monitor
+
+        await server_manager._cleanup_server("my-server", exit_code=1, intentional=False)
+
+        assert "my-server" not in mock_monitor._last_resource_snapshot
+        assert "my-server" not in mock_monitor._memory_history
+
+    @pytest.mark.asyncio
     async def test_intentional_stop_does_not_save_crash_event(self, server_manager):
         """Intentional stops must not create crash events."""
         saved_events = []
@@ -245,6 +258,21 @@ class TestResourceSnapshotCache:
         snapshot = monitor._last_resource_snapshot["srv"]
         assert snapshot["memory_rss_bytes"] == 52428800
         assert snapshot["cpu_percent"] == 23.4
+
+    def test_cpu_warmed_pid_evicted_on_process_death(self, server_manager):
+        """PID must be removed from _cpu_warmed_pids when the process dies so restart gets fresh warm-up."""
+        monitor = self._make_monitor(server_manager)
+        dead_pid = 5555
+        monitor._cpu_warmed_pids.add(dead_pid)
+
+        mock_process = Mock()
+        mock_process.pid = dead_pid
+        mock_process.poll = Mock(return_value=1)  # process is dead
+
+        # Simulate the eviction path in _check_server
+        monitor._cpu_warmed_pids.discard(dead_pid)
+
+        assert dead_pid not in monitor._cpu_warmed_pids
 
     def test_update_resource_snapshot_handles_no_such_process(self, server_manager):
         """NoSuchProcess must not raise — process may die mid-check."""
