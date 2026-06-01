@@ -1728,17 +1728,16 @@ async def get_server_crashes(
             crash["exit_category"] = info["category"]
             crash["exit_label"] = info["label"]
             crash["exit_description"] = info["description"]
+        # Normalise ObjectId and datetime fields to JSON-safe types
+        crash.pop("_id", None)
+        if hasattr(crash.get("timestamp"), "isoformat"):
+            crash["timestamp"] = crash["timestamp"].isoformat()
 
-    # Compute crashes_per_hour from timestamps in the returned set
+    # crashes_per_hour: query the DB for the full count in the last hour,
+    # independent of the `limit` param so the metric is always accurate.
     now = datetime.now(timezone.utc)
-    one_hour_ago = (now - timedelta(hours=1)).timestamp()
-    crashes_last_hour = sum(
-        1 for c in crashes
-        if c.get("timestamp") and (
-            c["timestamp"].timestamp() if hasattr(c["timestamp"], "timestamp")
-            else float(c["timestamp"])
-        ) > one_hour_ago
-    )
+    one_hour_ago_ts = (now - timedelta(hours=1)).timestamp()
+    crashes_last_hour = await manager.db.count_crash_events_since(id, one_hour_ago_ts)
 
     # restart_count from live status (falls back to 0)
     status = await manager.get_server_status(id)
@@ -1767,51 +1766,12 @@ async def get_server_stderr(
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    log_path = manager._get_stderr_log_path(id)
-
-    if not os.path.exists(log_path):
-        return {
-            "server": id,
-            "lines": [],
-            "line_count": 0,
-            "truncated": False,
-        }
-
-    # Read last N lines from disk using byte-seek (same approach as _read_crash_stderr)
     try:
-        # Estimate bytes needed: avg 120 bytes/line with 2x headroom
-        read_bytes = lines * 240
-        file_size = os.path.getsize(log_path)
-        truncated = file_size > read_bytes
-
-        with open(log_path, "rb") as f:
-            if truncated:
-                f.seek(-read_bytes, os.SEEK_END)
-            data = f.read()
-
-        text = data.decode("utf-8", errors="replace")
-        all_lines = text.splitlines()
-
-        # Drop first line if truncated (may be a partial line from the seek)
-        if truncated and len(all_lines) > 1:
-            all_lines = all_lines[1:]
-
-        # Take last N lines
-        tail = all_lines[-lines:]
-
-        # Apply optional contains filter (post-read, keeps file I/O simple)
-        if contains:
-            tail = [line for line in tail if contains.lower() in line.lower()]
-
+        result = manager.get_stderr_tail(id, lines=lines, contains=contains)
     except OSError as e:
         raise HTTPException(500, f"Failed to read stderr log: {truncate_error(str(e))}")
 
-    return {
-        "server": id,
-        "lines": tail,
-        "line_count": len(tail),
-        "truncated": truncated,
-    }
+    return {"server": id, **result}
 
 
 # ==================== Environment Variable Management ====================

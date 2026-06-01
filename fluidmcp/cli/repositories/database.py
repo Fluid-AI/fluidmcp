@@ -1218,6 +1218,18 @@ class DatabaseManager(PersistenceBackend):
             logger.error(f"Error listing crash events for '{server_id}': {e}")
             return []
 
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """Count crash events for a server since a UTC POSIX timestamp."""
+        try:
+            from datetime import datetime, timezone
+            since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+            return await self.db.fluidmcp_crash_events.count_documents(
+                {"server_id": server_id, "timestamp": {"$gt": since_dt}}
+            )
+        except Exception as e:
+            logger.error(f"Error counting crash events for '{server_id}': {e}")
+            return 0
+
     # ==================== Connection Management ====================
 
     async def disconnect(self):

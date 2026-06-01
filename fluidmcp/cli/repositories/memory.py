@@ -163,6 +163,18 @@ class InMemoryBackend(PersistenceBackend):
         events = list(self._crash_events.get(server_id, []))
         return events[:limit]
 
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """Count crash events since a UTC POSIX timestamp."""
+        count = 0
+        for event in self._crash_events.get(server_id, []):
+            ts = event.get("timestamp")
+            if ts is None:
+                continue
+            event_ts = ts.timestamp() if hasattr(ts, "timestamp") else float(ts)
+            if event_ts > since_ts:
+                count += 1
+        return count
+
     # ==================== LLM Model Persistence ====================
 
     async def save_llm_model(self, model_config: Dict[str, Any]) -> bool:
