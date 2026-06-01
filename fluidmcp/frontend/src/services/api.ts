@@ -11,6 +11,17 @@ import type {
   CloneFromGithubRequest,
   CloneFromGithubResponse,
 } from '../types/server';
+import type {
+  LLMModelsListResponse,
+  LLMModelDetailsResponse,
+  LLMModelLogsResponse,
+  LLMHealthCheckResponse,
+  LLMModelRestartResponse,
+  LLMModelStopResponse,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ReplicateModelConfig,
+} from '../types/llm';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 
@@ -44,6 +55,7 @@ function mergeAbortSignals(...signals: AbortSignal[]): AbortSignal {
 
 class ApiClient {
   private baseUrl: string;
+  private token: string | null = null;
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
@@ -66,6 +78,7 @@ class ApiClient {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         headers: {
           'Content-Type': 'application/json',
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           ...options?.headers,
         },
         credentials: 'include', // IMPORTANT: Send httpOnly cookies with all requests
@@ -103,6 +116,9 @@ class ApiClient {
     return this.request<ServersListResponse>(url, options);
   }
 
+  setToken(token: string | null) {
+    this.token = token;
+  }
   async getServerDetails(serverId: string, options?: { signal?: AbortSignal }): Promise<ServerDetailsResponse> {
     return this.request<ServerDetailsResponse>(`/api/servers/${serverId}`, options);
   }
@@ -183,6 +199,92 @@ class ApiClient {
   // Authentication APIs
   async getAuthConfig(options?: { signal?: AbortSignal }): Promise<any> {
     return this.request('/auth/config', options);
+  // LLM Model Management APIs
+  async listLLMModels(options?: { signal?: AbortSignal }): Promise<LLMModelsListResponse> {
+    return this.request<LLMModelsListResponse>('/api/llm/models', options);
+  }
+
+  async getLLMModelDetails(modelId: string, options?: { signal?: AbortSignal }): Promise<LLMModelDetailsResponse> {
+    return this.request<LLMModelDetailsResponse>(`/api/llm/models/${modelId}`, options);
+  }
+
+  async restartLLMModel(modelId: string): Promise<LLMModelRestartResponse> {
+    return this.request<LLMModelRestartResponse>(`/api/llm/models/${modelId}/restart`, { method: 'POST' });
+  }
+
+  async stopLLMModel(modelId: string, force = false): Promise<LLMModelStopResponse> {
+    return this.request<LLMModelStopResponse>(
+      `/api/llm/models/${modelId}/stop?force=${force}`,
+      { method: 'POST' }
+    );
+  }
+
+  async getLLMModelLogs(
+    modelId: string,
+    lines = 100,
+    options?: { signal?: AbortSignal }
+  ): Promise<LLMModelLogsResponse> {
+    return this.request<LLMModelLogsResponse>(`/api/llm/models/${modelId}/logs?lines=${lines}`, options);
+  }
+
+  async triggerLLMHealthCheck(modelId: string): Promise<LLMHealthCheckResponse> {
+    return this.request<LLMHealthCheckResponse>(`/api/llm/models/${modelId}/health-check`, { method: 'POST' });
+  }
+
+  async chatCompletion(
+    payload: ChatCompletionRequest,
+    options?: { stream?: boolean; signal?: AbortSignal }
+  ): Promise<ChatCompletionResponse> {
+    const { stream = false, signal } = options || {};
+
+    // Future-proof: structured for both streaming and non-streaming
+    if (stream) {
+      // TODO: Implement streaming with requestRaw when ready
+      // return this.requestRaw('/api/llm/v1/chat/completions', { ... });
+      throw new Error('Streaming not yet implemented');
+    }
+
+    // Non-streaming: use existing request method with full error handling, timeout, AbortController
+    return this.request<ChatCompletionResponse>(
+      '/api/llm/v1/chat/completions',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        signal,
+      }
+    );
+  }
+
+  // LLM Model Management (CRUD)
+  async createLLMModel(config: ReplicateModelConfig): Promise<{ message: string; model_id: string }> {
+    return this.request('/api/llm/models', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async updateLLMModel(
+    modelId: string,
+    updates: Partial<Pick<ReplicateModelConfig, 'default_params' | 'timeout' | 'max_retries'>>
+  ): Promise<{ message: string; model_id: string; updated_fields: string[] }> {
+    return this.request(`/api/llm/models/${modelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteLLMModel(modelId: string): Promise<{ message: string; model_id: string }> {
+    return this.request(`/api/llm/models/${modelId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Server Configuration Management (CRUD)
+  async addServer(config: any): Promise<{ message: string; id: string; name: string }> {
+    return this.request('/api/servers', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
   }
 
   async getCurrentUser(options?: { signal?: AbortSignal }): Promise<any> {
@@ -191,6 +293,53 @@ class ApiClient {
 
   async logout(): Promise<{ logout_url: string; message: string }> {
     return this.request('/auth/logout', { method: 'POST' });
+  }
+
+  // Inspector Tools APIs
+  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+    return this.request(`/api/inspector/connect`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async disconnectInspectorServer(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async runInspectorTool(
+    sessionId: string,
+    toolName: string,
+    params: Record<string, any>
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/tools/${toolName}/run`, {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  }
+  
+  async runInspectorChat(
+    sessionId: string,
+    message: string
+  ): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+  }
+
+  async getInspectorLogs(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/logs`, {
+      method: "GET",
+    });
+  }
+  async chatWithInspector(sessionId: string, data: any): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/chat`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
   }
 
   /**

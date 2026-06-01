@@ -8,6 +8,11 @@ import { ToolRunner } from "./pages/ToolRunner";
 import Documentation from "./pages/Documentation";
 import ManageServers from "./pages/ManageServers";
 import { useAuth } from "./contexts/AuthContext";
+import LLMModels from "./pages/LLMModels";
+import LLMModelDetails from "./pages/LLMModelDetails";
+import LLMPlayground from "./pages/LLMPlayground";
+import ManageServers from "./pages/ManageServers";
+import MCPInspector from "./pages/MCPInspector";
 
 function App() {
   const location = useLocation();
@@ -73,7 +78,11 @@ function App() {
         <Route path="/servers/manage" element={<ManageServers />} />
         <Route path="/documentation" element={<Documentation />} />
         <Route path="/servers/:serverId" element={<ServerDetails />} />
+        <Route path="/inspector" element={<MCPInspector />} />
         <Route path="/servers/:serverId/tools/:toolName" element={<ToolRunner />} />
+        <Route path="/llm/models" element={<LLMModels />} />
+        <Route path="/llm/models/:modelId" element={<LLMModelDetails />} />
+        <Route path="/llm/playground" element={<LLMPlayground />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </>

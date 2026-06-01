@@ -1,0 +1,1831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auth0 OAuth Implementation &#x2014; FluidMCP</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --bg2: #161b22;
+      --bg3: #1c2128;
+      --border: rgba(210, 168, 255, 0.15);
+      --accent: #d2a8ff;
+      --accent2: #58a6ff;
+      --accent3: #3fb950;
+      --accent4: #f0883e;
+      --danger: #f85149;
+      --text: #e6edf3;
+      --text2: #8b949e;
+      --text3: #6e7681;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      min-height: 100vh;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* ─── Sidebar ─────────────────────────────────────────────────── */
+    .sidebar {
+      width: 280px;
+      min-width: 280px;
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    .sidebar-header {
+      padding: 24px 20px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-logo {
+      font-size: 22px;
+      margin-bottom: 6px;
+    }
+
+    .sidebar-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .sidebar-subtitle {
+      font-size: 11px;
+      color: var(--text3);
+      margin-top: 2px;
+    }
+
+    .sidebar-progress {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .progress-label {
+      font-size: 11px;
+      color: var(--text2);
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .progress-bar {
+      background: var(--bg3);
+      border-radius: 4px;
+      height: 6px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    .nav-list {
+      padding: 12px 10px;
+      flex: 1;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-bottom: 2px;
+    }
+
+    .nav-item:hover { background: var(--bg3); }
+
+    .nav-item.active {
+      background: rgba(210, 168, 255, 0.1);
+      border: 1px solid rgba(210, 168, 255, 0.25);
+    }
+
+    .nav-item.done .nav-badge {
+      background: var(--accent3);
+      color: #0d1117;
+    }
+
+    .nav-badge {
+      min-width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text2);
+      flex-shrink: 0;
+    }
+
+    .nav-item.active .nav-badge {
+      background: var(--accent);
+      color: #0d1117;
+      border-color: var(--accent);
+    }
+
+    .nav-label {
+      font-size: 12.5px;
+      color: var(--text2);
+      line-height: 1.3;
+    }
+
+    .nav-item.active .nav-label { color: var(--text); font-weight: 500; }
+
+    /* ─── Main content ─────────────────────────────────────────────── */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+    }
+
+    .lesson {
+      display: none;
+      padding: 48px 56px 80px;
+      max-width: 900px;
+      animation: slideInUp 0.3s ease;
+    }
+
+    .lesson.active { display: block; }
+
+    @keyframes slideInUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .lesson-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(210, 168, 255, 0.1);
+      border: 1px solid rgba(210, 168, 255, 0.3);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 20px;
+      margin-bottom: 16px;
+    }
+
+    .lesson-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 8px;
+      line-height: 1.25;
+    }
+
+    .lesson-subtitle {
+      font-size: 15px;
+      color: var(--text2);
+      margin-bottom: 36px;
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .lesson p {
+      color: var(--text2);
+      margin-bottom: 20px;
+      line-height: 1.75;
+    }
+
+    .lesson h3 {
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 32px 0 14px;
+    }
+
+    .lesson h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+      margin: 20px 0 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* ─── Cards ─────────────────────────────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 14px;
+      margin: 20px 0 28px;
+    }
+
+    .cards-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin: 20px 0 28px;
+    }
+
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px;
+      transition: border-color 0.2s;
+    }
+
+    .card:hover { border-color: rgba(210, 168, 255, 0.35); }
+
+    .card-icon {
+      font-size: 22px;
+      margin-bottom: 10px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .card-text {
+      font-size: 12.5px;
+      color: var(--text2);
+      line-height: 1.55;
+    }
+
+    /* ─── Info / Warn / OK boxes ─────────────────────────────────────── */
+    .info-box, .warn-box, .ok-box, .danger-box {
+      display: flex;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 8px;
+      margin: 20px 0;
+      border: 1px solid;
+    }
+
+    .info-box {
+      background: rgba(88, 166, 255, 0.07);
+      border-color: rgba(88, 166, 255, 0.25);
+    }
+
+    .warn-box {
+      background: rgba(240, 136, 62, 0.07);
+      border-color: rgba(240, 136, 62, 0.3);
+    }
+
+    .ok-box {
+      background: rgba(63, 185, 80, 0.07);
+      border-color: rgba(63, 185, 80, 0.3);
+    }
+
+    .danger-box {
+      background: rgba(248, 81, 73, 0.07);
+      border-color: rgba(248, 81, 73, 0.3);
+    }
+
+    .box-icon { font-size: 16px; flex-shrink: 0; padding-top: 1px; }
+
+    .box-text { font-size: 13px; color: var(--text2); line-height: 1.6; }
+    .box-text strong { color: var(--text); }
+    .box-text code {
+      background: var(--bg3);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      color: var(--accent);
+    }
+
+    /* ─── Code blocks ─────────────────────────────────────────────── */
+    .code-block {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin: 20px 0 28px;
+      overflow: hidden;
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: var(--bg3);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .code-lang {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .code-file {
+      font-size: 11px;
+      color: var(--text3);
+      font-family: monospace;
+    }
+
+    .code-body {
+      padding: 18px 20px;
+      overflow-x: auto;
+    }
+
+    .code-body pre {
+      font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--text);
+      white-space: pre;
+    }
+
+    /* ─── Directory tree ──────────────────────────────────────────── */
+    .directory-tree {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 22px;
+      margin: 16px 0 24px;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 12.5px;
+    }
+
+    .dir-line {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 2px 0;
+      line-height: 1.65;
+    }
+
+    .dir-indent-1 { padding-left: 20px; }
+    .dir-indent-2 { padding-left: 40px; }
+    .dir-indent-3 { padding-left: 60px; }
+
+    .dir-icon { font-size: 13px; flex-shrink: 0; }
+    .dir-name { color: var(--text2); }
+    .dir-highlight { color: var(--accent); font-weight: 600; }
+    .dir-comment { color: var(--text3); font-size: 11.5px; margin-left: 4px; }
+
+    /* ─── Tables ──────────────────────────────────────────────────── */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 28px;
+      font-size: 13px;
+    }
+
+    .data-table th {
+      background: var(--bg3);
+      color: var(--accent);
+      font-weight: 600;
+      padding: 10px 14px;
+      text-align: left;
+      border: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .data-table td {
+      padding: 9px 14px;
+      border: 1px solid var(--border);
+      color: var(--text2);
+      vertical-align: top;
+    }
+
+    .data-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    .data-table td code {
+      background: var(--bg3);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      color: var(--accent2);
+    }
+    .data-table td strong { color: var(--text); }
+
+    /* ─── Flow steps ──────────────────────────────────────────────── */
+    .flow-steps {
+      margin: 20px 0 28px;
+    }
+
+    .flow-step {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 14px;
+      align-items: flex-start;
+    }
+
+    .flow-step-num {
+      min-width: 30px;
+      height: 30px;
+      background: rgba(210, 168, 255, 0.15);
+      border: 1px solid rgba(210, 168, 255, 0.35);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .flow-step-body {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      flex: 1;
+    }
+
+    .flow-step-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+
+    .flow-step-desc {
+      font-size: 12.5px;
+      color: var(--text2);
+      line-height: 1.55;
+    }
+
+    .flow-step-desc code {
+      background: var(--bg3);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      color: var(--accent);
+    }
+
+    .flow-connector {
+      width: 1px;
+      height: 14px;
+      background: var(--border);
+      margin: 0 0 0 14px;
+    }
+
+    /* ─── Env var list ────────────────────────────────────────────── */
+    .env-list { margin: 16px 0 24px; }
+
+    .env-item {
+      display: flex;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      align-items: flex-start;
+    }
+
+    .env-key {
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--accent2);
+      font-weight: 700;
+      min-width: 240px;
+      flex-shrink: 0;
+    }
+
+    .env-desc { font-size: 12.5px; color: var(--text2); }
+    .env-required {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 700;
+      background: rgba(248, 81, 73, 0.15);
+      color: var(--danger);
+      border: 1px solid rgba(248, 81, 73, 0.3);
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .env-optional {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 700;
+      background: rgba(63, 185, 80, 0.1);
+      color: var(--accent3);
+      border: 1px solid rgba(63, 185, 80, 0.25);
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
+    /* ─── Navigation buttons ─────────────────────────────────────── */
+    .lesson-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      gap: 12px;
+    }
+
+    .nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--bg2);
+      color: var(--text2);
+      transition: all 0.15s;
+      text-decoration: none;
+    }
+
+    .nav-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(210, 168, 255, 0.07);
+    }
+
+    .nav-btn.primary {
+      background: rgba(210, 168, 255, 0.12);
+      border-color: rgba(210, 168, 255, 0.35);
+      color: var(--accent);
+    }
+
+    .nav-btn.primary:hover {
+      background: rgba(210, 168, 255, 0.2);
+    }
+
+    .nav-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    .complete-btn {
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(63, 185, 80, 0.4);
+      background: rgba(63, 185, 80, 0.1);
+      color: var(--accent3);
+      transition: all 0.15s;
+    }
+
+    .complete-btn:hover {
+      background: rgba(63, 185, 80, 0.18);
+      border-color: var(--accent3);
+    }
+
+    .complete-btn.done {
+      background: rgba(63, 185, 80, 0.18);
+      border-color: var(--accent3);
+      cursor: default;
+    }
+
+    /* ─── Inline code ─────────────────────────────────────────────── */
+    code {
+      background: var(--bg3);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12.5px;
+      color: var(--accent2);
+      border: 1px solid rgba(88, 166, 255, 0.15);
+    }
+
+    /* ─── Scrollbar ───────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+    /* ─── Dos and Donts ───────────────────────────────────────────── */
+    .dos-donts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 16px 0 28px;
+    }
+
+    .dos-box, .donts-box {
+      border-radius: 10px;
+      padding: 16px;
+      border: 1px solid;
+    }
+
+    .dos-box {
+      background: rgba(63, 185, 80, 0.05);
+      border-color: rgba(63, 185, 80, 0.25);
+    }
+
+    .donts-box {
+      background: rgba(248, 81, 73, 0.05);
+      border-color: rgba(248, 81, 73, 0.25);
+    }
+
+    .dos-title, .donts-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .dos-title { color: var(--accent3); }
+    .donts-title { color: var(--danger); }
+
+    .dos-item, .donts-item {
+      font-size: 12.5px;
+      color: var(--text2);
+      padding: 5px 0;
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      line-height: 1.5;
+    }
+
+    /* ─── Mode comparison ─────────────────────────────────────────── */
+    .mode-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .mode-oauth { background: rgba(210, 168, 255, 0.15); color: var(--accent); }
+    .mode-bearer { background: rgba(88, 166, 255, 0.15); color: var(--accent2); }
+    .mode-anon { background: rgba(63, 185, 80, 0.1); color: var(--accent3); }
+  </style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">&#x1F510;</div>
+    <div class="sidebar-title">Auth0 OAuth</div>
+    <div class="sidebar-subtitle">FluidMCP Authentication Guide</div>
+  </div>
+  <div class="sidebar-progress">
+    <div class="progress-label">
+      <span>Progress</span>
+      <span id="prog-label">0 / 8</span>
+    </div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="prog-fill" style="width:0%"></div>
+    </div>
+  </div>
+  <div class="nav-list" id="nav"></div>
+</aside>
+
+<main class="main" id="main"></main>
+
+<script>
+const STORAGE_KEY = 'fmcp_auth_done';
+let done = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let currentIdx = 0;
+
+const lessons = [
+  {
+    id: 1,
+    title: "Authentication Overview",
+    sub: "Modes, concepts, and why Auth0",
+    content: `
+      <p>FluidMCP supports three distinct authentication modes that can be selected at server startup. Understanding which mode to use &#x2014; and how each works &#x2014; is the first step to securing your deployment.</p>
+
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">&#x1F513;</div>
+          <div class="card-title">No-Auth (Dev Mode)</div>
+          <div class="card-text">All requests pass through as <code>anonymous</code>. Zero configuration needed. Use only for local development and testing.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F511;</div>
+          <div class="card-title">Bearer Token</div>
+          <div class="card-text">A static secret token passed in the <code>Authorization: Bearer</code> header. Ideal for server-to-server API access and CLI tools.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F512;</div>
+          <div class="card-title">OAuth2 / Auth0</div>
+          <div class="card-text">Full browser-based login with Auth0 as the Identity Provider. Issues JWTs, supports social login, and stores tokens in httpOnly cookies.</div>
+        </div>
+      </div>
+
+      <h3>Why Auth0?</h3>
+      <p>Auth0 is a managed Identity Provider (IdP) that handles the hard parts of authentication: user databases, password hashing, MFA, social logins (Google, GitHub, Zoho, Atlassian), and token issuance. FluidMCP integrates with Auth0 using the standard <strong>OAuth 2.0 Authorization Code Flow</strong>.</p>
+
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">&#x1F504;</div>
+          <div class="card-title">OAuth2 Authorization Code Flow</div>
+          <div class="card-text">The browser-safe OAuth flow. FluidMCP never handles user passwords &#x2014; Auth0 does. Only short-lived authorization codes cross the browser.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F510;</div>
+          <div class="card-title">JWT Validation with JWKS</div>
+          <div class="card-text">Auth0 signs tokens with RS256. FluidMCP validates them using Auth0&#39;s public JWKS endpoint with an in-process TTL cache.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F36A;</div>
+          <div class="card-title">httpOnly Cookie Security</div>
+          <div class="card-text">Access tokens are stored in <code>httpOnly</code> cookies &#x2014; invisible to JavaScript &#x2014; preventing XSS token theft entirely.</div>
+        </div>
+      </div>
+
+      <div class="info-box">
+        <div class="box-icon">&#x2139;</div>
+        <div class="box-text">
+          <strong>When to use each mode:</strong><br>
+          &#x2022; <strong>No-auth</strong> &#x2014; Local development, internal-only tools with no sensitive data<br>
+          &#x2022; <strong>Bearer token</strong> &#x2014; CI/CD pipelines, machine-to-machine API clients, Railway deployments<br>
+          &#x2022; <strong>Auth0 OAuth</strong> &#x2014; Any browser-facing deployment where users need to log in individually
+        </div>
+      </div>
+    `
+  },
+  {
+    id: 2,
+    title: "Directory Structure",
+    sub: "All auth-related files and their roles",
+    content: `
+      <p>The Auth0 integration spans both the backend (Python/FastAPI) and the frontend (React/TypeScript). Here is the complete map of every relevant file.</p>
+
+      <div class="directory-tree">
+        <div class="dir-line">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-highlight">fluidmcp/cli/</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">auth.py</span>
+          <span class="dir-comment"># Bearer token: verify_token(), get_token(), _validate_bearer_token()</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">auth/</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">config.py</span>
+          <span class="dir-comment"># Auth0Config pydantic model + from_env_or_file() loader</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">routes.py</span>
+          <span class="dir-comment"># /auth/login, /auth/callback, /auth/me, /auth/logout, /auth/config</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">oauth_client.py</span>
+          <span class="dir-comment"># Auth0Client: get_authorization_url(), exchange_code_for_tokens(), get_user_info()</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">jwt_validator.py</span>
+          <span class="dir-comment"># JWKSCache (TTL + thread-safe) + validate_oauth_jwt()</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">dependencies.py</span>
+          <span class="dir-comment"># get_current_user() FastAPI dependency (unified 3-mode auth)</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">url_utils.py</span>
+          <span class="dir-comment"># get_base_url(), get_callback_url(), get_cors_origins() — env detection</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-name">server.py</span>
+          <span class="dir-comment"># create_app() — wires CORS, security headers, auth routes</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">api/</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-name">management.py</span>
+          <span class="dir-comment"># Protected routes using Depends(get_current_user)</span>
+        </div>
+        <div class="dir-line" style="margin-top:10px;">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-highlight">fluidmcp/frontend/src/</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">contexts/</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">AuthContext.tsx</span>
+          <span class="dir-comment"># AuthProvider, useAuth(), requireAuth() — wraps entire app</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">services/</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">auth.ts</span>
+          <span class="dir-comment"># authService.login(), logout(), getCurrentUser(), getConfig()</span>
+        </div>
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">components/</span>
+        </div>
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-name">UserMenu.tsx</span>
+          <span class="dir-comment"># User avatar, display name, logout button</span>
+        </div>
+      </div>
+
+      <h3>File Reference Table</h3>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Key Class / Function</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>cli/auth.py</code></td>
+            <td><code>verify_token()</code>, <code>_validate_bearer_token()</code></td>
+            <td>Legacy bearer-only protection via FastAPI dependency</td>
+          </tr>
+          <tr>
+            <td><code>cli/auth/config.py</code></td>
+            <td><code>Auth0Config</code>, <code>from_env_or_file()</code></td>
+            <td>Pydantic model that loads all Auth0 env vars with file fallback</td>
+          </tr>
+          <tr>
+            <td><code>cli/auth/routes.py</code></td>
+            <td><code>auth_router</code>, <code>login()</code>, <code>callback()</code></td>
+            <td>All OAuth HTTP endpoints: login, callback, me, logout, config</td>
+          </tr>
+          <tr>
+            <td><code>cli/auth/oauth_client.py</code></td>
+            <td><code>Auth0Client</code></td>
+            <td>Thin wrapper around Auth0 REST API calls</td>
+          </tr>
+          <tr>
+            <td><code>cli/auth/jwt_validator.py</code></td>
+            <td><code>JWKSCache</code>, <code>validate_oauth_jwt()</code></td>
+            <td>RS256 JWT validation with JWKS caching and key-rotation handling</td>
+          </tr>
+          <tr>
+            <td><code>cli/auth/dependencies.py</code></td>
+            <td><code>get_current_user()</code></td>
+            <td>Unified FastAPI dependency — OAuth, bearer, or anonymous</td>
+          </tr>
+          <tr>
+            <td><code>cli/auth/url_utils.py</code></td>
+            <td><code>get_base_url()</code>, <code>get_cors_origins()</code></td>
+            <td>Detects Codespaces, Gitpod, or local URL automatically</td>
+          </tr>
+          <tr>
+            <td><code>cli/server.py</code></td>
+            <td><code>create_app()</code></td>
+            <td>Wires CORS, security headers middleware, mounts auth router</td>
+          </tr>
+          <tr>
+            <td><code>frontend/src/contexts/AuthContext.tsx</code></td>
+            <td><code>AuthProvider</code>, <code>useAuth()</code>, <code>requireAuth()</code></td>
+            <td>React context — state management for auth across the UI</td>
+          </tr>
+          <tr>
+            <td><code>frontend/src/services/auth.ts</code></td>
+            <td><code>authService</code></td>
+            <td>Thin API client that calls the backend&#39;s <code>/auth/*</code> endpoints</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="info-box">
+        <div class="box-icon">&#x1F4A1;</div>
+        <div class="box-text">
+          <strong>Import relationship:</strong> <code>server.py</code> imports <code>auth_router</code> and <code>Auth0Config</code> from the <code>auth/</code> package. The router&#39;s endpoints import <code>Auth0Client</code> (oauth_client) and <code>get_current_user</code> (dependencies). The dependency imports <code>validate_oauth_jwt</code> (jwt_validator). Everything flows downward &#x2014; no circular imports.
+        </div>
+      </div>
+    `
+  },
+  {
+    id: 3,
+    title: "Auth0 Setup & Configuration",
+    sub: "Environment variables, Auth0Config, and startup commands",
+    content: `
+      <p>Before Auth0 login works, the server needs five pieces of information from your Auth0 application. These are loaded by <code>Auth0Config</code> from environment variables (with optional JSON file fallback).</p>
+
+      <h3>Required Environment Variables</h3>
+      <div class="env-list">
+        <div class="env-item">
+          <div class="env-key">FMCP_AUTH0_DOMAIN</div>
+          <div class="env-desc">Your Auth0 tenant domain, e.g. <code>myapp.us.auth0.com</code>. Used to build all Auth0 API URLs.</div>
+          <div class="env-required">REQUIRED</div>
+        </div>
+        <div class="env-item">
+          <div class="env-key">FMCP_AUTH0_CLIENT_ID</div>
+          <div class="env-desc">Application Client ID from Auth0 dashboard. Included in every authorization and token request.</div>
+          <div class="env-required">REQUIRED</div>
+        </div>
+        <div class="env-item">
+          <div class="env-key">FMCP_AUTH0_CLIENT_SECRET</div>
+          <div class="env-desc">Application Client Secret. Used during code exchange (<code>/oauth/token</code>). <strong>Never expose this to the frontend.</strong></div>
+          <div class="env-required">REQUIRED</div>
+        </div>
+        <div class="env-item">
+          <div class="env-key">FMCP_AUTH0_AUDIENCE</div>
+          <div class="env-desc">API audience identifier (e.g. <code>https://api.myapp.com</code>). Scopes the JWT to your API. Prevents audience-confusion attacks.</div>
+          <div class="env-required">REQUIRED</div>
+        </div>
+        <div class="env-item">
+          <div class="env-key">FMCP_JWT_SECRET</div>
+          <div class="env-desc">Secret for local JWT operations. Required by <code>validate_required()</code>.</div>
+          <div class="env-required">REQUIRED</div>
+        </div>
+        <div class="env-item" style="background:#f0f4ff;border-left:3px solid #4a6cf7;padding:10px 14px;">
+          <div class="env-key" style="font-size:0.85em;color:#4a6cf7;">&#x2139;&#xFE0F; Dual-algorithm design note</div>
+          <div class="env-desc" style="margin-top:6px;"><code>Auth0Config.jwt_algorithm</code> defaults to <code>"HS256"</code> and pairs with <code>FMCP_JWT_SECRET</code> for any locally-signed session tokens. This is <strong>separate</strong> from Auth0-issued access tokens, which are <strong>always</strong> validated with <code>RS256</code> via the Auth0 JWKS endpoint — that algorithm is pinned in <code>jwt_validator.py</code> and is not configurable. In short: <code>HS256</code> + <code>jwt_secret</code> = local sessions; <code>RS256</code> + JWKS = Auth0 tokens.</div>
+        </div>
+        <div class="env-item">
+          <div class="env-key">FMCP_AUTH0_CALLBACK_URL</div>
+          <div class="env-desc">Override the auto-detected OAuth callback URL. Set this if automatic Codespaces/Gitpod detection fails or you use a custom domain.</div>
+          <div class="env-optional">OPTIONAL</div>
+        </div>
+        <div class="env-item">
+          <div class="env-key">FMCP_BASE_URL</div>
+          <div class="env-desc">Manually set the server base URL used in all generated links. Takes highest priority in <code>get_base_url()</code>.<br><br><strong>&#x26A0;&#xFE0F; Required on Railway and any HTTPS deployment in Auth0 mode:</strong> <code>is_local_development()</code> in <code>routes.py</code> checks this value to decide whether to set <code>Secure=True</code> on the <code>fmcp_auth_token</code> cookie. If this env var is unset (or contains <code>localhost</code>/<code>127.0.0.1</code>), the cookie ships <strong>without</strong> the <code>Secure</code> flag, meaning it can be sent over plain HTTP. Always set this to your public HTTPS URL (e.g. <code>https://your-app.up.railway.app</code>) when deploying behind HTTPS.</div>
+          <div class="env-optional">OPTIONAL (REQUIRED in HTTPS deployments with Auth0)</div>
+        </div>
+      </div>
+
+      <h3>Auth0Config &#x2014; Loading Priority</h3>
+      <p>The <code>Auth0Config.from_env_or_file()</code> class method in <code>auth/config.py</code> applies a strict priority order:</p>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Environment variables (highest priority)</div>
+            <div class="flow-step-desc"><code>FMCP_AUTH0_DOMAIN</code>, <code>FMCP_AUTH0_CLIENT_ID</code>, etc. Always override anything from files.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">2</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Specified config file (<code>--auth0-config</code> flag)</div>
+            <div class="flow-step-desc">Pass a path to a JSON file. Fields not present in env vars are taken from here.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">3</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Default file (<code>./auth0-config.json</code>)</div>
+            <div class="flow-step-desc">Looked up automatically in the current working directory if no file flag is passed.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">4</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Dynamic URL detection + defaults</div>
+            <div class="flow-step-desc">If <code>callback_url</code> is still not set, <code>get_callback_url(port)</code> from <code>url_utils.py</code> auto-detects Codespaces, Gitpod, or falls back to <code>http://localhost:8099</code>.</div>
+          </div>
+        </div>
+      </div>
+
+      <h3>Server Startup Commands</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">bash</span>
+          <span class="code-file">terminal</span>
+        </div>
+        <div class="code-body"><pre># &#x2500;&#x2500; Auth0 OAuth mode (browser login with JWT)
+export FMCP_AUTH0_DOMAIN="myapp.us.auth0.com"
+export FMCP_AUTH0_CLIENT_ID="abc123"
+export FMCP_AUTH0_CLIENT_SECRET="secret"
+export FMCP_AUTH0_AUDIENCE="https://api.myapp.com"
+export FMCP_JWT_SECRET="local-secret"
+fmcp serve --auth0
+
+# &#x2500;&#x2500; Bearer token only (API-key style)
+fmcp serve --secure --token mytoken
+
+# &#x2500;&#x2500; Auto-generate a bearer token (printed to stdout)
+fmcp serve --secure
+
+# &#x2500;&#x2500; No auth (dev/local only)
+fmcp serve</pre></div>
+      </div>
+
+      <h3>URL Auto-Detection (<code>url_utils.py</code>)</h3>
+      <p>The <code>get_base_url(port)</code> function detects the environment in priority order:</p>
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">&#x2699;</div>
+          <div class="card-title"><code>FMCP_BASE_URL</code> (manual override)</div>
+          <div class="card-text">Highest priority. Strips trailing slash. Use for custom domains or Railway deployments.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F4BB;</div>
+          <div class="card-title">GitHub Codespaces</div>
+          <div class="card-text">Detected via <code>CODESPACES=true</code> + <code>CODESPACE_NAME</code>. Builds <code>https://&#x7B;name&#x7D;-&#x7B;port&#x7D;.app.github.dev</code>.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F310;</div>
+          <div class="card-title">Gitpod</div>
+          <div class="card-text">Detected via <code>GITPOD_WORKSPACE_ID</code>. Builds <code>https://&#x7B;port&#x7D;-&#x7B;workspace-url&#x7D;</code>.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F3E0;</div>
+          <div class="card-title">Local fallback</div>
+          <div class="card-text">Returns <code>http://localhost:{port}</code> when no cloud environment is detected.</div>
+        </div>
+      </div>
+
+      <div class="warn-box">
+        <div class="box-icon">&#x26A0;</div>
+        <div class="box-text">
+          <strong>Warning &#x2014; combined mode blocked:</strong> Using <code>--secure --auth0</code> together is currently blocked with <code>sys.exit(1)</code> in <code>cli.py</code>. You must choose one auth mode per server instance. This restriction may be lifted in a future release.
+        </div>
+      </div>
+    `
+  },
+  {
+    id: 4,
+    title: "OAuth Login Flow",
+    sub: "Step-by-step walkthrough of the Authorization Code flow",
+    content: `
+      <p>When a user clicks &ldquo;Login&rdquo; in the FluidMCP UI, the following 10-step flow executes across the browser, FluidMCP backend, and Auth0.</p>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">User clicks Login &#x2192; <code>requireAuth()</code> in <code>AuthContext.tsx</code></div>
+            <div class="flow-step-desc">If <code>checkAuth()</code> returns false, the return URL is stored in <code>sessionStorage</code> and <code>authService.login()</code> redirects the browser to <code>/auth/login</code>.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">2</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title"><code>GET /auth/login</code> &#x2192; <code>routes.py :: login()</code></div>
+            <div class="flow-step-desc">Calls <code>create_state()</code> which generates a <code>secrets.token_urlsafe(32)</code> CSRF token, stores it in <code>_state_store</code> dict with the current UTC timestamp. States older than 10 minutes are purged.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">3</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Redirect to Auth0 authorize endpoint</div>
+            <div class="flow-step-desc"><code>Auth0Client.get_authorization_url(state, redirect_uri)</code> builds: <code>https://&#x7B;domain&#x7D;/authorize?response_type=code&amp;client_id=...&amp;redirect_uri=...&amp;scope=openid+profile+email&amp;state=...&amp;audience=...</code></div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">4</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">User authenticates at Auth0</div>
+            <div class="flow-step-desc">The browser shows the Auth0 hosted login page. User enters credentials (email/password, or social provider like Google or GitHub). FluidMCP does not see any password.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">5</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Auth0 redirects back to <code>/auth/callback?code=...&amp;state=...</code></div>
+            <div class="flow-step-desc">Auth0 sends a one-time authorization code and echoes back the CSRF state token to the callback URL configured in the Auth0 dashboard.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">6</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">CSRF state validation &#x2192; <code>validate_state(state)</code></div>
+            <div class="flow-step-desc">Checks <code>_state_store</code> for the token and <strong>deletes it</strong> (one-time use). Mismatch raises <code>HTTP 400 &#x2014; Invalid state parameter. Possible CSRF attack.</code></div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">7</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Token exchange &#x2192; <code>Auth0Client.exchange_code_for_tokens(code, redirect_uri)</code></div>
+            <div class="flow-step-desc">Server-to-server POST to <code>https://&#x7B;domain&#x7D;/oauth/token</code> with <code>grant_type=authorization_code</code>, client credentials, and the code. Returns <code>&#x7B;access_token, id_token, refresh_token&#x7D;</code>.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">8</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Fetch user profile &#x2192; <code>Auth0Client.get_user_info(access_token)</code></div>
+            <div class="flow-step-desc">GET to <code>https://&#x7B;domain&#x7D;/userinfo</code> with <code>Authorization: Bearer access_token</code>. Returns <code>&#x7B;sub, email, name, picture&#x7D;</code>.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">9</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Set httpOnly cookie <code>fmcp_auth_token</code></div>
+            <div class="flow-step-desc"><code>response.set_cookie(key="fmcp_auth_token", value=access_token, httponly=True, samesite="lax", max_age=86400, secure=&lt;True in production&gt;)</code>. The cookie is invisible to JavaScript.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">10</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Redirect to <code>/ui</code> dashboard</div>
+            <div class="flow-step-desc">The success HTML page auto-redirects via <code>window.location.href = &#39;/ui&#39;</code> after 1 second. Subsequent API calls include the cookie automatically.</div>
+          </div>
+        </div>
+      </div>
+
+      <h3>Callback Route Handler (key excerpt)</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">python</span>
+          <span class="code-file">fluidmcp/cli/auth/routes.py</span>
+        </div>
+        <div class="code-body"><pre>@auth_router.get("/callback")
+async def callback(request: Request, code: str = None,
+                   state: str = None, error: str = None):
+    # 1. Surface any Auth0 error
+    if error:
+        return HTMLResponse(content=error_html)
+
+    # 2. Require both code and state
+    if not code or not state:
+        raise HTTPException(400, "Missing code or state parameter")
+
+    # 3. Validate CSRF state (one-time use, deleted on match)
+    if not validate_state(state):
+        raise HTTPException(400, "Invalid state parameter. Possible CSRF attack.")
+
+    # 4. Exchange code for tokens (server-side only)
+    tokens = oauth_client.exchange_code_for_tokens(code, config.callback_url)
+
+    # 5. Fetch user profile from Auth0
+    user_info = oauth_client.get_user_info(tokens['access_token'])
+
+    # 6. Set httpOnly cookie &#x2014; NOT localStorage
+    response = Response(content=success_html, media_type="text/html")
+    response.set_cookie(
+        key="fmcp_auth_token",
+        value=tokens['access_token'],
+        httponly=True,
+        secure=not is_local_development(),
+        samesite="lax",
+        max_age=86400,
+        path="/"
+    )
+    return response</pre></div>
+      </div>
+    `
+  },
+  {
+    id: 5,
+    title: "JWT Validation & JWKS Cache",
+    sub: "RS256 signature verification with thread-safe key caching",
+    content: `
+      <p>After the OAuth flow, every subsequent API request carries the Auth0 access token (in the cookie or Authorization header). The server must validate this JWT on each request &#x2014; without hitting Auth0&#39;s servers every time. That&#39;s what <code>JWKSCache</code> and <code>validate_oauth_jwt()</code> handle.</p>
+
+      <h3>How JWT RS256 Works</h3>
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">&#x1F511;</div>
+          <div class="card-title">Auth0 Signs with Private Key</div>
+          <div class="card-text">Auth0 holds an RSA private key and uses it to sign every JWT with RS256. You never see this key.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F512;</div>
+          <div class="card-title">JWKS = Public Keys</div>
+          <div class="card-text">Auth0 publishes the matching RSA public keys at <code>https://&#x7B;domain&#x7D;/.well-known/jwks.json</code>. Anyone can fetch and use them to verify signatures.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F50D;</div>
+          <div class="card-title">FluidMCP Verifies</div>
+          <div class="card-text">Using the public key + <code>python-jose</code>, FluidMCP verifies the signature, issuer (<code>iss</code>), audience (<code>aud</code>), and expiry (<code>exp</code>) &#x2014; all in-process.</div>
+        </div>
+      </div>
+
+      <h3>JWKSCache Class (<code>auth/jwt_validator.py</code>)</h3>
+      <p>Fetching JWKS on every request would be slow and would hit Auth0 rate limits. <code>JWKSCache</code> solves this with a TTL-based in-process cache:</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">python</span>
+          <span class="code-file">fluidmcp/cli/auth/jwt_validator.py</span>
+        </div>
+        <div class="code-body"><pre>class JWKSCache:
+    """Cache for JWKS keys with TTL to avoid repeated fetches"""
+
+    def __init__(self, jwks_url: str, ttl_seconds: int = 3600):
+        self.jwks_url = jwks_url
+        self.ttl = timedelta(seconds=ttl_seconds)   # Default: 1 hour
+        self._keys: Optional[Dict] = None
+        self._expires_at: Optional[datetime] = None
+        self._lock = threading.Lock()               # Thread-safe access
+
+    def get_signing_key(self, kid: str):
+        with self._lock:
+            # Refresh if cache is empty or expired
+            if (self._keys is None
+                    or self._expires_at is None
+                    or datetime.utcnow() >= self._expires_at):
+                self._refresh_keys()
+
+            # Look up key by Key ID
+            for key_data in self._keys.get("keys", []):
+                if key_data.get("kid") == kid:
+                    return jwk.construct(key_data)
+
+        raise ValueError(f"Key ID {kid} not found in JWKS")</pre></div>
+      </div>
+
+      <h3>validate_oauth_jwt() &#x2014; Step by Step</h3>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Decode header (unverified) to extract <code>kid</code></div>
+            <div class="flow-step-desc"><code>jwt.get_unverified_header(token)</code> &#x2014; reads the JWT header without signature check. Raises if <code>kid</code> field is missing.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">2</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Retrieve public key from <code>JWKSCache.get_signing_key(kid)</code></div>
+            <div class="flow-step-desc">Returns the cached RSA public key matching the <code>kid</code>. Cache auto-refreshes from Auth0 if expired.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">3</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Full JWT decode with <code>python-jose</code></div>
+            <div class="flow-step-desc"><code>jwt.decode(token, signing_key, algorithms=["RS256"], audience=audience, issuer="https://&#x7B;domain&#x7D;/")</code> &#x2014; verifies signature, expiry, issuer, and audience simultaneously.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">4</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Return user context dict</div>
+            <div class="flow-step-desc">Extracts <code>sub</code> &#x2192; <code>user_id</code>, <code>email</code>, <code>name</code> from payload. Returns <code>&#x7B;"user_id": sub, "email": ..., "name": ..., "auth_method": "oauth"&#x7D;</code>.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-box">
+        <div class="box-icon">&#x1F504;</div>
+        <div class="box-text">
+          <strong>Key rotation handling:</strong> If <code>get_signing_key(kid)</code> raises <code>ValueError: Key ID ... not found</code>, <code>validate_oauth_jwt()</code> immediately force-invalidates the cache (<code>cache._keys = None</code>) and retries once with fresh keys fetched from <code>/.well-known/jwks.json</code>. This handles Auth0&#39;s periodic key rotation transparently. The <code>retry_on_key_error=False</code> parameter prevents infinite loops on the second attempt.
+        </div>
+      </div>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">python</span>
+          <span class="code-file">fluidmcp/cli/auth/jwt_validator.py &#x2014; key rotation excerpt</span>
+        </div>
+        <div class="code-body"><pre>except ValueError as e:
+    # Handle stale JWKS cache &#x2014; Auth0 may have rotated keys
+    if "Key ID" in str(e) and "not found" in str(e) and retry_on_key_error:
+        logger.warning(f"Key not found in JWKS cache, refreshing: {e}")
+
+        # Force cache refresh by invalidating cached keys
+        cache = _get_jwks_cache()
+        with cache._lock:
+            cache._keys = None
+            cache._expires_at = None
+
+        # Retry once with fresh keys
+        return await validate_oauth_jwt(token, retry_on_key_error=False)</pre></div>
+      </div>
+    `
+  },
+  {
+    id: 6,
+    title: "Protecting API Routes",
+    sub: "get_current_user() dependency and three-mode auth logic",
+    content: `
+      <p>All protected routes in FluidMCP use a single FastAPI dependency: <code>get_current_user()</code> from <code>auth/dependencies.py</code>. It transparently handles all three authentication modes based on environment variables set at startup.</p>
+
+      <h3>Three-Mode Decision Logic</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">python</span>
+          <span class="code-file">fluidmcp/cli/auth/dependencies.py</span>
+        </div>
+        <div class="code-body"><pre>async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Dict[str, Optional[str]]:
+
+    auth0_mode  = os.getenv("FMCP_AUTH0_MODE")  == "true"
+    secure_mode = os.getenv("FMCP_SECURE_MODE") == "true"
+
+    # &#x2500;&#x2500; Mode 1: No auth &#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;
+    if not auth0_mode and not secure_mode:
+        return {"user_id": "anonymous", "email": None,
+                "name": "Anonymous", "auth_method": "none"}
+
+    # &#x2500;&#x2500; Token extraction (priority order) &#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;
+    token = None
+    if credentials:                                   # 1. Authorization header
+        token = credentials.credentials
+    elif "fmcp_auth_token" in request.cookies:        # 2. httpOnly cookie
+        token = request.cookies["fmcp_auth_token"]
+
+    if not token:
+        raise HTTPException(401, "Authentication required.")
+
+    # &#x2500;&#x2500; Mode 2: OAuth JWT validation &#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;
+    if auth0_mode:
+        user = await validate_oauth_jwt(token)  # raises on invalid
+        return user  # auth_method = "oauth"
+
+    # &#x2500;&#x2500; Mode 3: Bearer token (constant-time compare) &#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;
+    if secure_mode:
+        bearer_token = os.getenv("FMCP_BEARER_TOKEN")
+        if token == bearer_token:
+            return {"user_id": f"bearer_{token[:8]}", "email": None,
+                    "name": f"Bearer User {token[:8]}", "auth_method": "bearer"}
+
+    raise HTTPException(401, "Invalid or expired token")</pre></div>
+      </div>
+
+      <h3>Using the Dependency in Routes</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">python</span>
+          <span class="code-file">fluidmcp/cli/api/management.py (pattern)</span>
+        </div>
+        <div class="code-body"><pre>from ..auth.dependencies import get_current_user
+
+@router.post("/servers")
+async def create_server(
+    config: ServerConfig,
+    user: dict = Depends(get_current_user)   # &#x2190; enforces auth
+):
+    user_id     = user["user_id"]      # Auth0 sub OR "bearer_xxxx" OR "anonymous"
+    auth_method = user["auth_method"]  # "oauth" | "bearer" | "none"
+    email       = user["email"]        # set for oauth, None for bearer/none
+    # ... business logic</pre></div>
+      </div>
+
+      <h3>Auth Mode Comparison</h3>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Env vars required</th>
+            <th>Token type</th>
+            <th>Client sends</th>
+            <th>auth_method value</th>
+            <th>Best for</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mode-badge mode-oauth">OAuth</span></td>
+            <td><code>FMCP_AUTH0_MODE=true</code></td>
+            <td>RS256 JWT (Auth0)</td>
+            <td>Cookie auto-sent or <code>Authorization: Bearer</code></td>
+            <td><code>"oauth"</code></td>
+            <td>Browser-based login, multi-user deployments</td>
+          </tr>
+          <tr>
+            <td><span class="mode-badge mode-bearer">Bearer</span></td>
+            <td><code>FMCP_SECURE_MODE=true</code> + <code>FMCP_BEARER_TOKEN</code></td>
+            <td>Static secret string</td>
+            <td><code>Authorization: Bearer &lt;token&gt;</code></td>
+            <td><code>"bearer"</code></td>
+            <td>API clients, CI/CD, machine-to-machine</td>
+          </tr>
+          <tr>
+            <td><span class="mode-badge mode-anon">Anonymous</span></td>
+            <td>None</td>
+            <td>None</td>
+            <td>Nothing</td>
+            <td><code>"none"</code></td>
+            <td>Local development, internal-only tools</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="info-box">
+        <div class="box-icon">&#x2139;</div>
+        <div class="box-text">
+          <strong>Token source priority:</strong> The Authorization header always wins over the cookie. This means API clients that set <code>Authorization: Bearer</code> explicitly (e.g. curl, Python scripts) will work regardless of whether a cookie is also present. Browsers automatically send the cookie without any JavaScript involvement.
+        </div>
+      </div>
+    `
+  },
+  {
+    id: 7,
+    title: "Frontend Auth Integration",
+    sub: "AuthProvider, useAuth(), authService, and protected components",
+    content: `
+      <p>The React frontend handles authentication through a context provider that wraps the entire app. Authentication state is lazy-loaded &#x2014; the provider does not call the backend on mount, only when a component explicitly checks auth.</p>
+
+      <h3>AuthProvider (<code>contexts/AuthContext.tsx</code>)</h3>
+      <p>The <code>AuthProvider</code> component holds the auth state (<code>user</code>, <code>authConfig</code>, <code>loading</code>) and exposes it via the <code>useAuth()</code> hook. It is mounted at the top of the React tree so all child components can access auth state.</p>
+
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">tsx</span>
+          <span class="code-file">fluidmcp/frontend/src/contexts/AuthContext.tsx</span>
+        </div>
+        <div class="code-body"><pre>// AuthContextType &#x2014; what useAuth() returns
+interface AuthContextType {
+  user: User | null;
+  authConfig: AuthConfig | null;
+  loading: boolean;
+  checkAuth: () => Promise&lt;boolean&gt;;
+  requireAuth: (returnUrl?: string) => Promise&lt;boolean&gt;;
+  logout: () => Promise&lt;void&gt;;
+  isAuthenticated: boolean;
+}
+
+// Usage in a protected component
+function Dashboard() {
+  const { user, isAuthenticated, requireAuth } = useAuth();
+
+  useEffect(() => {
+    requireAuth('/dashboard');  // redirects to /auth/login if not authed
+  }, []);
+
+  if (!isAuthenticated) return &lt;LoadingSpinner /&gt;;
+  return &lt;div&gt;Welcome, {user?.name}!&lt;/div&gt;;
+}</pre></div>
+      </div>
+
+      <h3>requireAuth() Logic</h3>
+      <p>When <code>requireAuth(returnUrl)</code> is called and the user is not authenticated:</p>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Calls <code>checkAuth()</code> which calls <code>authService.getCurrentUser()</code></div>
+            <div class="flow-step-desc">GET <code>/auth/me</code> &#x2014; includes the cookie automatically via <code>credentials: 'include'</code>. Returns <code>null</code> on 401.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">2</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Stores return URL in <code>sessionStorage</code></div>
+            <div class="flow-step-desc">Key: <code>auth_return_url</code>. Prepends <code>/ui</code> prefix if not already present (matches Vite base path config).</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">3</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Redirects browser to <code>/auth/login</code></div>
+            <div class="flow-step-desc"><code>authService.login()</code> sets <code>window.location.href = '/auth/login'</code>, starting the OAuth flow.</div>
+          </div>
+        </div>
+      </div>
+
+      <h3>authService (<code>services/auth.ts</code>)</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">typescript</span>
+          <span class="code-file">fluidmcp/frontend/src/services/auth.ts</span>
+        </div>
+        <div class="code-body"><pre>export const authService = {
+  // Check OAuth config on backend (/auth/config)
+  async getConfig(): Promise&lt;AuthConfig&gt; {
+    return apiClient.getAuthConfig();
+  },
+
+  // GET /auth/me &#x2014; uses the httpOnly cookie automatically
+  async getCurrentUser(): Promise&lt;User | null&gt; {
+    try {
+      return await apiClient.getCurrentUser();
+    } catch {
+      return null;  // 401 = not authenticated
+    }
+  },
+
+  // Redirect to backend OAuth entry point
+  login() {
+    window.location.href = '/auth/login';
+  },
+
+  // POST /auth/logout &#x2014; clears cookie server-side
+  async logout() {
+    await apiClient.logout();
+    window.location.href = '/';
+  }
+};</pre></div>
+      </div>
+
+      <h3>Why Cookies Work Automatically</h3>
+      <p>All API calls from the frontend use <code>credentials: 'include'</code> in the underlying <code>fetch()</code> calls. This tells the browser to attach any matching cookies (including <code>fmcp_auth_token</code>) to every request &#x2014; without any JavaScript reading or transmitting the token value.</p>
+
+      <div class="ok-box">
+        <div class="box-icon">&#x1F512;</div>
+        <div class="box-text">
+          <strong>XSS safety:</strong> Because <code>fmcp_auth_token</code> is set with <code>httponly=True</code>, no JavaScript on the page &#x2014; including malicious injected scripts &#x2014; can read, copy, or exfiltrate the access token. This is the key security advantage of httpOnly cookies over <code>localStorage</code>.
+        </div>
+      </div>
+    `
+  },
+  {
+    id: 8,
+    title: "Security Features & Best Practices",
+    sub: "CSRF, XSS, timing attacks, headers, CORS, and troubleshooting",
+    content: `
+      <p>FluidMCP&#39;s auth implementation includes several layers of defense-in-depth. Here is a complete rundown of every security feature and when it applies.</p>
+
+      <h3>Security Mechanisms</h3>
+      <div class="cards">
+        <div class="card">
+          <div class="card-icon">&#x1F6E1;</div>
+          <div class="card-title">CSRF Protection</div>
+          <div class="card-text"><code>secrets.token_urlsafe(32)</code> state tokens stored in <code>_state_store</code> with 10-minute expiry. One-time use &#x2014; deleted on successful validation.<br><br><strong>&#x26A0;&#xFE0F; Multi-instance caveat:</strong> <code>_state_store</code> is an in-process Python dict (<code>routes.py</code> line 25). In multi-worker (<code>uvicorn --workers N</code>) or multi-replica Railway deployments, each process owns its own dict — a state token created by worker A will not be found by worker B, causing random CSRF login failures. For production multi-instance setups, use a single-worker deployment or replace <code>_state_store</code> with a shared Redis/DB-backed store.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F512;</div>
+          <div class="card-title">XSS Protection</div>
+          <div class="card-text"><code>httponly=True</code> on <code>fmcp_auth_token</code> cookie. Token is completely invisible to JavaScript. No <code>localStorage</code> or <code>sessionStorage</code> token storage.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x23F1;</div>
+          <div class="card-title">Timing Attack Prevention</div>
+          <div class="card-text"><code>secrets.compare_digest()</code> used in <code>dependencies.py :: get_current_user()</code> for constant-time bearer token comparison. Prevents timing side-channel attacks.</div>
+        </div>
+        <div class="card">
+          <div class="card-icon">&#x1F4CB;</div>
+          <div class="card-title">Security Headers</div>
+          <div class="card-text">Middleware in <code>server.py</code> adds CSP, <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, and <code>X-XSS-Protection: 1; mode=block</code> to all responses.</div>
+        </div>
+      </div>
+
+      <h3>OAuth &#x2192; Bearer Fallback (<code>dependencies.py</code>)</h3>
+      <p>The CLI enforces a mutex between <code>--secure</code> and <code>--auth0</code> — you cannot pass both flags at once. However, when environment variables are set directly (e.g. in Railway or Docker), both <code>FMCP_AUTH0_MODE=true</code> and <code>FMCP_SECURE_MODE=true</code> can be active simultaneously. In that case <code>get_current_user()</code> in <code>dependencies.py</code> applies a silent fallback:</p>
+      <ol>
+        <li>OAuth JWT validation is attempted first via <code>jwt_validator.py :: validate_oauth_jwt()</code>.</li>
+        <li>If it fails <strong>and</strong> <code>FMCP_SECURE_MODE=true</code>, bearer token validation is tried next.</li>
+        <li>If bearer also fails, a <code>401</code> is returned.</li>
+      </ol>
+      <p>This fallback is intentional for gradual auth migrations, but should be used deliberately. Avoid setting both env vars in production unless you understand the precedence.</p>
+
+      <h3>Security Headers (from <code>server.py :: add_security_headers</code>)</h3>
+      <div class="code-block">
+        <div class="code-header">
+          <span class="code-lang">python</span>
+          <span class="code-file">fluidmcp/cli/server.py</span>
+        </div>
+        <div class="code-body"><pre>@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    # Prevent XSS via Content Security Policy
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self' data:;"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"   # No MIME sniffing
+    response.headers["X-Frame-Options"]         = "DENY"      # No clickjacking
+    response.headers["X-XSS-Protection"]        = "1; mode=block"
+    response.headers["Referrer-Policy"]         = "strict-origin-when-cross-origin"
+    return response</pre></div>
+      </div>
+
+      <h3>CORS Auto-Configuration (<code>url_utils.py :: get_cors_origins()</code>)</h3>
+      <p>When <code>auth0_mode=True</code>, <code>create_app()</code> calls <code>get_cors_origins(port)</code> which builds the allowed origins list dynamically:</p>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Custom origins from <code>FMCP_ALLOWED_ORIGINS</code> env var</div>
+            <div class="flow-step-desc">Comma-separated list. Added first, highest explicit priority.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">2</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Auto-detected base URL</div>
+            <div class="flow-step-desc">Result of <code>get_base_url(port)</code> &#x2014; Codespaces URL, Gitpod URL, or localhost.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">3</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Localhost always included</div>
+            <div class="flow-step-desc"><code>http://localhost:{port}</code> and <code>http://127.0.0.1:{port}</code> are appended if not already present.</div>
+          </div>
+        </div>
+        <div class="flow-connector"></div>
+        <div class="flow-step">
+          <div class="flow-step-num">4</div>
+          <div class="flow-step-body">
+            <div class="flow-step-title">Codespaces wildcard for port forwarding</div>
+            <div class="flow-step-desc">In Codespaces, adds <code>https://&#x7B;codespace-name&#x7D;-*.app.github.dev</code> to handle port forwarding URL variations.</div>
+          </div>
+        </div>
+      </div>
+
+      <h3>Do&#39;s and Don&#39;ts</h3>
+      <div class="dos-donts">
+        <div class="dos-box">
+          <div class="dos-title">&#x2705; Do</div>
+          <div class="dos-item"><span>&#x2705;</span> Use <code>--auth0</code> for all browser-facing deployments with real users</div>
+          <div class="dos-item"><span>&#x2705;</span> Set <code>FMCP_AUTH0_AUDIENCE</code> to prevent audience confusion attacks</div>
+          <div class="dos-item"><span>&#x2705;</span> Set <code>FMCP_BEARER_TOKEN</code> explicitly &#x2014; don&#39;t rely on auto-generated tokens in production</div>
+          <div class="dos-item"><span>&#x2705;</span> Add your callback URL to Auth0 dashboard&#39;s Allowed Callback URLs before testing</div>
+          <div class="dos-item"><span>&#x2705;</span> Use <code>FMCP_BASE_URL</code> when the auto-detected URL is wrong (e.g. behind a reverse proxy)</div>
+        </div>
+        <div class="donts-box">
+          <div class="donts-title">&#x274C; Don&#39;t</div>
+          <div class="donts-item"><span>&#x274C;</span> Don&#39;t use <code>--allow-insecure</code> or disable secure in production</div>
+          <div class="donts-item"><span>&#x274C;</span> Don&#39;t combine <code>--secure --auth0</code> &#x2014; currently blocked by the CLI</div>
+          <div class="donts-item"><span>&#x274C;</span> Don&#39;t store tokens in <code>localStorage</code> &#x2014; use httpOnly cookies</div>
+          <div class="donts-item"><span>&#x274C;</span> Don&#39;t expose <code>FMCP_AUTH0_CLIENT_SECRET</code> to the frontend or commit it to git</div>
+          <div class="donts-item"><span>&#x274C;</span> Don&#39;t use CORS wildcard (<code>*</code>) in production &#x2014; it breaks cookie-based auth</div>
+        </div>
+      </div>
+
+      <h3>Common Troubleshooting</h3>
+      <table class="data-table">
+        <thead>
+          <tr><th>Symptom</th><th>Likely Cause</th><th>Fix</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>500 on <code>/auth/login</code>: &ldquo;OAuth not configured&rdquo;</td>
+            <td>Missing <code>FMCP_AUTH0_*</code> env vars</td>
+            <td>Set all 4 required env vars and restart with <code>--auth0</code></td>
+          </tr>
+          <tr>
+            <td>400: &ldquo;Invalid state parameter&rdquo;</td>
+            <td>CSRF state expired or reused (browser cached old callback URL)</td>
+            <td>Clear browser cookies and retry. State expires after 10 minutes.</td>
+          </tr>
+          <tr>
+            <td>JWT: &ldquo;Invalid audience&rdquo;</td>
+            <td><code>FMCP_AUTH0_AUDIENCE</code> mismatch between token and validation</td>
+            <td>Ensure audience matches exactly between Auth0 API settings and env var</td>
+          </tr>
+          <tr>
+            <td>Cookie not sent to API calls</td>
+            <td>API client missing <code>credentials: 'include'</code> or CORS wildcard</td>
+            <td>Add <code>credentials: 'include'</code> to fetch. Never use CORS <code>*</code> with credentials.</td>
+          </tr>
+          <tr>
+            <td>JWKS fetch failures on startup</td>
+            <td>Wrong <code>FMCP_AUTH0_DOMAIN</code> or network connectivity issue</td>
+            <td>Verify domain is reachable: <code>curl https://&#x7B;domain&#x7D;/.well-known/jwks.json</code></td>
+          </tr>
+          <tr>
+            <td>Login works locally, fails on Codespaces</td>
+            <td>Auth0 Allowed Callback URL not updated after Codespace restart</td>
+            <td>Re-run <code>fmcp serve --auth0</code> (prints new URL) and update Auth0 dashboard</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="ok-box">
+        <div class="box-icon">&#x1F680;</div>
+        <div class="box-text">
+          <strong>You&#39;ve completed the Auth0 OAuth tutorial!</strong> You now understand the full authentication pipeline: from env configuration and URL detection, through the OAuth authorization code flow, JWT validation with JWKS caching, the unified <code>get_current_user()</code> dependency, frontend AuthContext integration, and the security layer protecting every deployment.
+        </div>
+      </div>
+    `
+  }
+];
+
+// ─── Render ────────────────────────────────────────────────────────────────
+const nav  = document.getElementById('nav');
+const main = document.getElementById('main');
+
+lessons.forEach((l, i) => {
+  // Nav item
+  const ni = document.createElement('div');
+  ni.className = 'nav-item' + (i === 0 ? ' active' : '') + (done.includes(l.id) ? ' done' : '');
+  ni.dataset.idx = i;
+  ni.innerHTML = `
+    <div class="nav-badge">${done.includes(l.id) ? '&#x2713;' : l.id}</div>
+    <div class="nav-label">${l.title}</div>
+  `;
+  ni.addEventListener('click', () => showLesson(i));
+  nav.appendChild(ni);
+
+  // Lesson section
+  const sec = document.createElement('section');
+  sec.className = 'lesson' + (i === 0 ? ' active' : '');
+  sec.dataset.id = l.id;
+
+  const isDone = done.includes(l.id);
+  const prevBtn = i > 0
+    ? `<button class="nav-btn" onclick="showLesson(${i - 1})">&#x2190; ${lessons[i-1].title}</button>`
+    : `<button class="nav-btn" disabled>&#x2190; Previous</button>`;
+  const nextBtn = i < lessons.length - 1
+    ? `<button class="nav-btn primary" onclick="showLesson(${i + 1})">${lessons[i+1].title} &#x2192;</button>`
+    : `<button class="nav-btn primary" disabled>&#x2714; All lessons complete</button>`;
+
+  sec.innerHTML = `
+    <div class="lesson-badge">&#x1F510; Lesson ${l.id} of ${lessons.length}</div>
+    <h1 class="lesson-title">${l.title}</h1>
+    <p class="lesson-subtitle">${l.sub}</p>
+    ${l.content}
+    <div class="lesson-footer">
+      ${prevBtn}
+      <button
+        class="complete-btn${isDone ? ' done' : ''}"
+        id="btn-${l.id}"
+        onclick="markDone(${l.id}, this)">
+        ${isDone ? '&#x2713; Completed' : 'Mark Complete'}
+      </button>
+      ${nextBtn}
+    </div>
+  `;
+  main.appendChild(sec);
+});
+
+updateProgress();
+
+function showLesson(idx) {
+  currentIdx = idx;
+
+  // Update nav
+  document.querySelectorAll('.nav-item').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+
+  // Update sections
+  document.querySelectorAll('.lesson').forEach((el, i) => {
+    el.classList.toggle('active', i === idx);
+  });
+
+  // Scroll main to top
+  document.getElementById('main').scrollTop = 0;
+}
+
+function markDone(id, btn) {
+  if (!done.includes(id)) {
+    done.push(id);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(done));
+  }
+  btn.textContent = '✓ Completed';
+  btn.className = 'complete-btn done';
+
+  // Update nav badge
+  document.querySelectorAll('.nav-item').forEach(el => {
+    const lessonId = lessons[parseInt(el.dataset.idx)].id;
+    if (lessonId === id) {
+      el.classList.add('done');
+      el.querySelector('.nav-badge').innerHTML = '&#x2713;';
+    }
+  });
+
+  updateProgress();
+}
+
+function updateProgress() {
+  const pct = Math.round((done.length / lessons.length) * 100);
+  document.getElementById('prog-fill').style.width = pct + '%';
+  document.getElementById('prog-label').textContent = done.length + ' / ' + lessons.length;
+}
+</script>
+</body>
+</html>
