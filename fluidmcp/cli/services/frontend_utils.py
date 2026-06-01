@@ -162,9 +162,26 @@ def setup_frontend_routes(
         # SPA catch-all: any /ui/{path} that isn't a real file gets index.html.
         # Starlette's StaticFiles(html=True) falls back to 404.html (not index.html)
         # when a path doesn't match a file, so deep-links like /ui/status would 404.
+        #
+        # SECURITY: Path traversal protection
+        # User-controlled path segments like "../../../etc/passwd" are resolved and
+        # checked to ensure they stay within frontend_dist before serving.
         @app.get("/ui/{path:path}", include_in_schema=False)
         async def ui_spa(path: str):
-            candidate = frontend_dist / path
+            # Build candidate path and resolve it to absolute form
+            candidate = (frontend_dist / path).resolve()
+            frontend_dist_resolved = frontend_dist.resolve()
+
+            # Containment check: ensure resolved path is under frontend_dist
+            # This prevents path traversal attacks (e.g., /ui/../../../etc/passwd)
+            try:
+                candidate.relative_to(frontend_dist_resolved)
+            except ValueError:
+                # Path escaped frontend_dist - serve index.html instead of error
+                # (error would leak information about server filesystem structure)
+                return FileResponse(str(index_html))
+
+            # Safe to serve: path is contained within frontend_dist
             if candidate.exists() and candidate.is_file():
                 return FileResponse(str(candidate))
             return FileResponse(str(index_html))
