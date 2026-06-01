@@ -19,20 +19,20 @@ from .url_utils import (
 )
 
 # Import verify_token from parent auth.py for backwards compatibility
-import sys
-from pathlib import Path
-
-# Import verify_token from the auth.py module (not this package)
-parent_path = Path(__file__).parent.parent
-if str(parent_path) not in sys.path:
-    sys.path.insert(0, str(parent_path))
-
-try:
-    from ..auth import verify_token
-except ImportError:
-    # Fallback: define a simple verify_token stub
-    def verify_token(*args, **kwargs):
-        pass
+#
+# SECURITY: No fallback - fail closed if import fails
+#
+# Import resolution: When server.py does `from .auth import verify_token`,
+# Python resolves .auth to this package (__init__.py), not auth.py module.
+# We re-export verify_token from the auth.py module here.
+#
+# The verify_token function enforces secure-mode bearer token authentication
+# for protected endpoints like /metrics. If this import fails, the server
+# will fail to start rather than silently bypass authentication.
+#
+# DO NOT add a fallback stub here - that would create a security vulnerability
+# by allowing protected endpoints to be accessed without authentication.
+from ..auth import verify_token
 
 __all__ = [
     # Configuration
