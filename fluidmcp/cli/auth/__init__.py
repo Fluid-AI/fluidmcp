@@ -18,21 +18,12 @@ from .url_utils import (
     print_auth_urls
 )
 
-# Import verify_token from parent auth.py for backwards compatibility
-#
-# SECURITY: No fallback - fail closed if import fails
-#
-# Import resolution: When server.py does `from .auth import verify_token`,
-# Python resolves .auth to this package (__init__.py), not auth.py module.
-# We re-export verify_token from the auth.py module here.
-#
-# The verify_token function enforces secure-mode bearer token authentication
-# for protected endpoints like /metrics. If this import fails, the server
-# will fail to start rather than silently bypass authentication.
-#
-# DO NOT add a fallback stub here - that would create a security vulnerability
-# by allowing protected endpoints to be accessed without authentication.
-from ..auth import verify_token
+# Bearer token authentication - imported from bearer.py inside this package.
+# The auth/ package directory shadows the auth.py module at the same level,
+# so `from ..auth import verify_token` would resolve back to this package
+# (circular) and never reach auth.py. Defining the verifier in bearer.py and
+# re-exporting it here makes the import path unambiguous.
+from .bearer import verify_token, get_token
 
 __all__ = [
     # Configuration
@@ -62,4 +53,5 @@ __all__ = [
 
     # Bearer token auth
     "verify_token",
+    "get_token",
 ]
