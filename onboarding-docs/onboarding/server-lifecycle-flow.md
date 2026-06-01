@@ -32,8 +32,11 @@ Start / Stop / Restart:
 │  useServerManagement().addServer(config):                           │
 │    → setLoading(true)                                               │
 │    → apiClient.addServer({                                          │
-│        server_id: "my-server",                                      │
-│        config: { command, args, env }                               │
+│        id: "my-server",                                             │
+│        name: "My Server",                                           │
+│        command: "npx",                                              │
+│        args: ["-y", "@package/server"],                             │
+│        env: {}                                                      │
 │      })                                                             │
 │         POST /api/servers                                           │
 └─────────────────────────────────────┬───────────────────────────────┘
@@ -69,7 +72,9 @@ Start / Stop / Restart:
 │  useServerManagement().updateServer(serverId, config):              │
 │    → setLoading(true)                                               │
 │    → apiClient.updateServer(serverId, {                             │
-│        config: { command, args, env }                               │
+│        command: "npx",                                              │
+│        args: ["-y", "@package/server"],                             │
+│        env: {}                                                      │
 │      })                                                             │
 │         PUT /api/servers/:id                                        │
 └─────────────────────────────────────┬───────────────────────────────┘
@@ -264,7 +269,7 @@ Clicking "Delete" on a server row opens a `DeleteConfirmationModal` with two dis
 
 ## Restart Flow
 
-Restart is a sequential Stop → Start on the same config. The config is re-read from the in-memory registry (originally loaded from MongoDB), so any instance-level env edits made via the Environment tab are discarded on restart.
+Restart is a sequential Stop → Start. The base config is re-read from the in-memory registry (originally loaded from MongoDB), then merged with any persisted instance-level env vars from the `fluidmcp_server_instances` collection. Instance env vars persist across restarts and take precedence over the config template env vars.
 
 ```
 POST /api/servers/:id/restart
@@ -321,10 +326,10 @@ POST /api/servers/:id/restart
 ## Important Behaviours
 
 **Config is stored once at Add time.**  
-Start/Stop/Restart reuse the same config from MongoDB. The only way to change the persisted config is to edit it via the ManageServers form (PUT `/api/servers/:id`).
+Start/Stop/Restart reuse the same base config from MongoDB. The only way to change the persisted base config is to edit it via the ManageServers form (PUT `/api/servers/:id`).
 
-**Restart resets instance env edits.**  
-Env vars edited through the Environment tab are applied to the running instance only and are lost on restart. See [env-variables-flow.md](env-variables-flow.md) for details.
+**Instance env vars persist across restarts.**  
+Env vars edited through the Environment tab are persisted to the `fluidmcp_server_instances` collection in MongoDB and survive restarts. When a server starts, instance env vars are merged with (and take precedence over) the base config env vars. See [env-variables-flow.md](env-variables-flow.md) for details.
 
 **Status polling.**  
 Dashboard cards call `GET /api/servers` on a short polling interval so the status badge stays current without a manual refresh.

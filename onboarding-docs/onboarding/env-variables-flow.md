@@ -98,8 +98,10 @@ The actual value is never sent to the frontend — only the masked representatio
 ┌─────────────────────────────────────────────────────────────────────┐
 │  FASTAPI GATEWAY                                                    │
 │    → validates bearer token                                         │
-│    → updates env vars on the running server instance in             │
-│      ServerManager (in-memory) + persists to MongoDB                │
+│    → validates and filters env vars (removes placeholders)          │
+│    → persists to MongoDB (fluidmcp_server_instances collection)     │
+│    → if server is running: automatically restarts it to apply       │
+│      new env vars (with rollback on restart failure)                │
 │    → returns { message: "...", env_updated: true }                  │
 └─────────────────────────────────────┬───────────────────────────────┘
                                       │ HTTP 200
@@ -132,11 +134,15 @@ The actual value is never sent to the frontend — only the masked representatio
 **Values are never shown in plain text.**  
 The backend only returns masked values (`"****"`). The frontend never has access to the actual secret. When a user edits a field and saves, the new value is sent once over HTTPS and immediately masked again in the response.
 
-**Env edits apply to the running instance only — the stored config is not changed.**  
-`PUT /api/servers/:id/instance/env` patches the in-memory state of the running process. The config saved in MongoDB (added via ManageServers) is left untouched. If the server is stopped and restarted, the original env values from the stored config are used again and any instance edits are lost.
+**Env edits are persisted to MongoDB and survive restarts.**  
+`PUT /api/servers/:id/instance/env` saves the env vars to the `fluidmcp_server_instances` collection in MongoDB. These values persist across server restarts and are merged with the base config env vars (from `fluidmcp_servers` collection) when the server starts. Instance env vars take precedence over config template env vars.
 
-**Updating env vars does not restart the server.**  
-The update patches the in-memory config only. For the new values to take effect in the MCP subprocess, the server needs to be restarted separately (via the Stop → Start buttons on ServerDetails or ManageServers).
+**Updating env vars automatically restarts running servers.**  
+When you update env vars via `PUT /api/servers/:id/instance/env`, if the server is currently running, it will be automatically restarted to apply the new environment variables. If the restart fails, the changes are rolled back to prevent the server from being left in a broken state.
+
+**Two-layer env var storage.**  
+- **Config template env** (`fluidmcp_servers` collection): Set when adding/editing server via ManageServers form
+- **Instance env** (`fluidmcp_server_instances` collection): Set via Environment tab, persists across restarts, takes precedence
 
 **Required vs optional.**  
 Fields marked `required: true` show a badge in the UI. If a required var is not `present`, the UI surfaces it visually so the user knows the server may not work correctly.
