@@ -199,6 +199,8 @@ class ApiClient {
   // Authentication APIs
   async getAuthConfig(options?: { signal?: AbortSignal }): Promise<any> {
     return this.request('/auth/config', options);
+  }
+
   // LLM Model Management APIs
   async listLLMModels(options?: { signal?: AbortSignal }): Promise<LLMModelsListResponse> {
     return this.request<LLMModelsListResponse>('/api/llm/models', options);
@@ -280,12 +282,6 @@ class ApiClient {
   }
 
   // Server Configuration Management (CRUD)
-  async addServer(config: any): Promise<{ message: string; id: string; name: string }> {
-    return this.request('/api/servers', {
-      method: 'POST',
-      body: JSON.stringify(config),
-    });
-  }
 
   async getCurrentUser(options?: { signal?: AbortSignal }): Promise<any> {
     return this.request('/auth/me', options);

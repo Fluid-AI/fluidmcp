@@ -9,7 +9,6 @@ import { ServerEnvForm } from "../components/ServerEnvForm";
 import { showSuccess, showError, showLoading } from "../services/toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
-import { Navbar } from "@/components/Navbar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "../contexts/AuthContext";
 

@@ -11,7 +11,6 @@ import { useAuth } from "./contexts/AuthContext";
 import LLMModels from "./pages/LLMModels";
 import LLMModelDetails from "./pages/LLMModelDetails";
 import LLMPlayground from "./pages/LLMPlayground";
-import ManageServers from "./pages/ManageServers";
 import MCPInspector from "./pages/MCPInspector";
 
 function App() {
