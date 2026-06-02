@@ -402,6 +402,36 @@ def create_dynamic_router(server_manager):
             _io_locks[name] = asyncio.Lock()
         return _io_locks[name]
 
+    async def auto_start_stopped_server(server_name: str) -> None:
+        """
+        Auto-start a stopped/idle-cleaned server if it has a valid, enabled config in the DB.
+
+        Raises HTTPException 404 if no config exists or server is disabled.
+        Raises HTTPException 503 if auto-start fails.
+        Does nothing if the server is already running.
+        """
+        # Fast path: process is alive, nothing to do
+        process = server_manager.processes.get(server_name)
+        if process is not None and process.poll() is None:
+            return
+
+        # No running process — check DB for a valid, enabled config
+        if server_manager.db is None:
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+
+        config = await server_manager.db.get_server_config(server_name)
+        if not config or config.get("deleted_at"):
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        if not config.get("enabled", True):
+            raise HTTPException(404, f"Server '{server_name}' is disabled")
+
+        safe_name = server_name.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_name}' on demand")
+        # Pass config so start_server skips a redundant DB fetch
+        started = await server_manager.start_server(server_name, config=config)
+        if not started:
+            raise HTTPException(503, f"Server '{server_name}' failed to auto-start")
+
     @router.post("/{server_name}/mcp", tags=["mcp"])
     async def proxy_jsonrpc(
         server_name: str,
@@ -431,15 +461,11 @@ def create_dynamic_router(server_manager):
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
-            # Check if server exists
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+            await auto_start_stopped_server(server_name)
 
-            process = server_manager.processes[server_name]
-
-            # Check if process is alive
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+            process = server_manager.processes.get(server_name)
+            if process is None:
+                raise HTTPException(503, f"Server '{server_name}' failed to start")
 
             # ── SSE transport: forward via HTTP ─────────────────────────────
             if isinstance(process, SseSubprocessHandle):
@@ -492,9 +518,6 @@ def create_dynamic_router(server_manager):
         """
         Server-Sent Events streaming endpoint for long-running MCP operations.
         """
-        # Update last_used_at for idle cleanup when SSE connection is opened
-        await server_manager.update_last_used(server_name)
-
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
@@ -503,6 +526,8 @@ def create_dynamic_router(server_manager):
         # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
         # in RequestTimer because they represent pre-flight validation failures that occur
         # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
+        # auto_start_stopped_server may auto-start a stopped server here; if it raises,
+        # the error is still a pre-flight failure before any streaming begins.
         #
         # These errors are observable through:
         # 1. FastAPI's built-in HTTP error logs
@@ -516,13 +541,14 @@ def create_dynamic_router(server_manager):
         #
         # Current implementation prioritizes clarity by separating HTTP validation from
         # MCP protocol errors tracked via RequestTimer.
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
+        # Update last_used_at for idle cleanup when SSE connection is opened
+        await server_manager.update_last_used(server_name)
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
@@ -636,13 +662,11 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
-
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         # ── SSE transport ────────────────────────────────────────────────────
         if isinstance(process, SseSubprocessHandle):
@@ -704,13 +728,11 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
-
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         # ── SSE transport ────────────────────────────────────────────────────
         if isinstance(process, SseSubprocessHandle):

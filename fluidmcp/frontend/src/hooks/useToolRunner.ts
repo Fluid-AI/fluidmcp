@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiClient } from '../services/api';
 import { toolHistoryService } from '../services/toolHistory';
+import { showLoading, showError, dismissToast } from '../services/toast';
 import type { ToolExecution } from '../services/toolHistory';
 
 interface UseToolRunnerResult {
@@ -57,11 +58,21 @@ export function useToolRunner(
         setExecutionTime(null);
       }
 
+      const toastId = `tool-run-${serverId}-${toolName}`;
       const startTime = performance.now();
 
       try {
+        // Check if server is stopped before running — show a loading toast since
+        // the backend may auto-start it, which takes several seconds
+        const serverStatus = await apiClient.getServerStatus(serverId);
+        if (serverStatus.state !== 'running') {
+          showLoading(`Starting server "${serverName}"...`, toastId);
+        }
+
         const response = await apiClient.runTool(serverId, toolName, args);
         const endTime = performance.now();
+
+        dismissToast(toastId);
         const duration = (endTime - startTime) / 1000; // Convert to seconds
 
         if (isMountedRef.current) {
@@ -89,6 +100,8 @@ export function useToolRunner(
         const duration = (endTime - startTime) / 1000;
 
         const errorMessage = err.message || 'Failed to execute tool';
+
+        showError(errorMessage, toastId);
 
         if (isMountedRef.current) {
           setError(errorMessage);

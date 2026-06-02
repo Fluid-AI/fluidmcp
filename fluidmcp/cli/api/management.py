@@ -1955,13 +1955,23 @@ async def run_tool(
     """
     manager = get_server_manager(request)
 
-    # Check if server is running
-    if id not in manager.processes:
-        raise HTTPException(400, f"Server '{id}' is not running")
+    # Auto-start the server if it's stopped but has a valid, enabled config
+    if id not in manager.processes or manager.processes[id].poll() is not None:
+        if manager.db is None:
+            raise HTTPException(400, f"Server '{id}' is not running")
+        config = await manager.db.get_server_config(id)
+        if not config or config.get("deleted_at") or not config.get("enabled", True):
+            raise HTTPException(400, f"Server '{id}' is not running")
+        safe_id = id.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_id}' on demand")
+        # Pass config so start_server skips a redundant DB fetch
+        started = await manager.start_server(id, config=config)
+        if not started:
+            raise HTTPException(400, f"Server '{id}' failed to auto-start")
 
-    process = manager.processes[id]
-    if process.poll() is not None:
-        raise HTTPException(400, f"Server '{id}' has stopped")
+    process = manager.processes.get(id)
+    if process is None:
+        raise HTTPException(503, f"Server '{id}' failed to start")
 
     # Send tools/call request
     try:
