@@ -670,3 +670,58 @@ class TestEdgeCases:
         # Unicode in env values should be accepted
         env = {"MESSAGE": "Hello 世界"}
         assert validate_env_dict(env) is True
+
+
+def _make_github_request(server_id: str) -> AddServerFromGitHubRequest:
+    return AddServerFromGitHubRequest(server_id=server_id, github_repo="owner/repo")
+
+
+class TestServerIdValidation:
+    """Test server ID validation via the live Pydantic model in api.py."""
+
+    def test_valid_hyphens(self):
+        _make_github_request("my-server")
+        _make_github_request("pdf-to-excel")
+
+    def test_valid_underscores(self):
+        _make_github_request("pdf_to_excel_lic")
+        _make_github_request("my_server")
+
+    def test_valid_mixed_hyphens_and_underscores(self):
+        _make_github_request("my_pdf-server")
+        _make_github_request("tool_v2-prod")
+
+    def test_valid_numbers(self):
+        _make_github_request("server123")
+        _make_github_request("server-2")
+        _make_github_request("server_v2")
+
+    def test_valid_simple_lowercase(self):
+        _make_github_request("filesystem")
+        _make_github_request("memory")
+
+    def test_invalid_uppercase(self):
+        with pytest.raises(ValidationError):
+            _make_github_request("MyServer")
+        with pytest.raises(ValidationError):
+            _make_github_request("PDF_to_excel")
+
+    def test_invalid_spaces(self):
+        with pytest.raises(ValidationError):
+            _make_github_request("my server")
+        with pytest.raises(ValidationError):
+            _make_github_request(" server")
+
+    def test_invalid_special_characters(self):
+        with pytest.raises(ValidationError):
+            _make_github_request("my@server")
+        with pytest.raises(ValidationError):
+            _make_github_request("server.name")
+        with pytest.raises(ValidationError):
+            _make_github_request("server/path")
+        with pytest.raises(ValidationError):
+            _make_github_request("server:8080")
+
+    def test_invalid_empty_string(self):
+        with pytest.raises(ValidationError):
+            _make_github_request("")

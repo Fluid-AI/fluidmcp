@@ -112,6 +112,12 @@ class InMemoryBackend(PersistenceBackend):
             return dict(state)
         return None
 
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """Delete instance state for a server from memory."""
+        self._instances.pop(server_id, None)
+        return True
+
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """Save log to memory (capped at 1000 lines per server)."""
         server_name = log_entry.get("server_name")
