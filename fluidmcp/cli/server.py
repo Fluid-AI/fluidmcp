@@ -698,7 +698,9 @@ async def main(args):
         host=args.host,
         port=args.port,
         loop="asyncio",
-        log_level="info"
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
         # Note: Uvicorn doesn't provide a direct body size limit parameter
         # For production, configure limits at reverse proxy level (Nginx, Cloudflare, etc.)
     )

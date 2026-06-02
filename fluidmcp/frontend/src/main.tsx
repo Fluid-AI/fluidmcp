@@ -11,7 +11,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
       <div className="min-h-screen bg-background font-sans antialiased" style={{ fontFamily: 'Inter, sans-serif' }}>
-        <BrowserRouter>
+        <BrowserRouter basename="/ui">
           <App />
         </BrowserRouter>
       </div>
