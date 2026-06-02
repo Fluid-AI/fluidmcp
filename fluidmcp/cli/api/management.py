@@ -1025,6 +1025,20 @@ async def add_server_from_github(
                     f"Choose a different Server ID and try again.",
                 )
 
+            # On re-clone (upsert), sync new env var keys from the updated config
+            # template into the instance env. Only add keys that are not already
+            # present so existing user-supplied values are never overwritten.
+            if upsert and existing_config:
+                template_env = server_config.get("env") or {}
+                if template_env:
+                    current_instance_env = await manager.db.get_instance_env(sid) or {}
+                    new_keys = {k: v for k, v in template_env.items() if k not in current_instance_env}
+                    if new_keys:
+                        if not await manager.db.update_instance_env(sid, new_keys):
+                            logger.warning(f"Failed to sync new env var(s) for '{sid}'")
+                        else:
+                            logger.info(f"Synced {len(new_keys)} new env var(s) to instance for '{sid}': {list(new_keys.keys())}")
+
             # Register in manager's in-memory configs for immediate availability
             manager.configs[sid] = server_config
             registered_ids.append(sid)
