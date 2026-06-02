@@ -170,11 +170,17 @@ class InMemoryBackend(PersistenceBackend):
             ts = event.get("timestamp")
             if ts is None:
                 continue
-            if hasattr(ts, "timestamp"):
+            from datetime import datetime as _dt, timezone as _tz
+            if isinstance(ts, _dt):
+                # Treat naive datetimes as UTC (they come from datetime.utcnow())
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
                 event_ts = ts.timestamp()
             elif isinstance(ts, str):
-                from datetime import datetime as _dt
-                event_ts = _dt.fromisoformat(ts).timestamp()
+                parsed = _dt.fromisoformat(ts)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                event_ts = parsed.timestamp()
             else:
                 event_ts = float(ts)
             if event_ts > since_ts:
