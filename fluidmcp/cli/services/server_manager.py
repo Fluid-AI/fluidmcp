@@ -2092,6 +2092,14 @@ class MCPHealthMonitor:
                 op_lock = self._sm._get_operation_lock(server_id)
                 async with op_lock:
                     if self._sm.processes.get(server_id) is process:
+                        process.terminate()
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(process.wait), timeout=10.0
+                            )
+                        except asyncio.TimeoutError:
+                            process.kill()
+                            await asyncio.to_thread(process.wait)
                         await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
                 return
 
@@ -2142,6 +2150,14 @@ class MCPHealthMonitor:
                 op_lock = self._sm._get_operation_lock(server_id)
                 async with op_lock:
                     if self._sm.processes.get(server_id) is process:
+                        process.terminate()
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(process.wait), timeout=10.0
+                            )
+                        except asyncio.TimeoutError:
+                            process.kill()
+                            await asyncio.to_thread(process.wait)
                         await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
         else:
             # Reset counter on any healthy cycle
