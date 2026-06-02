@@ -5,26 +5,22 @@
       "endpoints": {
         "base_url": "http://qwen-7b:8000/v1"
       },
-      "env": {}
+      "env": {
+        "VLLM_BASE_URL": "http://qwen-7b:8000/v1"
+      }
     }
   },
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem"
-      ],
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
       "env": {},
       "port": 8091,
       "install_path": "/home/coder/workspace/fluidmcp/.fmcp-packages/.temp_servers/filesystem"
     },
     "memory": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ],
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
       "env": {},
       "port": 8092,
       "install_path": "/home/coder/workspace/fluidmcp/.fmcp-packages/.temp_servers/memory"
