@@ -27,8 +27,19 @@ from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
-from .sse_handle import SseSubprocessHandle
+from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
+
+
+def _parse_mcp_response(resp) -> dict:
+    """Parse an MCP HTTP response that may be plain JSON or SSE-framed."""
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        raise Exception(f"No data line found in SSE response: {resp.text!r}")
+    return resp.json()
 
 
 def classify_exit_code(exit_code: int) -> Dict[str, str]:
@@ -122,14 +133,16 @@ class ServerManager:
 
         for server_id, process in list(self.processes.items()):
             try:
-                # Release allocated port for HTTP-transport servers
-                if isinstance(process, SseSubprocessHandle):
+                # Free the port and schedule pool closure. close_nowait() is used
+                # here because cleanup_all() is synchronous — it can't await.
+                if isinstance(process, NetworkSubprocessHandle):
                     try:
-                        parsed = urlparse(process.sse_url)
+                        parsed = urlparse(process.base_url)
                         if parsed.port:
                             self._release_port(parsed.port)
                     except Exception:
                         pass
+                    process.close_nowait()
 
                 if process.poll() is None:  # Process still running
                     logger.info(f"Terminating server '{server_id}' (PID: {process.pid})")
@@ -532,8 +545,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "running",
-                    "transport": "sse" if isinstance(process, SseSubprocessHandle) else "stdio",
-                    "url": process.sse_url if isinstance(process, SseSubprocessHandle) else None,
+                    "transport": process.transport if isinstance(process, NetworkSubprocessHandle) else "stdio",
+                    "url": process.base_url if isinstance(process, NetworkSubprocessHandle) else None,
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
@@ -667,7 +680,7 @@ class ServerManager:
             transport = config.get("transport", "stdio")
             if transport in ("sse", "http"):
                 running_process = self.processes.get(id)
-                runtime_url = running_process.sse_url if isinstance(running_process, SseSubprocessHandle) else None
+                runtime_url = running_process.base_url if isinstance(running_process, NetworkSubprocessHandle) else None
                 mcp_config = {
                     "transport": transport,
                     "url": runtime_url,
@@ -955,7 +968,7 @@ class ServerManager:
                     self._close_stderr_log(id)
                     logger.error(f"HTTP handshake failed for server '{name}' (id: {id})")
                     return None
-                logger.info(f"[{id}] HTTP server connected successfully")
+                logger.info(f"[{id}] HTTP (streamable-http) server connected successfully")
                 return handle
             # ── stdio transport: normal handshake ───────────────────────────
 
@@ -1060,14 +1073,14 @@ class ServerManager:
         id: str,
         port: int,
         process: subprocess.Popen,
-    ) -> Optional["SseSubprocessHandle"]:
+    ) -> Optional["NetworkSubprocessHandle"]:
         """
         Complete startup for a subprocess-owned SSE MCP server.
 
         After the process is spawned we:
           1. Poll until the HTTP server is accepting connections (max 30 s).
           2. Discover and cache tools via POST /messages/.
-          3. Return an SseSubprocessHandle wrapping the real Popen.
+          3. Return a NetworkSubprocessHandle wrapping the real Popen.
 
         Args:
             id:      Server identifier.
@@ -1075,7 +1088,7 @@ class ServerManager:
             process: The already-spawned subprocess.Popen.
 
         Returns:
-            SseSubprocessHandle on success, None on failure.
+            NetworkSubprocessHandle on success, None on failure.
         """
         import httpx
 
@@ -1124,41 +1137,198 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_sse(id, url)
+        await self._discover_and_cache_tools_network(id, url, session_id=None)
 
-        return SseSubprocessHandle(process=process, sse_url=url)
+        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
 
     async def _handshake_http_subprocess(
         self,
         id: str,
         port: int,
         process: subprocess.Popen,
-    ) -> Optional["SseSubprocessHandle"]:
-        """Handshake for streamable-http (POST /mcp) servers. Not yet implemented."""
-        logger.warning(f"[{id}] HTTP transport handshake not yet implemented")
-        return None
-
-    async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
+    ) -> Optional["NetworkSubprocessHandle"]:
         """
-        Discover tools from an SSE MCP server via HTTP and cache in database.
+        Complete startup for a subprocess-owned streamable-http MCP server.
 
-        SSE MCP servers expose a POST /messages/ endpoint that accepts
-        standard JSON-RPC 2.0 requests.
+        Polls POST {base_url}/mcp with an initialize request until the server
+        responds (max 30s, 1s interval), then discovers and caches tools.
 
         Args:
-            server_id: Server identifier.
-            base_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+            id:      Server identifier.
+            port:    The port allocated by _allocate_port() for this server.
+            process: The already-spawned subprocess.Popen.
+
+        Returns:
+            NetworkSubprocessHandle on success, None on failure.
         """
         import httpx
 
-        messages_url = f"{base_url.rstrip('/')}/messages/"
+        base_url = f"http://127.0.0.1:{port}"
+        name = self.configs.get(id, {}).get("name", id)
+        mcp_url = f"{base_url}/mcp"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "fluidmcp", "version": "1.0.0"},
+            },
+        }
+
+        # Check whether the server developer opted into FastMCP's stateless_http mode
+        # by setting FASTMCP_STATELESS_HTTP in the server's env config.
+        # Stateless mode means no initialize handshake and no session ID — every request
+        # is independent, which allows full concurrency. Any value other than "false"
+        # (including an empty string) is treated as opting in.
+        server_env = self.configs.get(id, {}).get("env") or {}
+        fastmcp_stateless_val = server_env.get("FASTMCP_STATELESS_HTTP")
+        stateless = (
+            fastmcp_stateless_val is not None
+            and str(fastmcp_stateless_val).lower() != "false"
+        )
+
+        if stateless:
+            logger.info(
+                f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+                f"stateless mode — skipping initialize handshake, waiting for HTTP readiness..."
+            )
+        else:
+            logger.info(
+                f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+                f"waiting for HTTP readiness at {mcp_url}..."
+            )
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 30
+        session_id = None
+
+        if stateless:
+            # Stateless mode: the server ignores session IDs, so we just wait until
+            # it responds to any valid request. tools/list is a safe probe that works
+            # without an initialized session.
+            readiness_payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            while loop.time() < deadline:
+                if process.poll() is not None:
+                    stderr_out = self._read_crash_stderr(id) or ""
+                    logger.error(
+                        f"[{id}] HTTP server process died before becoming ready "
+                        f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                    )
+                    return None
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.post(mcp_url, json=readiness_payload, headers=headers)
+                        if resp.is_success:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] Stateless HTTP server is ready at {base_url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            break
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"[{id}] HTTP server did not become ready within 30s")
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                return None
+        else:
+            # Stateful mode: send the MCP initialize request and capture the
+            # mcp-session-id the server returns. Every subsequent request to this
+            # server must include that header or the server will reject it with 400.
+            # After a successful initialize, send the notifications/initialized
+            # notification to complete the handshake.
+            while loop.time() < deadline:
+                if process.poll() is not None:
+                    stderr_out = self._read_crash_stderr(id) or ""
+                    logger.error(
+                        f"[{id}] HTTP server process died before becoming ready "
+                        f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                    )
+                    return None
+
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.post(mcp_url, json=init_payload, headers=headers)
+                        if resp.is_success:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] HTTP server is ready at {base_url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            session_id = resp.headers.get("mcp-session-id")
+                            _parse_mcp_response(resp)
+                            notif_headers = dict(headers)
+                            if session_id:
+                                notif_headers["Mcp-Session-Id"] = session_id
+                            await client.post(
+                                mcp_url,
+                                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                                headers=notif_headers,
+                            )
+                            break
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass  # Server not up yet — keep polling
+
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"[{id}] HTTP server did not become ready within 30s")
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                return None
+
+        # Discover and cache tools via POST /mcp
+        await self._discover_and_cache_tools_network(id, base_url, session_id=session_id)
+
+        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
+
+    async def _discover_and_cache_tools_network(
+        self, server_id: str, base_url: str, session_id: str = None
+    ) -> None:
+        """
+        Discover tools from an SSE or HTTP MCP server and cache in database.
+
+        For SSE servers (session_id=None), posts to /messages/ with no special headers.
+        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
+
+        Args:
+            server_id:  Server identifier.
+            base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
+            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
+        """
+        import httpx
+
+        if session_id is not None:
+            url = f"{base_url.rstrip('/')}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": session_id,
+            }
+        else:
+            url = f"{base_url.rstrip('/')}/messages/"
+            headers = {}
+
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(messages_url, json=tools_request)
+                resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                response = resp.json()
+                response = _parse_mcp_response(resp) if session_id is not None else resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
@@ -1168,25 +1338,25 @@ class ServerManager:
                     try:
                         await self.db.save_server_config(config)
                         logger.info(
-                            f"[SSE] Discovered and cached {len(tools)} tool(s) "
+                            f"Discovered and cached {len(tools)} tool(s) "
                             f"for server '{server_id}'"
                         )
                     except Exception as e:
                         logger.warning(
-                            f"[SSE] Failed to save tools for '{server_id}': {e}"
+                            f"Failed to save tools for '{server_id}': {e}"
                         )
                 else:
                     logger.warning(
-                        f"[SSE] Config not found for '{server_id}', cannot cache tools"
+                        f"Config not found for '{server_id}', cannot cache tools"
                     )
             else:
                 logger.warning(
-                    f"[SSE] No tools in response for server '{server_id}': {response}"
+                    f"No tools in response for server '{server_id}': {response}"
                 )
 
         except Exception as e:
             # Tool discovery failure must never abort server startup
-            logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
+            logger.warning(f"Tool discovery failed for '{server_id}': {e}")
 
     async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
         """
@@ -1199,13 +1369,18 @@ class ServerManager:
         """
         uptime = self.get_uptime(id)
 
-        # Release allocated port for HTTP-transport servers before removing from registry
+        # Free the port back to the pool and drain the shared httpx connection pool
+        # so stale TCP connections don't linger after the subprocess exits.
         process = self.processes.get(id)
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             try:
-                parsed = urlparse(process.sse_url)
+                parsed = urlparse(process.base_url)
                 if parsed.port:
                     self._release_port(parsed.port)
+            except Exception:
+                pass
+            try:
+                await process.aclose()
             except Exception:
                 pass
 
@@ -1642,7 +1817,7 @@ class MCPHealthMonitor:
         is_alive = True
 
         # Check process liveness
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             alive, reason = self._sm.health_checker.check_process_alive(process.pid)
             if not alive:
                 is_alive = False
@@ -1651,7 +1826,7 @@ class MCPHealthMonitor:
                     process.poll()
                 except Exception:
                     pass
-                logger.warning(f"MCP server '{server_id}' SSE process dead: {reason}")
+                logger.warning(f"MCP server '{server_id}' network process dead: {reason}")
         else:
             if process.poll() is not None:
                 is_alive = False
