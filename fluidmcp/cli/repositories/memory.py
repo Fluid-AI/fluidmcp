@@ -170,7 +170,13 @@ class InMemoryBackend(PersistenceBackend):
             ts = event.get("timestamp")
             if ts is None:
                 continue
-            event_ts = ts.timestamp() if hasattr(ts, "timestamp") else float(ts)
+            if hasattr(ts, "timestamp"):
+                event_ts = ts.timestamp()
+            elif isinstance(ts, str):
+                from datetime import datetime as _dt
+                event_ts = _dt.fromisoformat(ts).timestamp()
+            else:
+                event_ts = float(ts)
             if event_ts > since_ts:
                 count += 1
         return count
