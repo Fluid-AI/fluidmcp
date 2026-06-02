@@ -270,3 +270,58 @@ class TestGetServerStderr:
             assert "file" not in resp.json()
         finally:
             os.unlink(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Secure-mode auth tests
+# ---------------------------------------------------------------------------
+
+class TestSecureModeAuth:
+    """Both debug endpoints must require bearer token when FMCP_SECURE_MODE=true."""
+
+    def _make_secure_client(self, server_manager, backend):
+        app = make_app(server_manager, backend)
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_crashes_rejects_unauthenticated_in_secure_mode(self, server_manager, backend):
+        server_manager.configs["srv1"] = {"id": "srv1", "name": "Test"}
+        client = self._make_secure_client(server_manager, backend)
+
+        with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": "secret"}, clear=False):
+            resp = client.get("/api/servers/srv1/crashes")
+
+        assert resp.status_code == 401
+
+    def test_crashes_accepts_valid_token_in_secure_mode(self, server_manager, backend):
+        server_manager.configs["srv1"] = {"id": "srv1", "name": "Test"}
+        client = self._make_secure_client(server_manager, backend)
+
+        with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": "secret"}, clear=False):
+            resp = client.get(
+                "/api/servers/srv1/crashes",
+                headers={"Authorization": "Bearer secret"},
+            )
+
+        assert resp.status_code == 200
+
+    def test_stderr_rejects_unauthenticated_in_secure_mode(self, server_manager, backend):
+        server_manager.configs["srv1"] = {"id": "srv1", "name": "Test"}
+        client = self._make_secure_client(server_manager, backend)
+
+        with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": "secret"}, clear=False):
+            resp = client.get("/api/servers/srv1/stderr")
+
+        assert resp.status_code == 401
+
+    def test_stderr_accepts_valid_token_in_secure_mode(self, server_manager, backend):
+        server_manager.configs["srv1"] = {"id": "srv1", "name": "Test"}
+        client = self._make_secure_client(server_manager, backend)
+
+        with patch.dict(os.environ, {"FMCP_SECURE_MODE": "true", "FMCP_BEARER_TOKEN": "secret"}, clear=False):
+            with patch.object(server_manager, "_get_stderr_log_path", return_value="/nonexistent.log"):
+                resp = client.get(
+                    "/api/servers/srv1/stderr",
+                    headers={"Authorization": "Bearer secret"},
+                )
+
+        assert resp.status_code == 200

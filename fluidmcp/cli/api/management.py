@@ -1710,6 +1710,7 @@ async def get_server_crashes(
     request: Request,
     id: str,
     limit: int = Query(20, ge=1, le=100, description="Max crash events to return"),
+    token: str = Depends(get_token),
 ):
     manager = get_server_manager(request)
 
@@ -1757,6 +1758,7 @@ async def get_server_stderr(
     id: str,
     lines: int = Query(50, ge=1, le=500, description="Number of recent lines to read"),
     contains: Optional[str] = Query(None, description="Case-insensitive substring filter"),
+    token: str = Depends(get_token),
 ):
     manager = get_server_manager(request)
 
