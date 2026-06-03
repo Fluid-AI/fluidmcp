@@ -1455,6 +1455,32 @@ async def proxy_sse(
     internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
     sse_url = f"{internal_url}/sse"
 
+    async def event_stream():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", sse_url, headers={"Accept": "text/event-stream"}) as response:
+                    if response.status_code != 200:
+                        yield f"event: error\ndata: SSE server returned {response.status_code}\n\n".encode()
+                        return
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+        except httpx.ConnectError:
+            yield b"event: error\ndata: SSE server is not running or not reachable\n\n"
+        except Exception as e:
+            logger.error(f"SSE proxy error for '{id}': {e}")
+            yield f"event: error\ndata: {str(e)}\n\n".encode()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disables nginx/Railway proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
 def _get_env_metadata(config: Dict[str, Any], env_key: str) -> Dict[str, Any]:
     """
     Get metadata for a specific environment variable from config.
@@ -1603,33 +1629,7 @@ async def update_server_instance_env(
     user_id = user["user_id"]  # Extract user ID from context
     manager = get_server_manager(request)
 
-    # Validate env_data types (FastAPI type hints don't guarantee runtime type safety)
-    for key, value in env_data.items():
-        if not isinstance(key, str):
-            raise HTTPException(400, f"Environment variable name must be string, got {type(key).__name__}")
-        if value is not None and not isinstance(value, str):
-            raise HTTPException(400, f"Environment variable '{key}' value must be string, got {type(value).__name__}")
-
-    # Validate env variable names STRICTLY
-    for key in env_data.keys():
-        if not ENV_NAME_PATTERN.match(key):
-            raise HTTPException(
-                400,
-                ENV_NAME_INVALID_MSG.format(key)
-            )
-
-    # Validate env variable values LOOSELY
-    for key, value in env_data.items():
-        if value is None:
-            continue
-
-        # Reject null bytes
-        if '\x00' in value:
-            raise HTTPException(400, ENV_VALUE_NULL_BYTE_MSG)
-
-        # Max length check
-        if len(value) > ENV_VALUE_MAX_LENGTH:
-            raise HTTPException(400, ENV_VALUE_TOO_LONG_MSG)
+    validate_env_variables(env_data)
 
     # Check if server exists
     config = await manager.db.get_server_config(id)
@@ -1692,32 +1692,6 @@ async def update_server_instance_env(
         "message": f"Environment variables updated for server '{id}'.{restart_message}",
         "env_updated": True
     }
-
-
-    async def event_stream():
-        try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("GET", sse_url, headers={"Accept": "text/event-stream"}) as response:
-                    if response.status_code != 200:
-                        yield f"event: error\ndata: SSE server returned {response.status_code}\n\n".encode()
-                        return
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
-        except httpx.ConnectError:
-            yield b"event: error\ndata: SSE server is not running or not reachable\n\n"
-        except Exception as e:
-            logger.error(f"SSE proxy error for '{id}': {e}")
-            yield f"event: error\ndata: {str(e)}\n\n".encode()
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # disables nginx/Railway proxy buffering
-            "Connection": "keep-alive",
-        },
-    )
 
 
 @router.post("/servers/{id}/messages")

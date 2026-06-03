@@ -52,8 +52,6 @@ def save_token_to_file(token: str) -> Path:
     logger.info(f"Token saved to: {token_file}")
     return token_file
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, host: str = "0.0.0.0", port: int = 8099, auth0_mode: bool = False) -> FastAPI:
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -806,7 +804,7 @@ def run():
         else:
             # Generate new token
             args.token = secrets.token_urlsafe(32)
-            logger.info(f"Generated bearer token: {args.token}")
+            logger.info(f"Bearer token generated (starts with: {args.token[:4]}****)")
 
             # Save to secure file
             token_file = save_token_to_file(args.token)

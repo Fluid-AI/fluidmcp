@@ -17,6 +17,7 @@ from .url_utils import (
     get_environment_info,
     print_auth_urls
 )
+from .bearer import verify_token, get_token
 
 __all__ = [
     # Configuration
@@ -43,4 +44,8 @@ __all__ = [
     "get_cors_origins",
     "get_environment_info",
     "print_auth_urls",
+
+    # Legacy bearer token auth
+    "verify_token",
+    "get_token",
 ]

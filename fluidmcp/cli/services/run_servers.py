@@ -1124,10 +1124,16 @@ def _add_metrics_endpoint(app: FastAPI) -> None:
     Args:
         app: FastAPI application instance
     """
+    import os as _os
+    from fastapi import Depends
     from fastapi.responses import PlainTextResponse
     from .metrics import get_registry, MetricsCollector
+    from ..auth import verify_token
 
-    @app.get("/metrics", tags=["monitoring"])
+    _auth_enabled = _os.getenv("FMCP_SECURE_MODE") == "true" or _os.getenv("FMCP_AUTH0_MODE") == "true"
+    _deps = [Depends(verify_token)] if _auth_enabled else []
+
+    @app.get("/metrics", tags=["monitoring"], dependencies=_deps)
     async def metrics():
         """
         Prometheus-compatible metrics endpoint.
