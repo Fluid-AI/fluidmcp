@@ -1081,20 +1081,9 @@ def create_dynamic_router(server_manager):
                 if not response_line:
                     return
                 yield f"data: {response_line.strip()}\n\n"
-                while True:
-                    response_line = await asyncio.to_thread(_readline_with_timeout, process.stdout, 30.0)
-                    if not response_line:
-                        # Distinguish real EOF (process exited) from a timeout
-                        if process.poll() is not None:
-                            logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
-                            break
-                        # Timeout with process still alive — send SSE keep-alive and continue
-                        logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
-                        yield ": keep-alive\n\n"
-                        continue
-
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
-                    yield f"data: {response_line.strip()}\n\n"
+                # stdio MCP gives exactly one JSON-RPC response per request;
+                # reading further from process.stdout here would steal responses
+                # queued for concurrent callers.
 
             except Exception as e:
                 completion_status = "error"
@@ -1142,21 +1131,9 @@ def create_dynamic_router(server_manager):
                 "jsonrpc": "2.0",
                 "method": "tools/list"
             }
-
             msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
-
-            # Non-blocking I/O — _readline_with_timeout uses select() so the thread
-            # returns after 30s instead of blocking forever (no stuck threads).
-            response_line = await asyncio.to_thread(_readline_with_timeout, process.stdout, 30.0)
-            if not response_line:
-                raise HTTPException(504, f"Server '{server_name}' timed out responding")
+            response_line = await _dispatch_stdio(server_name, process, msg)
             response_data = json.loads(response_line)
-
             return JSONResponse(content=response_data)
 
         except HTTPException:
@@ -1217,24 +1194,7 @@ def create_dynamic_router(server_manager):
             }
 
             msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
-
-            # Tool execution with timeout — _readline_with_timeout uses select() so the
-            # thread returns after 60s instead of blocking forever (no stuck threads).
-            response_line = await asyncio.to_thread(_readline_with_timeout, process.stdout, 60.0)
-            if not response_line:
-                # Log timeout failure
-                await server_manager.db.save_log_entry({
-                    "server_name": server_name,
-                    "stream": "error",
-                    "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
-                })
-                raise HTTPException(504, "Tool execution timed out")
-
+            response_line = await _dispatch_stdio(server_name, process, msg)
             response_data = json.loads(response_line)
 
             # Update last_used_at for idle cleanup

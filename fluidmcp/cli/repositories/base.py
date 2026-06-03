@@ -244,6 +244,7 @@ class PersistenceBackend(ABC):
         """
         return []
 
+    @abstractmethod
     async def list_instances_by_state(self, state: str) -> List[Dict[str, Any]]:
         """
         List all server instances with the given runtime state.
@@ -252,9 +253,8 @@ class PersistenceBackend(ABC):
             state: State to filter by (e.g., 'running', 'stopped', 'failed')
 
         Returns:
-            List of instance dicts. Default implementation returns empty list.
+            List of instance dicts.
         """
-        return []
 
     def supports_rollback(self) -> bool:
         """
