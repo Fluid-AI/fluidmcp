@@ -67,18 +67,15 @@ class TestMemoryKillPolicy:
         # 99MB / 100MB = 99% > 98% kill threshold
         _set_snapshot(monitor, "srv", memory_rss_bytes=99 * 1024 * 1024)
 
-        cleanup_called = []
-        async def mock_cleanup(id, exit_code, intentional=False):
-            cleanup_called.append((id, exit_code))
+        restart_called = []
         async def mock_restart_under_policy(server_id, proc, exit_code, config):
-            pass
-        server_manager._cleanup_server = mock_cleanup
+            restart_called.append((server_id, exit_code))
         monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
 
-        assert len(cleanup_called) == 1
-        assert cleanup_called[0] == ("srv", -1)
+        assert len(restart_called) == 1
+        assert restart_called[0] == ("srv", -1)
 
     @pytest.mark.asyncio
     async def test_warns_but_no_kill_at_warn_threshold(self, monitor, server_manager):
@@ -151,27 +148,24 @@ class TestCpuStuckPolicy:
         server_manager.processes["srv"] = process
         _set_snapshot(monitor, "srv", cpu_percent=95.0)
 
-        cleanup_called = []
-        async def mock_cleanup(id, exit_code, intentional=False):
-            cleanup_called.append((id, exit_code))
+        restart_called = []
         async def mock_restart_under_policy(server_id, proc, exit_code, config):
-            pass
-        server_manager._cleanup_server = mock_cleanup
+            restart_called.append((server_id, exit_code))
         monitor._restart_under_policy = mock_restart_under_policy
 
         # First two cycles: warning only
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 0
+        assert len(restart_called) == 0
         assert monitor._high_cpu_cycles["srv"] == 1
 
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 0
+        assert len(restart_called) == 0
         assert monitor._high_cpu_cycles["srv"] == 2
 
         # Third cycle: kill fires
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 1
-        assert cleanup_called[0] == ("srv", -1)
+        assert len(restart_called) == 1
+        assert restart_called[0] == ("srv", -1)
 
     @pytest.mark.asyncio
     async def test_cpu_counter_resets_on_healthy_cycle(self, monitor, server_manager):
@@ -225,21 +219,18 @@ class TestKillCooldown:
         server_manager.processes["srv"] = process
         _set_snapshot(monitor, "srv", memory_rss_bytes=99 * 1024 * 1024)
 
-        cleanup_called = []
-        async def mock_cleanup(id, exit_code, intentional=False):
-            cleanup_called.append(id)
+        restart_called = []
         async def mock_restart_under_policy(server_id, proc, exit_code, config):
-            pass
-        server_manager._cleanup_server = mock_cleanup
+            restart_called.append(server_id)
         monitor._restart_under_policy = mock_restart_under_policy
 
         # First kill fires
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 1
+        assert len(restart_called) == 1
 
         # Immediately try again — should be blocked by 60s cooldown
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 1  # still 1, not 2
+        assert len(restart_called) == 1  # still 1, not 2
 
     @pytest.mark.asyncio
     async def test_kill_allowed_after_cooldown_expires(self, monitor, server_manager):
@@ -252,24 +243,21 @@ class TestKillCooldown:
         server_manager.processes["srv"] = process
         _set_snapshot(monitor, "srv", memory_rss_bytes=99 * 1024 * 1024)
 
-        cleanup_called = []
-        async def mock_cleanup(id, exit_code, intentional=False):
-            cleanup_called.append(id)
+        restart_called = []
         async def mock_restart_under_policy(server_id, proc, exit_code, config):
-            pass
-        server_manager._cleanup_server = mock_cleanup
+            restart_called.append(server_id)
         monitor._restart_under_policy = mock_restart_under_policy
 
         # First kill
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 1
+        assert len(restart_called) == 1
 
         # Simulate cooldown expiry by backdating the last kill time
         monitor._last_kill_time["srv"] = time.monotonic() - 61
 
         # Second kill allowed
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 2
+        assert len(restart_called) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -291,16 +279,13 @@ class TestConfigOverrides:
         # 85MB / 100MB = 85% > 80% kill threshold
         _set_snapshot(monitor, "srv", memory_rss_bytes=85 * 1024 * 1024)
 
-        cleanup_called = []
-        async def mock_cleanup(id, exit_code, intentional=False):
-            cleanup_called.append(id)
+        restart_called = []
         async def mock_restart_under_policy(server_id, proc, exit_code, config):
-            pass
-        server_manager._cleanup_server = mock_cleanup
+            restart_called.append(server_id)
         monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 1
+        assert len(restart_called) == 1
 
     @pytest.mark.asyncio
     async def test_per_server_cpu_kill_cycles_respected(self, monitor, server_manager):
@@ -313,16 +298,13 @@ class TestConfigOverrides:
         server_manager.processes["srv"] = process
         _set_snapshot(monitor, "srv", cpu_percent=85.0)
 
-        cleanup_called = []
-        async def mock_cleanup(id, exit_code, intentional=False):
-            cleanup_called.append(id)
+        restart_called = []
         async def mock_restart_under_policy(server_id, proc, exit_code, config):
-            pass
-        server_manager._cleanup_server = mock_cleanup
+            restart_called.append(server_id)
         monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
-        assert len(cleanup_called) == 1
+        assert len(restart_called) == 1
 
 
 # ---------------------------------------------------------------------------

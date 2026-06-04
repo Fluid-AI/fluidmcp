@@ -2103,18 +2103,16 @@ class MCPHealthMonitor:
                     f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
                     f"(>= {memory_kill_pct}%), killing to protect other servers"
                 )
-                op_lock = self._sm._get_operation_lock(server_id)
-                async with op_lock:
-                    if self._sm.processes.get(server_id) is process:
-                        process.terminate()
-                        try:
-                            await asyncio.wait_for(
-                                asyncio.to_thread(process.wait), timeout=10.0
-                            )
-                        except asyncio.TimeoutError:
-                            process.kill()
-                            await asyncio.to_thread(process.wait)
-                        await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
+                # Terminate the process; _restart_under_policy handles cleanup + restart
+                if self._sm.processes.get(server_id) is process:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(process.wait), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.to_thread(process.wait)
                 # Route through the same monitor restart-policy/backoff path as a natural death
                 await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
                 return
@@ -2163,18 +2161,16 @@ class MCPHealthMonitor:
                     f"[RESOURCE] {server_id} CPU stuck at {cpu_pct:.1f}% "
                     f"for {cpu_kill_cycles} consecutive cycles, restarting"
                 )
-                op_lock = self._sm._get_operation_lock(server_id)
-                async with op_lock:
-                    if self._sm.processes.get(server_id) is process:
-                        process.terminate()
-                        try:
-                            await asyncio.wait_for(
-                                asyncio.to_thread(process.wait), timeout=10.0
-                            )
-                        except asyncio.TimeoutError:
-                            process.kill()
-                            await asyncio.to_thread(process.wait)
-                        await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
+                # Terminate the process; _restart_under_policy handles cleanup + restart
+                if self._sm.processes.get(server_id) is process:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(process.wait), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.to_thread(process.wait)
                 # Route through the same monitor restart-policy/backoff path as a natural death
                 await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
         else:
