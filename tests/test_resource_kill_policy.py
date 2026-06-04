@@ -70,7 +70,10 @@ class TestMemoryKillPolicy:
         cleanup_called = []
         async def mock_cleanup(id, exit_code, intentional=False):
             cleanup_called.append((id, exit_code))
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
+            pass
         server_manager._cleanup_server = mock_cleanup
+        monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
 
@@ -151,7 +154,10 @@ class TestCpuStuckPolicy:
         cleanup_called = []
         async def mock_cleanup(id, exit_code, intentional=False):
             cleanup_called.append((id, exit_code))
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
+            pass
         server_manager._cleanup_server = mock_cleanup
+        monitor._restart_under_policy = mock_restart_under_policy
 
         # First two cycles: warning only
         await monitor._check_resource_thresholds("srv", process)
@@ -222,8 +228,10 @@ class TestKillCooldown:
         cleanup_called = []
         async def mock_cleanup(id, exit_code, intentional=False):
             cleanup_called.append(id)
-            # After kill, remove from processes so second check sees a different process
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
+            pass
         server_manager._cleanup_server = mock_cleanup
+        monitor._restart_under_policy = mock_restart_under_policy
 
         # First kill fires
         await monitor._check_resource_thresholds("srv", process)
@@ -247,7 +255,10 @@ class TestKillCooldown:
         cleanup_called = []
         async def mock_cleanup(id, exit_code, intentional=False):
             cleanup_called.append(id)
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
+            pass
         server_manager._cleanup_server = mock_cleanup
+        monitor._restart_under_policy = mock_restart_under_policy
 
         # First kill
         await monitor._check_resource_thresholds("srv", process)
@@ -283,7 +294,10 @@ class TestConfigOverrides:
         cleanup_called = []
         async def mock_cleanup(id, exit_code, intentional=False):
             cleanup_called.append(id)
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
+            pass
         server_manager._cleanup_server = mock_cleanup
+        monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
         assert len(cleanup_called) == 1
@@ -302,7 +316,10 @@ class TestConfigOverrides:
         cleanup_called = []
         async def mock_cleanup(id, exit_code, intentional=False):
             cleanup_called.append(id)
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
+            pass
         server_manager._cleanup_server = mock_cleanup
+        monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
         assert len(cleanup_called) == 1
@@ -316,7 +333,7 @@ class TestRestartPolicyAfterKill:
 
     @pytest.mark.asyncio
     async def test_restart_invoked_after_memory_kill(self, monitor, server_manager):
-        """_check_auto_restart_on_crash must be called after a memory-triggered kill."""
+        """_restart_under_policy must be called after a memory-triggered kill."""
         server_manager.configs["srv"] = {
             "memory_limit_mb": 100,
             "memory_kill_pct": 98,
@@ -331,11 +348,11 @@ class TestRestartPolicyAfterKill:
         async def mock_cleanup(id, exit_code, intentional=False):
             pass
 
-        async def mock_restart_check(server_id, instance):
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
             restart_checked.append(server_id)
 
         server_manager._cleanup_server = mock_cleanup
-        server_manager._check_auto_restart_on_crash = mock_restart_check
+        monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
 
@@ -343,7 +360,7 @@ class TestRestartPolicyAfterKill:
 
     @pytest.mark.asyncio
     async def test_restart_invoked_after_cpu_kill(self, monitor, server_manager):
-        """_check_auto_restart_on_crash must be called after a CPU-stuck kill."""
+        """_restart_under_policy must be called after a CPU-stuck kill."""
         server_manager.configs["srv"] = {
             "cpu_warn_pct": 80,
             "cpu_kill_cycles": 1,
@@ -357,11 +374,11 @@ class TestRestartPolicyAfterKill:
         async def mock_cleanup(id, exit_code, intentional=False):
             pass
 
-        async def mock_restart_check(server_id, instance):
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
             restart_checked.append(server_id)
 
         server_manager._cleanup_server = mock_cleanup
-        server_manager._check_auto_restart_on_crash = mock_restart_check
+        monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
 
@@ -383,10 +400,10 @@ class TestRestartPolicyAfterKill:
 
         restart_checked = []
 
-        async def mock_restart_check(server_id, instance):
+        async def mock_restart_under_policy(server_id, proc, exit_code, config):
             restart_checked.append(server_id)
 
-        server_manager._check_auto_restart_on_crash = mock_restart_check
+        monitor._restart_under_policy = mock_restart_under_policy
 
         await monitor._check_resource_thresholds("srv", process)
 

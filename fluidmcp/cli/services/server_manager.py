@@ -1919,6 +1919,20 @@ class MCPHealthMonitor:
                     await self._sm._cleanup_server(server_id, exit_code)
             return
 
+        await self._restart_under_policy(server_id, process, exit_code, config)
+
+    async def _restart_under_policy(
+        self,
+        server_id: str,
+        process,
+        exit_code: int,
+        config: Dict[str, Any],
+    ) -> None:
+        """Apply restart policy after a process death (natural or resource-triggered).
+
+        Shared by the dead-process monitor path and resource-kill paths so both
+        honour the same restart_policy / max_restarts / exponential-backoff logic.
+        """
         restart_policy = config.get("restart_policy", "on-failure")
         max_restarts = config.get("max_restarts", 3)
 
@@ -2101,9 +2115,8 @@ class MCPHealthMonitor:
                             process.kill()
                             await asyncio.to_thread(process.wait)
                         await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
-                # Honour restart policy — fetch fresh instance state written by _cleanup_server
-                instance = await self._sm.db.get_instance_state(server_id) or {}
-                await self._sm._check_auto_restart_on_crash(server_id, instance)
+                # Route through the same monitor restart-policy/backoff path as a natural death
+                await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
                 return
 
             elif mem_pct >= memory_warn_pct:
@@ -2162,9 +2175,8 @@ class MCPHealthMonitor:
                             process.kill()
                             await asyncio.to_thread(process.wait)
                         await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
-                # Honour restart policy — fetch fresh instance state written by _cleanup_server
-                instance = await self._sm.db.get_instance_state(server_id) or {}
-                await self._sm._check_auto_restart_on_crash(server_id, instance)
+                # Route through the same monitor restart-policy/backoff path as a natural death
+                await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
         else:
             # Reset counter on any healthy cycle
             self._high_cpu_cycles.pop(server_id, None)
