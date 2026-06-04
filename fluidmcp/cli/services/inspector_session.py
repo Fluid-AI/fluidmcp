@@ -1,12 +1,17 @@
+import os
+import re
 import time
 import json
+import shlex
 import asyncio
 import ipaddress
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 import httpx
 from loguru import logger
+from fastapi import HTTPException
 
 
 def _validate_url(url: str) -> None:
@@ -32,20 +37,90 @@ def _validate_url(url: str) -> None:
         raise ValueError("Connections to private/internal addresses are not allowed")
 
 
+# ── Per-binary argument schemas ───────────────────────────────────────────────
+# Each entry defines which flags are permitted and whether non-flag args are
+# package names or local file paths. Anything not in allowed_flags is rejected.
+# URL arguments (http://, https://) are always blocked — remote fetch is not a
+# supported MCP use case and would allow deno/bun to pull attacker-controlled code.
+
+_BINARY_SCHEMAS = {
+    "npx":     {"allowed_flags": {"-y", "--yes", "--package"}, "arg_type": "package"},
+    "uvx":     {"allowed_flags": {"--from", "--with"},         "arg_type": "package"},
+    "node":    {"allowed_flags": set(),                        "arg_type": "filepath"},
+    "python":  {"allowed_flags": set(),                        "arg_type": "filepath"},
+    "python3": {"allowed_flags": set(),                        "arg_type": "filepath"},
+    "deno":    {"allowed_flags": {"run"},                      "arg_type": "filepath"},
+    "bun":     {"allowed_flags": set(),                        "arg_type": "filepath"},
+}
+
+_PACKAGE_RE = re.compile(r'^[@a-zA-Z0-9][\w.\-/]*$')
+
+_ALLOWED_ROOTS = [Path("/home"), Path("/app"), Path("/workspace"), Path("/workspaces"), Path("/tmp")]
+
+
+def _validate_stdio_args(binary: str, parts: list) -> None:
+    """Validate flags and non-flag arguments for a stdio command against its per-binary schema.
+
+    For package-type binaries (npx, uvx), validation stops once the package name is
+    consumed — remaining args are passthrough to the MCP server package and are not
+    interpreted by node/python, so interpreter flag injection is not possible there.
+    """
+    schema = _BINARY_SCHEMAS[binary]
+    package_consumed = False  # only relevant for arg_type == "package"
+
+    for arg in parts[1:]:
+        # Block remote URLs unconditionally — remote fetch via deno/bun is not a
+        # supported MCP use case and would allow execution of attacker-controlled code.
+        if arg.startswith("http://") or arg.startswith("https://"):
+            raise HTTPException(400, "Remote URLs are not permitted as arguments")
+
+        # Once the package name has been seen for npx/uvx, remaining args are
+        # passthrough to the MCP server package — stop validating them.
+        if schema["arg_type"] == "package" and package_consumed:
+            continue
+
+        if arg.startswith("-") or arg in schema["allowed_flags"]:
+            # Flag or subcommand (e.g. deno's "run")
+            if arg not in schema["allowed_flags"]:
+                raise HTTPException(400, f"Flag '{arg}' is not permitted for '{binary}'")
+        elif schema["arg_type"] == "filepath":
+            _validate_stdio_filepath(arg)
+        else:
+            # Package name — validate then mark as consumed
+            if not _PACKAGE_RE.match(arg):
+                raise HTTPException(400, f"Invalid package name: '{arg}'")
+            package_consumed = True
+
+
+def _validate_stdio_filepath(path_str: str) -> None:
+    """Resolve path and ensure it stays within an allowed root directory."""
+    try:
+        resolved = Path(path_str).resolve()
+    except Exception:
+        raise HTTPException(400, f"Invalid path: '{path_str}'")
+
+    if not any(str(resolved).startswith(str(root)) for root in _ALLOWED_ROOTS):
+        raise HTTPException(400, f"Path '{path_str}' is outside allowed directories")
+
+
 class InspectorSession:
     """
     Manages a temporary connection to an external MCP server for the inspector.
 
-    HTTP transport: raw JSON-RPC POST, response comes back in the same HTTP response.
-    SSE transport:  persistent GET /sse connection (background task) receives all
-                    responses; requests are sent via POST to the messages endpoint.
-                    This matches the MCP SSE spec — the stream must stay open.
+    HTTP transport:  raw JSON-RPC POST, response comes back in the same HTTP response.
+    SSE transport:   persistent GET /sse connection (background task) receives all
+                     responses; requests are sent via POST to the messages endpoint.
+                     This matches the MCP SSE spec — the stream must stay open.
+    stdio transport: spawns the MCP server as a child subprocess and communicates
+                     over stdin/stdout pipes (JSON-RPC, newline-delimited).
+                     The server only exists while this session is open.
     """
 
     def __init__(
         self,
         url: str,
         transport: str,
+        command: Optional[str] = None,
         auth: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         env_vars: Optional[Dict[str, str]] = None,
@@ -53,6 +128,7 @@ class InspectorSession:
     ):
         self.url = url.rstrip("/")
         self.transport = transport.lower()
+        self.command = command  # shell command string for stdio transport
         self.auth = auth or {}
         self.extra_headers = headers or {}
         self.env_vars = env_vars or {}
@@ -70,6 +146,9 @@ class InspectorSession:
         self._sse_ready = asyncio.Event()      # set once endpoint URL is known
         self._sse_pending: Dict[int, "asyncio.Future[dict]"] = {}  # id → Future
         self._sse_task: Optional[asyncio.Task] = None
+
+        # stdio state
+        self._process: Optional[asyncio.subprocess.Process] = None
 
         # Shared httpx client for HTTP/POST requests
         self._client: Optional[httpx.AsyncClient] = None
@@ -226,13 +305,187 @@ class InspectorSession:
                 future.cancel()
             raise
 
+    # ── stdio transport ───────────────────────────────────────────────────────
+
+    async def _start_stdio_process(self) -> Dict[str, Any]:
+        """
+        Spawn the MCP server subprocess and run the MCP initialize handshake.
+        Returns server info dict (name, version, protocol_version).
+
+        Ported from package_launcher.initialize_mcp_server() but fully async:
+        uses asyncio.create_subprocess_exec + await readline instead of
+        blocking subprocess.Popen + asyncio.to_thread.
+        """
+        if not self.command:
+            raise Exception("stdio transport requires a command")
+
+        parts = shlex.split(self.command)
+
+        # ── Command allowlist ─────────────────────────────────────────────────
+        # Only permit known MCP server launchers. Check basename so full paths
+        # like /usr/local/bin/npx still pass.
+        exe_basename = os.path.basename(parts[0])
+        if exe_basename not in _BINARY_SCHEMAS:
+            raise HTTPException(
+                400,
+                f"Command '{exe_basename}' is not allowed. "
+                f"Permitted launchers: {', '.join(sorted(_BINARY_SCHEMAS))}"
+            )
+
+        # ── Argument validation ───────────────────────────────────────────────
+        # Per-binary schema: validates flags against a per-interpreter allowlist
+        # and checks non-flag args as either safe package names or local file
+        # paths within allowed roots. Blocks -c/-e/--eval and remote URLs.
+        _validate_stdio_args(exe_basename, parts)
+
+        # ── Subprocess environment ────────────────────────────────────────────
+        # Build a minimal safe env from a fixed allowlist of system variables
+        # so FluidMCP's own secrets (BEARER_TOKEN, MONGODB_URI, API_KEY,
+        # etc.) are never visible to the spawned process. User-supplied env_vars
+        # are layered on top — they can only add/override within this safe base.
+        _SYSTEM_ENV_ALLOWLIST = {
+            "PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP",
+            "LANG", "LC_ALL", "LC_CTYPE",
+            "NODE_PATH", "NPM_CONFIG_CACHE", "NPM_CONFIG_PREFIX",
+            "PYTHONPATH", "VIRTUAL_ENV",
+            "DENO_DIR", "BUN_INSTALL",
+            "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+        }
+        proc_env = {
+            k: v for k, v in os.environ.items()
+            if k in _SYSTEM_ENV_ALLOWLIST
+        }
+        # Layer user-supplied vars on top (they cannot see what's not in base)
+        if self.env_vars:
+            proc_env.update(self.env_vars)
+
+        if self.env_vars:
+            logger.info(f"Inspector stdio: spawning {exe_basename!r} with env vars: {list(self.env_vars.keys())}")
+        else:
+            logger.info(f"Inspector stdio: spawning {exe_basename!r}")
+
+        self._process = await asyncio.create_subprocess_exec(
+            *parts,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=proc_env,
+        )
+
+        # MCP initialize handshake
+        init_request = {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": ["text/html+mcp", "text/html;profile=mcp-app"]
+                        }
+                    }
+                },
+                "clientInfo": {"name": "FluidMCP Inspector", "version": "1.0.0"},
+            },
+        }
+
+        self._process.stdin.write((json.dumps(init_request) + "\n").encode())
+        await self._process.stdin.drain()
+
+        # Read lines until we get the initialize response (skip non-JSON stdout noise)
+        deadline = asyncio.get_event_loop().time() + 30.0
+        while asyncio.get_event_loop().time() < deadline:
+            if self._process.returncode is not None:
+                stderr_bytes = await self._process.stderr.read(4096)
+                raise Exception(
+                    f"stdio process died during handshake (exit {self._process.returncode}): "
+                    f"{stderr_bytes.decode(errors='replace').strip()}"
+                )
+            try:
+                raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+
+            if not raw:
+                raise Exception("stdio process closed stdout during handshake")
+
+            line = raw.decode(errors="replace").strip()
+            if not line:
+                continue
+
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                logger.debug(f"Inspector stdio: skipping non-JSON line: {line[:200]}")
+                continue
+
+            if msg.get("id") == 0 and "result" in msg:
+                # Send notifications/initialized to complete the handshake
+                notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                self._process.stdin.write((json.dumps(notif) + "\n").encode())
+                await self._process.stdin.drain()
+                logger.info("Inspector stdio: handshake complete")
+                result = msg.get("result", {})
+                server_info = result.get("serverInfo", {})
+                return {
+                    "name": server_info.get("name", "Unknown MCP Server"),
+                    "version": server_info.get("version", "unknown"),
+                    "protocol_version": result.get("protocolVersion", "unknown"),
+                }
+
+        raise Exception("stdio process did not respond to initialize within 30s")
+
+    async def _stdio_send(self, request: dict) -> dict:
+        """
+        Write one JSON-RPC request to the subprocess stdin, read the matching
+        response from stdout. Skips non-JSON lines (log output from the server).
+        """
+        if not self._process or self._process.returncode is not None:
+            raise Exception("stdio process is not running")
+
+        line = (json.dumps(request) + "\n").encode()
+        self._process.stdin.write(line)
+        await self._process.stdin.drain()
+
+        req_id = request.get("id")
+        deadline = asyncio.get_event_loop().time() + self.timeout
+
+        while asyncio.get_event_loop().time() < deadline:
+            if self._process.returncode is not None:
+                raise Exception("stdio process died while waiting for response")
+            try:
+                raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+
+            if not raw:
+                raise Exception("stdio process closed stdout unexpectedly")
+
+            decoded = raw.decode(errors="replace").strip()
+            if not decoded:
+                continue
+
+            try:
+                msg = json.loads(decoded)
+            except json.JSONDecodeError:
+                logger.debug(f"Inspector stdio: skipping non-JSON line: {decoded[:200]}")
+                continue
+
+            if msg.get("id") == req_id:
+                return msg
+
+        raise Exception(f"stdio: no response for request id={req_id} within {self.timeout}s")
+
     # ── Transport dispatcher ──────────────────────────────────────────────────
 
     def _make_request(self, method: str, params: dict) -> dict:
         return {"jsonrpc": "2.0", "id": self._next_id(), "method": method, "params": params}
 
     async def _send(self, request: dict) -> dict:
-        """Route request through SSE or plain HTTP depending on transport."""
+        """Route request through stdio, SSE, or plain HTTP depending on transport."""
+        if self.transport == "stdio":
+            return await self._stdio_send(request)
         if self.transport == "sse":
             return await self._sse_request(request)
 
@@ -245,6 +498,14 @@ class InspectorSession:
 
     async def initialize(self) -> Dict[str, Any]:
         self.last_used = time.time()
+
+        if self.transport == "stdio":
+            # Spawn subprocess and run the full MCP handshake.
+            # _start_stdio_process() sends initialize + notifications/initialized
+            # and stores the initialize result so we can return server info here.
+            info = await self._start_stdio_process()
+            self.add_log("connect", f"Connected to {info['name']} (STDIO)")
+            return info
 
         if self.transport == "sse":
             # Kick off the background SSE listener before sending any requests
@@ -309,7 +570,36 @@ class InspectorSession:
         data = await self._send(self._make_request("resources/list", {}))
         if "error" in data:
             raise Exception(f"resources/list error: {data['error'].get('message', 'Unknown error')}")
-        return data.get("result", {}).get("resources", [])
+        resources = data.get("result", {}).get("resources", [])
+        for r in resources:
+            r["isTemplate"] = False
+        return resources
+
+    async def list_resource_templates(self) -> list:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("resources/templates/list", {}))
+        if "error" in data:
+            return []  # not all servers implement templates — silently skip
+        templates = data.get("result", {}).get("resourceTemplates", [])
+        # Normalise: rename uriTemplate → uri so the frontend uses one field
+        for t in templates:
+            t["uri"] = t.pop("uriTemplate", t.get("uri", ""))
+            t["isTemplate"] = True
+        return templates
+
+    async def list_prompts(self) -> list:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("prompts/list", {}))
+        if "error" in data:
+            raise Exception(f"prompts/list error: {data['error'].get('message', 'Unknown error')}")
+        return data.get("result", {}).get("prompts", [])
+
+    async def get_prompt(self, name: str, arguments: dict) -> dict:
+        self.last_used = time.time()
+        data = await self._send(self._make_request("prompts/get", {"name": name, "arguments": arguments}))
+        if "error" in data:
+            raise Exception(f"prompts/get error: {data['error'].get('message', 'Unknown error')}")
+        return data.get("result", {})
 
     async def read_resource(self, uri: str) -> dict:
         self.last_used = time.time()
@@ -320,6 +610,15 @@ class InspectorSession:
 
     async def close(self) -> None:
         self.add_log("disconnect", "Session closed")
+        if self._process is not None:
+            try:
+                self._process.terminate()
+                await asyncio.wait_for(self._process.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                self._process.kill()
+            except Exception:
+                pass
+            self._process = None
         if self._sse_task:
             self._sse_task.cancel()
             try:

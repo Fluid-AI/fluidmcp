@@ -1,3 +1,4 @@
+import os
 import uuid
 import asyncio
 import time
@@ -29,8 +30,9 @@ class AuthConfig(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    url: str
-    transport: str = "http"   # "http" | "sse" | "stdio"
+    url: Optional[str] = None        # required for http / sse
+    command: Optional[str] = None    # required for stdio
+    transport: str = "http"          # "http" | "sse" | "stdio"
     auth: Optional[AuthConfig] = None
     headers: Optional[Dict[str, str]] = None
     env_vars: Optional[Dict[str, str]] = None
@@ -39,6 +41,10 @@ class ConnectRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[list] = Field(default_factory=list)
+    provider: Optional[str] = "groq"       # "groq" | "openai" | "anthropic" | "gemini"
+    model: Optional[str] = None            # None → use provider default
+    api_key: Optional[str] = None          # None → fall back to env var
+    system_prompt: Optional[str] = None
 
 class ReadResourceRequest(BaseModel):
     uri: str
@@ -105,15 +111,24 @@ async def connect_server(body: ConnectRequest):
     The session is stored in memory and expires after SESSION_TTL seconds of
     inactivity. Nothing is persisted to MongoDB.
     """
-    if not body.url:
-        raise HTTPException(400, "url is required")
+    target = body.command if body.transport == "stdio" else body.url
 
-    _validate_mcp_url(body.url)
+    if body.transport == "stdio":
+        _val = os.getenv("FMCP_INSPECTOR_ALLOW_STDIO", "").strip().lower()
+        if _val not in ("1", "true", "yes"):
+            raise HTTPException(403, "stdio transport is disabled on this deployment")
+        if not body.command:
+            raise HTTPException(400, "command is required for stdio transport")
+    else:
+        if not body.url:
+            raise HTTPException(400, "url is required")
+        _validate_mcp_url(body.url)
 
     auth_dict = body.auth.model_dump() if body.auth else {}
 
     session = InspectorSession(
-        url=body.url,
+        url=body.url or "stdio://local",
+        command=body.command,
         transport=body.transport,
         auth=auth_dict,
         headers=body.headers,
@@ -126,7 +141,7 @@ async def connect_server(body: ConnectRequest):
         server_info = await session.initialize()
     except Exception as e:
         await session.close()
-        logger.warning(f"Inspector: failed to connect to {body.url} — {e}")
+        logger.warning(f"Inspector: failed to connect to {target!r} — {e}")
         raise HTTPException(502, f"Failed to connect to MCP server: {str(e)}")
 
     # Fetch tools immediately so frontend gets everything in one response
@@ -134,13 +149,13 @@ async def connect_server(body: ConnectRequest):
         tools = await session.list_tools()
     except Exception as e:
         await session.close()
-        logger.warning(f"Inspector: connected but failed to list tools for {body.url} — {e}")
+        logger.warning(f"Inspector: connected but failed to list tools for {target!r} — {e}")
         raise HTTPException(502, f"Connected but failed to fetch tools: {str(e)}")
 
     session_id = str(uuid.uuid4())
     sessions[session_id] = session
 
-    logger.info(f"Inspector: new session {session_id} for {body.url} ({body.transport}), {len(tools)} tools")
+    logger.info(f"Inspector: new session {session_id} for {target!r} ({body.transport}), {len(tools)} tools")
 
     return {
         "session_id": session_id,
@@ -241,12 +256,19 @@ async def list_resources(session_id: str):
     if not session:
         raise HTTPException(404, "Session not found or expired")
 
+    resources, templates = [], []
     try:
         resources = await session.list_resources()
-        return {"resources": resources, "count": len(resources)}
     except Exception as e:
-        logger.error(f"Inspector: list_resources failed for session {session_id} — {e}")
-        raise HTTPException(500, f"Failed to fetch resources: {str(e)}")
+        if "Method not found" not in str(e):
+            logger.warning(f"Inspector: list_resources failed for session {session_id} — {e}")
+    try:
+        templates = await session.list_resource_templates()
+    except Exception as e:
+        if "Method not found" not in str(e):
+            logger.warning(f"Inspector: list_resource_templates failed for session {session_id} — {e}")
+    combined = resources + templates
+    return {"resources": combined, "count": len(combined)}
 
 
 @router.post("/inspector/{session_id}/resources/read")
@@ -269,6 +291,41 @@ async def read_resource(session_id: str, body: ReadResourceRequest):
     except Exception as e:
         logger.error(f"Inspector: read_resource failed for session {session_id} — {e}")
         raise HTTPException(500, f"Failed to read resource: {str(e)}")
+
+
+class GetPromptRequest(BaseModel):
+    name: str
+    arguments: Optional[dict] = Field(default_factory=dict)
+
+
+@router.get("/inspector/{session_id}/prompts")
+async def list_prompts(session_id: str):
+    """List all prompts available on the connected MCP server."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    try:
+        prompts = await session.list_prompts()
+        return {"prompts": prompts, "count": len(prompts)}
+    except Exception as e:
+        if "Method not found" in str(e):
+            return {"prompts": [], "count": 0}
+        logger.error(f"Inspector: list_prompts failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to fetch prompts: {str(e)}")
+
+
+@router.post("/inspector/{session_id}/prompts/get")
+async def get_prompt(session_id: str, body: GetPromptRequest):
+    """Get a prompt by name with optional arguments."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    try:
+        result = await session.get_prompt(body.name, body.arguments or {})
+        return result
+    except Exception as e:
+        logger.error(f"Inspector: get_prompt failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to get prompt: {str(e)}")
 
 
 @router.post("/inspector/{session_id}/chat")
@@ -296,9 +353,15 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent, passing chat history for multi-turn context
+        # Call the agent with the requested provider/model/key
         agent_result = await choose_tool_with_llm(
-            body.message, tools, chat_history=body.chat_history or []
+            body.message,
+            tools,
+            chat_history=body.chat_history or [],
+            provider=body.provider or "groq",
+            model=body.model or None,
+            api_key=body.api_key or None,
+            system_prompt=body.system_prompt or None,
         )
 
         # Validate the response has the expected fields
@@ -322,8 +385,45 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
 
     except Exception as e:
         logger.error(f"Inspector chat error: {e}")
+        err_str = str(e)
+
+        # Try to extract just the human-readable message from provider error dicts
+        # e.g. "Error code: 401 - {'error': {'message': 'Incorrect API key...', ...}}"
+        user_message = err_str
+        try:
+            import re, ast
+            match = re.search(r"\{.*\}", err_str, re.DOTALL)
+            if match:
+                parsed = ast.literal_eval(match.group())
+                if isinstance(parsed, dict):
+                    inner = parsed.get("error", parsed)
+                    if isinstance(inner, dict) and "message" in inner:
+                        user_message = inner["message"]
+        except Exception:
+            pass
+
+        # Redact API key values echoed back in provider error messages
+        # e.g. "Incorrect API key provided: sk-abc123" or "provided: aaaaaaaaa"
+        import re as _re
+        user_message = _re.sub(r"(provided|key):\s*\S+", r"\1: [REDACTED]", user_message, flags=_re.IGNORECASE)
+
+        is_auth = any(kw in err_str.lower() for kw in (
+            "api key", "apikey", "invalid_api_key", "unauthorized",
+            "authentication", "403", "401", "permission", "incorrect api key",
+            "no api key provided", "insufficient_quota", "quota",
+        ))
+
+        if is_auth:
+            is_quota = any(kw in err_str.lower() for kw in ("quota", "insufficient_quota", "429"))
+            prefix = "Quota exceeded" if is_quota else "Authentication failed"
+            return {
+                "clarification_needed": True,
+                "message": f"{prefix}: {user_message}",
+                "error_type": "auth",
+            }
 
         return {
             "clarification_needed": True,
-            "message": "Unable to determine which tool to run."
+            "message": f"LLM error: {user_message}",
+            "error_type": "llm",
         }
