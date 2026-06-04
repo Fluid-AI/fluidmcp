@@ -22,7 +22,7 @@ import json
 import threading
 from collections import defaultdict
 from time import time as current_time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # Import centralized validators
 from .validators import (
@@ -53,6 +53,7 @@ except ImportError:
     _redis_available = False
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
+from ..services.server_manager import classify_exit_code
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
@@ -1700,6 +1701,79 @@ async def get_server_logs(
         "logs": logs,
         "count": len(logs)
     }
+
+
+# ==================== Debugging Endpoints ====================
+
+@router.get("/servers/{id}/crashes")
+async def get_server_crashes(
+    request: Request,
+    id: str,
+    limit: int = Query(20, ge=1, le=100, description="Max crash events to return"),
+    token: str = Depends(get_token),
+):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    crashes = await manager.db.list_crash_events(id, limit=limit)
+
+    # Annotate with human-readable exit classification if not already present
+    for crash in crashes:
+        if "exit_category" not in crash and "exit_code" in crash:
+            info = classify_exit_code(crash["exit_code"])
+            crash["exit_category"] = info["category"]
+            crash["exit_label"] = info["label"]
+            crash["exit_description"] = info["description"]
+        # Normalise ObjectId and datetime fields to JSON-safe types
+        crash.pop("_id", None)
+        if hasattr(crash.get("timestamp"), "isoformat"):
+            crash["timestamp"] = crash["timestamp"].isoformat()
+
+    # crashes_per_hour: query the DB for the full count in the last hour,
+    # independent of the `limit` param so the metric is always accurate.
+    now = datetime.now(timezone.utc)
+    one_hour_ago_ts = (now - timedelta(hours=1)).timestamp()
+    crashes_last_hour = await manager.db.count_crash_events_since(id, one_hour_ago_ts)
+
+    # restart_count from live status (falls back to 0)
+    status = await manager.get_server_status(id)
+    restart_count = status.get("restart_count", 0)
+
+    return {
+        "server": id,
+        "restart_count": restart_count,
+        "crashes_per_hour": crashes_last_hour,
+        "crashes": crashes,
+    }
+
+
+@router.get("/servers/{id}/stderr")
+async def get_server_stderr(
+    request: Request,
+    id: str,
+    lines: int = Query(50, ge=1, le=500, description="Number of recent lines to read"),
+    contains: Optional[str] = Query(None, description="Case-insensitive substring filter"),
+    token: str = Depends(get_token),
+):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    try:
+        result = manager.get_stderr_tail(id, lines=lines, contains=contains)
+    except OSError as e:
+        raise HTTPException(500, f"Failed to read stderr log: {truncate_error(str(e))}")
+
+    return {"server": id, **result}
 
 
 # ==================== Environment Variable Management ====================

@@ -1562,6 +1562,52 @@ class ServerManager:
             logger.debug(f"Failed to read stderr log for '{server_id}': {e}")
             return ""
 
+    def get_stderr_tail(
+        self,
+        server_id: str,
+        lines: int = 50,
+        contains: Optional[str] = None,
+    ) -> dict:
+        """
+        Return the tail of a server's stderr log as a structured dict.
+
+        Args:
+            server_id: Server identifier
+            lines: Maximum number of lines to return (from the end)
+            contains: Optional case-insensitive substring filter
+
+        Returns:
+            Dict with keys: lines (list[str]), line_count (int), truncated (bool)
+        """
+        log_path = self._get_stderr_log_path(server_id)
+
+        if not os.path.exists(log_path):
+            return {"lines": [], "line_count": 0, "truncated": False}
+
+        # Estimate bytes needed: avg 120 bytes/line with 2x headroom
+        read_bytes = lines * 240
+        file_size = os.path.getsize(log_path)
+        truncated = file_size > read_bytes
+
+        with open(log_path, "rb") as f:
+            if truncated:
+                f.seek(-read_bytes, os.SEEK_END)
+            data = f.read()
+
+        text = data.decode("utf-8", errors="replace")
+        all_lines = text.splitlines()
+
+        # Drop first line if truncated (may be a partial line from the seek)
+        if truncated and len(all_lines) > 1:
+            all_lines = all_lines[1:]
+
+        tail = all_lines[-lines:]
+
+        if contains:
+            tail = [line for line in tail if contains.lower() in line.lower()]
+
+        return {"lines": tail, "line_count": len(tail), "truncated": truncated}
+
     # ==================== Resource Limits ====================
 
     @staticmethod

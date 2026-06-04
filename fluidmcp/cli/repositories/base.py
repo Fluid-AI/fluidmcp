@@ -262,6 +262,19 @@ class PersistenceBackend(ABC):
         """
         return []
 
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """
+        Count crash events for a server since a UTC timestamp.
+
+        Args:
+            server_id: Server identifier
+            since_ts: UTC POSIX timestamp — count events with timestamp > this value
+
+        Returns:
+            Number of crash events since the given timestamp
+        """
+        return 0
+
     def supports_rollback(self) -> bool:
         """
         Check if this backend supports model rollback/versioning.
