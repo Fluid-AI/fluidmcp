@@ -219,12 +219,29 @@ async def callback(request: Request, code: str = None, state: str = None, error:
 
 
 @auth_router.get("/me")
-async def get_user_info(user: dict = Depends(get_current_user)):
+async def get_user_info(request: Request, user: dict = Depends(get_current_user)):
     """
     Get current user information.
 
-    Requires authentication via Authorization header.
+    For OAuth users, enriches the JWT claims with full profile
+    (name, email, picture) fetched from Auth0's /userinfo endpoint,
+    since access tokens don't carry profile claims.
     """
+    if user.get("auth_method") == "oauth" and oauth_client:
+        try:
+            token = request.cookies.get("fmcp_auth_token")
+            if not token:
+                auth_header = request.headers.get("Authorization", "")
+                if auth_header.startswith("Bearer "):
+                    token = auth_header[7:]
+            if token:
+                profile = oauth_client.get_user_info(token)
+                user["name"] = profile.get("name") or user.get("name", "Unknown")
+                user["email"] = profile.get("email") or user.get("email")
+                user["picture"] = profile.get("picture")
+        except Exception as e:
+            logger.warning(f"Failed to fetch user profile from /userinfo: {e}")
+
     return user
 
 
@@ -234,9 +251,12 @@ async def logout(request: Request):
     if not oauth_client:
         raise HTTPException(status_code=500, detail="OAuth not configured")
 
-    # Generate Auth0 logout URL
-    base_url = str(request.base_url).rstrip('/')
-    logout_url = oauth_client.logout_url(base_url)
+    # Generate Auth0 logout URL - redirect to /ui after logout
+    # Use the same URL detection as callback (supports Codespaces, etc.)
+    from .url_utils import get_base_url
+    base_url = get_base_url(config.port)
+    return_to_url = f"{base_url}/ui"
+    logout_url = oauth_client.logout_url(return_to_url)
 
     # Create response that clears the cookie
     response = JSONResponse(content={

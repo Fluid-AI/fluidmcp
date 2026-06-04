@@ -6,11 +6,11 @@ import Status from "./pages/Status";
 import ServerDetails from "./pages/ServerDetails";
 import { ToolRunner } from "./pages/ToolRunner";
 import Documentation from "./pages/Documentation";
+import ManageServers from "./pages/ManageServers";
 import { useAuth } from "./contexts/AuthContext";
 import LLMModels from "./pages/LLMModels";
 import LLMModelDetails from "./pages/LLMModelDetails";
 import LLMPlayground from "./pages/LLMPlayground";
-import ManageServers from "./pages/ManageServers";
 import MCPInspector from "./pages/MCPInspector";
 
 function App() {
@@ -46,7 +46,7 @@ function App() {
 
         // Verify authentication before replaying action
         checkAuth().then((isAuth) => {
-          if (isAuth && action.action === 'start' && action.serverId) {
+          if (isAuth && action.action === 'start' && action.serverId && action.serverName) {
             // Trigger a custom event that the Dashboard can listen to
             window.dispatchEvent(new CustomEvent('replay-action', {
               detail: action

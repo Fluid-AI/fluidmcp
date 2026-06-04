@@ -17,6 +17,11 @@ from .url_utils import (
     get_environment_info,
     print_auth_urls
 )
+# Bearer token authentication - imported from bearer.py inside this package.
+# The auth/ package directory shadows the auth.py module at the same level,
+# so `from ..auth import verify_token` would resolve back to this package
+# (circular) and never reach auth.py. Defining the verifier in bearer.py and
+# re-exporting it here makes the import path unambiguous.
 from .bearer import verify_token, get_token
 
 __all__ = [
@@ -45,7 +50,7 @@ __all__ = [
     "get_environment_info",
     "print_auth_urls",
 
-    # Legacy bearer token auth
+    # Bearer token auth
     "verify_token",
     "get_token",
 ]

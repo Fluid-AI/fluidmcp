@@ -1,8 +1,10 @@
 """
-Bearer token authentication utilities (legacy/simple auth mode).
+Bearer token authentication for FluidMCP.
 
-Used by endpoints that need simple bearer token validation
-independent of the OAuth2/Auth0 flow.
+This module provides the bearer token verifier used to protect FastAPI endpoints
+when FMCP_SECURE_MODE=true. It is defined inside the auth/ package so that
+`from fluidmcp.cli.auth import verify_token` resolves unambiguously to this
+module, without relying on the auth.py module which is shadowed by the package.
 """
 
 import os
@@ -37,24 +39,20 @@ def _validate_bearer_token(credentials: HTTPAuthorizationCredentials, bearer_tok
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> None:
-    """Validate bearer token if secure mode is enabled."""
+    """Validate bearer token if FMCP_SECURE_MODE=true, pass through otherwise."""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
     secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
     if not secure_mode:
         return None
-
     _validate_bearer_token(credentials, bearer_token)
     return None
 
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[str]:
-    """Validate bearer token and return the token value."""
+    """Validate bearer token and return its value; returns None when secure mode is off."""
     bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
     secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
-
     if not secure_mode:
         return None
-
     _validate_bearer_token(credentials, bearer_token)
     return credentials.credentials
