@@ -2101,6 +2101,9 @@ class MCPHealthMonitor:
                             process.kill()
                             await asyncio.to_thread(process.wait)
                         await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
+                # Honour restart policy — fetch fresh instance state written by _cleanup_server
+                instance = await self._sm.db.get_instance_state(server_id) or {}
+                await self._sm._check_auto_restart_on_crash(server_id, instance)
                 return
 
             elif mem_pct >= memory_warn_pct:
@@ -2159,6 +2162,9 @@ class MCPHealthMonitor:
                             process.kill()
                             await asyncio.to_thread(process.wait)
                         await self._sm._cleanup_server(server_id, exit_code=-1, intentional=False)
+                # Honour restart policy — fetch fresh instance state written by _cleanup_server
+                instance = await self._sm.db.get_instance_state(server_id) or {}
+                await self._sm._check_auto_restart_on_crash(server_id, instance)
         else:
             # Reset counter on any healthy cycle
             self._high_cpu_cycles.pop(server_id, None)

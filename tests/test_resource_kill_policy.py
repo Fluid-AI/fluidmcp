@@ -306,3 +306,88 @@ class TestConfigOverrides:
 
         await monitor._check_resource_thresholds("srv", process)
         assert len(cleanup_called) == 1
+
+
+# ---------------------------------------------------------------------------
+# Restart policy after resource kill
+# ---------------------------------------------------------------------------
+
+class TestRestartPolicyAfterKill:
+
+    @pytest.mark.asyncio
+    async def test_restart_invoked_after_memory_kill(self, monitor, server_manager):
+        """_check_auto_restart_on_crash must be called after a memory-triggered kill."""
+        server_manager.configs["srv"] = {
+            "memory_limit_mb": 100,
+            "memory_kill_pct": 98,
+            "memory_warn_pct": 90,
+        }
+        process = _make_process()
+        server_manager.processes["srv"] = process
+        _set_snapshot(monitor, "srv", memory_rss_bytes=99 * 1024 * 1024)
+
+        restart_checked = []
+
+        async def mock_cleanup(id, exit_code, intentional=False):
+            pass
+
+        async def mock_restart_check(server_id, instance):
+            restart_checked.append(server_id)
+
+        server_manager._cleanup_server = mock_cleanup
+        server_manager._check_auto_restart_on_crash = mock_restart_check
+
+        await monitor._check_resource_thresholds("srv", process)
+
+        assert restart_checked == ["srv"], "restart policy was not invoked after memory kill"
+
+    @pytest.mark.asyncio
+    async def test_restart_invoked_after_cpu_kill(self, monitor, server_manager):
+        """_check_auto_restart_on_crash must be called after a CPU-stuck kill."""
+        server_manager.configs["srv"] = {
+            "cpu_warn_pct": 80,
+            "cpu_kill_cycles": 1,
+        }
+        process = _make_process()
+        server_manager.processes["srv"] = process
+        _set_snapshot(monitor, "srv", cpu_percent=85.0)
+
+        restart_checked = []
+
+        async def mock_cleanup(id, exit_code, intentional=False):
+            pass
+
+        async def mock_restart_check(server_id, instance):
+            restart_checked.append(server_id)
+
+        server_manager._cleanup_server = mock_cleanup
+        server_manager._check_auto_restart_on_crash = mock_restart_check
+
+        await monitor._check_resource_thresholds("srv", process)
+
+        assert restart_checked == ["srv"], "restart policy was not invoked after CPU kill"
+
+    @pytest.mark.asyncio
+    async def test_restart_not_invoked_when_cooldown_active(self, monitor, server_manager):
+        """When cooldown guard skips the kill, restart must not be called either."""
+        server_manager.configs["srv"] = {
+            "memory_limit_mb": 100,
+            "memory_kill_pct": 98,
+        }
+        process = _make_process()
+        server_manager.processes["srv"] = process
+        _set_snapshot(monitor, "srv", memory_rss_bytes=99 * 1024 * 1024)
+
+        # Set a recent kill so cooldown is active
+        monitor._last_kill_time["srv"] = time.monotonic()
+
+        restart_checked = []
+
+        async def mock_restart_check(server_id, instance):
+            restart_checked.append(server_id)
+
+        server_manager._check_auto_restart_on_crash = mock_restart_check
+
+        await monitor._check_resource_thresholds("srv", process)
+
+        assert restart_checked == [], "restart should not be called when cooldown skipped the kill"
