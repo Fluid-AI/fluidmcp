@@ -61,16 +61,13 @@ async def get_current_user(
     # 1. Authorization header (highest priority - for API clients)
     if credentials:
         token = credentials.credentials
-        logger.debug(f"Token from Authorization header")
 
     # 2. httpOnly cookie (for browser-based OAuth)
     elif "fmcp_auth_token" in request.cookies:
         token = request.cookies["fmcp_auth_token"]
-        logger.debug(f"Token from cookie")
 
     # Authentication required but no token found
     if not token:
-        logger.debug(f"No authentication token found")
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Please provide a valid token."

@@ -4,7 +4,7 @@ Authentication API routes for Auth0 OAuth flow.
 This module provides FastAPI endpoints for Auth0 authentication.
 """
 
-import html as html_lib
+import html as html_module
 import os
 import secrets
 from datetime import datetime, timedelta
@@ -88,7 +88,8 @@ async def callback(request: Request, code: str = None, state: str = None, error:
     ip_address = request.client.host if request.client else "unknown"
 
     if error:
-        logger.error(f"OAuth callback error: {error}")
+        logger.error(f"OAuth callback error received")
+        safe_error = html_module.escape(error)
         error_html = f"""
         <!DOCTYPE html>
         <html>
@@ -104,7 +105,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         <body>
             <div class="error-box">
                 <h1>Authentication Error</h1>
-                <p>{html_lib.escape(error)}</p>
+                <p>{safe_error}</p>
                 <p><a href="/auth/login">Try again</a></p>
             </div>
         </body>
@@ -137,6 +138,8 @@ async def callback(request: Request, code: str = None, state: str = None, error:
 
         logger.info(f"OAuth login successful for user: {user_info.get('email', user_info.get('sub'))}")
 
+        safe_name = html_module.escape(user_info.get('name', user_info.get('email', 'User')))
+
         # Create HTML response WITHOUT localStorage (token in httpOnly cookie)
         success_html = f"""
         <!DOCTYPE html>
@@ -153,8 +156,8 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         </head>
         <body>
             <div class="success-box">
-                <h1>✓ Login Successful!</h1>
-                <p>Welcome, {html_lib.escape(user_info.get('name', user_info.get('email', 'User')))}!</p>
+                <h1>&#10003; Login Successful!</h1>
+                <p>Welcome, {safe_name}!</p>
                 <p>Redirecting to dashboard...</p>
                 <div class="spinner"></div>
             </div>
@@ -169,6 +172,10 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         </html>
         """
 
+        # Derive Secure flag from the actual request scheme so production HTTPS
+        # deployments are always protected even when FMCP_BASE_URL is not set.
+        use_secure_cookie = request.url.scheme == "https" or not is_local_development()
+
         # Create response with httpOnly cookie for security
         response = Response(content=success_html, media_type="text/html")
 
@@ -177,7 +184,7 @@ async def callback(request: Request, code: str = None, state: str = None, error:
             key="fmcp_auth_token",
             value=access_token,
             httponly=True,  # Not accessible to JavaScript (XSS protection)
-            secure=not is_local_development(),  # HTTPS only in production, HTTP ok for localhost
+            secure=use_secure_cookie,  # HTTPS only in production, HTTP ok for localhost
             samesite="lax",  # CSRF protection + allows OAuth redirects
             max_age=86400,  # 24 hours
             path="/"
@@ -186,25 +193,23 @@ async def callback(request: Request, code: str = None, state: str = None, error:
         return response
 
     except Exception as e:
-        logger.error(f"OAuth token exchange failed: {e}")
-        error_html = f"""
+        logger.error(f"OAuth token exchange failed")
+        error_html = """
         <!DOCTYPE html>
         <html>
         <head>
             <title>Authentication Failed</title>
             <style>
-                body {{ font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }}
-                .error-box {{ background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }}
-                h1 {{ color: #dc3545; }}
-                a {{ color: #667eea; text-decoration: none; }}
-                .error-details {{ background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; font-family: monospace; font-size: 12px; text-align: left; word-break: break-word; }}
+                body { font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
+                .error-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                h1 { color: #dc3545; }
+                a { color: #667eea; text-decoration: none; }
             </style>
         </head>
         <body>
             <div class="error-box">
                 <h1>Authentication Failed</h1>
                 <p>Unable to complete authentication with Auth0.</p>
-                <div class="error-details">{html_lib.escape(str(e))}</div>
                 <p><a href="/auth/login">Try again</a></p>
             </div>
         </body>

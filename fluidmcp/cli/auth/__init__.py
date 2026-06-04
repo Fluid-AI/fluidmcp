@@ -17,7 +17,6 @@ from .url_utils import (
     get_environment_info,
     print_auth_urls
 )
-
 # Bearer token authentication - imported from bearer.py inside this package.
 # The auth/ package directory shadows the auth.py module at the same level,
 # so `from ..auth import verify_token` would resolve back to this package

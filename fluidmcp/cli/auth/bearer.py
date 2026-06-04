@@ -22,12 +22,14 @@ def _validate_bearer_token(credentials: HTTPAuthorizationCredentials, bearer_tok
             status_code=500,
             detail="Server misconfiguration: FMCP_BEARER_TOKEN not set in secure mode"
         )
+
     if not credentials or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing authorization token",
             headers={"WWW-Authenticate": "Bearer"}
         )
+
     if not secrets.compare_digest(credentials.credentials, bearer_token):
         raise HTTPException(
             status_code=401,
