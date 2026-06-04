@@ -54,6 +54,13 @@ except ImportError:
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.server_manager import classify_exit_code
+
+try:
+    import psutil as _psutil
+    _psutil_available = True
+except ImportError:
+    _psutil = None
+    _psutil_available = False
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
@@ -1774,6 +1781,84 @@ async def get_server_stderr(
         raise HTTPException(500, f"Failed to read stderr log: {truncate_error(str(e))}")
 
     return {"server": id, **result}
+
+
+@router.get("/servers/{id}/resources")
+async def get_server_resources(request: Request, id: str):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    process = manager.processes.get(id)
+    pid = getattr(process, "pid", None) if process else None
+
+    memory_limit_mb = (config or {}).get(
+        "memory_limit_mb",
+        int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0"))
+    )
+    memory_limit_bytes = memory_limit_mb * 1024 * 1024 if memory_limit_mb > 0 else None
+
+    monitor = getattr(manager, "_health_monitor", None)
+    snapshot = monitor._last_resource_snapshot.get(id) if monitor else None
+
+    rss = cpu = open_fds = threads = None
+    status = "not_running"
+    try:
+        if not _psutil_available:
+            raise ImportError("psutil not available")
+        if pid and process and process.poll() is None:
+            proc = _psutil.Process(pid)
+            rss = proc.memory_info().rss
+            cpu = proc.cpu_percent(interval=None)
+            open_fds = proc.num_fds() if hasattr(proc, "num_fds") else None
+            threads = proc.num_threads()
+            status = "running"
+        else:
+            raise RuntimeError("process not running")
+    except Exception:
+        if snapshot:
+            rss = snapshot.get("memory_rss_bytes")
+            cpu = snapshot.get("cpu_percent")
+            open_fds = snapshot.get("open_fds")
+        status = "not_running"
+
+    def _human(b: Optional[int]) -> Optional[str]:
+        if b is None:
+            return None
+        for unit in ("B", "KB", "MB", "GB"):
+            if b < 1024:
+                return f"{b:.1f} {unit}"
+            b //= 1024
+        return f"{b:.1f} TB"
+
+    memory_usage_pct = None
+    memory_limit_note = None
+    if memory_limit_bytes:
+        memory_usage_pct = round(rss / memory_limit_bytes * 100, 1) if rss else None
+    else:
+        memory_limit_note = "memory limit not configured — set FMCP_DEFAULT_MEMORY_LIMIT_MB to enable"
+
+    memory_trend = monitor.get_memory_trend(id) if monitor else "unknown"
+
+    return {
+        "server": id,
+        "pid": pid,
+        "status": status,
+        "memory_rss_bytes": rss,
+        "memory_rss_human": _human(rss),
+        "memory_trend": memory_trend,
+        "memory_limit_bytes": memory_limit_bytes,
+        "memory_limit_human": _human(memory_limit_bytes),
+        "memory_usage_pct": memory_usage_pct,
+        "memory_limit_note": memory_limit_note,
+        "cpu_percent": cpu,
+        "open_fds": open_fds,
+        "threads": threads,
+    }
 
 
 # ==================== Environment Variable Management ====================
