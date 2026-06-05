@@ -550,6 +550,7 @@ class ServerManager:
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
+                    "stability": instance.get("stability", "stable") if instance else "stable",
                     "exit_code": None
                 }
             else:
@@ -560,6 +561,7 @@ class ServerManager:
                     "pid": None,
                     "uptime": None,
                     "restart_count": 0,
+                    "stability": "stable",
                     "exit_code": process.returncode
                 }
 
@@ -586,6 +588,7 @@ class ServerManager:
                             "pid": None,
                             "uptime": None,
                             "restart_count": instance.get("restart_count", 0),
+                            "stability": instance.get("stability", "stable"),
                             "exit_code": -1
                         }
 
@@ -618,6 +621,7 @@ class ServerManager:
                         "pid": None,
                         "uptime": None,
                         "restart_count": instance.get("restart_count", 0),
+                        "stability": instance.get("stability", "stable"),
                         "exit_code": -1
                     }
 
@@ -628,6 +632,7 @@ class ServerManager:
                 "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
+                "stability": instance.get("stability", "stable"),
                 "exit_code": instance.get("exit_code")
             }
 
@@ -638,6 +643,7 @@ class ServerManager:
             "pid": None,
             "uptime": None,
             "restart_count": 0,
+            "stability": "stable",
             "exit_code": None
         }
 
@@ -1803,6 +1809,15 @@ class MCPHealthMonitor:
         # Tracks whether cpu_percent has been warmed up for each PID (first call returns 0.0)
         self._cpu_warmed_pids: set = set()
 
+        # Resource throttling state
+        # Consecutive cycles where cpu_percent exceeded cpu_warn_pct
+        self._high_cpu_cycles: Dict[str, int] = {}
+        # Timestamp of last resource-triggered kill per server (cooldown guard)
+        self._last_kill_time: Dict[str, float] = {}
+
+        # Stability tracking: sliding window of restart timestamps (10 min)
+        self._restart_timestamps: Dict[str, List[float]] = {}
+
     def start(self) -> None:
         """Start the background health monitor."""
         if self._running:
@@ -1885,8 +1900,12 @@ class MCPHealthMonitor:
                 uptime = self._sm.get_uptime(server_id)
                 if uptime and uptime > 300:
                     self._restart_counts.pop(server_id, None)
+                    self._restart_timestamps.pop(server_id, None)
+                    asyncio.ensure_future(self._clear_stability(server_id))
             # Update resource snapshot while process is alive
             self._update_resource_snapshot(server_id, process)
+            # Check resource thresholds and kill/restart if exceeded
+            await self._check_resource_thresholds(server_id, process)
             return
 
         # Evict stale PID from warm-up tracking so the next restart gets a fresh warm-up
@@ -1911,6 +1930,20 @@ class MCPHealthMonitor:
                     await self._sm._cleanup_server(server_id, exit_code)
             return
 
+        await self._restart_under_policy(server_id, process, exit_code, config)
+
+    async def _restart_under_policy(
+        self,
+        server_id: str,
+        process,
+        exit_code: int,
+        config: Dict[str, Any],
+    ) -> None:
+        """Apply restart policy after a process death (natural or resource-triggered).
+
+        Shared by the dead-process monitor path and resource-kill paths so both
+        honour the same restart_policy / max_restarts / exponential-backoff logic.
+        """
         restart_policy = config.get("restart_policy", "on-failure")
         max_restarts = config.get("max_restarts", 3)
 
@@ -1964,6 +1997,7 @@ class MCPHealthMonitor:
                     )
                     success = False
             self._restart_counts[server_id] = count + 1
+            await self._check_stability(server_id)
             if success:
                 logger.info(f"MCP server '{server_id}' restarted successfully")
             else:
@@ -2031,3 +2065,166 @@ class MCPHealthMonitor:
         if len(set(readings)) == 1:
             return "stable"
         return "fluctuating"
+
+    async def _check_resource_thresholds(self, server_id: str, process) -> None:
+        """Kill or restart a server if it exceeds memory or CPU thresholds."""
+        snapshot = self._last_resource_snapshot.get(server_id)
+        if not snapshot:
+            return
+
+        config = self._sm.configs.get(server_id) or {}
+
+        # --- Memory kill policy ---
+        try:
+            memory_warn_pct = float(config.get("memory_warn_pct",
+                os.getenv("FMCP_MEMORY_WARN_PCT", "90")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_MEMORY_WARN_PCT value, using default 90%")
+            memory_warn_pct = 90.0
+        try:
+            memory_kill_pct = float(config.get("memory_kill_pct",
+                os.getenv("FMCP_MEMORY_KILL_PCT", "98")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_MEMORY_KILL_PCT value, using default 98%")
+            memory_kill_pct = 98.0
+
+        try:
+            memory_limit_mb = config.get("memory_limit_mb",
+                int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_DEFAULT_MEMORY_LIMIT_MB value, using default 0")
+            memory_limit_mb = 0
+        memory_limit_bytes = memory_limit_mb * 1024 * 1024 if memory_limit_mb > 0 else None
+
+        if memory_limit_bytes and snapshot.get("memory_rss_bytes"):
+            mem_pct = snapshot["memory_rss_bytes"] / memory_limit_bytes * 100
+
+            if mem_pct >= memory_kill_pct:
+                # Cooldown guard: at most one resource kill per 60s per server
+                now = time.monotonic()
+                last_kill = self._last_kill_time.get(server_id)
+                if last_kill and (now - last_kill) < 60:
+                    elapsed = now - last_kill
+                    logger.warning(
+                        f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% — "
+                        f"kill skipped, cooldown active ({60 - elapsed:.0f}s remaining)"
+                    )
+                    return
+                self._last_kill_time[server_id] = now
+                logger.error(
+                    f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
+                    f"(>= {memory_kill_pct}%), killing to protect other servers"
+                )
+                # Terminate the process; _restart_under_policy handles cleanup + restart
+                if self._sm.processes.get(server_id) is process:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(process.wait), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.to_thread(process.wait)
+                # Route through the same monitor restart-policy/backoff path as a natural death
+                await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
+                return
+
+            elif mem_pct >= memory_warn_pct:
+                logger.warning(
+                    f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
+                    f"(>= {memory_warn_pct}%) — approaching kill threshold"
+                )
+
+        # --- CPU stuck policy ---
+        try:
+            cpu_warn_pct = float(config.get("cpu_warn_pct",
+                os.getenv("FMCP_CPU_WARN_PCT", "90")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_CPU_WARN_PCT value, using default 90%")
+            cpu_warn_pct = 90.0
+        try:
+            cpu_kill_cycles = int(config.get("cpu_kill_cycles",
+                os.getenv("FMCP_CPU_KILL_CYCLES", "3")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_CPU_KILL_CYCLES value, using default 3")
+            cpu_kill_cycles = 3
+
+        cpu_pct = snapshot.get("cpu_percent", 0) or 0
+        if cpu_pct >= cpu_warn_pct:
+            self._high_cpu_cycles[server_id] = self._high_cpu_cycles.get(server_id, 0) + 1
+            cycles = self._high_cpu_cycles[server_id]
+            logger.warning(
+                f"[RESOURCE] {server_id} CPU at {cpu_pct:.1f}% "
+                f"(cycle {cycles}/{cpu_kill_cycles})"
+            )
+            if cycles >= cpu_kill_cycles:
+                now = time.monotonic()
+                last_kill = self._last_kill_time.get(server_id)
+                if last_kill and (now - last_kill) < 60:
+                    elapsed = now - last_kill
+                    logger.warning(
+                        f"[RESOURCE] {server_id} CPU stuck — "
+                        f"kill skipped, cooldown active ({60 - elapsed:.0f}s remaining)"
+                    )
+                    return
+                self._last_kill_time[server_id] = now
+                self._high_cpu_cycles.pop(server_id, None)
+                logger.error(
+                    f"[RESOURCE] {server_id} CPU stuck at {cpu_pct:.1f}% "
+                    f"for {cpu_kill_cycles} consecutive cycles, restarting"
+                )
+                # Terminate the process; _restart_under_policy handles cleanup + restart
+                if self._sm.processes.get(server_id) is process:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(process.wait), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.to_thread(process.wait)
+                # Route through the same monitor restart-policy/backoff path as a natural death
+                await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
+        else:
+            # Reset counter on any healthy cycle
+            self._high_cpu_cycles.pop(server_id, None)
+
+    async def _check_stability(self, server_id: str) -> None:
+        """Record a restart timestamp and flag server as unstable if flapping."""
+        now = time.monotonic()
+        window = 600  # 10 minutes
+        try:
+            storm_threshold = int(os.getenv("FMCP_RESTART_STORM_THRESHOLD", "5"))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_RESTART_STORM_THRESHOLD value, using default 5")
+            storm_threshold = 5
+
+        timestamps = self._restart_timestamps.get(server_id, [])
+        timestamps.append(now)
+        # Keep only timestamps within the sliding window
+        timestamps = [t for t in timestamps if now - t <= window]
+        self._restart_timestamps[server_id] = timestamps
+
+        if len(timestamps) >= storm_threshold:
+            logger.warning(
+                f"[ALERT] {server_id} has restarted {len(timestamps)} times "
+                f"in the last 10 minutes — marking unstable"
+            )
+            try:
+                instance = await self._sm.db.get_instance_state(server_id) or {}
+                instance["server_id"] = server_id
+                instance["stability"] = "unstable"
+                await self._sm.db.save_instance_state(instance)
+            except Exception as e:
+                logger.error(f"Failed to update stability flag for '{server_id}': {e}")
+
+    async def _clear_stability(self, server_id: str) -> None:
+        """Clear the unstable flag after sustained healthy operation."""
+        try:
+            instance = await self._sm.db.get_instance_state(server_id)
+            if instance and instance.get("stability") == "unstable":
+                instance["stability"] = "stable"
+                await self._sm.db.save_instance_state(instance)
+                logger.info(f"[ALERT] {server_id} stability cleared after 5 minutes of healthy operation")
+        except Exception as e:
+            logger.error(f"Failed to clear stability flag for '{server_id}': {e}")

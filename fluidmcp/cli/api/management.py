@@ -1784,7 +1784,7 @@ async def get_server_stderr(
 
 
 @router.get("/servers/{id}/resources")
-async def get_server_resources(request: Request, id: str):
+async def get_server_resources(request: Request, id: str, token: str = Depends(get_token)):
     manager = get_server_manager(request)
 
     config = manager.configs.get(id)
