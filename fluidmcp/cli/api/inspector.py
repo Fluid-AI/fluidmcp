@@ -357,10 +357,32 @@ async def export_server(session_id: str):
     # Strip auth tokens — only expose the type so the recipient knows what auth is needed
     safe_auth = {"type": session.auth.get("type", "none")} if session.auth else {"type": "none"}
 
+    # Redact credentials from URL: remove userinfo (user:pass@host) and any
+    # query parameters whose names suggest secrets (token, key, secret, etc.)
+    _SENSITIVE_PARAM_PATTERN = {"token", "key", "secret", "password", "pass",
+                                "auth", "apikey", "api_key", "access_token",
+                                "client_secret", "credential"}
+    def _safe_url(raw: str) -> str:
+        try:
+            from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+            p = urlparse(raw)
+            # Drop userinfo (user:password@host)
+            netloc = p.hostname or ""
+            if p.port:
+                netloc = f"{netloc}:{p.port}"
+            # Redact sensitive query params
+            clean_qs = urlencode([
+                (k, "***") if k.lower() in _SENSITIVE_PARAM_PATTERN else (k, v)
+                for k, v in parse_qsl(p.query, keep_blank_values=True)
+            ])
+            return urlunparse((p.scheme, netloc, p.path, p.params, clean_qs, ""))
+        except Exception:
+            return ""
+
     return {
         "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "serverInfo": getattr(session, "server_info", {}),
-        "url": session.url,
+        "url": _safe_url(session.url),
         "transport": session.transport,
         "auth": safe_auth,
         "tools": tools,
