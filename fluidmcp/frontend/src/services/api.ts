@@ -309,6 +309,8 @@ class ApiClient {
 
   async logout(): Promise<void> {
     return this.request('/auth/logout', { method: 'POST' });
+  }
+
   // Inspector Tools APIs
   async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
     return this.request(`/api/inspector/connect`, {

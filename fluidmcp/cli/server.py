@@ -54,7 +54,7 @@ class TraceContextMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
-from .auth import get_optional_user
+from .auth import get_optional_user, get_current_user
 from .services.opentelemetry_manager import init_opentelemetry, shutdown_opentelemetry
 
 def save_token_to_file(token: str) -> Path:
@@ -340,7 +340,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
 
     @app.get("/metrics")
-    async def metrics(request: Request, _=Depends(get_optional_user)):
+    async def metrics(request: Request, _=Depends(get_current_user)):
         """
         Prometheus-compatible metrics endpoint.
 
@@ -853,7 +853,7 @@ def run():
         else:
             # Generate new token
             args.token = secrets.token_urlsafe(32)
-            logger.info(f"Generated bearer token: {args.token}")
+            logger.info(f"Generated bearer token (starts with: {args.token[:4]}****)")
 
             # Save to secure file
             token_file = save_token_to_file(args.token)
