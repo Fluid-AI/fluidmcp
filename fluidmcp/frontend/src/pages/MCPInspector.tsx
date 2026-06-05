@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/services/api";
-import { type SavedRequest, loadSavedRequests, saveRequest, deleteSavedRequest } from "@/lib/saved-requests";
+import { type SavedRequest, loadSavedRequests, saveRequest, deleteSavedRequest, renameSavedRequest } from "@/lib/saved-requests";
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
 import { JsonResultView } from '../components/result/JsonResultView';
@@ -379,6 +379,8 @@ export default function MCPInspector() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveTitle, setSaveTitle] = useState("")
   const [formPrefill, setFormPrefill] = useState<Record<string, any> | undefined>(undefined)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameTitle, setRenameTitle] = useState("")
   // 3A-4: typed per-server execution history
   const [executionHistoryByServer, setExecutionHistoryByServer] = useState<Record<string, ExecutionRun[]>>({})
   const executionHistory = executionHistoryByServer[selectedServerId ?? ""] ?? []
@@ -1484,9 +1486,10 @@ export default function MCPInspector() {
                                             borderRadius: "5px",
                                             border: "1px solid rgba(63,63,70,0.4)",
                                             background: "rgba(0,0,0,0.2)",
-                                            cursor: "pointer",
+                                            cursor: renamingId === req.id ? "default" : "pointer",
                                           }}
                                           onClick={() => {
+                                            if (renamingId === req.id) return;
                                             const tool = server.tools.find((t: any) => t.name === req.toolName);
                                             if (tool) {
                                               setSelectedTool(tool);
@@ -1497,25 +1500,86 @@ export default function MCPInspector() {
                                             }
                                           }}
                                         >
-                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                                            <div style={{ flex: 1, minWidth: 0 }}>
-                                              <div style={{ fontSize: "0.72rem", color: "#fff", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{req.title}</div>
-                                              <div style={{ fontSize: "0.64rem", color: "rgba(255,255,255,0.4)", marginTop: "0.1rem" }}>{req.toolName}</div>
+                                          {renamingId === req.id ? (
+                                            <div style={{ display: "flex", gap: "0.3rem", alignItems: "center" }} onClick={e => e.stopPropagation()}>
+                                              <input
+                                                autoFocus
+                                                value={renameTitle}
+                                                onChange={e => setRenameTitle(e.target.value)}
+                                                onKeyDown={e => {
+                                                  if (e.key === "Enter" && renameTitle.trim()) {
+                                                    renameSavedRequest(selectedServer.url, req.id, renameTitle.trim());
+                                                    setSavedRequests(loadSavedRequests(selectedServer.url));
+                                                    setRenamingId(null);
+                                                  } else if (e.key === "Escape") {
+                                                    setRenamingId(null);
+                                                  }
+                                                }}
+                                                style={{
+                                                  flex: 1, fontSize: "0.72rem", padding: "0.15rem 0.3rem",
+                                                  borderRadius: "3px", border: "1px solid rgba(99,102,241,0.5)",
+                                                  background: "rgba(0,0,0,0.35)", color: "#fff",
+                                                }}
+                                              />
+                                              <button
+                                                onClick={() => {
+                                                  if (renameTitle.trim()) {
+                                                    renameSavedRequest(selectedServer.url, req.id, renameTitle.trim());
+                                                    setSavedRequests(loadSavedRequests(selectedServer.url));
+                                                  }
+                                                  setRenamingId(null);
+                                                }}
+                                                style={{
+                                                  fontSize: "0.6rem", padding: "0.1rem 0.3rem",
+                                                  borderRadius: "3px", border: "1px solid rgba(99,102,241,0.4)",
+                                                  background: "rgba(99,102,241,0.15)", color: "rgba(165,180,252,0.9)", cursor: "pointer", flexShrink: 0,
+                                                }}
+                                              >✓</button>
+                                              <button
+                                                onClick={() => setRenamingId(null)}
+                                                style={{
+                                                  fontSize: "0.6rem", padding: "0.1rem 0.3rem",
+                                                  borderRadius: "3px", border: "1px solid rgba(63,63,70,0.5)",
+                                                  background: "transparent", color: "rgba(255,255,255,0.3)", cursor: "pointer", flexShrink: 0,
+                                                }}
+                                              >✕</button>
                                             </div>
-                                            <button
-                                              onClick={e => {
-                                                e.stopPropagation();
-                                                deleteSavedRequest(selectedServer.url, req.id);
-                                                setSavedRequests(loadSavedRequests(selectedServer.url));
-                                              }}
-                                              style={{
-                                                marginLeft: "0.35rem", fontSize: "0.6rem", padding: "0.1rem 0.3rem",
-                                                borderRadius: "3px", border: "1px solid rgba(63,63,70,0.5)",
-                                                background: "transparent", color: "rgba(255,255,255,0.3)", cursor: "pointer", flexShrink: 0,
-                                              }}
-                                              title="Delete saved request"
-                                            >✕</button>
-                                          </div>
+                                          ) : (
+                                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                                              <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ fontSize: "0.72rem", color: "#fff", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{req.title}</div>
+                                                <div style={{ fontSize: "0.64rem", color: "rgba(255,255,255,0.4)", marginTop: "0.1rem" }}>{req.toolName}</div>
+                                              </div>
+                                              <div style={{ display: "flex", gap: "0.2rem", flexShrink: 0, marginLeft: "0.35rem" }}>
+                                                <button
+                                                  onClick={e => {
+                                                    e.stopPropagation();
+                                                    setRenamingId(req.id);
+                                                    setRenameTitle(req.title);
+                                                  }}
+                                                  style={{
+                                                    fontSize: "0.6rem", padding: "0.1rem 0.3rem",
+                                                    borderRadius: "3px", border: "1px solid rgba(63,63,70,0.5)",
+                                                    background: "transparent", color: "rgba(255,255,255,0.3)", cursor: "pointer",
+                                                  }}
+                                                  title="Rename saved request"
+                                                >✎</button>
+                                                <button
+                                                  onClick={e => {
+                                                    e.stopPropagation();
+                                                    deleteSavedRequest(selectedServer.url, req.id);
+                                                    setSavedRequests(loadSavedRequests(selectedServer.url));
+                                                  }}
+                                                  style={{
+                                                    fontSize: "0.6rem", padding: "0.1rem 0.3rem",
+                                                    borderRadius: "3px", border: "1px solid rgba(63,63,70,0.5)",
+                                                    background: "transparent", color: "rgba(255,255,255,0.3)", cursor: "pointer",
+                                                  }}
+                                                  title="Delete saved request"
+                                                >✕</button>
+                                              </div>
+                                            </div>
+                                          )}
                                         </div>
                                       ))}
                                     </div>

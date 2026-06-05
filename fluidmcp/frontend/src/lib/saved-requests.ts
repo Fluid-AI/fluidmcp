@@ -27,3 +27,10 @@ export function deleteSavedRequest(serverUrl: string, id: string): void {
   const all = loadSavedRequests(serverUrl).filter(r => r.id !== id);
   localStorage.setItem(storageKey(serverUrl), JSON.stringify(all));
 }
+
+export function renameSavedRequest(serverUrl: string, id: string, newTitle: string): void {
+  const all = loadSavedRequests(serverUrl).map(r =>
+    r.id === id ? { ...r, title: newTitle } : r
+  );
+  localStorage.setItem(storageKey(serverUrl), JSON.stringify(all));
+}
