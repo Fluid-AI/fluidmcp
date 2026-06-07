@@ -90,7 +90,7 @@ if [ "${ON_PREMISE}" = "true" ]; then
   echo ""
 
   echo "Starting fmcp run..."
-  fmcp run "$CONFIG_PATH" --file --start-server --port "$PORT" &
+  MCP_CLIENT_SERVER_ALL_PORT="$PORT" fmcp run "$CONFIG_PATH" --file --start-server &
   SERVE_PID=$!
 
   if ! kill -0 "$SERVE_PID" 2>/dev/null; then
