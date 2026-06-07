@@ -1,5 +1,6 @@
 import os
 import json
+import select as _select
 import subprocess
 import shutil
 import asyncio
@@ -18,6 +19,50 @@ from .metrics import MetricsCollector, RequestTimer
 from .network_handle import NetworkSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
+
+# Max seconds to wait for an MCP subprocess to write a response line.
+# Overridable via the MCP_READ_TIMEOUT environment variable.
+#
+# Why select() and not asyncio.wait_for():
+# wait_for cancels the coroutine but leaves the OS thread blocked on readline().
+# ThreadPoolExecutor can only reclaim a slot when the thread *returns*, so the
+# slot stays consumed forever. select() puts the timeout inside the thread itself —
+# if nothing arrives in time, the thread returns "" immediately and frees its slot.
+_MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "45"))
+
+
+def _readline_with_timeout(stdout, timeout: float) -> str:
+    """Read one line from a subprocess stdout pipe, with a hard thread-level timeout.
+
+    This function is designed to be called via asyncio.to_thread() so that the
+    event loop is not blocked. The key guarantee it provides over a plain
+    readline() call is that it will always return within `timeout` seconds,
+    ensuring the ThreadPoolExecutor slot is freed even if the MCP subprocess
+    hangs indefinitely.
+
+    How it works:
+        select.select() is called first with the given timeout. It blocks the
+        OS thread until either data is available on stdout OR the timeout expires.
+        - If data arrives in time:  select returns stdout in the ready-list and
+          we call readline() which returns immediately (data is already buffered).
+        - If the timeout expires:   select returns an empty ready-list, and we
+          return "" without touching readline() at all.
+
+    Callers check for the empty-string return value and raise HTTPException(504).
+
+    Args:
+        stdout: The stdout pipe of a subprocess.Popen instance.
+        timeout: Maximum seconds to wait before giving up.
+
+    Returns:
+        The next line (including the trailing newline) if data arrived in time,
+        or "" if the timeout elapsed without any data.
+    """
+    ready, _, _ = _select.select([stdout], [], [], timeout)
+    if not ready:
+        return ""
+    return stdout.readline()
+
 
 def find_metadata_file(base_dir: Path) -> Path:
     """
@@ -429,6 +474,36 @@ def create_dynamic_router(server_manager):
             _io_locks[name] = asyncio.Lock()
         return _io_locks[name]
 
+    async def auto_start_stopped_server(server_name: str) -> None:
+        """
+        Auto-start a stopped/idle-cleaned server if it has a valid, enabled config in the DB.
+
+        Raises HTTPException 404 if no config exists or server is disabled.
+        Raises HTTPException 503 if auto-start fails.
+        Does nothing if the server is already running.
+        """
+        # Fast path: process is alive, nothing to do
+        process = server_manager.processes.get(server_name)
+        if process is not None and process.poll() is None:
+            return
+
+        # No running process — check DB for a valid, enabled config
+        if server_manager.db is None:
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+
+        config = await server_manager.db.get_server_config(server_name)
+        if not config or config.get("deleted_at"):
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        if not config.get("enabled", True):
+            raise HTTPException(404, f"Server '{server_name}' is disabled")
+
+        safe_name = server_name.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_name}' on demand")
+        # Pass config so start_server skips a redundant DB fetch
+        started = await server_manager.start_server(server_name, config=config)
+        if not started:
+            raise HTTPException(503, f"Server '{server_name}' failed to auto-start")
+
     @router.post("/{server_name}/mcp", tags=["mcp"])
     async def proxy_jsonrpc(
         server_name: str,
@@ -458,15 +533,11 @@ def create_dynamic_router(server_manager):
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
-            # Check if server exists
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+            await auto_start_stopped_server(server_name)
 
-            process = server_manager.processes[server_name]
-
-            # Check if process is alive
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+            process = server_manager.processes.get(server_name)
+            if process is None:
+                raise HTTPException(503, f"Server '{server_name}' failed to start")
 
             # ── Network transport: forward via HTTP ──────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
@@ -487,8 +558,18 @@ def create_dynamic_router(server_manager):
                     except (BrokenPipeError, OSError) as e:
                         raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                    # Read response (non-blocking with asyncio.to_thread)
-                    response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Wait for the MCP subprocess to write its JSON-RPC response.
+                    # _readline_with_timeout runs in a thread (via to_thread) and uses
+                    # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
+                    # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
+                    # A plain readline() here would block the thread forever on a hung server,
+                    # eventually exhausting the pool and making all healthy servers unreachable.
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
+                    if not response_line:
+                        # Empty string means select() timed out — server did not respond.
+                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -511,9 +592,6 @@ def create_dynamic_router(server_manager):
         """
         Server-Sent Events streaming endpoint for long-running MCP operations.
         """
-        # Update last_used_at for idle cleanup when SSE connection is opened
-        await server_manager.update_last_used(server_name)
-
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
@@ -522,6 +600,8 @@ def create_dynamic_router(server_manager):
         # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
         # in RequestTimer because they represent pre-flight validation failures that occur
         # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
+        # auto_start_stopped_server may auto-start a stopped server here; if it raises,
+        # the error is still a pre-flight failure before any streaming begins.
         #
         # These errors are observable through:
         # 1. FastAPI's built-in HTTP error logs
@@ -535,13 +615,14 @@ def create_dynamic_router(server_manager):
         #
         # Current implementation prioritizes clarity by separating HTTP validation from
         # MCP protocol errors tracked via RequestTimer.
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
+        # Update last_used_at for idle cleanup when SSE connection is opened
+        await server_manager.update_last_used(server_name)
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
@@ -613,9 +694,21 @@ def create_dynamic_router(server_manager):
                         return
 
                 while True:
-                    # Non-blocking I/O with asyncio.to_thread
-                    response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Read the next line from the MCP subprocess for streaming.
+                    # Uses _readline_with_timeout (via to_thread) so the thread returns
+                    # after _MCP_READ_TIMEOUT seconds if no data arrives, keeping the
+                    # ThreadPoolExecutor pool healthy for other servers.
+                    # An empty string indicates a timeout (select() expired);
+                    # a None/falsy non-empty value indicates EOF (process closed stdout).
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
                     if not response_line:
+                        if response_line == "":
+                            # Timeout: server never wrote data within the deadline.
+                            logger.warning(f"SSE stream for '{server_name}' timed out waiting for stdout after {_MCP_READ_TIMEOUT}s")
+                            yield f"data: {json.dumps({'error': f'Server did not respond within {_MCP_READ_TIMEOUT} seconds'})}\n\n"
+                        # Either timeout or EOF — stop streaming either way.
                         break
 
                     logger.debug(f"Received from MCP: {response_line.strip()}")
@@ -652,13 +745,11 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
-
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         # ── Network transport ────────────────────────────────────────────────
         if isinstance(process, NetworkSubprocessHandle):
@@ -685,8 +776,16 @@ def create_dynamic_router(server_manager):
                 except (BrokenPipeError, OSError) as e:
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Non-blocking I/O with asyncio.to_thread
-                response_line = await asyncio.to_thread(process.stdout.readline)
+                # Wait for the tools/list response from the MCP subprocess.
+                # _readline_with_timeout runs inside the thread and uses select() to
+                # enforce the timeout at the OS level, ensuring the thread returns and
+                # its pool slot is freed if this server hangs.
+                response_line = await asyncio.to_thread(
+                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                )
+                if not response_line:
+                    # select() timed out — no response received within the deadline.
+                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
@@ -712,13 +811,11 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
-
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         # ── Network transport ────────────────────────────────────────────────
         if isinstance(process, NetworkSubprocessHandle):
@@ -751,18 +848,21 @@ def create_dynamic_router(server_manager):
                 except (BrokenPipeError, OSError) as e:
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Tool execution with timeout
-                try:
-                    response_line = await asyncio.wait_for(
-                        asyncio.to_thread(process.stdout.readline),
-                        timeout=60.0  # 60 second tool execution timeout
-                    )
-                except asyncio.TimeoutError:
-                    # Log timeout failure
+                # Wait for the tool execution response from the MCP subprocess.
+                # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
+                # _readline_with_timeout uses select() inside the thread so the thread
+                # exits on timeout rather than blocking the ThreadPoolExecutor slot forever.
+                # Without this, a single hanging tool call occupies a thread indefinitely;
+                # enough concurrent hangs will exhaust the pool and block all other servers.
+                response_line = await asyncio.to_thread(
+                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                )
+                if not response_line:
+                    # select() timed out — persist the failure for observability before raising.
                     await server_manager.db.save_log_entry({
                         "server_name": server_name,
                         "stream": "error",
-                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
+                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
                     })
                     raise HTTPException(504, "Tool execution timed out")
 
