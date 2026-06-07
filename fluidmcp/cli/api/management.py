@@ -22,7 +22,7 @@ import json
 import threading
 from collections import defaultdict
 from time import time as current_time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 # Import centralized validators
 from .validators import (
@@ -53,10 +53,19 @@ except ImportError:
     _redis_available = False
 
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
+from ..services.server_manager import classify_exit_code
+
+try:
+    import psutil as _psutil
+    _psutil_available = True
+except ImportError:
+    _psutil = None
+    _psutil_available = False
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
+from ..services.network_handle import NetworkSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
 
@@ -1024,6 +1033,20 @@ async def add_server_from_github(
                     f"Choose a different Server ID and try again.",
                 )
 
+            # On re-clone (upsert), sync new env var keys from the updated config
+            # template into the instance env. Only add keys that are not already
+            # present so existing user-supplied values are never overwritten.
+            if upsert and existing_config:
+                template_env = server_config.get("env") or {}
+                if template_env:
+                    current_instance_env = await manager.db.get_instance_env(sid) or {}
+                    new_keys = {k: v for k, v in template_env.items() if k not in current_instance_env}
+                    if new_keys:
+                        if not await manager.db.update_instance_env(sid, new_keys):
+                            logger.warning(f"Failed to sync new env var(s) for '{sid}'")
+                        else:
+                            logger.info(f"Synced {len(new_keys)} new env var(s) to instance for '{sid}': {list(new_keys.keys())}")
+
             # Register in manager's in-memory configs for immediate availability
             manager.configs[sid] = server_config
             registered_ids.append(sid)
@@ -1281,6 +1304,9 @@ async def delete_server(
     if id in manager.configs:
         del manager.configs[id]
 
+    # Clean up stale instance state so a re-clone of the same server ID starts fresh
+    await manager.db.reset_instance_state(id)
+
     from datetime import datetime
     deleted_at = datetime.utcnow().isoformat()
     logger.info(f"Soft deleted server configuration: {id}")
@@ -1478,7 +1504,13 @@ async def proxy_sse(
     if config.get("transport") != "sse":
         raise HTTPException(400, f"Server '{id}' is not an SSE server (transport={config.get('transport', 'stdio')})")
 
-    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    # Resolve the dynamically allocated URL from the live process handle.
+    # Port is not stored in config — it's assigned at spawn time and held on
+    # NetworkSubprocessHandle. If the process isn't running, there's no URL to proxy to.
+    process = manager.processes.get(id)
+    if not isinstance(process, NetworkSubprocessHandle):
+        raise HTTPException(503, f"Server '{id}' is not currently running")
+    internal_url = process.base_url.rstrip("/")
     sse_url = f"{internal_url}/sse"
 
     async def event_stream():
@@ -1535,7 +1567,11 @@ async def proxy_sse_messages(
     if config.get("transport") != "sse":
         raise HTTPException(400, f"Server '{id}' is not an SSE server")
 
-    internal_url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
+    # Same as proxy_sse: port lives on the handle, not in config.
+    process = manager.processes.get(id)
+    if not isinstance(process, NetworkSubprocessHandle):
+        raise HTTPException(503, f"Server '{id}' is not currently running")
+    internal_url = process.base_url.rstrip("/")
     body = await request.body()
 
     try:
@@ -1671,6 +1707,157 @@ async def get_server_logs(
         "server": id,
         "logs": logs,
         "count": len(logs)
+    }
+
+
+# ==================== Debugging Endpoints ====================
+
+@router.get("/servers/{id}/crashes")
+async def get_server_crashes(
+    request: Request,
+    id: str,
+    limit: int = Query(20, ge=1, le=100, description="Max crash events to return"),
+    token: str = Depends(get_token),
+):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    crashes = await manager.db.list_crash_events(id, limit=limit)
+
+    # Annotate with human-readable exit classification if not already present
+    for crash in crashes:
+        if "exit_category" not in crash and "exit_code" in crash:
+            info = classify_exit_code(crash["exit_code"])
+            crash["exit_category"] = info["category"]
+            crash["exit_label"] = info["label"]
+            crash["exit_description"] = info["description"]
+        # Normalise ObjectId and datetime fields to JSON-safe types
+        crash.pop("_id", None)
+        if hasattr(crash.get("timestamp"), "isoformat"):
+            crash["timestamp"] = crash["timestamp"].isoformat()
+
+    # crashes_per_hour: query the DB for the full count in the last hour,
+    # independent of the `limit` param so the metric is always accurate.
+    now = datetime.now(timezone.utc)
+    one_hour_ago_ts = (now - timedelta(hours=1)).timestamp()
+    crashes_last_hour = await manager.db.count_crash_events_since(id, one_hour_ago_ts)
+
+    # restart_count from live status (falls back to 0)
+    status = await manager.get_server_status(id)
+    restart_count = status.get("restart_count", 0)
+
+    return {
+        "server": id,
+        "restart_count": restart_count,
+        "crashes_per_hour": crashes_last_hour,
+        "crashes": crashes,
+    }
+
+
+@router.get("/servers/{id}/stderr")
+async def get_server_stderr(
+    request: Request,
+    id: str,
+    lines: int = Query(50, ge=1, le=500, description="Number of recent lines to read"),
+    contains: Optional[str] = Query(None, description="Case-insensitive substring filter"),
+    token: str = Depends(get_token),
+):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    try:
+        result = manager.get_stderr_tail(id, lines=lines, contains=contains)
+    except OSError as e:
+        raise HTTPException(500, f"Failed to read stderr log: {truncate_error(str(e))}")
+
+    return {"server": id, **result}
+
+
+@router.get("/servers/{id}/resources")
+async def get_server_resources(request: Request, id: str, token: str = Depends(get_token)):
+    manager = get_server_manager(request)
+
+    config = manager.configs.get(id)
+    if not config:
+        config = await manager.db.get_server_config(id)
+    if not config:
+        raise HTTPException(404, f"Server '{id}' not found")
+
+    process = manager.processes.get(id)
+    pid = getattr(process, "pid", None) if process else None
+
+    memory_limit_mb = (config or {}).get(
+        "memory_limit_mb",
+        int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0"))
+    )
+    memory_limit_bytes = memory_limit_mb * 1024 * 1024 if memory_limit_mb > 0 else None
+
+    monitor = getattr(manager, "_health_monitor", None)
+    snapshot = monitor._last_resource_snapshot.get(id) if monitor else None
+
+    rss = cpu = open_fds = threads = None
+    status = "not_running"
+    try:
+        if not _psutil_available:
+            raise ImportError("psutil not available")
+        if pid and process and process.poll() is None:
+            proc = _psutil.Process(pid)
+            rss = proc.memory_info().rss
+            cpu = proc.cpu_percent(interval=None)
+            open_fds = proc.num_fds() if hasattr(proc, "num_fds") else None
+            threads = proc.num_threads()
+            status = "running"
+        else:
+            raise RuntimeError("process not running")
+    except Exception:
+        if snapshot:
+            rss = snapshot.get("memory_rss_bytes")
+            cpu = snapshot.get("cpu_percent")
+            open_fds = snapshot.get("open_fds")
+        status = "not_running"
+
+    def _human(b: Optional[int]) -> Optional[str]:
+        if b is None:
+            return None
+        for unit in ("B", "KB", "MB", "GB"):
+            if b < 1024:
+                return f"{b:.1f} {unit}"
+            b //= 1024
+        return f"{b:.1f} TB"
+
+    memory_usage_pct = None
+    memory_limit_note = None
+    if memory_limit_bytes:
+        memory_usage_pct = round(rss / memory_limit_bytes * 100, 1) if rss else None
+    else:
+        memory_limit_note = "memory limit not configured — set FMCP_DEFAULT_MEMORY_LIMIT_MB to enable"
+
+    memory_trend = monitor.get_memory_trend(id) if monitor else "unknown"
+
+    return {
+        "server": id,
+        "pid": pid,
+        "status": status,
+        "memory_rss_bytes": rss,
+        "memory_rss_human": _human(rss),
+        "memory_trend": memory_trend,
+        "memory_limit_bytes": memory_limit_bytes,
+        "memory_limit_human": _human(memory_limit_bytes),
+        "memory_usage_pct": memory_usage_pct,
+        "memory_limit_note": memory_limit_note,
+        "cpu_percent": cpu,
+        "open_fds": open_fds,
+        "threads": threads,
     }
 
 
@@ -1927,13 +2114,23 @@ async def run_tool(
     """
     manager = get_server_manager(request)
 
-    # Check if server is running
-    if id not in manager.processes:
-        raise HTTPException(400, f"Server '{id}' is not running")
+    # Auto-start the server if it's stopped but has a valid, enabled config
+    if id not in manager.processes or manager.processes[id].poll() is not None:
+        if manager.db is None:
+            raise HTTPException(400, f"Server '{id}' is not running")
+        config = await manager.db.get_server_config(id)
+        if not config or config.get("deleted_at") or not config.get("enabled", True):
+            raise HTTPException(400, f"Server '{id}' is not running")
+        safe_id = id.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_id}' on demand")
+        # Pass config so start_server skips a redundant DB fetch
+        started = await manager.start_server(id, config=config)
+        if not started:
+            raise HTTPException(400, f"Server '{id}' failed to auto-start")
 
-    process = manager.processes[id]
-    if process.poll() is not None:
-        raise HTTPException(400, f"Server '{id}' has stopped")
+    process = manager.processes.get(id)
+    if process is None:
+        raise HTTPException(503, f"Server '{id}' failed to start")
 
     # Send tools/call request
     try:

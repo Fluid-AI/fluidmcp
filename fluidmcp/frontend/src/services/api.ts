@@ -282,7 +282,14 @@ class ApiClient {
   }
 
   // Inspector Tools APIs
-  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+  async connectInspectorServer(payload: {
+    url?: string;
+    command?: string;
+    transport: string;
+    auth?: { type: string; token?: string };
+    headers?: Record<string, string>;
+    timeout?: number;
+  }): Promise<any> {
     return this.request(`/api/inspector/connect`, {
       method: "POST",
       body: JSON.stringify(payload),
@@ -328,6 +335,27 @@ class ApiClient {
     });
   }
 
+  async listInspectorResources(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources`);
+  }
+
+  async readInspectorResource(sessionId: string, uri: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources/read`, {
+      method: "POST",
+      body: JSON.stringify({ uri }),
+    });
+  }
+
+  async listInspectorPrompts(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/prompts`);
+  }
+
+  async getInspectorPrompt(sessionId: string, name: string, args: Record<string, string>): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/prompts/get`, {
+      method: "POST",
+      body: JSON.stringify({ name, arguments: args }),
+    });
+  }
 
   /**
    * Clone a GitHub repository and register its MCP server(s).

@@ -112,6 +112,12 @@ class InMemoryBackend(PersistenceBackend):
             return dict(state)
         return None
 
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """Delete instance state for a server from memory."""
+        self._instances.pop(server_id, None)
+        return True
+
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """Save log to memory (capped at 1000 lines per server)."""
         server_name = log_entry.get("server_name")
@@ -156,6 +162,30 @@ class InMemoryBackend(PersistenceBackend):
         """List recent crash events from in-memory storage."""
         events = list(self._crash_events.get(server_id, []))
         return events[:limit]
+
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """Count crash events since a UTC POSIX timestamp."""
+        count = 0
+        for event in self._crash_events.get(server_id, []):
+            ts = event.get("timestamp")
+            if ts is None:
+                continue
+            from datetime import datetime as _dt, timezone as _tz
+            if isinstance(ts, _dt):
+                # Treat naive datetimes as UTC (they come from datetime.utcnow())
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+                event_ts = ts.timestamp()
+            elif isinstance(ts, str):
+                parsed = _dt.fromisoformat(ts)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                event_ts = parsed.timestamp()
+            else:
+                event_ts = float(ts)
+            if event_ts > since_ts:
+                count += 1
+        return count
 
     # ==================== LLM Model Persistence ====================
 

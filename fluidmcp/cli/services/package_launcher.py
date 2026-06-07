@@ -1,10 +1,12 @@
 import os
 import json
+import select as _select
 import subprocess
 import shutil
 import asyncio
 import time
 import threading
+import httpx
 from typing import Union, Dict, Any, Iterator, AsyncIterator
 from pathlib import Path
 from loguru import logger
@@ -14,9 +16,53 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
-from .sse_handle import SseSubprocessHandle
+from .network_handle import NetworkSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
+
+# Max seconds to wait for an MCP subprocess to write a response line.
+# Overridable via the MCP_READ_TIMEOUT environment variable.
+#
+# Why select() and not asyncio.wait_for():
+# wait_for cancels the coroutine but leaves the OS thread blocked on readline().
+# ThreadPoolExecutor can only reclaim a slot when the thread *returns*, so the
+# slot stays consumed forever. select() puts the timeout inside the thread itself —
+# if nothing arrives in time, the thread returns "" immediately and frees its slot.
+_MCP_READ_TIMEOUT = float(os.environ.get("MCP_READ_TIMEOUT", "45"))
+
+
+def _readline_with_timeout(stdout, timeout: float) -> str:
+    """Read one line from a subprocess stdout pipe, with a hard thread-level timeout.
+
+    This function is designed to be called via asyncio.to_thread() so that the
+    event loop is not blocked. The key guarantee it provides over a plain
+    readline() call is that it will always return within `timeout` seconds,
+    ensuring the ThreadPoolExecutor slot is freed even if the MCP subprocess
+    hangs indefinitely.
+
+    How it works:
+        select.select() is called first with the given timeout. It blocks the
+        OS thread until either data is available on stdout OR the timeout expires.
+        - If data arrives in time:  select returns stdout in the ready-list and
+          we call readline() which returns immediately (data is already buffered).
+        - If the timeout expires:   select returns an empty ready-list, and we
+          return "" without touching readline() at all.
+
+    Callers check for the empty-string return value and raise HTTPException(504).
+
+    Args:
+        stdout: The stdout pipe of a subprocess.Popen instance.
+        timeout: Maximum seconds to wait before giving up.
+
+    Returns:
+        The next line (including the trailing newline) if data arrived in time,
+        or "" if the timeout elapsed without any data.
+    """
+    ready, _, _ = _select.select([stdout], [], [], timeout)
+    if not ready:
+        return ""
+    return stdout.readline()
+
 
 def find_metadata_file(base_dir: Path) -> Path:
     """
@@ -69,8 +115,6 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
     Raises:
         HTTPException on any HTTP or connection error.
     """
-    import httpx
-
     messages_url = f"{sse_url.rstrip('/')}/messages/"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -90,6 +134,79 @@ async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.
     except Exception as e:
         logger.error(f"SSE proxy error → {messages_url}: {e}")
         raise HTTPException(500, f"SSE proxy error: {str(e)}")
+
+async def _proxy_to_http_server(
+    base_url: str,
+    payload: dict,
+    timeout: float = 60.0,
+    session_id: str = None,
+    client: httpx.AsyncClient = None,
+) -> dict:
+    """
+    Forward a JSON-RPC request to a streamable-http MCP server via POST /mcp.
+
+    Args:
+        base_url:   Base URL of the HTTP server (e.g. "http://127.0.0.1:8000").
+        payload:    JSON-RPC 2.0 dict to send.
+        timeout:    HTTP request timeout in seconds.
+        session_id: MCP session ID to include as mcp-session-id header.
+        client:     Optional shared httpx.AsyncClient. When provided the pool's
+                    pre-established connections are reused (no per-request TCP
+                    handshake). When None a fresh short-lived client is created.
+
+    Returns:
+        Parsed JSON response dict.
+
+    Raises:
+        HTTPException on any HTTP or connection error.
+    """
+    mcp_url = f"{base_url.rstrip('/')}/mcp"
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    # Stateful servers require every request to carry the session ID negotiated
+    # during the initialize handshake. Stateless servers omit it entirely.
+    if session_id:
+        headers["mcp-session-id"] = session_id
+
+    # Use the caller-supplied shared pool when available. If not (e.g. tool
+    # discovery at startup, or SSE fallback paths), create a short-lived client
+    # and close it in the finally block so connections don't leak.
+    owned_client = client is None
+    if owned_client:
+        client = httpx.AsyncClient(timeout=timeout)
+
+    try:
+        resp = await client.post(mcp_url, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        # FastMCP returns text/event-stream even for non-streaming responses.
+        # Unwrap the SSE envelope to get the plain JSON-RPC payload.
+        content_type = resp.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            for line in resp.text.splitlines():
+                if line.startswith("data: "):
+                    return json.loads(line[6:])
+            raise Exception(f"No data line in SSE response: {resp.text!r}")
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            e.response.status_code,
+            f"HTTP server returned HTTP {e.response.status_code}"
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            503,
+            f"Cannot reach HTTP server at {base_url}. Is it still running?"
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            504,
+            f"HTTP server at {base_url} timed out after {timeout}s"
+        )
+    except Exception as e:
+        logger.error(f"HTTP proxy error → {mcp_url}: {e}")
+        raise HTTPException(500, f"HTTP proxy error: {str(e)}")
+    finally:
+        if owned_client:
+            await client.aclose()
 
 def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Validate bearer token if secure mode is enabled"""
@@ -357,6 +474,36 @@ def create_dynamic_router(server_manager):
             _io_locks[name] = asyncio.Lock()
         return _io_locks[name]
 
+    async def auto_start_stopped_server(server_name: str) -> None:
+        """
+        Auto-start a stopped/idle-cleaned server if it has a valid, enabled config in the DB.
+
+        Raises HTTPException 404 if no config exists or server is disabled.
+        Raises HTTPException 503 if auto-start fails.
+        Does nothing if the server is already running.
+        """
+        # Fast path: process is alive, nothing to do
+        process = server_manager.processes.get(server_name)
+        if process is not None and process.poll() is None:
+            return
+
+        # No running process — check DB for a valid, enabled config
+        if server_manager.db is None:
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+
+        config = await server_manager.db.get_server_config(server_name)
+        if not config or config.get("deleted_at"):
+            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        if not config.get("enabled", True):
+            raise HTTPException(404, f"Server '{server_name}' is disabled")
+
+        safe_name = server_name.replace('\n', '\\n').replace('\r', '\\r')
+        logger.info(f"Auto-starting server '{safe_name}' on demand")
+        # Pass config so start_server skips a redundant DB fetch
+        started = await server_manager.start_server(server_name, config=config)
+        if not started:
+            raise HTTPException(503, f"Server '{server_name}' failed to auto-start")
+
     @router.post("/{server_name}/mcp", tags=["mcp"])
     async def proxy_jsonrpc(
         server_name: str,
@@ -386,21 +533,19 @@ def create_dynamic_router(server_manager):
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
-            # Check if server exists
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+            await auto_start_stopped_server(server_name)
 
-            process = server_manager.processes[server_name]
+            process = server_manager.processes.get(server_name)
+            if process is None:
+                raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-            # Check if process is alive
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
-
-            # ── SSE transport: forward via HTTP ─────────────────────────────
-            if isinstance(process, SseSubprocessHandle):
-                with RequestTimer(collector, request.get("method", "unknown")):
-                    response = await _proxy_to_sse_server(process.sse_url, request)
-                    return JSONResponse(content=response)
+            # ── Network transport: forward via HTTP ──────────────────────────
+            if isinstance(process, NetworkSubprocessHandle):
+                if process.transport == "http":
+                    response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
+                else:
+                    response = await _proxy_to_sse_server(process.base_url, request)
+                return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
             try:
@@ -413,8 +558,18 @@ def create_dynamic_router(server_manager):
                     except (BrokenPipeError, OSError) as e:
                         raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                    # Read response (non-blocking with asyncio.to_thread)
-                    response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Wait for the MCP subprocess to write its JSON-RPC response.
+                    # _readline_with_timeout runs in a thread (via to_thread) and uses
+                    # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
+                    # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
+                    # A plain readline() here would block the thread forever on a hung server,
+                    # eventually exhausting the pool and making all healthy servers unreachable.
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
+                    if not response_line:
+                        # Empty string means select() timed out — server did not respond.
+                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -437,9 +592,6 @@ def create_dynamic_router(server_manager):
         """
         Server-Sent Events streaming endpoint for long-running MCP operations.
         """
-        # Update last_used_at for idle cleanup when SSE connection is opened
-        await server_manager.update_last_used(server_name)
-
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
 
@@ -448,6 +600,8 @@ def create_dynamic_router(server_manager):
         # Design Decision: These HTTPExceptions (404/503) are intentionally NOT wrapped
         # in RequestTimer because they represent pre-flight validation failures that occur
         # before any MCP protocol interaction begins. They are pure HTTP-layer errors.
+        # auto_start_stopped_server may auto-start a stopped server here; if it raises,
+        # the error is still a pre-flight failure before any streaming begins.
         #
         # These errors are observable through:
         # 1. FastAPI's built-in HTTP error logs
@@ -461,13 +615,14 @@ def create_dynamic_router(server_manager):
         #
         # Current implementation prioritizes clarity by separating HTTP validation from
         # MCP protocol errors tracked via RequestTimer.
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
+        # Update last_used_at for idle cleanup when SSE connection is opened
+        await server_manager.update_last_used(server_name)
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
@@ -475,32 +630,41 @@ def create_dynamic_router(server_manager):
                 # Track streaming session when generator starts executing
                 collector.increment_active_streams()
 
-                # ── SSE transport: forward to external HTTP server ───────────
-                if isinstance(process, SseSubprocessHandle):
-                    import httpx
-                    messages_url = f"{process.sse_url.rstrip('/')}/messages/"
-                    sse_stream_url = f"{process.sse_url.rstrip('/')}/sse"
-                    try:
-                        async with httpx.AsyncClient(
-                            timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-                        ) as client:
-                            await client.post(messages_url, json=request)
-                            async with client.stream("GET", sse_stream_url) as resp:
-                                async for line in resp.aiter_lines():
-                                    if line.startswith("data: "):
-                                        data = line[6:]
-                                        yield f"data: {data}\n\n"
-                                        try:
-                                            parsed = json.loads(data)
-                                            if "result" in parsed:
-                                                break
-                                        except json.JSONDecodeError:
-                                            pass
-                    except Exception as e:
-                        completion_status = "error"
-                        collector.record_error("sse_proxy_error")
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                    return  # done for SSE — don't fall through to stdin path
+                # ── Network transport: forward to external HTTP server ───────
+                if isinstance(process, NetworkSubprocessHandle):
+                    if process.transport == "http":
+                        try:
+                            response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
+                            yield f"data: {json.dumps(response)}\n\n"
+                        except Exception as e:
+                            completion_status = "error"
+                            collector.record_error("http_proxy_error")
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    else:
+                        import httpx
+                        messages_url = f"{process.base_url.rstrip('/')}/messages/"
+                        sse_stream_url = f"{process.base_url.rstrip('/')}/sse"
+                        try:
+                            async with httpx.AsyncClient(
+                                timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+                            ) as client:
+                                await client.post(messages_url, json=request)
+                                async with client.stream("GET", sse_stream_url) as resp:
+                                    async for line in resp.aiter_lines():
+                                        if line.startswith("data: "):
+                                            data = line[6:]
+                                            yield f"data: {data}\n\n"
+                                            try:
+                                                parsed = json.loads(data)
+                                                if "result" in parsed:
+                                                    break
+                                            except json.JSONDecodeError:
+                                                pass
+                        except Exception as e:
+                            completion_status = "error"
+                            collector.record_error("sse_proxy_error")
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    return  # done for network transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
                 msg = json.dumps(request)
@@ -530,9 +694,21 @@ def create_dynamic_router(server_manager):
                         return
 
                 while True:
-                    # Non-blocking I/O with asyncio.to_thread
-                    response_line = await asyncio.to_thread(process.stdout.readline)
+                    # Read the next line from the MCP subprocess for streaming.
+                    # Uses _readline_with_timeout (via to_thread) so the thread returns
+                    # after _MCP_READ_TIMEOUT seconds if no data arrives, keeping the
+                    # ThreadPoolExecutor pool healthy for other servers.
+                    # An empty string indicates a timeout (select() expired);
+                    # a None/falsy non-empty value indicates EOF (process closed stdout).
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
                     if not response_line:
+                        if response_line == "":
+                            # Timeout: server never wrote data within the deadline.
+                            logger.warning(f"SSE stream for '{server_name}' timed out waiting for stdout after {_MCP_READ_TIMEOUT}s")
+                            yield f"data: {json.dumps({'error': f'Server did not respond within {_MCP_READ_TIMEOUT} seconds'})}\n\n"
+                        # Either timeout or EOF — stop streaming either way.
                         break
 
                     logger.debug(f"Received from MCP: {response_line.strip()}")
@@ -569,21 +745,19 @@ def create_dynamic_router(server_manager):
         """
         List available tools for a server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
-
-        # ── SSE transport ────────────────────────────────────────────────────
-        if isinstance(process, SseSubprocessHandle):
-            response = await _proxy_to_sse_server(
-                process.sse_url,
-                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-                timeout=30.0
-            )
+        # ── Network transport ────────────────────────────────────────────────
+        if isinstance(process, NetworkSubprocessHandle):
+            payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            if process.transport == "http":
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
+            else:
+                response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
             return JSONResponse(content=response)
         # ── stdio transport continues below ──────────────────────────────────
 
@@ -602,8 +776,16 @@ def create_dynamic_router(server_manager):
                 except (BrokenPipeError, OSError) as e:
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Non-blocking I/O with asyncio.to_thread
-                response_line = await asyncio.to_thread(process.stdout.readline)
+                # Wait for the tools/list response from the MCP subprocess.
+                # _readline_with_timeout runs inside the thread and uses select() to
+                # enforce the timeout at the OS level, ensuring the thread returns and
+                # its pool slot is freed if this server hangs.
+                response_line = await asyncio.to_thread(
+                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                )
+                if not response_line:
+                    # select() timed out — no response received within the deadline.
+                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
             response_data = json.loads(response_line)
 
             return JSONResponse(content=response_data)
@@ -629,28 +811,21 @@ def create_dynamic_router(server_manager):
         """
         Call a specific tool on the MCP server.
         """
-        if server_name not in server_manager.processes:
-            raise HTTPException(404, f"Server '{server_name}' not found or not running")
+        await auto_start_stopped_server(server_name)
 
-        process = server_manager.processes[server_name]
+        process = server_manager.processes.get(server_name)
+        if process is None:
+            raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-        if process.poll() is not None:
-            raise HTTPException(503, f"Server '{server_name}' is not running")
-
-        # ── SSE transport ────────────────────────────────────────────────────
-        if isinstance(process, SseSubprocessHandle):
+        # ── Network transport ────────────────────────────────────────────────
+        if isinstance(process, NetworkSubprocessHandle):
             if "name" not in request_body:
                 raise HTTPException(400, "Tool name is required")
-            response = await _proxy_to_sse_server(
-                process.sse_url,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": request_body
-                },
-                timeout=60.0
-            )
+            payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
+            if process.transport == "http":
+                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
+            else:
+                response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
             return JSONResponse(content=response)
         # ── stdio transport continues below ──────────────────────────────────
 
@@ -673,18 +848,21 @@ def create_dynamic_router(server_manager):
                 except (BrokenPipeError, OSError) as e:
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Tool execution with timeout
-                try:
-                    response_line = await asyncio.wait_for(
-                        asyncio.to_thread(process.stdout.readline),
-                        timeout=60.0  # 60 second tool execution timeout
-                    )
-                except asyncio.TimeoutError:
-                    # Log timeout failure
+                # Wait for the tool execution response from the MCP subprocess.
+                # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
+                # _readline_with_timeout uses select() inside the thread so the thread
+                # exits on timeout rather than blocking the ThreadPoolExecutor slot forever.
+                # Without this, a single hanging tool call occupies a thread indefinitely;
+                # enough concurrent hangs will exhaust the pool and block all other servers.
+                response_line = await asyncio.to_thread(
+                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                )
+                if not response_line:
+                    # select() timed out — persist the failure for observability before raising.
                     await server_manager.db.save_log_entry({
                         "server_name": server_name,
                         "stream": "error",
-                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after 60 seconds"
+                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
                     })
                     raise HTTPException(504, "Tool execution timed out")
 

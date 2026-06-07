@@ -498,11 +498,14 @@ class DatabaseManager(PersistenceBackend):
             # Remove created_at from config to avoid conflict with $setOnInsert
             update_config = {k: v for k, v in config.items() if k != "created_at"}
 
-            # Upsert: update if exists, insert if not
+            # Upsert: update if exists, insert if not.
+            # $unset deleted_at so that re-saving a previously soft-deleted server
+            # (e.g. after the user deletes then re-clones the same repo) resurrects it.
             result = await self.db.fluidmcp_servers.update_one(
                 {"id": config["id"]},
                 {
                     "$set": update_config,
+                    "$unset": {"deleted_at": ""},
                     "$setOnInsert": {"created_at": datetime.utcnow()}
                 },
                 upsert=True
@@ -619,6 +622,29 @@ class DatabaseManager(PersistenceBackend):
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Error soft deleting server config: {e}")
+            return False
+
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """
+        Delete the instance state document for a server.
+
+        Called when a server is soft-deleted so that a subsequent re-clone
+        starts with a clean instance record (no stale PID, exit codes, etc.).
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            True if the document was removed (or did not exist)
+        """
+        try:
+            # TODO(auth): decide if delete should wipe all users' state or only the requesting user's;
+            # if per-user, change to delete_many({"server_id": server_id, "user_id": user_id})
+            await self.db.fluidmcp_server_instances.delete_one({"server_id": server_id})
+            return True
+        except Exception as e:
+            logger.error(f"Error resetting instance state for '{server_id}': {e}")
             return False
 
     # ==================== Server Instance Operations ====================
@@ -1191,6 +1217,18 @@ class DatabaseManager(PersistenceBackend):
         except Exception as e:
             logger.error(f"Error listing crash events for '{server_id}': {e}")
             return []
+
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """Count crash events for a server since a UTC POSIX timestamp."""
+        try:
+            from datetime import datetime, timezone
+            since_dt = datetime.fromtimestamp(since_ts, tz=timezone.utc)
+            return await self.db.fluidmcp_crash_events.count_documents(
+                {"server_id": server_id, "timestamp": {"$gt": since_dt}}
+            )
+        except Exception as e:
+            logger.error(f"Error counting crash events for '{server_id}': {e}")
+            return 0
 
     # ==================== Connection Management ====================
 

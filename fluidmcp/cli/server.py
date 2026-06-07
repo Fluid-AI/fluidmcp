@@ -646,6 +646,7 @@ async def main(args):
         logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
         health_check_interval = 30
     health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
+    server_manager._health_monitor = health_monitor
     health_monitor.start()
 
     # 4. Create FastAPI app (without MCP servers)
@@ -697,7 +698,9 @@ async def main(args):
         host=args.host,
         port=args.port,
         loop="asyncio",
-        log_level="info"
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
         # Note: Uvicorn doesn't provide a direct body size limit parameter
         # For production, configure limits at reverse proxy level (Nginx, Cloudflare, etc.)
     )

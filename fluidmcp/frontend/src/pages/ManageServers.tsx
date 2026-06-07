@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
 import { ServerForm } from '../components/ServerForm';
 import { CloneFromGithubForm } from '../components/CloneFromGithubForm';
@@ -11,6 +12,8 @@ type FilterMode = 'all' | 'running' | 'stopped' | 'failed';
 type CreateTab = 'manual' | 'github';
 
 export default function ManageServers() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [showDeleted, setShowDeleted] = useState(false);
   const { servers, loading, createServer, updateServer, deleteServer, refetch } = useServerManagement(showDeleted);
 
@@ -21,6 +24,15 @@ export default function ManageServers() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Auto-open add-server modal when navigated from Dashboard
+  useEffect(() => {
+    if ((location.state as { openAddServer?: boolean })?.openAddServer) {
+      setEditingServer(null);
+      setCreateTab('manual');
+      setShowForm(true);
+    }
+  }, [location.state]);
 
   const SERVERS_PER_PAGE = 10;
 
@@ -232,6 +244,7 @@ export default function ManageServers() {
                     <ServerForm
                       mode="create"
                       initialData={null}
+                      existingIds={servers.map(s => s.id)}
                       onSubmit={handleFormSubmit}
                       onCancel={() => setShowForm(false)}
                     />
@@ -294,7 +307,12 @@ export default function ManageServers() {
                     return (
                       <tr key={server.id} className="hover:bg-zinc-800/50 transition-colors">
                         <td className="px-6 py-4">
-                          <div className="text-sm font-medium text-white">{server.name}</div>
+                          <span
+                            onClick={() => navigate(`/servers/${server.id}`)}
+                            className="text-sm font-medium text-white hover:text-zinc-300 hover:underline transition-colors cursor-pointer"
+                          >
+                            {server.name}
+                          </span>
                           <div className="text-xs text-zinc-400 font-mono">{server.id}</div>
                           {server.description && (
                             <div className="text-xs text-zinc-400 mt-1">{server.description}</div>

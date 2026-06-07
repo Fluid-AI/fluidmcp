@@ -10,16 +10,58 @@ import subprocess
 import json
 import time
 import atexit
-from typing import Dict, Any, Optional, List, IO
+from collections import deque
+from urllib.parse import urlparse
+from typing import Dict, Any, Optional, List, IO, Deque
 from pathlib import Path
 from datetime import datetime, timedelta
 from loguru import logger
+
+try:
+    import psutil
+    _psutil_available = True
+except ImportError:
+    _psutil_available = False
 
 from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
-from .sse_handle import SseSubprocessHandle
+from .network_handle import NetworkSubprocessHandle
+from .network_utils import find_free_port
+
+
+def _parse_mcp_response(resp) -> dict:
+    """Parse an MCP HTTP response that may be plain JSON or SSE-framed."""
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        raise Exception(f"No data line found in SSE response: {resp.text!r}")
+    return resp.json()
+
+
+def classify_exit_code(exit_code: int) -> Dict[str, str]:
+    """Return a human-readable classification for a process exit code."""
+    table = {
+        0:    ("clean",    "clean_exit",          "Process exited normally"),
+        1:    ("error",    "generic_error",        "Unhandled error"),
+        126:  ("config",   "permission_denied",    "Cannot execute — check file permissions"),
+        127:  ("config",   "command_not_found",    "Binary/command not found — check command path"),
+        137:  ("resource", "oom_killed",           "Killed by OS (likely OOM) — check memory limits"),
+        139:  ("crash",    "segfault",             "Segmentation fault"),
+        143:  ("shutdown", "sigterm_container",    "SIGTERM from container runtime (Railway/Docker stop)"),
+        255:  ("error",    "unknown_fatal",        "Unknown fatal error — check stderr for details"),
+        -1:   ("resource", "killed_by_fluidmcp",   "Killed by FluidMCP resource monitor (OOM or CPU stuck)"),
+        -9:   ("resource", "sigkill",              "Force-killed (SIGKILL)"),
+        -15:  ("shutdown", "sigterm",              "Graceful shutdown (SIGTERM)"),
+    }
+    if exit_code in table:
+        category, label, description = table[exit_code]
+    else:
+        category, label, description = "error", "unknown", f"Unknown exit code {exit_code}"
+    return {"category": category, "label": label, "description": description}
 
 
 class ServerManager:
@@ -59,6 +101,9 @@ class ServerManager:
         # Stderr log file handles (for file-based stderr capture)
         self._stderr_logs: Dict[str, IO] = {}
 
+        # Ports allocated to HTTP-transport (SSE / streamable-http) servers
+        self._allocated_ports: set = set()
+
         # Idle cleanup configuration
         self.idle_timeout_seconds = int(os.getenv("FMCP_IDLE_TIMEOUT", "3600"))  # Default 1 hour
         self.cleanup_interval_seconds = 300  # Run cleanup every 5 minutes
@@ -88,6 +133,17 @@ class ServerManager:
 
         for server_id, process in list(self.processes.items()):
             try:
+                # Free the port and schedule pool closure. close_nowait() is used
+                # here because cleanup_all() is synchronous — it can't await.
+                if isinstance(process, NetworkSubprocessHandle):
+                    try:
+                        parsed = urlparse(process.base_url)
+                        if parsed.port:
+                            self._release_port(parsed.port)
+                    except Exception:
+                        pass
+                    process.close_nowait()
+
                 if process.poll() is None:  # Process still running
                     logger.info(f"Terminating server '{server_id}' (PID: {process.pid})")
 
@@ -489,11 +545,12 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "running",
-                    "transport": "sse" if isinstance(process, SseSubprocessHandle) else "stdio",
-                    "url": process.sse_url if isinstance(process, SseSubprocessHandle) else None,
+                    "transport": process.transport if isinstance(process, NetworkSubprocessHandle) else "stdio",
+                    "url": process.base_url if isinstance(process, NetworkSubprocessHandle) else None,
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
+                    "stability": instance.get("stability", "stable") if instance else "stable",
                     "exit_code": None
                 }
             else:
@@ -504,6 +561,7 @@ class ServerManager:
                     "pid": None,
                     "uptime": None,
                     "restart_count": 0,
+                    "stability": "stable",
                     "exit_code": process.returncode
                 }
 
@@ -530,6 +588,7 @@ class ServerManager:
                             "pid": None,
                             "uptime": None,
                             "restart_count": instance.get("restart_count", 0),
+                            "stability": instance.get("stability", "stable"),
                             "exit_code": -1
                         }
 
@@ -562,6 +621,7 @@ class ServerManager:
                         "pid": None,
                         "uptime": None,
                         "restart_count": instance.get("restart_count", 0),
+                        "stability": instance.get("stability", "stable"),
                         "exit_code": -1
                     }
 
@@ -572,6 +632,7 @@ class ServerManager:
                 "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
+                "stability": instance.get("stability", "stable"),
                 "exit_code": instance.get("exit_code")
             }
 
@@ -582,6 +643,7 @@ class ServerManager:
             "pid": None,
             "uptime": None,
             "restart_count": 0,
+            "stability": "stable",
             "exit_code": None
         }
 
@@ -622,10 +684,12 @@ class ServerManager:
 
             # Separate MCP config fields from metadata fields
             transport = config.get("transport", "stdio")
-            if transport == "sse":
+            if transport in ("sse", "http"):
+                running_process = self.processes.get(id)
+                runtime_url = running_process.base_url if isinstance(running_process, NetworkSubprocessHandle) else None
                 mcp_config = {
-                    "transport": "sse",
-                    "url": config.get("url"),
+                    "transport": transport,
+                    "url": runtime_url,
                     "command": config.get("command"),
                     "args": config.get("args", []),
                 }
@@ -674,6 +738,16 @@ class ServerManager:
         logger.info("All servers stopped")
 
     # ==================== Private Helper Methods ====================
+
+    def _allocate_port(self) -> int:
+        """Allocate a free port from the HTTP-transport reserved range (8500-8599)."""
+        port = find_free_port(start=8500, end=8599, taken_ports=self._allocated_ports)
+        self._allocated_ports.add(port)
+        return port
+
+    def _release_port(self, port: int) -> None:
+        """Release a previously allocated HTTP-transport port."""
+        self._allocated_ports.discard(port)
 
     async def _spawn_mcp_process(self, id: str, config: Dict[str, Any]) -> Optional[subprocess.Popen]:
         """
@@ -807,6 +881,17 @@ class ServerManager:
                 )
                 working_dir = install_path_resolved
                 
+            # ── HTTP transport: allocate a port and inject MCP_PORT ─────────
+            allocated_port: Optional[int] = None
+            if config.get("transport") in ("sse", "http"):
+                try:
+                    allocated_port = self._allocate_port()
+                except RuntimeError as e:
+                    logger.error(f"Port allocation failed for server '{name}' (id: {id}): {e}")
+                    return None
+                env["MCP_PORT"] = str(allocated_port)
+                logger.info(f"[{id}] Allocated port {allocated_port} for HTTP-transport server")
+
             logger.debug(f"Spawning process: {cmd_list}")
             logger.debug(f"Working directory: {working_dir}")
             logger.debug(f"COMMAND: {cmd_list}")
@@ -856,6 +941,8 @@ class ServerManager:
 
             # Check if process is still alive
             if process.poll() is not None:
+                if allocated_port is not None:
+                    self._release_port(allocated_port)
                 self._close_stderr_log(id)
                 if stderr_fh == subprocess.PIPE and process.stderr:
                     try:
@@ -872,13 +959,23 @@ class ServerManager:
 
             # ── SSE transport: skip stdio handshake, wait for HTTP instead ──
             if config.get("transport") == "sse":
-                handle = await self._handshake_sse_subprocess(id, config, process)
+                handle = await self._handshake_sse_subprocess(id, allocated_port, process)
                 if not handle:
+                    self._release_port(allocated_port)
                     self._close_stderr_log(id)
                     logger.error(f"SSE handshake failed for server '{name}' (id: {id})")
                     return None
                 logger.info(f"[{id}] SSE server connected successfully")
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
+            elif config.get("transport") == "http":
+                handle = await self._handshake_http_subprocess(id, allocated_port, process)
+                if not handle:
+                    self._release_port(allocated_port)
+                    self._close_stderr_log(id)
+                    logger.error(f"HTTP handshake failed for server '{name}' (id: {id})")
+                    return None
+                logger.info(f"[{id}] HTTP (streamable-http) server connected successfully")
+                return handle
             # ── stdio transport: normal handshake ───────────────────────────
 
             # Initialize MCP server with handshake (using shared utility)
@@ -980,32 +1077,30 @@ class ServerManager:
     async def _handshake_sse_subprocess(
         self,
         id: str,
-        config: Dict[str, Any],
+        port: int,
         process: subprocess.Popen,
-    ) -> Optional["SseSubprocessHandle"]:
+    ) -> Optional["NetworkSubprocessHandle"]:
         """
         Complete startup for a subprocess-owned SSE MCP server.
 
         After the process is spawned we:
           1. Poll until the HTTP server is accepting connections (max 30 s).
           2. Discover and cache tools via POST /messages/.
-          3. Return an SseSubprocessHandle wrapping the real Popen.
+          3. Return a NetworkSubprocessHandle wrapping the real Popen.
 
         Args:
             id:      Server identifier.
-            config:  Server config dict (must contain 'url').
+            port:    The port allocated by _allocate_port() for this server.
             process: The already-spawned subprocess.Popen.
 
         Returns:
-            SseSubprocessHandle on success, None on failure.
+            NetworkSubprocessHandle on success, None on failure.
         """
         import httpx
 
-        url = config.get("url", "http://127.0.0.1:8000").rstrip("/")
-        name = config.get("name", id)
-        # Use custom health endpoint if specified, otherwise default to /sse
-        health_endpoint = config.get("health_endpoint", "/sse")
-        health_url = f"{url}{health_endpoint}"
+        url = f"http://127.0.0.1:{port}"
+        name = self.configs.get(id, {}).get("name", id)
+        health_url = f"{url}/sse"
 
         logger.info(
             f"[{id}] SSE server '{name}' spawned (PID {process.pid}), "
@@ -1048,31 +1143,198 @@ class ServerManager:
             return None
 
         # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_sse(id, url)
+        await self._discover_and_cache_tools_network(id, url, session_id=None)
 
-        return SseSubprocessHandle(process=process, sse_url=url)
+        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
 
-    async def _discover_and_cache_tools_sse(self, server_id: str, base_url: str) -> None:
+    async def _handshake_http_subprocess(
+        self,
+        id: str,
+        port: int,
+        process: subprocess.Popen,
+    ) -> Optional["NetworkSubprocessHandle"]:
         """
-        Discover tools from an SSE MCP server via HTTP and cache in database.
+        Complete startup for a subprocess-owned streamable-http MCP server.
 
-        SSE MCP servers expose a POST /messages/ endpoint that accepts
-        standard JSON-RPC 2.0 requests.
+        Polls POST {base_url}/mcp with an initialize request until the server
+        responds (max 30s, 1s interval), then discovers and caches tools.
 
         Args:
-            server_id: Server identifier.
-            base_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+            id:      Server identifier.
+            port:    The port allocated by _allocate_port() for this server.
+            process: The already-spawned subprocess.Popen.
+
+        Returns:
+            NetworkSubprocessHandle on success, None on failure.
         """
         import httpx
 
-        messages_url = f"{base_url.rstrip('/')}/messages/"
+        base_url = f"http://127.0.0.1:{port}"
+        name = self.configs.get(id, {}).get("name", id)
+        mcp_url = f"{base_url}/mcp"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+
+        init_payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "fluidmcp", "version": "1.0.0"},
+            },
+        }
+
+        # Check whether the server developer opted into FastMCP's stateless_http mode
+        # by setting FASTMCP_STATELESS_HTTP in the server's env config.
+        # Stateless mode means no initialize handshake and no session ID — every request
+        # is independent, which allows full concurrency. Any value other than "false"
+        # (including an empty string) is treated as opting in.
+        server_env = self.configs.get(id, {}).get("env") or {}
+        fastmcp_stateless_val = server_env.get("FASTMCP_STATELESS_HTTP")
+        stateless = (
+            fastmcp_stateless_val is not None
+            and str(fastmcp_stateless_val).lower() != "false"
+        )
+
+        if stateless:
+            logger.info(
+                f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+                f"stateless mode — skipping initialize handshake, waiting for HTTP readiness..."
+            )
+        else:
+            logger.info(
+                f"[{id}] HTTP server '{name}' spawned (PID {process.pid}), "
+                f"waiting for HTTP readiness at {mcp_url}..."
+            )
+
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + 30
+        session_id = None
+
+        if stateless:
+            # Stateless mode: the server ignores session IDs, so we just wait until
+            # it responds to any valid request. tools/list is a safe probe that works
+            # without an initialized session.
+            readiness_payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            while loop.time() < deadline:
+                if process.poll() is not None:
+                    stderr_out = self._read_crash_stderr(id) or ""
+                    logger.error(
+                        f"[{id}] HTTP server process died before becoming ready "
+                        f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                    )
+                    return None
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.post(mcp_url, json=readiness_payload, headers=headers)
+                        if resp.is_success:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] Stateless HTTP server is ready at {base_url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            break
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"[{id}] HTTP server did not become ready within 30s")
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                return None
+        else:
+            # Stateful mode: send the MCP initialize request and capture the
+            # mcp-session-id the server returns. Every subsequent request to this
+            # server must include that header or the server will reject it with 400.
+            # After a successful initialize, send the notifications/initialized
+            # notification to complete the handshake.
+            while loop.time() < deadline:
+                if process.poll() is not None:
+                    stderr_out = self._read_crash_stderr(id) or ""
+                    logger.error(
+                        f"[{id}] HTTP server process died before becoming ready "
+                        f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
+                    )
+                    return None
+
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as client:
+                        resp = await client.post(mcp_url, json=init_payload, headers=headers)
+                        if resp.is_success:
+                            elapsed = 30 - (deadline - loop.time())
+                            logger.info(
+                                f"[{id}] HTTP server is ready at {base_url} "
+                                f"(took {elapsed:.1f}s)"
+                            )
+                            session_id = resp.headers.get("mcp-session-id")
+                            _parse_mcp_response(resp)
+                            notif_headers = dict(headers)
+                            if session_id:
+                                notif_headers["Mcp-Session-Id"] = session_id
+                            await client.post(
+                                mcp_url,
+                                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                                headers=notif_headers,
+                            )
+                            break
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass  # Server not up yet — keep polling
+
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"[{id}] HTTP server did not become ready within 30s")
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                return None
+
+        # Discover and cache tools via POST /mcp
+        await self._discover_and_cache_tools_network(id, base_url, session_id=session_id)
+
+        return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
+
+    async def _discover_and_cache_tools_network(
+        self, server_id: str, base_url: str, session_id: str = None
+    ) -> None:
+        """
+        Discover tools from an SSE or HTTP MCP server and cache in database.
+
+        For SSE servers (session_id=None), posts to /messages/ with no special headers.
+        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
+
+        Args:
+            server_id:  Server identifier.
+            base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
+            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
+        """
+        import httpx
+
+        if session_id is not None:
+            url = f"{base_url.rstrip('/')}/mcp"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "Mcp-Session-Id": session_id,
+            }
+        else:
+            url = f"{base_url.rstrip('/')}/messages/"
+            headers = {}
+
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(messages_url, json=tools_request)
+                resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                response = resp.json()
+                response = _parse_mcp_response(resp) if session_id is not None else resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
@@ -1082,25 +1344,25 @@ class ServerManager:
                     try:
                         await self.db.save_server_config(config)
                         logger.info(
-                            f"[SSE] Discovered and cached {len(tools)} tool(s) "
+                            f"Discovered and cached {len(tools)} tool(s) "
                             f"for server '{server_id}'"
                         )
                     except Exception as e:
                         logger.warning(
-                            f"[SSE] Failed to save tools for '{server_id}': {e}"
+                            f"Failed to save tools for '{server_id}': {e}"
                         )
                 else:
                     logger.warning(
-                        f"[SSE] Config not found for '{server_id}', cannot cache tools"
+                        f"Config not found for '{server_id}', cannot cache tools"
                     )
             else:
                 logger.warning(
-                    f"[SSE] No tools in response for server '{server_id}': {response}"
+                    f"No tools in response for server '{server_id}': {response}"
                 )
 
         except Exception as e:
             # Tool discovery failure must never abort server startup
-            logger.warning(f"[SSE] Tool discovery failed for '{server_id}': {e}")
+            logger.warning(f"Tool discovery failed for '{server_id}': {e}")
 
     async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
         """
@@ -1113,6 +1375,21 @@ class ServerManager:
         """
         uptime = self.get_uptime(id)
 
+        # Free the port back to the pool and drain the shared httpx connection pool
+        # so stale TCP connections don't linger after the subprocess exits.
+        process = self.processes.get(id)
+        if isinstance(process, NetworkSubprocessHandle):
+            try:
+                parsed = urlparse(process.base_url)
+                if parsed.port:
+                    self._release_port(parsed.port)
+            except Exception:
+                pass
+            try:
+                await process.aclose()
+            except Exception:
+                pass
+
         # Remove from registry
         if id in self.processes:
             del self.processes[id]
@@ -1121,6 +1398,10 @@ class ServerManager:
 
         # Close stderr log file handle
         self._close_stderr_log(id)
+
+        # Capture resource snapshot before clearing (used in crash event below)
+        health_monitor = getattr(self, "_health_monitor", None)
+        resource_snapshot = health_monitor._last_resource_snapshot.get(id) if health_monitor else None
 
         # Determine state
         if intentional or exit_code == 0:
@@ -1140,20 +1421,39 @@ class ServerManager:
         # Persist crash event for non-intentional failures
         if state == "failed":
             stderr_tail = self._read_crash_stderr(id)
+            exit_info = classify_exit_code(exit_code)
+            config = self.configs.get(id) or {}
+            server_name = config.get("name", id)
             try:
-                await self.db.save_crash_event({
+                crash_event: Dict[str, Any] = {
                     "server_id": id,
+                    "server_name": server_name,
                     "exit_code": exit_code,
+                    "exit_category": exit_info["category"],
+                    "exit_label": exit_info["label"],
+                    "exit_description": exit_info["description"],
                     "stderr_tail": stderr_tail,
                     "uptime_seconds": uptime,
-                    "timestamp": datetime.utcnow()
-                })
+                    "timestamp": datetime.utcnow(),
+                }
+                if resource_snapshot:
+                    crash_event["memory_bytes_at_crash"] = resource_snapshot.get("memory_rss_bytes")
+                    crash_event["cpu_percent_at_crash"] = resource_snapshot.get("cpu_percent")
+                    crash_event["active_requests_at_crash"] = resource_snapshot.get("active_requests")
+                await self.db.save_crash_event(crash_event)
             except Exception as e:
                 logger.error(f"Failed to save crash event for server '{id}': {e}")
             uptime_str = f"{uptime:.1f}s" if uptime is not None else "unknown"
-            logger.warning(f"Server '{id}' crashed (exit_code={exit_code}, uptime={uptime_str})")
+            logger.warning(
+                f"Server '{id}' crashed (exit_code={exit_code} [{exit_info['label']}], uptime={uptime_str})"
+            )
         else:
             logger.info(f"Cleaned up server '{id}'")
+
+        # Clean up health monitor per-server state after crash event is saved
+        if health_monitor is not None:
+            health_monitor._last_resource_snapshot.pop(id, None)
+            health_monitor._memory_history.pop(id, None)
 
     def get_uptime(self, server_id: str) -> Optional[float]:
         """
@@ -1267,6 +1567,52 @@ class ServerManager:
         except Exception as e:
             logger.debug(f"Failed to read stderr log for '{server_id}': {e}")
             return ""
+
+    def get_stderr_tail(
+        self,
+        server_id: str,
+        lines: int = 50,
+        contains: Optional[str] = None,
+    ) -> dict:
+        """
+        Return the tail of a server's stderr log as a structured dict.
+
+        Args:
+            server_id: Server identifier
+            lines: Maximum number of lines to return (from the end)
+            contains: Optional case-insensitive substring filter
+
+        Returns:
+            Dict with keys: lines (list[str]), line_count (int), truncated (bool)
+        """
+        log_path = self._get_stderr_log_path(server_id)
+
+        if not os.path.exists(log_path):
+            return {"lines": [], "line_count": 0, "truncated": False}
+
+        # Estimate bytes needed: avg 120 bytes/line with 2x headroom
+        read_bytes = lines * 240
+        file_size = os.path.getsize(log_path)
+        truncated = file_size > read_bytes
+
+        with open(log_path, "rb") as f:
+            if truncated:
+                f.seek(-read_bytes, os.SEEK_END)
+            data = f.read()
+
+        text = data.decode("utf-8", errors="replace")
+        all_lines = text.splitlines()
+
+        # Drop first line if truncated (may be a partial line from the seek)
+        if truncated and len(all_lines) > 1:
+            all_lines = all_lines[1:]
+
+        tail = all_lines[-lines:]
+
+        if contains:
+            tail = [line for line in tail if contains.lower() in line.lower()]
+
+        return {"lines": tail, "line_count": len(tail), "truncated": truncated}
 
     # ==================== Resource Limits ====================
 
@@ -1455,6 +1801,23 @@ class MCPHealthMonitor:
         self._restarts_in_progress: set = set()
         self._restart_counts: Dict[str, int] = {}
 
+        # Resource snapshot cache: server_id -> {memory_rss_bytes, cpu_percent, active_requests}
+        # Updated every health check cycle; used at crash time and by /resources endpoint
+        self._last_resource_snapshot: Dict[str, Dict[str, Any]] = {}
+        # Ring buffer of last 3 RSS readings per server for memory_trend computation
+        self._memory_history: Dict[str, Deque[int]] = {}
+        # Tracks whether cpu_percent has been warmed up for each PID (first call returns 0.0)
+        self._cpu_warmed_pids: set = set()
+
+        # Resource throttling state
+        # Consecutive cycles where cpu_percent exceeded cpu_warn_pct
+        self._high_cpu_cycles: Dict[str, int] = {}
+        # Timestamp of last resource-triggered kill per server (cooldown guard)
+        self._last_kill_time: Dict[str, float] = {}
+
+        # Stability tracking: sliding window of restart timestamps (10 min)
+        self._restart_timestamps: Dict[str, List[float]] = {}
+
     def start(self) -> None:
         """Start the background health monitor."""
         if self._running:
@@ -1515,7 +1878,7 @@ class MCPHealthMonitor:
         is_alive = True
 
         # Check process liveness
-        if isinstance(process, SseSubprocessHandle):
+        if isinstance(process, NetworkSubprocessHandle):
             alive, reason = self._sm.health_checker.check_process_alive(process.pid)
             if not alive:
                 is_alive = False
@@ -1524,7 +1887,7 @@ class MCPHealthMonitor:
                     process.poll()
                 except Exception:
                     pass
-                logger.warning(f"MCP server '{server_id}' SSE process dead: {reason}")
+                logger.warning(f"MCP server '{server_id}' network process dead: {reason}")
         else:
             if process.poll() is not None:
                 is_alive = False
@@ -1537,7 +1900,18 @@ class MCPHealthMonitor:
                 uptime = self._sm.get_uptime(server_id)
                 if uptime and uptime > 300:
                     self._restart_counts.pop(server_id, None)
+                    self._restart_timestamps.pop(server_id, None)
+                    asyncio.ensure_future(self._clear_stability(server_id))
+            # Update resource snapshot while process is alive
+            self._update_resource_snapshot(server_id, process)
+            # Check resource thresholds and kill/restart if exceeded
+            await self._check_resource_thresholds(server_id, process)
             return
+
+        # Evict stale PID from warm-up tracking so the next restart gets a fresh warm-up
+        pid = getattr(process, "pid", None)
+        if pid:
+            self._cpu_warmed_pids.discard(pid)
 
         # Process is dead — always clean up DB state
         rc = getattr(process, "returncode", None)
@@ -1556,6 +1930,20 @@ class MCPHealthMonitor:
                     await self._sm._cleanup_server(server_id, exit_code)
             return
 
+        await self._restart_under_policy(server_id, process, exit_code, config)
+
+    async def _restart_under_policy(
+        self,
+        server_id: str,
+        process,
+        exit_code: int,
+        config: Dict[str, Any],
+    ) -> None:
+        """Apply restart policy after a process death (natural or resource-triggered).
+
+        Shared by the dead-process monitor path and resource-kill paths so both
+        honour the same restart_policy / max_restarts / exponential-backoff logic.
+        """
         restart_policy = config.get("restart_policy", "on-failure")
         max_restarts = config.get("max_restarts", 3)
 
@@ -1609,6 +1997,7 @@ class MCPHealthMonitor:
                     )
                     success = False
             self._restart_counts[server_id] = count + 1
+            await self._check_stability(server_id)
             if success:
                 logger.info(f"MCP server '{server_id}' restarted successfully")
             else:
@@ -1619,3 +2008,223 @@ class MCPHealthMonitor:
             logger.error(f"Error restarting MCP server '{server_id}': {e}")
         finally:
             self._restarts_in_progress.discard(server_id)
+
+    def _update_resource_snapshot(self, server_id: str, process) -> None:
+        """Update cached resource snapshot for a live process."""
+        if not _psutil_available:
+            return
+        pid = getattr(process, "pid", None)
+        if not pid:
+            return
+        try:
+            proc = psutil.Process(pid)
+            # Warm up cpu_percent on first encounter — first call always returns 0.0
+            if pid not in self._cpu_warmed_pids:
+                proc.cpu_percent(interval=None)
+                self._cpu_warmed_pids.add(pid)
+                return  # skip this cycle; next cycle will have a real reading
+            rss = proc.memory_info().rss
+            cpu = proc.cpu_percent(interval=None)
+            # Update ring buffer for memory trend
+            if server_id not in self._memory_history:
+                self._memory_history[server_id] = deque(maxlen=3)
+            self._memory_history[server_id].append(rss)
+            snapshot = {
+                "memory_rss_bytes": rss,
+                "cpu_percent": cpu,
+                "active_requests": self._get_active_requests(server_id),
+            }
+            self._last_resource_snapshot[server_id] = snapshot
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def _get_active_requests(self, server_id: str) -> int:
+        """Read active request count directly from the metrics gauge samples dict."""
+        try:
+            registry = getattr(self._sm, "_metrics_registry", None)
+            if registry is None:
+                return 0
+            gauge = registry.get_metric("fluidmcp_active_requests")
+            if gauge is None:
+                return 0
+            key = gauge._get_label_key({"server_id": server_id})
+            return int(gauge.samples.get(key, 0))
+        except Exception:
+            return 0
+
+    def get_memory_trend(self, server_id: str) -> str:
+        """Derive memory trend from the last 3 RSS readings."""
+        history = self._memory_history.get(server_id)
+        if not history or len(history) < 2:
+            return "unknown"
+        readings = list(history)
+        if all(readings[i] < readings[i + 1] for i in range(len(readings) - 1)):
+            return "increasing"
+        if all(readings[i] > readings[i + 1] for i in range(len(readings) - 1)):
+            return "decreasing"
+        if len(set(readings)) == 1:
+            return "stable"
+        return "fluctuating"
+
+    async def _check_resource_thresholds(self, server_id: str, process) -> None:
+        """Kill or restart a server if it exceeds memory or CPU thresholds."""
+        snapshot = self._last_resource_snapshot.get(server_id)
+        if not snapshot:
+            return
+
+        config = self._sm.configs.get(server_id) or {}
+
+        # --- Memory kill policy ---
+        try:
+            memory_warn_pct = float(config.get("memory_warn_pct",
+                os.getenv("FMCP_MEMORY_WARN_PCT", "90")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_MEMORY_WARN_PCT value, using default 90%")
+            memory_warn_pct = 90.0
+        try:
+            memory_kill_pct = float(config.get("memory_kill_pct",
+                os.getenv("FMCP_MEMORY_KILL_PCT", "98")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_MEMORY_KILL_PCT value, using default 98%")
+            memory_kill_pct = 98.0
+
+        try:
+            memory_limit_mb = config.get("memory_limit_mb",
+                int(os.getenv("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_DEFAULT_MEMORY_LIMIT_MB value, using default 0")
+            memory_limit_mb = 0
+        memory_limit_bytes = memory_limit_mb * 1024 * 1024 if memory_limit_mb > 0 else None
+
+        if memory_limit_bytes and snapshot.get("memory_rss_bytes"):
+            mem_pct = snapshot["memory_rss_bytes"] / memory_limit_bytes * 100
+
+            if mem_pct >= memory_kill_pct:
+                # Cooldown guard: at most one resource kill per 60s per server
+                now = time.monotonic()
+                last_kill = self._last_kill_time.get(server_id)
+                if last_kill and (now - last_kill) < 60:
+                    elapsed = now - last_kill
+                    logger.warning(
+                        f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% — "
+                        f"kill skipped, cooldown active ({60 - elapsed:.0f}s remaining)"
+                    )
+                    return
+                self._last_kill_time[server_id] = now
+                logger.error(
+                    f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
+                    f"(>= {memory_kill_pct}%), killing to protect other servers"
+                )
+                # Terminate the process; _restart_under_policy handles cleanup + restart
+                if self._sm.processes.get(server_id) is process:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(process.wait), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.to_thread(process.wait)
+                # Route through the same monitor restart-policy/backoff path as a natural death
+                await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
+                return
+
+            elif mem_pct >= memory_warn_pct:
+                logger.warning(
+                    f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
+                    f"(>= {memory_warn_pct}%) — approaching kill threshold"
+                )
+
+        # --- CPU stuck policy ---
+        try:
+            cpu_warn_pct = float(config.get("cpu_warn_pct",
+                os.getenv("FMCP_CPU_WARN_PCT", "90")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_CPU_WARN_PCT value, using default 90%")
+            cpu_warn_pct = 90.0
+        try:
+            cpu_kill_cycles = int(config.get("cpu_kill_cycles",
+                os.getenv("FMCP_CPU_KILL_CYCLES", "3")))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_CPU_KILL_CYCLES value, using default 3")
+            cpu_kill_cycles = 3
+
+        cpu_pct = snapshot.get("cpu_percent", 0) or 0
+        if cpu_pct >= cpu_warn_pct:
+            self._high_cpu_cycles[server_id] = self._high_cpu_cycles.get(server_id, 0) + 1
+            cycles = self._high_cpu_cycles[server_id]
+            logger.warning(
+                f"[RESOURCE] {server_id} CPU at {cpu_pct:.1f}% "
+                f"(cycle {cycles}/{cpu_kill_cycles})"
+            )
+            if cycles >= cpu_kill_cycles:
+                now = time.monotonic()
+                last_kill = self._last_kill_time.get(server_id)
+                if last_kill and (now - last_kill) < 60:
+                    elapsed = now - last_kill
+                    logger.warning(
+                        f"[RESOURCE] {server_id} CPU stuck — "
+                        f"kill skipped, cooldown active ({60 - elapsed:.0f}s remaining)"
+                    )
+                    return
+                self._last_kill_time[server_id] = now
+                self._high_cpu_cycles.pop(server_id, None)
+                logger.error(
+                    f"[RESOURCE] {server_id} CPU stuck at {cpu_pct:.1f}% "
+                    f"for {cpu_kill_cycles} consecutive cycles, restarting"
+                )
+                # Terminate the process; _restart_under_policy handles cleanup + restart
+                if self._sm.processes.get(server_id) is process:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(process.wait), timeout=10.0
+                        )
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        await asyncio.to_thread(process.wait)
+                # Route through the same monitor restart-policy/backoff path as a natural death
+                await self._restart_under_policy(server_id, process, exit_code=-1, config=config)
+        else:
+            # Reset counter on any healthy cycle
+            self._high_cpu_cycles.pop(server_id, None)
+
+    async def _check_stability(self, server_id: str) -> None:
+        """Record a restart timestamp and flag server as unstable if flapping."""
+        now = time.monotonic()
+        window = 600  # 10 minutes
+        try:
+            storm_threshold = int(os.getenv("FMCP_RESTART_STORM_THRESHOLD", "5"))
+        except (ValueError, TypeError):
+            logger.warning("Invalid FMCP_RESTART_STORM_THRESHOLD value, using default 5")
+            storm_threshold = 5
+
+        timestamps = self._restart_timestamps.get(server_id, [])
+        timestamps.append(now)
+        # Keep only timestamps within the sliding window
+        timestamps = [t for t in timestamps if now - t <= window]
+        self._restart_timestamps[server_id] = timestamps
+
+        if len(timestamps) >= storm_threshold:
+            logger.warning(
+                f"[ALERT] {server_id} has restarted {len(timestamps)} times "
+                f"in the last 10 minutes — marking unstable"
+            )
+            try:
+                instance = await self._sm.db.get_instance_state(server_id) or {}
+                instance["server_id"] = server_id
+                instance["stability"] = "unstable"
+                await self._sm.db.save_instance_state(instance)
+            except Exception as e:
+                logger.error(f"Failed to update stability flag for '{server_id}': {e}")
+
+    async def _clear_stability(self, server_id: str) -> None:
+        """Clear the unstable flag after sustained healthy operation."""
+        try:
+            instance = await self._sm.db.get_instance_state(server_id)
+            if instance and instance.get("stability") == "unstable":
+                instance["stability"] = "stable"
+                await self._sm.db.save_instance_state(instance)
+                logger.info(f"[ALERT] {server_id} stability cleared after 5 minutes of healthy operation")
+        except Exception as e:
+            logger.error(f"Failed to clear stability flag for '{server_id}': {e}")

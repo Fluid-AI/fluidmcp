@@ -582,7 +582,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             logger.info(f"Starting FastAPI server for {package_name}")
             logger.info(f"Swagger UI available at: http://localhost:{client_server_port}/docs")
 
-            uvicorn.run(app, host="0.0.0.0", port=client_server_port)
+            uvicorn.run(app, host="0.0.0.0", port=client_server_port, proxy_headers=True, forwarded_allow_ips="*")
 
     except ValueError:
         logger.exception("Configuration error")
