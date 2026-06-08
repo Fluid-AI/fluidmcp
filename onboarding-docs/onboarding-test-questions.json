@@ -750,15 +750,15 @@
     }
   ],
   "metadata": {
-    "total_questions": 56,
+    "total_questions": 51,
     "by_difficulty": {
-      "easy": 15,
-      "medium": 28,
-      "hard": 13
+      "easy": 14,
+      "medium": 25,
+      "hard": 12
     },
     "by_type": {
-      "multiple_choice": 51,
-      "short_answer": 5
+      "multiple_choice": 48,
+      "short_answer": 3
     },
     "topics_covered": [
       "Frontend tech stack and versions",
