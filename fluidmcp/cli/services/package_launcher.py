@@ -17,6 +17,7 @@ import uvicorn
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
+from .tracing import trace_mcp_operation, set_span_attribute
 from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
@@ -500,28 +501,33 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
         collector = MetricsCollector(package_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics
+        # Track request with metrics and distributed tracing
         with RequestTimer(collector, method):
-            try:
-                # Extract all headers from incoming HTTP request
-                all_headers = dict(http_request.headers)
+            with trace_mcp_operation(method, package_name, {"request_id": request.get("id")}):
+                try:
+                    # Extract all headers from incoming HTTP request
+                    all_headers = dict(http_request.headers)
 
-                logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
+                    logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
 
-                # Only inject headers if this is a tools/call request
-                if request.get("method") == "tools/call" and all_headers:
-                    params = request.get("params", {})
-                    if "arguments" not in params:
-                        params["arguments"] = {}
+                    # Only inject headers if this is a tools/call request
+                    if request.get("method") == "tools/call" and all_headers:
+                        params = request.get("params", {})
+                        if "arguments" not in params:
+                            params["arguments"] = {}
 
-                    logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
-                    logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
+                        logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
+                        logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
 
-                    params["arguments"]["headers"] = all_headers
-                    request["params"] = params
+                        params["arguments"]["headers"] = all_headers
+                        request["params"] = params
 
-                    logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
+                        logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
 
+                    # Thread-safe communication with MCP server
+                    with process_lock:
+                        msg = json.dumps(request)
+                        logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
                 # The subprocess is already initialized at startup by initialize_mcp_server().
                 # Forwarding initialize again would cause readline() to block forever (deadlock).
                 # Handle these at the gateway level and never forward to the subprocess.
@@ -786,19 +792,31 @@ def create_dynamic_router(server_manager):
         collector = MetricsCollector(server_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics (RequestTimer automatically records all errors)
+        # Track request with metrics and distributed tracing
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching
         with RequestTimer(collector, method):
-            # Check if server exists
-            if server_name not in server_manager.processes:
-                raise HTTPException(404, f"Server '{server_name}' not found or not running")
+            with trace_mcp_operation(method, server_name, {"request_id": request.get("id")}):
+                # Enrich with server context (user_id not available in proxy)
+                from ..services.tracing import enrich_current_span
+                from ..context import set_server_id
 
-            process = server_manager.processes[server_name]
+                enrich_current_span(
+                    server_id=server_name,
+                    request_id=request.get("id"),
+                    method=method
+                )
+                set_server_id(server_name)
 
-            # Check if process is alive
-            if process.poll() is not None:
-                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+                # Check if server exists
+                if server_name not in server_manager.processes:
+                    raise HTTPException(404, f"Server '{server_name}' not found or not running")
+
+                process = server_manager.processes[server_name]
+
+                # Check if process is alive
+                if process.poll() is not None:
+                    raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
             # The subprocess is already initialized at startup by initialize_mcp_server().
             # Forwarding initialize again would cause readline() to block forever (deadlock).

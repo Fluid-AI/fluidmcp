@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import ServerCard from "../components/ServerCard";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { ServerListControls } from "../components/ServerListControls";
@@ -10,12 +10,15 @@ import { showSuccess, showError, showLoading } from "../services/toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "../contexts/AuthContext";
+import { UserMenu } from "../components/UserMenu";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
 //dummy comment to change file1
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
+  const { requireAuth } = useAuth();
 
   // Controls state
   const [searchQuery, setSearchQuery] = useState("");
@@ -90,14 +93,64 @@ export default function Dashboard() {
     });
   }, []);
 
+  // Listen for action replay events after OAuth authentication
+  useEffect(() => {
+    const handleReplayAction = async (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const action = customEvent.detail;
+
+      if (action.action === 'start' && action.serverId) {
+        // Wait a bit for the UI to settle
+        setTimeout(async () => {
+          // Find the server and start it
+          const server = servers.find(s => s.id === action.serverId);
+          if (server && server.status?.state !== 'running') {
+            // Call the start handler directly
+            await handleStartServer(action.serverId);
+          }
+        }, 500);
+      }
+    };
+
+    // Add event listener
+    window.addEventListener('replay-action', handleReplayAction);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('replay-action', handleReplayAction);
+    };
+  }, [servers]);
+
   const [actionState, setActionState] = useState<{
     serverId: string | null;
     type: 'starting' | 'stopping' | 'restarting' | null;
   }>({ serverId: null, type: null });
 
-  const handleStartServer = useCallback(async (serverId: string, serverName: string) => {
+  const handleStartServer = useCallback(async (serverId: string) => {
     if (actionState.type !== null) return;
 
+    // Store the action context before auth check
+    // This allows us to replay the action after authentication
+    const actionContext = {
+      action: 'start',
+      serverId: serverId,
+      timestamp: Date.now()
+    };
+    sessionStorage.setItem('auth_pending_action', JSON.stringify(actionContext));
+
+    // Check authentication - will redirect to Auth0 if not authenticated
+    const isAuthenticated = await requireAuth(window.location.pathname);
+    if (!isAuthenticated) {
+      // User will be redirected to Auth0 login
+      // After login, they'll return to this page and resume the action
+      return;
+    }
+
+    // Clear the pending action since we're authenticated
+    sessionStorage.removeItem('auth_pending_action');
+
+    const server = servers.find(s => s.id === serverId);
+    const serverName = server?.name || serverId;
     const toastId = `server-${serverId}`;
 
     setActionState({ serverId, type: 'starting' });
@@ -111,12 +164,64 @@ export default function Dashboard() {
     } finally {
       setActionState({ serverId: null, type: null });
     }
-  }, [actionState.type, startServer]);
+  }, [actionState.type, startServer, servers, requireAuth]);
 
   if (loading) {
     return (
       <div className="dashboard">
-        <Navbar />
+        {/* Navbar */}
+        <header className="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/60 transition-all duration-200">
+          <div className="container mx-auto flex h-16 max-w-screen-xl items-center justify-between px-6">
+            <div className="flex items-center space-x-8">
+              <Link to="/" className="flex items-center space-x-2 group transition-all duration-200 hover:scale-105">
+                <span className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text whitespace-nowrap">Fluid MCP </span>
+              </Link>
+              <nav className="hidden md:flex items-center space-x-1 text-sm">
+                <Link 
+                  to="/servers" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground"
+                >
+                  Servers
+                </Link>
+                <Link 
+                  to="/status" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  Status
+                </Link>
+                <Link 
+                  to="/documentation" 
+                  className="inline-flex h-10 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-all duration-200 hover:bg-zinc-800 hover:text-white focus:bg-zinc-800 focus:text-white focus:outline-none text-foreground/60"
+                >
+                  Documentation
+                </Link>
+              </nav>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                Fluid MCP for your Enterprise
+              </button>
+              <button
+                style={{ background: '#000', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', transition: 'all 0.2s', margin: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = '#18181b'}
+                onMouseLeave={(e) => e.currentTarget.style.background = '#000'}
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                </svg>
+                Report Issue
+              </button>
+              <UserMenu />
+            </div>
+          </div>
+        </header>
         <div style={{ paddingTop: '64px' }}>
           <header className="dashboard-header">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -241,7 +346,7 @@ export default function Dashboard() {
                   >
                     <ServerCard
                       server={server}
-                      onStart={() => handleStartServer(server.id, server.name)}
+                      onStart={() => handleStartServer(server.id)}
                       onViewDetails={() => navigate(`/servers/${server.id}`)}
                       isStarting={actionState.serverId === server.id && actionState.type === 'starting'}
                     />
