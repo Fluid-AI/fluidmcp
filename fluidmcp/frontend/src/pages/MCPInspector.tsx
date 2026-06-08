@@ -371,6 +371,8 @@ export default function MCPInspector() {
   const [toolError, setToolError] = useState<string | null>(null)
   const [executing, setExecuting] = useState(false)
   const [executionTime, setExecutionTime] = useState<number | null>(null)
+  const [lastRunParams, setLastRunParams] = useState<any | null>(null)
+  const [copyRequestToast, setCopyRequestToast] = useState(false)
   // 3A-4: typed per-server execution history
   const [executionHistoryByServer, setExecutionHistoryByServer] = useState<Record<string, ExecutionRun[]>>({})
   const executionHistory = executionHistoryByServer[selectedServerId ?? ""] ?? []
@@ -792,6 +794,7 @@ export default function MCPInspector() {
     try {
       setExecuting(true);
       setToolError(null);
+      setLastRunParams(params);
 
       const start = performance.now();
 
@@ -995,6 +998,7 @@ export default function MCPInspector() {
     setToolResult(null)
     setToolError(null)
     setExecutionTime(null)
+    setLastRunParams(null)
   }, [selectedTool])
 
   // 4B: Fetch prompts list when Prompts tab becomes active
@@ -1428,29 +1432,48 @@ export default function MCPInspector() {
                               )}
                               {isSelected && server?.tools?.filter((t: any) =>
                                 toolSearch.trim() === '' || t.name.toLowerCase().includes(toolSearch.toLowerCase()) || (t.description ?? '').toLowerCase().includes(toolSearch.toLowerCase())
-                              ).map((tool: any) => (
-                                <div
-                                  key={tool.name}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedTool(tool);
-                                    setToolResult(null);
-                                    setToolError(null);
-                                  }}
-                                  style={{
-                                    marginLeft: "0.5rem",
-                                    marginTop: "0.4rem",
-                                    fontSize: "0.82rem",
-                                    cursor: "pointer",
-                                    color: selectedTool?.name === tool.name ? "#fff" : "rgba(255,255,255,0.65)",
-                                    padding: "0.2rem 0.4rem",
-                                    borderRadius: "0.25rem",
-                                    background: selectedTool?.name === tool.name ? "rgba(255,255,255,0.08)" : "transparent",
-                                  }}
-                                >
-                                  • {tool.name}
-                                </div>
-                              ))}
+                              ).map((tool: any) => {
+                                const ann = tool.annotations ?? {};
+                                const badges = [
+                                  ann.readOnlyHint    && { label: "Read-only",   bg: "rgba(63,63,70,0.5)",    color: "rgba(255,255,255,0.5)" },
+                                  ann.destructiveHint && { label: "Destructive", bg: "rgba(239,68,68,0.15)",  color: "rgba(252,165,165,0.9)" },
+                                  ann.idempotentHint  && { label: "Idempotent",  bg: "rgba(34,197,94,0.12)",  color: "rgba(134,239,172,0.85)" },
+                                  ann.openWorldHint   && { label: "External",    bg: "rgba(59,130,246,0.15)", color: "rgba(147,197,253,0.9)" },
+                                ].filter(Boolean) as { label: string; bg: string; color: string }[];
+                                return (
+                                  <div
+                                    key={tool.name}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedTool(tool);
+                                      setToolResult(null);
+                                      setToolError(null);
+                                    }}
+                                    style={{
+                                      marginLeft: "0.5rem",
+                                      marginTop: "0.4rem",
+                                      fontSize: "0.82rem",
+                                      cursor: "pointer",
+                                      color: selectedTool?.name === tool.name ? "#fff" : "rgba(255,255,255,0.65)",
+                                      padding: "0.2rem 0.4rem",
+                                      borderRadius: "0.25rem",
+                                      background: selectedTool?.name === tool.name ? "rgba(255,255,255,0.08)" : "transparent",
+                                    }}
+                                  >
+                                    <div>• {tool.name}</div>
+                                    {badges.length > 0 && (
+                                      <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap", marginTop: "0.2rem", marginLeft: "0.6rem" }}>
+                                        {badges.map(b => (
+                                          <span key={b.label} style={{
+                                            fontSize: "0.6rem", padding: "0.05rem 0.3rem", borderRadius: "999px",
+                                            background: b.bg, color: b.color, fontWeight: 500,
+                                          }}>{b.label}</span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           );
                         })
@@ -1663,9 +1686,36 @@ export default function MCPInspector() {
                   overflow: "hidden",
                 }}
               >
-                <h2 style={{ fontSize: "1.1rem", fontWeight: "600", flexShrink: 0 }}>
-                  Tool Execution
-                </h2>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+                  <h2 style={{ fontSize: "1.1rem", fontWeight: "600" }}>Tool Execution</h2>
+                  {selectedServer?.status === "connected" && selectedServer.session_id && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const data = await apiClient.exportInspectorServer(selectedServer.session_id!);
+                          // Merge in the display name from local state since backend doesn't store it
+                          data.serverInfo = { ...data.serverInfo, name: selectedServer.name || selectedServer.server_info?.name };
+                          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                          const a = document.createElement("a");
+                          a.href = URL.createObjectURL(blob);
+                          a.download = `${(selectedServer.name || selectedServer.server_info?.name || "mcp-server").replace(/\s+/g, "-").toLowerCase()}-export.json`;
+                          a.click();
+                          URL.revokeObjectURL(a.href);
+                        } catch (e) {
+                          console.error("Export failed", e);
+                        }
+                      }}
+                      title="Export server config + tools as JSON"
+                      style={{
+                        fontSize: "0.72rem", padding: "0.25rem 0.65rem", borderRadius: "6px",
+                        background: "rgba(39,39,42,0.8)", border: "1px solid rgba(63,63,70,0.6)",
+                        color: "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.3rem",
+                      }}
+                    >
+                      ↓ Export
+                    </button>
+                  )}
+                </div>
 
                 {/* Mode tabs */}
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem", flexShrink: 0 }}>
@@ -1732,7 +1782,25 @@ export default function MCPInspector() {
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
                   {mode === "manual" && selectedServer && selectedTool && (
                     <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: "0.5rem", marginTop: "1rem" }}>
-                      <h3 style={{ marginBottom: "1rem" }}>{selectedTool.name}</h3>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+                        <h3 style={{ margin: 0 }}>{selectedTool.name}</h3>
+                        {(() => {
+                          const ann = selectedTool.annotations ?? {};
+                          const ANNOTATION_META: { key: string; label: string; bg: string; color: string; tip: string }[] = [
+                            { key: "readOnlyHint",    label: "Read-only",   bg: "rgba(63,63,70,0.6)",    color: "rgba(220,220,220,0.85)", tip: "Tool does not modify state" },
+                            { key: "destructiveHint", label: "Destructive", bg: "rgba(239,68,68,0.18)",  color: "rgba(252,165,165,0.95)", tip: "Tool may delete or overwrite data" },
+                            { key: "idempotentHint",  label: "Idempotent",  bg: "rgba(34,197,94,0.15)",  color: "rgba(134,239,172,0.9)",  tip: "Same call with same args always gives same result" },
+                            { key: "openWorldHint",   label: "External",    bg: "rgba(59,130,246,0.18)", color: "rgba(147,197,253,0.95)", tip: "Tool interacts with the external world (web, APIs, filesystem)" },
+                          ];
+                          return ANNOTATION_META.filter(a => ann[a.key]).map(a => (
+                            <span key={a.label} title={a.tip} style={{
+                              fontSize: "0.65rem", padding: "0.15rem 0.55rem", borderRadius: "999px",
+                              background: a.bg, color: a.color, fontWeight: 600, cursor: "help",
+                              border: `1px solid ${a.color}33`,
+                            }}>{a.label}</span>
+                          ));
+                        })()}
+                      </div>
 
                       {selectedServer.status === "connected" ? (
                         <>
@@ -1743,8 +1811,32 @@ export default function MCPInspector() {
                             loading={executing}
                           />
 
+                          {lastRunParams && (
+                            <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <button
+                                onClick={() => {
+                                  const jsonrpc = {
+                                    jsonrpc: "2.0", id: 1,
+                                    method: "tools/call",
+                                    params: { name: selectedTool.name, arguments: lastRunParams },
+                                  };
+                                  navigator.clipboard.writeText(JSON.stringify(jsonrpc, null, 2));
+                                  setCopyRequestToast(true);
+                                  setTimeout(() => setCopyRequestToast(false), 2000);
+                                }}
+                                style={{
+                                  fontSize: "0.72rem", padding: "0.25rem 0.65rem", borderRadius: "6px",
+                                  background: "rgba(99,102,241,0.1)", border: "1px solid rgba(99,102,241,0.35)",
+                                  color: "rgba(165,180,252,0.9)", cursor: "pointer",
+                                }}
+                              >
+                                {copyRequestToast ? "✓ Copied!" : "Copy as JSON-RPC"}
+                              </button>
+                            </div>
+                          )}
+
                           {(toolResult || toolError) && (
-                            <div style={{ marginTop: "2rem" }}>
+                            <div style={{ marginTop: "1.25rem" }}>
                               <ToolResult
                                 result={toolResult}
                                 error={toolError || undefined}

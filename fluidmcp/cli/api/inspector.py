@@ -328,6 +328,74 @@ async def get_prompt(session_id: str, body: GetPromptRequest):
         raise HTTPException(500, f"Failed to get prompt: {str(e)}")
 
 
+@router.get("/inspector/{session_id}/export")
+async def export_server(session_id: str):
+    """
+    Export server config, tools, resources, and prompts as a JSON snapshot.
+    Auth tokens are stripped — only the auth type is included.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    tools, resources, prompts = [], [], []
+    try:
+        tools = await session.list_tools()
+    except Exception:
+        pass
+    try:
+        resources = await session.list_resources()
+    except Exception:
+        pass
+    try:
+        prompts = await session.list_prompts()
+    except Exception:
+        pass
+
+    # Strip auth tokens — only expose the type so the recipient knows what auth is needed
+    safe_auth = {"type": session.auth.get("type", "none")} if session.auth else {"type": "none"}
+
+    # Redact credentials from URL: remove userinfo (user:pass@host) and any
+    # query parameter whose name contains a sensitive substring.
+    # Normalized by lowercasing and stripping hyphens/underscores so that
+    # variants like authToken, x-api-key, refresh_token, clientSecret all match.
+    _SENSITIVE_SUBSTRINGS = ("token", "key", "secret", "password", "pass",
+                             "auth", "credential", "access", "client")
+    def _param_is_sensitive(name: str) -> bool:
+        normalized = name.lower().replace("-", "").replace("_", "")
+        return any(sub in normalized for sub in _SENSITIVE_SUBSTRINGS)
+
+    def _safe_url(raw: str) -> str:
+        try:
+            from urllib.parse import urlencode, parse_qsl, urlunparse, urlparse
+            p = urlparse(raw)
+            # Drop userinfo (user:password@host)
+            netloc = p.hostname or ""
+            if p.port:
+                netloc = f"{netloc}:{p.port}"
+            # Redact any query param whose name looks like a credential
+            clean_qs = urlencode([
+                (k, "***") if _param_is_sensitive(k) else (k, v)
+                for k, v in parse_qsl(p.query, keep_blank_values=True)
+            ])
+            return urlunparse((p.scheme, netloc, p.path, p.params, clean_qs, ""))
+        except Exception:
+            return ""
+
+    return {
+        "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "serverInfo": getattr(session, "server_info", {}),
+        "url": _safe_url(session.url),
+        "transport": session.transport,
+        "auth": safe_auth,
+        "tools": tools,
+        "resources": resources,
+        "prompts": prompts,
+    }
+
+
 @router.post("/inspector/{session_id}/chat")
 async def chat_with_tools(session_id: str, body: ChatRequest):
     """
