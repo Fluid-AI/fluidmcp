@@ -1,0 +1,783 @@
+{
+  "title": "FluidMCP Frontend Onboarding — Test Questions",
+  "description": "Assessment questions covering frontend setup, React architecture, tool execution, environment variables, and server lifecycle. Created to validate onboarding comprehension for new developers joining the FluidMCP project.",
+  "version": "1.0.0",
+  "sections": [
+    {
+      "id": "frontend-setup",
+      "title": "Frontend Setup & Tech Stack",
+      "source_doc": "onboarding/frontend-setup.md",
+      "questions": [
+        {
+          "id": "fs-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "At which URL path is the FluidMCP frontend UI accessible?",
+          "options": [
+            "/",
+            "/ui",
+            "/app",
+            "/docs"
+          ],
+          "answer": "/ui",
+          "explanation": "The frontend is served at /ui. The root / is the FastAPI info endpoint and /docs is the Swagger UI for the backend API."
+        },
+        {
+          "id": "fs-02",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "Which build tool is used for the FluidMCP frontend?",
+          "options": [
+            "Webpack",
+            "Parcel",
+            "Vite",
+            "Rollup"
+          ],
+          "answer": "Vite",
+          "explanation": "Vite is used as the build tool and dev server. It is configured in vite.config.ts and includes a proxy setup for API calls during development."
+        },
+        {
+          "id": "fs-03",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "What React version does the FluidMCP frontend use?",
+          "options": [
+            "17.0.0",
+            "18.0.0",
+            "19.2.0",
+            "16.14.0"
+          ],
+          "answer": "19.2.0",
+          "explanation": "The frontend uses React 19.2.0 as specified in the tech stack."
+        },
+        {
+          "id": "fs-04",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Which library is used for form state management in the FluidMCP frontend?",
+          "options": [
+            "Formik",
+            "React Hook Form",
+            "Redux Form",
+            "Final Form"
+          ],
+          "answer": "React Hook Form",
+          "explanation": "React Hook Form (version 7.71.1) is used for form state management, paired with Zod for schema validation."
+        },
+        {
+          "id": "fs-05",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What global state management solution does the FluidMCP frontend use?",
+          "options": [
+            "Redux",
+            "Zustand",
+            "MobX",
+            "Custom hooks only — no global state library"
+          ],
+          "answer": "Custom hooks only — no global state library",
+          "explanation": "FluidMCP uses custom hooks per-feature for state management. There is no Redux, Zustand, or similar library."
+        },
+        {
+          "id": "fs-06",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Where does production frontend code live after a build?",
+          "options": [
+            "fluidmcp/frontend/build/",
+            "fluidmcp/frontend/out/",
+            "fluidmcp/frontend/dist/",
+            "fluidmcp/static/"
+          ],
+          "answer": "fluidmcp/frontend/dist/",
+          "explanation": "npm run build outputs the production bundle to fluidmcp/frontend/dist/. This folder is gitignored and served by the Python backend."
+        },
+        {
+          "id": "fs-07",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Which environment variable does the frontend read to determine the backend base URL?",
+          "options": [
+            "REACT_APP_API_URL",
+            "VITE_API_BASE_URL",
+            "NEXT_PUBLIC_API_URL",
+            "API_BASE_URL"
+          ],
+          "answer": "VITE_API_BASE_URL",
+          "explanation": "The frontend reads VITE_API_BASE_URL. If not set, it defaults to window.location.origin — the same origin it is served from."
+        },
+        {
+          "id": "fs-08",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What is the correct order of steps to set up the frontend for local development?",
+          "options": [
+            "npm run dev → fmcp serve → open browser",
+            "npm install → npm run build → fmcp serve → open browser",
+            "pip install -r requirements.txt → npm install → npm run dev",
+            "fmcp serve → npm install → npm run build"
+          ],
+          "answer": "npm install → npm run build → fmcp serve → open browser",
+          "explanation": "You must install dependencies, build the frontend to dist/, then start the backend (which serves the built frontend). npm run dev can be used for hot-reload during active development."
+        },
+        {
+          "id": "fs-09",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "How does the Python backend ensure that client-side routes (e.g. /ui/servers) work when accessed directly?",
+          "options": [
+            "The backend has a FastAPI route for every possible frontend path",
+            "Starlette StaticFiles with html=True serves index.html for all /ui/* paths, letting React Router handle routing",
+            "The frontend uses hash-based routing so paths never reach the backend",
+            "Nginx rewrites all /ui/* requests to /ui"
+          ],
+          "answer": "Starlette StaticFiles with html=True serves index.html for all /ui/* paths, letting React Router handle routing",
+          "explanation": "fluidmcp/cli/api/frontend.py mounts the dist/ folder under /ui using Starlette StaticFiles(html=True) and a catch-all that returns index.html for any /ui/* path. React Router then renders the correct component client-side."
+        },
+        {
+          "id": "fs-10",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "What is the minimum required Node.js version for local development?",
+          "options": [
+            "Node.js 14+",
+            "Node.js 16+",
+            "Node.js 18+",
+            "Node.js 20+"
+          ],
+          "answer": "Node.js 18+",
+          "explanation": "The prerequisites state Node.js 18+ and npm are required for local development."
+        },
+        {
+          "id": "fs-11",
+          "type": "short_answer",
+          "difficulty": "medium",
+          "question": "List the 5 steps required to add a new page to the FluidMCP frontend.",
+          "answer": "1. Create the page component in src/pages/MyPage.tsx. 2. Add the route in src/App.tsx. 3. Add a nav link in src/components/Navbar.tsx. 4. Create a hook in src/hooks/useMyFeature.ts if the page needs API data. 5. Rebuild with npm run build and restart the backend.",
+          "explanation": "This follows the quick reference guide in frontend-setup.md."
+        },
+        {
+          "id": "fs-12",
+          "type": "short_answer",
+          "difficulty": "hard",
+          "question": "The FMCP_BEARER_TOKEN environment variable must be set manually on Railway. Why?",
+          "answer": "Railway containers are ephemeral. If FMCP_BEARER_TOKEN is not set, a new token is auto-generated on every container restart, which breaks authentication for any client holding the old token.",
+          "explanation": "This is a critical deployment detail explained in the frontend-setup.md Railway section."
+        }
+      ]
+    },
+    {
+      "id": "react-architecture",
+      "title": "React Architecture & Pages",
+      "source_doc": "onboarding/react-architecture.md",
+      "questions": [
+        {
+          "id": "ra-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "How many pages (routes) does the FluidMCP frontend define in App.tsx?",
+          "options": [
+            "5",
+            "7",
+            "9",
+            "11"
+          ],
+          "answer": "9",
+          "explanation": "There are 9 pages: Dashboard, Status, ServerDetails, ToolRunner, ManageServers, LLMModels, LLMModelDetails, LLMPlayground, and Documentation."
+        },
+        {
+          "id": "ra-02",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "Which page is the landing page of the FluidMCP frontend?",
+          "options": [
+            "Status",
+            "ManageServers",
+            "Dashboard",
+            "Documentation"
+          ],
+          "answer": "Dashboard",
+          "explanation": "Dashboard is the landing page, served at / and /servers. It shows all configured MCP servers as cards."
+        },
+        {
+          "id": "ra-03",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "What is the route path for the ToolRunner page?",
+          "options": [
+            "/tools/:toolName",
+            "/servers/:serverId/tools/:toolName",
+            "/servers/tools/:toolName",
+            "/run/:serverId/:toolName"
+          ],
+          "answer": "/servers/:serverId/tools/:toolName",
+          "explanation": "ToolRunner is at /servers/:serverId/tools/:toolName — it requires both the server ID and the tool name as path parameters."
+        },
+        {
+          "id": "ra-04",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Which page is intentionally separate from Dashboard because its purpose is configuration rather than monitoring?",
+          "options": [
+            "Status",
+            "ServerDetails",
+            "ManageServers",
+            "LLMModels"
+          ],
+          "answer": "ManageServers",
+          "explanation": "ManageServers is the CRUD control panel at /servers/manage. It is intentionally separate — Dashboard is for monitoring, ManageServers is for configuration."
+        },
+        {
+          "id": "ra-05",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Why can you NOT deep-link directly to a route like /servers from outside the app?",
+          "options": [
+            "Authentication blocks direct access",
+            "The backend only serves the SPA from /ui — routes like /servers are not backend routes",
+            "React Router does not support direct URL navigation",
+            "The routes are hash-based and cannot be linked"
+          ],
+          "answer": "The backend only serves the SPA from /ui — routes like /servers are not backend routes",
+          "explanation": "The Python backend only mounts the frontend under /ui. Paths like /servers are client-side routes handled by React Router, so you must start from /ui and navigate within the SPA."
+        },
+        {
+          "id": "ra-06",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What is the only place in the codebase where apiClient methods are called?",
+          "options": [
+            "Directly inside page components",
+            "Inside custom hooks in src/hooks/",
+            "Inside services/api.ts itself",
+            "Inside TypeScript type definitions"
+          ],
+          "answer": "Inside custom hooks in src/hooks/",
+          "explanation": "All hooks live in src/hooks/ and are the only place that calls apiClient methods. Pages and components call hooks, not apiClient directly."
+        },
+        {
+          "id": "ra-07",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Which hook does the ManageServers page use?",
+          "options": [
+            "useServers",
+            "useServerDetails",
+            "useServerManagement",
+            "useServerPolling"
+          ],
+          "answer": "useServerManagement",
+          "explanation": "ManageServers uses useServerManagement, which provides createServer, updateServer, deleteServer operations and fetches servers including disabled ones."
+        },
+        {
+          "id": "ra-08",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What happens when a user tries to edit a server that is currently running in ManageServers?",
+          "options": [
+            "The server is automatically stopped before the edit form opens",
+            "The edit is blocked with an alert — the user must stop the server first",
+            "The form opens but changes are queued until the server is stopped",
+            "The edit is allowed for non-critical fields only"
+          ],
+          "answer": "The edit is blocked with an alert — the user must stop the server first",
+          "explanation": "The handleEdit guard in ManageServers checks server.status?.state === 'running' and shows an alert if true. The user must stop the server before editing."
+        },
+        {
+          "id": "ra-09",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Which hook does LLMModels use that Dashboard does NOT, and what is its purpose?",
+          "options": [
+            "useCallback — prevents unnecessary re-renders",
+            "useDebounce — delays search input updates to avoid excessive filtering on each keystroke",
+            "useMemo — memoizes the list of models",
+            "useRef — tracks whether the component is mounted"
+          ],
+          "answer": "useDebounce — delays search input updates to avoid excessive filtering on each keystroke",
+          "explanation": "LLMModels uses useDebounce(searchQuery, 300) which waits 300ms after the user stops typing before applying the filter. Dashboard does inline filtering without debounce."
+        },
+        {
+          "id": "ra-10",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "What is the purpose of the AbortController + isMountedRef pattern used in hooks?",
+          "options": [
+            "To cancel fetch requests that take longer than 30 seconds",
+            "To prevent state updates on an unmounted component, avoiding memory leaks",
+            "To retry failed requests automatically",
+            "To batch multiple API calls into a single request"
+          ],
+          "answer": "To prevent state updates on an unmounted component, avoiding memory leaks",
+          "explanation": "If a component unmounts while a fetch is in flight, calling setState on it would cause a React warning and potential memory leak. AbortController cancels the request and isMountedRef guards against any state updates after unmount."
+        },
+        {
+          "id": "ra-11",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "Why is useCallback used on fetch functions inside hooks?",
+          "options": [
+            "To make the fetch function run faster",
+            "To memoize the function reference so useEffect does not re-run infinitely when the function is a dependency",
+            "To ensure the fetch runs on the main thread",
+            "To share the same function instance across multiple components"
+          ],
+          "answer": "To memoize the function reference so useEffect does not re-run infinitely when the function is a dependency",
+          "explanation": "Without useCallback, a new function reference is created on every render. If that function is in the useEffect dependency array, it triggers the effect on every render, causing an infinite loop."
+        },
+        {
+          "id": "ra-12",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "After calling createServer(), updateServer(), or deleteServer() in useServerManagement, what always happens next?",
+          "options": [
+            "The UI updates optimistically without a server round-trip",
+            "fetchServers() is called again to re-sync the UI with the server state",
+            "The component is forced to unmount and remount",
+            "A WebSocket event triggers a global state refresh"
+          ],
+          "answer": "fetchServers() is called again to re-sync the UI with the server state",
+          "explanation": "Every mutation calls fetchData() at the end to keep the UI in sync with the server. This is a common pattern across all hooks in FluidMCP."
+        },
+        {
+          "id": "ra-13",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "The Documentation page makes no API calls and uses no custom hooks. Why is this architecturally correct?",
+          "options": [
+            "Documentation pages should always be server-rendered",
+            "The content is static and hardcoded in the component — no server data is needed",
+            "It is a temporary implementation that will be refactored later",
+            "The hook pattern does not support static content"
+          ],
+          "answer": "The content is static and hardcoded in the component — no server data is needed",
+          "explanation": "Documentation uses local useState only for UI interactions (active section, sidebar open state, scroll position). Creating a hook just to wrap static content would add unnecessary complexity."
+        },
+        {
+          "id": "ra-14",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "How many custom hooks are defined in src/hooks/ (excluding use-toast.ts and use-mobile.tsx)?",
+          "options": [
+            "8",
+            "9",
+            "11",
+            "13"
+          ],
+          "answer": "11",
+          "explanation": "The hooks overview table lists 11 custom hooks: useServers, useServerManagement, useServerDetails, useServerEnv, useServerPolling, useActiveServerFiltering, useServerFiltering, useLLMModels, useToolRunner, usePolling, useDebounce."
+        },
+        {
+          "id": "ra-15",
+          "type": "short_answer",
+          "difficulty": "hard",
+          "question": "Describe the full data flow from user action to UI update in the FluidMCP hook pattern.",
+          "answer": "Page/Component calls a custom hook. The hook calls an apiClient method (e.g. apiClient.listServers()). apiClient calls fetch() to the FastAPI backend. The backend returns a typed response. The hook updates its state. The state change triggers a re-render in the component.",
+          "explanation": "This is the hook → api → component pattern described in frontend-setup.md."
+        }
+      ]
+    },
+    {
+      "id": "api-client",
+      "title": "API Client & Backend Communication",
+      "source_doc": "onboarding/frontend-setup.md",
+      "questions": [
+        {
+          "id": "ac-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "How is the ApiClient used across the codebase?",
+          "options": [
+            "A new instance is created in each hook",
+            "It is imported as a class and instantiated per page",
+            "It is a singleton — one instance exported from services/api.ts and imported everywhere",
+            "It is injected via React Context"
+          ],
+          "answer": "It is a singleton — one instance exported from services/api.ts and imported everywhere",
+          "explanation": "services/api.ts ends with 'export default new ApiClient()'. This singleton is imported by all hooks. Only one instance exists for the entire app."
+        },
+        {
+          "id": "ac-02",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What class is thrown when an HTTP response has a non-2xx status code?",
+          "options": [
+            "NetworkError",
+            "FetchError",
+            "ApiHttpError",
+            "HttpException"
+          ],
+          "answer": "ApiHttpError",
+          "explanation": "ApiHttpError extends Error and carries both the message and the HTTP status code. Hooks catch it to surface meaningful error messages in the UI."
+        },
+        {
+          "id": "ac-03",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What is the default request timeout for most ApiClient methods?",
+          "options": [
+            "10 seconds",
+            "30 seconds",
+            "60 seconds",
+            "120 seconds"
+          ],
+          "answer": "30 seconds",
+          "explanation": "The private request() method sets a 30-second timeout using AbortController. GitHub operations use a longer 120-second timeout."
+        },
+        {
+          "id": "ac-04",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "Which file is the ONLY file that calls fetch() in the entire frontend?",
+          "options": [
+            "src/main.tsx",
+            "src/App.tsx",
+            "src/services/api.ts",
+            "src/hooks/useServers.ts"
+          ],
+          "answer": "src/services/api.ts",
+          "explanation": "All HTTP calls go through the ApiClient singleton in services/api.ts. No hook or component should call fetch() directly — they must go through apiClient methods."
+        }
+      ]
+    },
+    {
+      "id": "server-lifecycle",
+      "title": "Server Lifecycle",
+      "source_doc": "onboarding/server-lifecycle-flow.md",
+      "questions": [
+        {
+          "id": "sl-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "What happens to an MCP server's configuration when it is added via the API?",
+          "options": [
+            "It is stored in a local JSON config file",
+            "It is stored in MongoDB",
+            "It is stored in environment variables",
+            "It is stored in Redis"
+          ],
+          "answer": "It is stored in MongoDB",
+          "explanation": "When a server is added, its config is validated and stored in MongoDB for persistence across restarts."
+        },
+        {
+          "id": "sl-02",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "What are the two delete options available in ManageServers?",
+          "options": [
+            "Archive and Purge",
+            "Soft-delete (disable) and Hard delete",
+            "Pause and Remove",
+            "Suspend and Destroy"
+          ],
+          "answer": "Soft-delete (disable) and Hard delete",
+          "explanation": "Soft-delete (disable) keeps the server in the database with enabled=false and allows recovery. Hard delete permanently removes it from MongoDB."
+        },
+        {
+          "id": "sl-03",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What communication protocol does the backend use to perform the MCP handshake when starting a server?",
+          "options": [
+            "HTTP REST",
+            "WebSocket",
+            "JSON-RPC over stdin/stdout",
+            "gRPC"
+          ],
+          "answer": "JSON-RPC over stdin/stdout",
+          "explanation": "When starting an MCP server, the backend spawns a subprocess and communicates via JSON-RPC messages over the process's stdin/stdout pipes. This is the MCP protocol."
+        },
+        {
+          "id": "sl-04",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What must a developer do before editing a running MCP server's configuration?",
+          "options": [
+            "Create a copy of the server first",
+            "Stop the server",
+            "Put the server in maintenance mode",
+            "Nothing — live edits are supported"
+          ],
+          "answer": "Stop the server",
+          "explanation": "Editing a running server is blocked in the UI. The user must stop the server first, then edit its configuration. This prevents inconsistent state."
+        },
+        {
+          "id": "sl-05",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What does the restart flow consist of?",
+          "options": [
+            "A single API call that atomically restarts the process",
+            "Stop followed by Start",
+            "Kill the process and wait for auto-recovery",
+            "Rolling restart with zero downtime"
+          ],
+          "answer": "Stop followed by Start",
+          "explanation": "Restart is a sequential Stop → Start. There is no atomic restart — it is two separate operations."
+        },
+        {
+          "id": "sl-06",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "After starting an MCP server, what additional data does the backend cache?",
+          "options": [
+            "Server health metrics",
+            "The tool list returned by the MCP handshake",
+            "The server's log output",
+            "The server's memory usage"
+          ],
+          "answer": "The tool list returned by the MCP handshake",
+          "explanation": "After the MCP handshake during startup, the backend caches the tool list. This avoids re-running the handshake every time a client requests available tools."
+        }
+      ]
+    },
+    {
+      "id": "tool-execution",
+      "title": "Tool Execution Flow",
+      "source_doc": "onboarding/tool-execution-flow.md",
+      "questions": [
+        {
+          "id": "te-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "Where does tool execution history get stored in the FluidMCP frontend?",
+          "options": [
+            "In MongoDB via the backend API",
+            "In browser localStorage",
+            "In React component state",
+            "In a browser cookie"
+          ],
+          "answer": "In browser localStorage",
+          "explanation": "Tool execution history is persisted in localStorage via services/toolHistory.ts. The history is per-tool and capped at 50 entries."
+        },
+        {
+          "id": "te-02",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "What is the entry path to execute a tool in the FluidMCP UI?",
+          "options": [
+            "Dashboard → ToolRunner",
+            "Dashboard → ServerDetails → ToolRunner",
+            "ManageServers → ToolRunner",
+            "Documentation → ToolRunner"
+          ],
+          "answer": "Dashboard → ServerDetails → ToolRunner",
+          "explanation": "The tool execution entry path is Dashboard → ServerDetails → ToolRunner. The user navigates to a server's details page first, then selects a tool to run."
+        },
+        {
+          "id": "te-03",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "How does the ToolRunner generate its input form?",
+          "options": [
+            "The form is hardcoded for each known tool",
+            "The form is auto-generated from the tool's JSON Schema definition",
+            "The user types raw JSON input",
+            "The form is fetched from the backend as HTML"
+          ],
+          "answer": "The form is auto-generated from the tool's JSON Schema definition",
+          "explanation": "JsonSchemaForm.tsx auto-generates forms from tool schemas. Each field type (string, number, boolean, array, object) has a corresponding renderer component."
+        },
+        {
+          "id": "te-04",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What are the four result display formats that ToolResult.tsx can auto-detect?",
+          "options": [
+            "HTML, CSV, XML, Plain text",
+            "JSON, Table, Text, MCP content",
+            "JSON, Markdown, Image, Binary",
+            "Text, Code, Error, Success"
+          ],
+          "answer": "JSON, Table, Text, MCP content",
+          "explanation": "ToolResult.tsx auto-detects the result format and delegates to JsonResultView, TableResultView, TextResultView, or McpContentView accordingly."
+        },
+        {
+          "id": "te-05",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "What is the maximum number of tool execution history entries stored per tool in localStorage?",
+          "options": [
+            "10",
+            "25",
+            "50",
+            "100"
+          ],
+          "answer": "50",
+          "explanation": "Tool history is capped at 50 entries per tool, as implemented in services/toolHistory.ts."
+        }
+      ]
+    },
+    {
+      "id": "environment-variables",
+      "title": "Environment Variables Flow",
+      "source_doc": "onboarding/env-variables-flow.md",
+      "questions": [
+        {
+          "id": "ev-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "Where in the ServerDetails page are environment variables managed?",
+          "options": [
+            "The Settings tab",
+            "The Env tab",
+            "The Config tab",
+            "A separate /env route"
+          ],
+          "answer": "The Env tab",
+          "explanation": "ServerDetails has three tabs: Tools, Logs, and Env. Environment variables are managed in the Env tab."
+        },
+        {
+          "id": "ev-02",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What happens to env var values when they are read back from the backend?",
+          "options": [
+            "They are returned in plain text",
+            "They are returned encrypted",
+            "They are masked — sensitive values are not exposed",
+            "They are base64-encoded"
+          ],
+          "answer": "They are masked — sensitive values are not exposed",
+          "explanation": "The backend masks env var values on read. This prevents API keys and secrets from being exposed in the UI or API responses."
+        },
+        {
+          "id": "ev-03",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "When do environment variable changes take effect for a running MCP server?",
+          "options": [
+            "Immediately — the running process picks them up automatically",
+            "After the browser page is refreshed",
+            "Only after the server is restarted",
+            "After 60 seconds via a background sync"
+          ],
+          "answer": "Only after the server is restarted",
+          "explanation": "Env var edits apply only to the running instance via PUT /api/servers/:id/instance/env. For the changes to persist and take full effect across restarts, the server must be restarted."
+        },
+        {
+          "id": "ev-04",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "Which hook handles env variable CRUD for a server, and what API endpoints does it use?",
+          "options": [
+            "useServerDetails — GET /api/servers/:id and PUT /api/servers/:id",
+            "useServerEnv — GET /api/servers/:id/instance/env for reads and PUT /api/servers/:id/instance/env for writes",
+            "useServerManagement — GET /api/servers and PATCH /api/servers/:id/env",
+            "useServers — GET /api/servers/:id/env and POST /api/servers/:id/env"
+          ],
+          "answer": "useServerEnv — GET /api/servers/:id/instance/env for reads and PUT /api/servers/:id/instance/env for writes",
+          "explanation": "useServerEnv is dedicated to env var CRUD. It reads from GET /api/servers/:id/instance/env and writes to PUT /api/servers/:id/instance/env."
+        }
+      ]
+    },
+    {
+      "id": "directory-structure",
+      "title": "Directory Structure & File Locations",
+      "source_doc": "onboarding/frontend-setup.md",
+      "questions": [
+        {
+          "id": "ds-01",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "Where are TypeScript type definitions for servers, tools, and env vars located?",
+          "options": [
+            "src/models/server.ts",
+            "src/types/server.ts",
+            "src/interfaces/server.ts",
+            "src/schemas/server.ts"
+          ],
+          "answer": "src/types/server.ts",
+          "explanation": "src/types/server.ts contains Server, Tool, and EnvVar TypeScript types. LLM-related types are in src/types/llm.ts."
+        },
+        {
+          "id": "ds-02",
+          "type": "multiple_choice",
+          "difficulty": "easy",
+          "question": "Which file defines ALL client-side routes for the application?",
+          "options": [
+            "src/main.tsx",
+            "src/App.tsx",
+            "src/components/Navbar.tsx",
+            "vite.config.ts"
+          ],
+          "answer": "src/App.tsx",
+          "explanation": "src/App.tsx is the single source of truth for all route definitions. It sets up React Router DOM with all 9 page routes."
+        },
+        {
+          "id": "ds-03",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "What utility function is exported from src/lib/utils.ts?",
+          "options": [
+            "formatDate()",
+            "cn() — conditional className merging",
+            "parseJSON()",
+            "debounce()"
+          ],
+          "answer": "cn() — conditional className merging",
+          "explanation": "src/lib/utils.ts exports cn(), a utility for conditional and merged Tailwind CSS class names. It is used throughout components."
+        },
+        {
+          "id": "ds-04",
+          "type": "multiple_choice",
+          "difficulty": "medium",
+          "question": "Which folder contains the auto-generated form components for rendering tool input fields?",
+          "options": [
+            "src/components/ui/",
+            "src/components/form/",
+            "src/components/result/",
+            "src/components/inputs/"
+          ],
+          "answer": "src/components/form/",
+          "explanation": "src/components/form/ contains JsonSchemaForm.tsx and field renderers (StringInput, NumberInput, BooleanInput, ArrayInput, ObjectInput, SelectInput) that auto-generate forms from tool JSON schemas."
+        },
+        {
+          "id": "ds-05",
+          "type": "multiple_choice",
+          "difficulty": "hard",
+          "question": "What is the purpose of src/components/ui/ versus src/components/ (top level)?",
+          "options": [
+            "ui/ is for server-side rendered components; top level is for client-side",
+            "ui/ contains shadcn/ui primitives (Button, Dialog, etc.); top level contains feature-specific composed components",
+            "ui/ is deprecated; top level is the current standard",
+            "ui/ is for mobile components; top level is for desktop"
+          ],
+          "answer": "ui/ contains shadcn/ui primitives (Button, Dialog, etc.); top level contains feature-specific composed components",
+          "explanation": "src/components/ui/ holds the base Radix UI / shadcn/ui primitives. The top-level src/components/ holds feature-specific components like ServerCard, ServerForm, Navbar, etc. that compose those primitives."
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "total_questions": 51,
+    "by_difficulty": {
+      "easy": 14,
+      "medium": 25,
+      "hard": 12
+    },
+    "by_type": {
+      "multiple_choice": 48,
+      "short_answer": 3
+    },
+    "topics_covered": [
+      "Frontend tech stack and versions",
+      "Local development setup",
+      "Production build and Railway deployment",
+      "ApiClient singleton pattern",
+      "Error handling with ApiHttpError",
+      "React Router and client-side routing",
+      "All 9 pages and their routes",
+      "Custom hooks pattern and responsibilities",
+      "AbortController + isMountedRef pattern",
+      "Refetch-after-mutation pattern",
+      "useCallback for stable fetch functions",
+      "Server lifecycle (add, start, stop, restart, delete)",
+      "Tool execution flow and JSON Schema forms",
+      "Tool result auto-detection",
+      "Tool history in localStorage",
+      "Environment variable read/write flow",
+      "Directory structure and file locations"
+    ]
+  }
+}
