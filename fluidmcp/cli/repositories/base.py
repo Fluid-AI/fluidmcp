@@ -244,6 +244,18 @@ class PersistenceBackend(ABC):
         """
         return []
 
+    @abstractmethod
+    async def list_instances_by_state(self, state: str) -> List[Dict[str, Any]]:
+        """
+        List all server instances with the given runtime state.
+
+        Args:
+            state: State to filter by (e.g., 'running', 'stopped', 'failed')
+
+        Returns:
+            List of instance dicts.
+        """
+
     def supports_rollback(self) -> bool:
         """
         Check if this backend supports model rollback/versioning.

@@ -155,6 +155,10 @@ class InMemoryBackend(PersistenceBackend):
         events = list(self._crash_events.get(server_id, []))
         return events[:limit]
 
+    async def list_instances_by_state(self, state: str) -> List[Dict[str, Any]]:
+        """List instances with a given state from in-memory storage."""
+        return [dict(s) for s in self._instances.values() if s.get("state") == state]
+
     # ==================== LLM Model Persistence ====================
 
     async def save_llm_model(self, model_config: Dict[str, Any]) -> bool:
