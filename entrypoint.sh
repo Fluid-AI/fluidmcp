@@ -160,6 +160,8 @@ echo "Starting fmcp serve..."
 SERVE_CMD=(fmcp serve --host 0.0.0.0 --port "$PORT" --secure --allow-all-origins)
 if [ -n "$MONGODB_URI" ]; then
   SERVE_CMD+=(--mongodb-uri "$MONGODB_URI")
+  SERVE_CMD+=(--database "${FMCP_DATABASE:-fluidmcp}")
+  SERVE_CMD+=(--require-persistence)
 fi
 
 "${SERVE_CMD[@]}" &
