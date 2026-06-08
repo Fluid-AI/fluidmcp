@@ -378,9 +378,9 @@ def run_servers(
             except VLLMConfigError as e:
                 logger.error(f"vLLM configuration validation failed: {e}")
                 logger.error("Skipping vLLM models - will continue with other model types if configured")
-                if launched_servers > 0:
+                if len(servers_to_launch) > 0:
                     logger.info(
-                        f"Note: {launched_servers} MCP server(s) were launched successfully. "
+                        f"Note: {len(servers_to_launch)} MCP server(s) were launched successfully. "
                         "They will continue running."
                     )
                 # Don't return - continue to initialize Replicate models if configured
@@ -475,7 +475,7 @@ def run_servers(
         replicate_will_init = bool(replicate_models)  # Will be initialized on startup
 
         if not vllm_launched and not replicate_will_init:
-            if launched_servers == 0:
+            if len(servers_to_launch) == 0:
                 logger.error("No MCP servers or LLM models successfully configured - aborting")
                 return
             else:
