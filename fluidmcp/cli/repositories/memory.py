@@ -133,20 +133,24 @@ class InMemoryBackend(PersistenceBackend):
             Dict of real environment variables, or None if the instance does
             not exist or has no env block (or all values were placeholders).
         """
-        instance = await self.get_instance_state(server_id)
-        if instance:
-            env = instance.get("env")
-            if env:
-                filtered_env = {
-                    k: v for k, v in env.items()
-                    if v
-                    and isinstance(v, str)
-                    and v.strip()
-                    and not v.strip().startswith("${")
-                    and not is_placeholder(v)
-                }
-                return filtered_env if filtered_env else None
-        return None
+        try:
+            instance = await self.get_instance_state(server_id)
+            if instance:
+                env = instance.get("env")
+                if env:
+                    filtered_env = {
+                        k: v for k, v in env.items()
+                        if v
+                        and isinstance(v, str)
+                        and v.strip()
+                        and not v.strip().startswith("${")
+                        and not is_placeholder(v)
+                    }
+                    return filtered_env if filtered_env else None
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving instance env: {e}")
+            return None
 
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """Save log to memory (capped at 1000 lines per server)."""

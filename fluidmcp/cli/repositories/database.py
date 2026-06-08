@@ -761,6 +761,7 @@ class DatabaseManager(PersistenceBackend):
                     filtered_env = {
                         k: v for k, v in env.items()
                         if v
+                        and isinstance(v, str)
                         and v.strip()
                         and not v.strip().startswith("${")
                         and not is_placeholder(v)
