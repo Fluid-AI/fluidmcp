@@ -358,21 +358,26 @@ async def export_server(session_id: str):
     safe_auth = {"type": session.auth.get("type", "none")} if session.auth else {"type": "none"}
 
     # Redact credentials from URL: remove userinfo (user:pass@host) and any
-    # query parameters whose names suggest secrets (token, key, secret, etc.)
-    _SENSITIVE_PARAM_PATTERN = {"token", "key", "secret", "password", "pass",
-                                "auth", "apikey", "api_key", "access_token",
-                                "client_secret", "credential"}
+    # query parameter whose name contains a sensitive substring.
+    # Normalized by lowercasing and stripping hyphens/underscores so that
+    # variants like authToken, x-api-key, refresh_token, clientSecret all match.
+    _SENSITIVE_SUBSTRINGS = ("token", "key", "secret", "password", "pass",
+                             "auth", "credential", "access", "client")
+    def _param_is_sensitive(name: str) -> bool:
+        normalized = name.lower().replace("-", "").replace("_", "")
+        return any(sub in normalized for sub in _SENSITIVE_SUBSTRINGS)
+
     def _safe_url(raw: str) -> str:
         try:
-            from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+            from urllib.parse import urlencode, parse_qsl, urlunparse, urlparse
             p = urlparse(raw)
             # Drop userinfo (user:password@host)
             netloc = p.hostname or ""
             if p.port:
                 netloc = f"{netloc}:{p.port}"
-            # Redact sensitive query params
+            # Redact any query param whose name looks like a credential
             clean_qs = urlencode([
-                (k, "***") if k.lower() in _SENSITIVE_PARAM_PATTERN else (k, v)
+                (k, "***") if _param_is_sensitive(k) else (k, v)
                 for k, v in parse_qsl(p.query, keep_blank_values=True)
             ])
             return urlunparse((p.scheme, netloc, p.path, p.params, clean_qs, ""))
