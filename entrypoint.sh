@@ -119,6 +119,13 @@ if [ -z "$FMCP_BEARER_TOKEN" ]; then
   exit 1
 fi
 
+# MongoDB URI is required in cloud/Railway mode to preserve persistence contract
+if [ -z "$MONGODB_URI" ]; then
+  echo "ERROR: MONGODB_URI environment variable is required in cloud/Railway mode"
+  echo "Add a MongoDB service in Railway and link it to this service."
+  exit 1
+fi
+
 # Path to configuration file for auto-registration (configurable via env var)
 CONFIG_PATH="${FMCP_CONFIG_PATH:-/app/examples/railway-llama4-config.json}"
 
@@ -156,13 +163,11 @@ echo ""
 # Note: FMCP_BEARER_TOKEN is read from environment (more secure than CLI arg)
 echo "Starting fmcp serve..."
 
-# Build command with optional MongoDB URI (use array to prevent shell injection)
-SERVE_CMD=(fmcp serve --host 0.0.0.0 --port "$PORT" --secure --allow-all-origins)
-if [ -n "$MONGODB_URI" ]; then
-  SERVE_CMD+=(--mongodb-uri "$MONGODB_URI")
-  SERVE_CMD+=(--database "${FMCP_DATABASE:-fluidmcp}")
-  SERVE_CMD+=(--require-persistence)
-fi
+# Build command — MongoDB flags always included (MONGODB_URI verified above)
+SERVE_CMD=(fmcp serve --host 0.0.0.0 --port "$PORT" --secure --allow-all-origins
+  --mongodb-uri "$MONGODB_URI"
+  --database "${FMCP_DATABASE:-fluidmcp}"
+  --require-persistence)
 
 "${SERVE_CMD[@]}" &
 
