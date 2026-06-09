@@ -322,9 +322,8 @@ def run_servers(
                 process = await server_manager._spawn_mcp_process(server_name, spawn_cfg)
 
                 if process:
-                    # Register in server_manager.processes so the dynamic router can find it.
-                    server_manager.processes[server_name] = process
-                    # Wire up module-level tracking used by health/tools endpoints.
+                    # _spawn_mcp_process already registers the process in server_manager.
+                    # Just wire up the module-level tracking used by health/tools endpoints.
                     _register_server_process(server_name, process)
                     _initialize_server_metrics(server_name)
 
