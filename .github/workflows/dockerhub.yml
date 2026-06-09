@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - development
+      - deploy_onprod
 
 jobs:
   docker-build-push:
