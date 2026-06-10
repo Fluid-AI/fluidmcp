@@ -46,8 +46,7 @@ dist/
 build/
 *.tar.gz
 
-# Examples & Docs
-examples/
+# Docs
 docs/
 
 # CI/CD
