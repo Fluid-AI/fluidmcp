@@ -831,6 +831,16 @@ class ServerManager:
                     # Inline env overlays on top of file env so per-run overrides still work
                     env_vars = {**file_env, **env_vars}
 
+            # Promote TRANSPORT_TYPE from env_file to config transport (if not already set)
+            # Supports 3 transport declaration methods:
+            #   1. "transport": "http" directly in config (already set, untouched)
+            #   2. TRANSPORT_TYPE in inline env (promoted by apply_transport during config resolution)
+            #   3. TRANSPORT_TYPE in env_file (promoted here)
+            if not config.get("transport"):
+                _env_transport = env_vars.get("TRANSPORT_TYPE", "")
+                if _env_transport in ("sse", "http"):
+                    config["transport"] = _env_transport
+
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
             working_dir_path = Path(working_dir)
