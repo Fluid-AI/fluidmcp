@@ -343,7 +343,7 @@ def run_servers(
 
     # Mount unified dynamic router (same as serve) — single router for all registered servers
     mcp_router = create_dynamic_router(server_manager)
-    app.include_router(mcp_router, tags=["mcp"])
+    app.include_router(mcp_router, prefix=os.environ.get("MCP_ROOT_PATH", ""), tags=["mcp"])
     logger.debug("Dynamic MCP router mounted")
 
     # Launch LLM models if configured (supports multiple types: vllm, replicate, etc.)
