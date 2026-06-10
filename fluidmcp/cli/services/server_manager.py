@@ -768,7 +768,24 @@ class ServerManager:
             args = config.get("args", [])
             env_vars = config.get("env", {})
 
-            # Load env_file if specified, merging before inline env (inline takes precedence)
+            # --- env_file support ---
+            # Allows secrets/env vars to be stored in a .env file on disk rather than
+            # inlined in the config JSON. This keeps production configs clean and avoids
+            # committing secrets. Usage in config:
+            #
+            #   "env_file": "servers/myserver/.env"   (relative to working_dir)
+            #   "env_file": "/absolute/path/.env"
+            #
+            # See examples/env-file-config.json for the full config structure supported.
+            #
+            # Rules:
+            #   - Relative paths are resolved relative to working_dir.
+            #   - The file must reside under install_path or working_dir (prevents
+            #     path-traversal attacks reading files outside the server tree).
+            #   - Inline "env" keys overlay on top of file values, so per-run overrides
+            #     still work without modifying the file.
+            #   - Standard .env syntax: KEY=VALUE, # comments, blank lines ignored,
+            #     optional surrounding single/double quotes stripped from values.
             env_file_path = config.pop("env_file", None)
             if env_file_path:
                 early_working_dir = config.get("working_dir", ".")
@@ -811,7 +828,7 @@ class ServerManager:
                         ):
                             v = v[1:-1]
                         file_env[k] = v
-                    # Inline env overlays on top of file env
+                    # Inline env overlays on top of file env so per-run overrides still work
                     env_vars = {**file_env, **env_vars}
 
             working_dir = config.get("working_dir", ".")

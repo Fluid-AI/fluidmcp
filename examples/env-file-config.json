@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "weatherapi": {
+      "command": "python",
+      "args": ["servers/weatherapi/server.py"],
+      "transport": "http",
+      "env_file": "servers/weatherapi/.env"
+    }
+  }
+}
