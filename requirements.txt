@@ -25,7 +25,7 @@ prometheus-client==0.21.0
 psutil==7.0.0
 redis==5.0.0
 sentry-sdk[fastapi]==2.19.2 
-pydantic==2.11.4
+pydantic==2.11.7
 pydantic-settings==2.9.1
 pydantic_core==2.33.2
 pymongo==4.11.0
@@ -45,7 +45,30 @@ sse-starlette==2.3.4
 starlette==0.46.2
 tqdm==4.67.1
 typing-inspection==0.4.1
-typing_extensions==4.13.2
+typing_extensions==4.15.0
 urllib3==2.4.0
 uvicorn==0.35.0
 uv==0.7.2
+mcp==1.26.0
+
+# Jupyter and async support
+nbclient==0.10.2
+nbformat==5.10.4
+nest-asyncio==1.6.0
+
+# Database drivers
+pyodbc==5.2.0
+sqlalchemy==2.0.41
+pymysql==1.1.1
+
+# OMC MCP Server - Data Science dependencies
+numpy==1.24.0
+pandas==2.0.0
+scipy==1.11.0
+matplotlib==3.7.0
+plotly==5.18.0
+pymssql==2.3.1
+psycopg2-binary==2.9.10
+
+# Cache and OTP storage
+pymemcache>=4.0.0,<5.0
