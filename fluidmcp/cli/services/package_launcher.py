@@ -546,7 +546,7 @@ def create_dynamic_router(server_manager):
                     _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
 
                     if pool_size > 1:
-                        # Pool mode: get active slot, retry on standby if it fails
+                        # Pool mode: get active slot, retry on standby if ANY error occurs
                         active_slot = server_manager.get_active_slot(server_name)
                         if active_slot is None:
                             raise HTTPException(503, f"Server '{server_name}': all pool slots unhealthy")
@@ -557,32 +557,30 @@ def create_dynamic_router(server_manager):
                                 session_id=active_slot.handle.session_id,
                                 client=active_slot.handle.http_client,
                             )
-                        except HTTPException as exc:
-                            if exc.status_code in (503, 504):
-                                failed_port = active_slot.port
-                                fallback = server_manager.get_fallback_slot(server_name, failed_port)
-                                if fallback is not None:
-                                    logger.error(
-                                        f"[FAILOVER] '{server_name}' — active subprocess (port={failed_port}) "
-                                        f"failed ({exc.status_code}), retrying on standby (port={fallback.port})"
-                                    )
-                                    asyncio.ensure_future(server_manager.promote_standby(server_name, failed_port))
-                                    response = await _proxy_to_http_server(
-                                        fallback.base_url, request,
-                                        timeout=_http_timeout,
-                                        session_id=fallback.handle.session_id,
-                                        client=fallback.handle.http_client,
-                                    )
-                                else:
-                                    logger.error(
-                                        f"[FAILOVER] '{server_name}' — active (port={failed_port}) failed, "
-                                        f"no healthy standby available"
-                                    )
-                                    monitor = getattr(server_manager, "_health_monitor", None)
-                                    if monitor is not None:
-                                        asyncio.ensure_future(monitor.trigger_restart(server_name))
-                                    raise
+                        except Exception as exc:
+                            failed_port = active_slot.port
+                            status = getattr(exc, "status_code", 500)
+                            fallback = server_manager.get_fallback_slot(server_name, failed_port)
+                            if fallback is not None:
+                                logger.error(
+                                    f"[FAILOVER] '{server_name}' — active slot (port={failed_port}) "
+                                    f"failed ({type(exc).__name__}: {status}), retrying on standby (port={fallback.port})"
+                                )
+                                asyncio.ensure_future(server_manager.promote_standby(server_name, failed_port))
+                                response = await _proxy_to_http_server(
+                                    fallback.base_url, request,
+                                    timeout=_http_timeout,
+                                    session_id=fallback.handle.session_id,
+                                    client=fallback.handle.http_client,
+                                )
                             else:
+                                logger.error(
+                                    f"[FAILOVER] '{server_name}' — active (port={failed_port}) failed, "
+                                    f"no healthy standby available"
+                                )
+                                monitor = getattr(server_manager, "_health_monitor", None)
+                                if monitor is not None:
+                                    asyncio.ensure_future(monitor.trigger_restart(server_name))
                                 raise
                     else:
                         # Single-process mode (FMCP_POOL_SIZE=1) — original behavior
