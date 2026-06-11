@@ -10,6 +10,7 @@ import subprocess
 import json
 import time
 import atexit
+import httpx
 from collections import deque
 from urllib.parse import urlparse
 from typing import Dict, Any, Optional, List, IO, Deque
@@ -1096,7 +1097,6 @@ class ServerManager:
         Returns:
             NetworkSubprocessHandle on success, None on failure.
         """
-        import httpx
 
         url = f"http://127.0.0.1:{port}"
         name = self.configs.get(id, {}).get("name", id)
@@ -1167,8 +1167,6 @@ class ServerManager:
         Returns:
             NetworkSubprocessHandle on success, None on failure.
         """
-        import httpx
-
         base_url = f"http://127.0.0.1:{port}"
         name = self.configs.get(id, {}).get("name", id)
         mcp_url = f"{base_url}/mcp"
@@ -1313,9 +1311,7 @@ class ServerManager:
         Args:
             server_id:  Server identifier.
             base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
-            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
         """
-        import httpx
 
         if session_id is not None:
             url = f"{base_url.rstrip('/')}/mcp"
@@ -1379,6 +1375,16 @@ class ServerManager:
         # so stale TCP connections don't linger after the subprocess exits.
         process = self.processes.get(id)
         if isinstance(process, NetworkSubprocessHandle):
+            # Kill the subprocess if still alive — poll() returns None while running.
+            # This is the single authoritative kill point so all paths (health monitor,
+            # trigger_restart, stop_server) clean up the OS process.
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    logger.info(f"[cleanup] Killed subprocess PID={process.pid} for server '{id}'")
+                    process.wait(timeout=5)
+            except Exception as e:
+                logger.debug(f"[cleanup] Kill/wait for '{id}' PID={getattr(process, 'pid', '?')}: {e}")
             try:
                 parsed = urlparse(process.base_url)
                 if parsed.port:
@@ -1873,6 +1879,119 @@ class MCPHealthMonitor:
 
         logger.info("MCP health monitor loop exited")
 
+    async def _check_http_ping(self, server_id: str, process: "NetworkSubprocessHandle") -> bool:
+        """POST tools/list to the subprocess HTTP port. Returns True if server is a zombie.
+
+        A zombie is a process that is alive by PID but no longer serving HTTP requests.
+        Uses a 10s timeout so a slow-but-alive server is not mis-classified.
+        Returns False (not a zombie) on any ambiguous error (connect refused = process
+        likely restarting, not zombie).
+        """
+        ping_payload = {"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}}
+        url = f"{process.base_url.rstrip('/')}/mcp"
+        timeout = float(os.getenv("FMCP_HTTP_PING_TIMEOUT", "10"))
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    url,
+                    json=ping_payload,
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            # Any HTTP response (including error codes) means the server is alive
+            return False
+        except httpx.ConnectError:
+            # Port not accepting connections — process may be mid-restart, not a zombie
+            return False
+        except httpx.TimeoutException:
+            logger.warning(
+                f"[{server_id}] HTTP ping timed out after {timeout}s — PID alive but "
+                f"server unresponsive, treating as zombie"
+            )
+            return True
+        except Exception as e:
+            logger.debug(f"[{server_id}] HTTP ping error (ignored): {e}")
+            return False
+
+    async def trigger_restart(self, server_id: str) -> None:
+        """Force-restart a server immediately (no backoff delay).
+
+        Called by the gateway when it receives a 504 from the subprocess — the
+        caller already waited for the full request timeout, so we skip the usual
+        exponential backoff and restart right away.
+        """
+        if server_id in self._restarts_in_progress:
+            logger.debug(f"[{server_id}] trigger_restart: restart already in progress, skipping")
+            return
+
+        process = self._sm.processes.get(server_id)
+        if process is None:
+            logger.debug(f"[{server_id}] trigger_restart: server not found, skipping")
+            return
+
+        config = await self._sm.db.get_server_config(server_id)
+        if not config:
+            logger.debug(f"[{server_id}] trigger_restart: no config found, skipping")
+            return
+
+        max_restarts = config.get("max_restarts", 3)
+        if self._restart_counts.get(server_id, 0) >= max_restarts:
+            logger.warning(f"[{server_id}] trigger_restart: max restarts ({max_restarts}) reached, not restarting")
+            return
+
+        old_pid = getattr(process, "pid", "?")
+        logger.error(
+            f"[RESTART] '{server_id}' — 504 gateway timeout detected. "
+            f"Killing old process (PID={old_pid}) and restarting immediately (no backoff). "
+            f"Restart attempt {self._restart_counts.get(server_id, 0) + 1}/{config.get('max_restarts', 3)}"
+        )
+        self._restarts_in_progress.add(server_id)
+        count = self._restart_counts.get(server_id, 0)
+        try:
+            op_lock = self._sm._get_operation_lock(server_id)
+            async with op_lock:
+                current = self._sm.processes.get(server_id)
+                if current is not None and current is not process:
+                    logger.info(f"[{server_id}] trigger_restart: process replaced concurrently, skipping")
+                    return
+                # Kill the subprocess before cleanup
+                # NetworkSubprocessHandle stores the real Popen as _process (private attr)
+                exit_code = -1
+                raw_proc = getattr(process, "_process", None)
+                if raw_proc is None:
+                    raw_proc = getattr(process, "process", None)
+                if raw_proc is not None:
+                    try:
+                        raw_proc.kill()
+                        logger.error(f"[RESTART] '{server_id}' — killed PID={old_pid}")
+                        exit_code = raw_proc.wait()
+                    except Exception as kill_err:
+                        logger.warning(f"[RESTART] '{server_id}' — kill failed: {kill_err}")
+                await self._sm._cleanup_server(server_id, exit_code)
+                logger.error(f"[RESTART] '{server_id}' — cleanup done, launching new process...")
+                restart_timeout = float(os.getenv("FMCP_RESTART_TIMEOUT_S", "60"))
+                try:
+                    success = await asyncio.wait_for(
+                        self._sm._start_server_unlocked(server_id, config),
+                        timeout=restart_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"[RESTART] '{server_id}' — launch timed out after {restart_timeout}s")
+                    success = False
+            self._restart_counts[server_id] = count + 1
+            await self._check_stability(server_id)
+            new_proc = self._sm.processes.get(server_id)
+            new_pid = getattr(new_proc, "pid", "none") if new_proc else "none"
+            if success:
+                logger.error(f"[RESTART] '{server_id}' — RESTARTED SUCCESSFULLY. New PID={new_pid}")
+            else:
+                logger.error(f"[RESTART] '{server_id}' — RESTART FAILED. Server may be down.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[{server_id}] trigger_restart error: {e}")
+        finally:
+            self._restarts_in_progress.discard(server_id)
+
     async def _check_server(self, server_id: str, process) -> None:
         """Check a single server's health and restart if needed."""
         is_alive = True
@@ -1892,6 +2011,13 @@ class MCPHealthMonitor:
             if process.poll() is not None:
                 is_alive = False
                 logger.warning(f"MCP server '{server_id}' process exited (code={process.returncode})")
+
+        if is_alive:
+            # HTTP ping for network-transport servers: PID alive but HTTP unresponsive = zombie
+            if isinstance(process, NetworkSubprocessHandle) and process.transport == "http":
+                zombie = await self._check_http_ping(server_id, process)
+                if zombie:
+                    is_alive = False
 
         if is_alive:
             # Process alive — reset restart count on sustained health
