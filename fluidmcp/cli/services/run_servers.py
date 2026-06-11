@@ -1392,12 +1392,14 @@ async def _serve_async(app: FastAPI, port: int) -> None:
         app: FastAPI application
         port: Port to listen on
     """
+    workers = int(os.getenv("FMCP_UVICORN_WORKERS", "2"))
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
         port=port,
         log_level="info",
-        access_log=True
+        access_log=True,
+        workers=workers,
     )
     server = uvicorn.Server(config)
 

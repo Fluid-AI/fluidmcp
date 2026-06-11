@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "test-server": {
+      "command": "python",
+      "args": ["/app/test_server/server.py"],
+      "transport": "http",
+      "env": {}
+    }
+  }
+}
