@@ -32,7 +32,7 @@ from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
 from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
-from .server_manager import ServerManager
+from .server_manager import ServerManager, MCPHealthMonitor
 from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
 
@@ -318,6 +318,8 @@ def run_servers(
                 }
                 # Store config before spawning so _spawn_mcp_process can read env overrides
                 server_manager.configs[server_name] = spawn_cfg
+                # Also persist to DB so trigger_restart / health monitor can look it up
+                await server_manager.db.save_server_config(spawn_cfg)
 
                 process = await server_manager._spawn_mcp_process(server_name, spawn_cfg)
 
@@ -341,6 +343,23 @@ def run_servers(
 
     if servers_to_launch:
         logger.info(f"Scheduled {len(servers_to_launch)} MCP server(s) to launch on startup")
+
+        @app.on_event("startup")
+        async def startup_mcp_health_monitor():
+            try:
+                health_check_interval = int(os.getenv("FMCP_HEALTH_CHECK_INTERVAL", "30"))
+            except ValueError:
+                health_check_interval = 30
+            health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
+            server_manager._health_monitor = health_monitor
+            health_monitor.start()
+            logger.info(f"MCP health monitor started (interval: {health_check_interval}s)")
+
+        @app.on_event("shutdown")
+        async def shutdown_mcp_health_monitor():
+            if server_manager._health_monitor and server_manager._health_monitor.is_running():
+                await server_manager._health_monitor.stop()
+                logger.info("MCP health monitor stopped")
 
     # Mount unified dynamic router (same as serve) — single router for all registered servers
     mcp_router = create_dynamic_router(server_manager)
