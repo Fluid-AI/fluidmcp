@@ -815,6 +815,8 @@ class ServerManager:
         failed_slot = None
         for slot in slots:
             if slot.port == failed_port:
+                if slot.status in (SlotStatus.UNHEALTHY, SlotStatus.RESTARTING):
+                    return  # already being handled, skip duplicate
                 failed_slot = slot
                 slot.status = SlotStatus.UNHEALTHY
                 slot.role = SlotRole.STANDBY
@@ -836,6 +838,8 @@ class ServerManager:
 
     async def _restart_slot(self, server_id: str, slot: "SubprocessSlot") -> None:
         """Kill and restart a failed slot, then rejoin it as standby."""
+        if slot.status == SlotStatus.RESTARTING:
+            return  # another coroutine is already restarting this slot
         slot.status = SlotStatus.RESTARTING
         logger.error(f"[pool:{server_id}] Restarting slot port={slot.port} PID={slot.pid}")
         # Kill old process
