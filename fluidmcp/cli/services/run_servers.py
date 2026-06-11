@@ -1392,18 +1392,19 @@ async def _serve_async(app: FastAPI, port: int) -> None:
         app: FastAPI application
         port: Port to listen on
     """
-    workers = int(os.getenv("FMCP_UVICORN_WORKERS", "2"))
     config = uvicorn.Config(
         app,
         host="0.0.0.0",
         port=port,
         log_level="info",
         access_log=True,
-        workers=workers,
+        # Single-process uvicorn: workers param is ignored by Server.serve().
+        # Use a large backlog + no concurrency cap so the event loop queues all
+        # incoming connections without dropping them under burst load.
+        backlog=int(os.getenv("FMCP_UVICORN_BACKLOG", "2048")),
+        limit_concurrency=None,
     )
     server = uvicorn.Server(config)
-
-    # Run the server (uvicorn handles signal processing internally)
     await server.serve()
 
 
