@@ -542,26 +542,74 @@ def create_dynamic_router(server_manager):
             # ── Network transport: forward via HTTP ──────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
                 if process.transport == "http":
-                    try:
-                        _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
-                        response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
-                    except HTTPException as exc:
-                        if exc.status_code == 504:
-                            # Gateway timed out — subprocess is unresponsive. Fire-and-forget
-                            # an immediate restart without waiting for the next health-check cycle.
-                            monitor = getattr(server_manager, "_health_monitor", None)
-                            if monitor is not None:
-                                logger.error(
-                                    f"[RESTART] '{server_name}' — 504 from subprocess, "
-                                    f"scheduling immediate restart"
-                                )
-                                asyncio.ensure_future(monitor.trigger_restart(server_name))
+                    pool_size = int(os.environ.get("FMCP_POOL_SIZE", "1"))
+                    _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
+
+                    if pool_size > 1:
+                        # Pool mode: get active slot, retry on standby if it fails
+                        active_slot = server_manager.get_active_slot(server_name)
+                        if active_slot is None:
+                            raise HTTPException(503, f"Server '{server_name}': all pool slots unhealthy")
+                        try:
+                            response = await _proxy_to_http_server(
+                                active_slot.base_url, request,
+                                timeout=_http_timeout,
+                                session_id=active_slot.handle.session_id,
+                                client=active_slot.handle.http_client,
+                            )
+                        except HTTPException as exc:
+                            if exc.status_code in (503, 504):
+                                failed_port = active_slot.port
+                                fallback = server_manager.get_fallback_slot(server_name, failed_port)
+                                if fallback is not None:
+                                    logger.error(
+                                        f"[FAILOVER] '{server_name}' — active subprocess (port={failed_port}) "
+                                        f"failed ({exc.status_code}), retrying on standby (port={fallback.port})"
+                                    )
+                                    asyncio.ensure_future(server_manager.promote_standby(server_name, failed_port))
+                                    response = await _proxy_to_http_server(
+                                        fallback.base_url, request,
+                                        timeout=_http_timeout,
+                                        session_id=fallback.handle.session_id,
+                                        client=fallback.handle.http_client,
+                                    )
+                                else:
+                                    logger.error(
+                                        f"[FAILOVER] '{server_name}' — active (port={failed_port}) failed, "
+                                        f"no healthy standby available"
+                                    )
+                                    monitor = getattr(server_manager, "_health_monitor", None)
+                                    if monitor is not None:
+                                        asyncio.ensure_future(monitor.trigger_restart(server_name))
+                                    raise
                             else:
-                                logger.error(
-                                    f"[RESTART] '{server_name}' — 504 from subprocess but "
-                                    f"health monitor not available, server will not auto-restart"
-                                )
-                        raise
+                                raise
+                    else:
+                        # Single-process mode (FMCP_POOL_SIZE=1) — original behavior
+                        try:
+                            response = await _proxy_to_http_server(
+                                process.base_url, request,
+                                timeout=_http_timeout,
+                                session_id=process.session_id,
+                                client=process.http_client,
+                            )
+                        except HTTPException as exc:
+                            if exc.status_code == 504:
+                                # Gateway timed out — subprocess is unresponsive. Fire-and-forget
+                                # an immediate restart without waiting for the next health-check cycle.
+                                monitor = getattr(server_manager, "_health_monitor", None)
+                                if monitor is not None:
+                                    logger.error(
+                                        f"[RESTART] '{server_name}' — 504 from subprocess, "
+                                        f"scheduling immediate restart"
+                                    )
+                                    asyncio.ensure_future(monitor.trigger_restart(server_name))
+                                else:
+                                    logger.error(
+                                        f"[RESTART] '{server_name}' — 504 from subprocess but "
+                                        f"health monitor not available, server will not auto-restart"
+                                    )
+                            raise
                 else:
                     response = await _proxy_to_sse_server(process.base_url, request)
                 return JSONResponse(content=response)

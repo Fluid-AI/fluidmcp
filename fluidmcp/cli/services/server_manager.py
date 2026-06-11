@@ -11,7 +11,9 @@ import json
 import time
 import atexit
 import httpx
+import shlex
 from collections import deque
+from enum import Enum
 from urllib.parse import urlparse
 from typing import Dict, Any, Optional, List, IO, Deque
 from pathlib import Path
@@ -65,6 +67,35 @@ def classify_exit_code(exit_code: int) -> Dict[str, str]:
     return {"category": category, "label": label, "description": description}
 
 
+class SlotStatus(Enum):
+    HEALTHY = "healthy"
+    UNHEALTHY = "unhealthy"
+    RESTARTING = "restarting"
+
+
+class SlotRole(Enum):
+    ACTIVE = "active"
+    STANDBY = "standby"
+
+
+class SubprocessSlot:
+    """One subprocess in a server's pool. Has its own port and NetworkSubprocessHandle."""
+
+    def __init__(self, handle: "NetworkSubprocessHandle", port: int):
+        self.handle = handle       # NetworkSubprocessHandle
+        self.port = port
+        self.status = SlotStatus.HEALTHY
+        self.role = SlotRole.STANDBY  # caller promotes one to ACTIVE after creation
+
+    @property
+    def pid(self) -> int:
+        return self.handle.pid
+
+    @property
+    def base_url(self) -> str:
+        return self.handle.base_url
+
+
 class ServerManager:
     """Manages MCP server processes and lifecycle."""
 
@@ -81,6 +112,9 @@ class ServerManager:
         self.processes: Dict[str, subprocess.Popen] = {}
         self.configs: Dict[str, Dict[str, Any]] = {}
         self.start_times: Dict[str, float] = {}  # server_id -> start timestamp (monotonic)
+
+        # Subprocess pool registry (pool mode only, FMCP_POOL_SIZE > 1)
+        self.pools: Dict[str, List[SubprocessSlot]] = {}  # server_id -> list of SubprocessSlot
 
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
@@ -265,6 +299,11 @@ class ServerManager:
             # Store process
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
+
+            # Initialize subprocess pool if FMCP_POOL_SIZE > 1 and HTTP transport
+            pool_size = int(os.getenv("FMCP_POOL_SIZE", "1"))
+            if pool_size > 1 and isinstance(process, NetworkSubprocessHandle) and process.transport == "http":
+                await self._init_pool(id, config, process, pool_size)
 
             # Clear stale PID cache entry (if any) since server is now running
             self._stale_pid_updates.pop(id, None)
@@ -737,6 +776,208 @@ class ServerManager:
             await self.stop_server(id)
 
         logger.info("All servers stopped")
+
+    # ==================== Subprocess Pool Methods ====================
+
+    def get_active_slot(self, server_id: str) -> Optional["SubprocessSlot"]:
+        """Return the active healthy slot, or promote a standby if active is unhealthy."""
+        slots = self.pools.get(server_id)
+        if not slots:
+            return None
+        # Find current active
+        for slot in slots:
+            if slot.role == SlotRole.ACTIVE and slot.status == SlotStatus.HEALTHY:
+                return slot
+        # Active is gone/unhealthy — promote first healthy standby
+        for slot in slots:
+            if slot.status == SlotStatus.HEALTHY:
+                slot.role = SlotRole.ACTIVE
+                logger.info(f"[pool:{server_id}] Auto-promoted standby (port={slot.port}) to active")
+                return slot
+        return None
+
+    def get_fallback_slot(self, server_id: str, exclude_port: int) -> Optional["SubprocessSlot"]:
+        """Return a healthy slot that isn't the one that just failed."""
+        slots = self.pools.get(server_id)
+        if not slots:
+            return None
+        for slot in slots:
+            if slot.port != exclude_port and slot.status == SlotStatus.HEALTHY:
+                return slot
+        return None
+
+    async def promote_standby(self, server_id: str, failed_port: int) -> None:
+        """Mark a slot unhealthy, promote a standby, and trigger background restart of the failed slot."""
+        slots = self.pools.get(server_id)
+        if not slots:
+            return
+        # Find and mark the failed slot
+        failed_slot = None
+        for slot in slots:
+            if slot.port == failed_port:
+                failed_slot = slot
+                slot.status = SlotStatus.UNHEALTHY
+                slot.role = SlotRole.STANDBY
+                logger.error(f"[pool:{server_id}] Slot port={failed_port} PID={slot.pid} marked unhealthy")
+                break
+        # Promote first healthy standby to active
+        for slot in slots:
+            if slot.status == SlotStatus.HEALTHY and slot.role == SlotRole.STANDBY:
+                slot.role = SlotRole.ACTIVE
+                logger.error(f"[pool:{server_id}] Promoted standby port={slot.port} to active")
+                break
+        # Update self.processes to point to new active
+        active = self.get_active_slot(server_id)
+        if active:
+            self.processes[server_id] = active.handle
+        # Restart the failed slot in background
+        if failed_slot is not None:
+            asyncio.ensure_future(self._restart_slot(server_id, failed_slot))
+
+    async def _restart_slot(self, server_id: str, slot: "SubprocessSlot") -> None:
+        """Kill and restart a failed slot, then rejoin it as standby."""
+        slot.status = SlotStatus.RESTARTING
+        logger.error(f"[pool:{server_id}] Restarting slot port={slot.port} PID={slot.pid}")
+        # Kill old process
+        try:
+            if slot.handle.poll() is None:
+                slot.handle.kill()
+                slot.handle.wait(timeout=5)
+                logger.info(f"[pool:{server_id}] Killed old slot PID={slot.pid}")
+        except Exception as e:
+            logger.warning(f"[pool:{server_id}] Kill slot failed: {e}")
+        # Close the HTTP client pool
+        try:
+            await slot.handle.aclose()
+        except Exception:
+            pass
+        # Release port
+        self._release_port(slot.port)
+        # Spawn a new subprocess on a new port
+        config = await self.db.get_server_config(server_id)
+        if not config:
+            logger.error(f"[pool:{server_id}] No config for slot restart, giving up")
+            slot.status = SlotStatus.UNHEALTHY
+            return
+        try:
+            new_port = self._allocate_port()
+        except RuntimeError as e:
+            logger.error(f"[pool:{server_id}] Port allocation failed for slot restart: {e}")
+            slot.status = SlotStatus.UNHEALTHY
+            return
+        new_handle = await self._spawn_single_http_slot(server_id, config, new_port)
+        if new_handle is None:
+            logger.error(f"[pool:{server_id}] Slot restart failed on port={new_port}")
+            self._release_port(new_port)
+            slot.status = SlotStatus.UNHEALTHY
+            return
+        # Update slot in place (same object, update fields)
+        slot.handle = new_handle
+        slot.port = new_port
+        slot.status = SlotStatus.HEALTHY
+        slot.role = SlotRole.STANDBY
+        logger.error(f"[pool:{server_id}] Slot restarted successfully — new port={new_port} PID={new_handle.pid}")
+
+    async def _spawn_single_http_slot(
+        self,
+        server_id: str,
+        config: Dict[str, Any],
+        port: int,
+    ) -> Optional["NetworkSubprocessHandle"]:
+        """Spawn one HTTP subprocess on a specific port. Used for pool slot creation/restart."""
+        command = config.get("command")
+        args = config.get("args", [])
+        env_vars = config.get("env", {}) or {}
+        install_path = config.get("working_dir") or config.get("install_path") or "."
+
+        if not command:
+            logger.error(f"[pool:{server_id}] No command in config")
+            return None
+
+        cmd_list = shlex.split(command) if isinstance(command, str) else [command]
+        cmd_list += [str(a) for a in args]
+
+        env = dict(os.environ)
+        for key, value in env_vars.items():
+            if value and not self._is_placeholder(value):
+                env[key] = value
+        env["MCP_PORT"] = str(port)
+        env["TRANSPORT_TYPE"] = config.get("transport", "http")
+
+        working_dir = Path(install_path).resolve()
+        if not working_dir.exists():
+            logger.error(f"[pool:{server_id}] Working dir does not exist: {working_dir}")
+            return None
+
+        try:
+            stderr_fh = self._open_stderr_log(server_id)
+        except Exception:
+            stderr_fh = subprocess.PIPE
+
+        try:
+            process = subprocess.Popen(
+                cmd_list,
+                cwd=str(working_dir),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=stderr_fh,
+                env=env,
+                text=True,
+                bufsize=1,
+            )
+        except Exception as e:
+            logger.error(f"[pool:{server_id}] Popen failed for slot port={port}: {e}")
+            return None
+
+        await asyncio.sleep(0.5)
+        if process.poll() is not None:
+            logger.error(f"[pool:{server_id}] Slot process died immediately on port={port}")
+            return None
+
+        handle = await self._handshake_http_subprocess(server_id, port, process)
+        return handle
+
+    async def _init_pool(
+        self,
+        server_id: str,
+        config: Dict[str, Any],
+        active_handle: "NetworkSubprocessHandle",
+        pool_size: int,
+    ) -> None:
+        """Spawn N-1 standby slots alongside the already-running active slot."""
+        # Find port of already-running active handle
+        try:
+            active_port = int(urlparse(active_handle.base_url).port)
+        except Exception:
+            active_port = 0
+
+        active_slot = SubprocessSlot(active_handle, active_port)
+        active_slot.role = SlotRole.ACTIVE
+        slots = [active_slot]
+
+        for i in range(pool_size - 1):
+            try:
+                standby_port = self._allocate_port()
+            except RuntimeError as e:
+                logger.error(f"[pool:{server_id}] Cannot allocate port for standby slot {i+1}: {e}")
+                break
+            logger.info(f"[pool:{server_id}] Spawning standby slot {i+1}/{pool_size-1} on port={standby_port}")
+            handle = await self._spawn_single_http_slot(server_id, config, standby_port)
+            if handle is None:
+                logger.error(f"[pool:{server_id}] Standby slot {i+1} failed to start")
+                self._release_port(standby_port)
+                continue
+            slot = SubprocessSlot(handle, standby_port)
+            slot.role = SlotRole.STANDBY
+            slots.append(slot)
+            logger.error(f"[pool:{server_id}] Standby slot started: port={standby_port} PID={handle.pid}")
+
+        self.pools[server_id] = slots
+        logger.error(
+            f"[pool:{server_id}] Pool initialized: {len(slots)}/{pool_size} slots "
+            f"({sum(1 for s in slots if s.role==SlotRole.ACTIVE)} active, "
+            f"{sum(1 for s in slots if s.role==SlotRole.STANDBY)} standby)"
+        )
 
     # ==================== Private Helper Methods ====================
 
@@ -1453,6 +1694,26 @@ class ServerManager:
             except Exception:
                 pass
 
+        # Clean up pool slots (kill all remaining slots when server is stopped)
+        if id in self.pools:
+            for slot in self.pools[id]:
+                try:
+                    raw = getattr(slot.handle, "_process", None)
+                    if raw and raw.poll() is None:
+                        raw.kill()
+                        raw.wait(timeout=3)
+                except Exception:
+                    pass
+                try:
+                    await slot.handle.aclose()
+                except Exception:
+                    pass
+                try:
+                    self._release_port(slot.port)
+                except Exception:
+                    pass
+            del self.pools[id]
+
         # Remove from registry
         if id in self.processes:
             del self.processes[id]
@@ -2049,8 +2310,36 @@ class MCPHealthMonitor:
         finally:
             self._restarts_in_progress.discard(server_id)
 
+    async def _check_pool_slots(self, server_id: str) -> None:
+        """Health-check each slot in a server's pool independently."""
+        slots = self._sm.pools.get(server_id)
+        if not slots:
+            return
+        for slot in list(slots):
+            if slot.status == SlotStatus.RESTARTING:
+                continue  # already being restarted
+            if slot.status == SlotStatus.UNHEALTHY:
+                continue  # already being handled
+            # PID liveness check
+            alive = slot.handle.poll() is None
+            if not alive:
+                logger.warning(f"[pool:{server_id}] Slot port={slot.port} PID={slot.pid} died")
+                asyncio.ensure_future(self._sm.promote_standby(server_id, slot.port))
+                continue
+            # HTTP ping check
+            zombie = await self._check_http_ping(server_id, slot.handle)
+            if zombie:
+                logger.error(f"[pool:{server_id}] Slot port={slot.port} PID={slot.pid} is zombie — triggering failover")
+                asyncio.ensure_future(self._sm.promote_standby(server_id, slot.port))
+
     async def _check_server(self, server_id: str, process) -> None:
         """Check a single server's health and restart if needed."""
+        # Pool-aware: if this server has a pool, check each slot independently
+        pool_size = int(os.getenv("FMCP_POOL_SIZE", "1"))
+        if pool_size > 1 and server_id in self._sm.pools:
+            await self._check_pool_slots(server_id)
+            return
+
         is_alive = True
 
         # Check process liveness

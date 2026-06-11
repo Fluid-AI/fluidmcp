@@ -330,6 +330,12 @@ def run_servers(
                     _register_server_process(server_name, process)
                     _initialize_server_metrics(server_name)
 
+                    # Initialize subprocess pool if FMCP_POOL_SIZE > 1
+                    from .server_manager import NetworkSubprocessHandle
+                    _pool_size = int(os.getenv("FMCP_POOL_SIZE", "1"))
+                    if _pool_size > 1 and isinstance(process, NetworkSubprocessHandle) and process.transport == "http":
+                        await server_manager._init_pool(server_name, spawn_cfg, process, _pool_size)
+
                     logger.debug(f"Successfully launched server {server_name}")
                 else:
                     logger.error(f"Failed to launch server '{server_name}'")
