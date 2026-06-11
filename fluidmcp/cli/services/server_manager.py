@@ -1375,6 +1375,16 @@ class ServerManager:
         # so stale TCP connections don't linger after the subprocess exits.
         process = self.processes.get(id)
         if isinstance(process, NetworkSubprocessHandle):
+            # Kill the subprocess if still alive — poll() returns None while running.
+            # This is the single authoritative kill point so all paths (health monitor,
+            # trigger_restart, stop_server) clean up the OS process.
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    logger.info(f"[cleanup] Killed subprocess PID={process.pid} for server '{id}'")
+                    process.wait(timeout=5)
+            except Exception as e:
+                logger.debug(f"[cleanup] Kill/wait for '{id}' PID={getattr(process, 'pid', '?')}: {e}")
             try:
                 parsed = urlparse(process.base_url)
                 if parsed.port:
