@@ -48,7 +48,7 @@ fluidmcp run examples/vllm-config.json --file --start-server
 
 **OpenAI-compatible endpoint**:
 ```bash
-curl -X POST http://localhost:8099/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -159,17 +159,17 @@ curl -X POST http://localhost:8099/llm/v1/chat/completions \
 fluidmcp run examples/vllm-multi-model-config.json --file --start-server
 
 # Query first model (specify model ID in request body)
-curl -X POST http://localhost:8099/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "vllm-opt", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # Query second model (specify model ID in request body)
-curl -X POST http://localhost:8099/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "vllm-gpt2", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # Check status of all models
-curl http://localhost:8099/api/llm/status
+curl http://localhost:8499/api/llm/status
 ```
 
 ---
@@ -451,7 +451,7 @@ List all available models or get details for a specific model using `?model={mod
 ### Basic Chat Completion
 
 ```bash
-curl -X POST http://localhost:8099/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -462,7 +462,7 @@ curl -X POST http://localhost:8099/llm/v1/chat/completions \
 ### With System Prompt
 
 ```bash
-curl -X POST http://localhost:8099/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -480,7 +480,7 @@ curl -X POST http://localhost:8099/llm/v1/chat/completions \
 **NEW**: Real-time token streaming using Server-Sent Events (SSE):
 
 ```bash
-curl -X POST http://localhost:8099/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -510,7 +510,7 @@ from openai import OpenAI
 
 # Point to FluidMCP gateway
 client = OpenAI(
-    base_url="http://localhost:8099/llm/v1",
+    base_url="http://localhost:8499/llm/v1",
     api_key="dummy"  # Not used, but required by SDK
 )
 
@@ -548,7 +548,7 @@ for chunk in stream:
 ```
 Client Request (OpenAI format)
     ↓
-FluidMCP Gateway (port 8099)
+FluidMCP Gateway (port 8499)
     ↓
 POST /llm/v1/chat/completions (with model="vllm" in body)
     ↓

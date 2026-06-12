@@ -677,7 +677,7 @@ def main():
     # serve command - NEW: Run as standalone API server
     serve_parser = subparsers.add_parser("serve", help="Run as standalone API server (backend starts without MCP servers)")
     serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
-    serve_parser.add_argument("--port", type=int, default=8099, help="Port to listen on (default: 8099)")
+    serve_parser.add_argument("--port", type=int, default=8499, help="Port to listen on (default: 8499)")
     serve_parser.add_argument("--mongodb-uri",
                               default=os.getenv("MONGODB_URI", "mongodb://localhost:27017"),
                               help="MongoDB connection URI (default: env MONGODB_URI or mongodb://localhost:27017)")

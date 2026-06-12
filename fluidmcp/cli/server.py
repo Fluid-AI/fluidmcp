@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI):
             logger.error(f"Error during database disconnect: {e}")
 
 
-async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8099) -> FastAPI:
+async def create_app(db_manager: DatabaseManager, server_manager: ServerManager, secure_mode: bool = False, token: str = None, allowed_origins: list = None, port: int = 8499) -> FastAPI:
     """
     Create FastAPI application without starting any MCP servers.
 
@@ -770,8 +770,8 @@ def run():
     parser.add_argument(
         "--port",
         type=int,
-        default=8099,
-        help="Port to listen on (default: 8099)"
+        default=8499,
+        help="Port to listen on (default: 8499)"
     )
     parser.add_argument(
         "--mongodb-uri",

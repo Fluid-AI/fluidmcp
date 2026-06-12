@@ -26,7 +26,7 @@ if [ -n "$METADATA_ENV_FILE_CONTENT" ]; then
 fi
 
 # Get port from environment (Railway sets this automatically)
-PORT="${PORT:-8099}"
+PORT="${PORT:-8499}"
 
 # Initialize SERVE_PID before signal handlers to prevent race condition on early signals
 SERVE_PID=""

@@ -38,7 +38,7 @@ from ..auth import verify_token
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
-client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8099"))
+client_server_all_port = int(os.environ.get("MCP_CLIENT_SERVER_ALL_PORT", "8499"))
 
 # Constants for LLM operations
 MAX_ERROR_MESSAGE_LENGTH = 1000  # Maximum length for error messages returned to clients
