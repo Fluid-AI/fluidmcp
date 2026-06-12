@@ -786,7 +786,7 @@ class ServerManager:
             #     still work without modifying the file.
             #   - Standard .env syntax: KEY=VALUE, # comments, blank lines ignored,
             #     optional surrounding single/double quotes stripped from values.
-            env_file_path = config.pop("env_file", None)
+            env_file_path = config.get("env_file")
             if env_file_path:
                 early_working_dir = config.get("working_dir", ".")
                 early_install_path = config.get("install_path", ".")
@@ -795,7 +795,11 @@ class ServerManager:
                     if Path(env_file_path).is_absolute()
                     else (Path(early_working_dir) / env_file_path).resolve()
                 )
-                # Security: env_file must be under install_path or working_dir
+                # Security: env_file must be under install_path or working_dir.
+                # Known limitation: if neither is explicitly set, both default to CWD,
+                # weakening this check. CWD=/ is the only dangerous edge case but won't
+                # occur in real deployments. Requiring install_path would break direct
+                # server configs (Format 1) that never set it, so we accept this trade-off.
                 install_resolved = Path(early_install_path).resolve()
                 working_resolved = Path(early_working_dir).resolve()
                 under_install = (
