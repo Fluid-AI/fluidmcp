@@ -38,6 +38,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install fastmcp separately to avoid conflicts with pinned deps above
+# fastmcp==3.0.0 ships mcp==1.25.0 as its own dep; isolated install resolves cleanly
+RUN pip install --no-cache-dir fastmcp==3.0.0
+
 # Copy application code
 COPY . .
 
