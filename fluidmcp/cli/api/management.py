@@ -68,6 +68,13 @@ from ..services import omni_adapter
 from ..services.network_handle import NetworkSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
+from ..services.metrics import get_registry as _get_metrics_registry
+
+try:
+    import psutil as _psutil
+    _psutil_available = True
+except ImportError:
+    _psutil_available = False
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -1111,13 +1118,11 @@ async def list_servers(request: Request, enabled_only: bool = True, include_dele
 @router.get("/servers/{id}")
 async def get_server(request: Request, id: str):
     """
-    Get detailed information about a specific server.
-
-    Args:
-        id: Server identifier
-
-    Returns:
-        Server config and status
+    Get detailed information about a specific server, including debug fields:
+    - status: state, pid, uptime, restart_count, stability, exit_code
+    - resources: live memory/CPU/FD snapshot (null when not running)
+    - concurrency: limit, active slots, lifetime rejected count
+    - crashes: recent crash count and crashes in the last hour
     """
     manager = get_server_manager(request)
 
@@ -1128,14 +1133,98 @@ async def get_server(request: Request, id: str):
     if not config:
         raise HTTPException(404, f"Server '{id}' not found")
 
-    # Get status
+    # Core status
     status = await manager.get_server_status(id)
+
+    # ── Resources ────────────────────────────────────────────────────────────
+    resources = {
+        "pid": None,
+        "memory_rss_bytes": None,
+        "memory_rss_human": None,
+        "memory_trend": "unknown",
+        "memory_limit_bytes": None,
+        "memory_limit_human": None,
+        "memory_usage_pct": None,
+        "cpu_percent": None,
+        "open_fds": None,
+        "threads": None,
+    }
+    # Only read live resources when status agrees the process is running.
+    # This prevents a race where processes[] still has the handle but status
+    # already resolved to "failed" (stale PID path).
+    if status.get("state") == "running" and _psutil_available:
+        process = manager.processes.get(id)
+        if process and process.poll() is None:
+            try:
+                proc = _psutil.Process(process.pid)
+                rss = proc.memory_info().rss
+                resources["pid"] = process.pid
+                resources["memory_rss_bytes"] = rss
+                resources["memory_rss_human"] = f"{rss / (1024 * 1024):.1f} MB"
+                resources["open_fds"] = proc.num_fds() if hasattr(proc, "num_fds") else None
+                resources["threads"] = proc.num_threads()
+                limit_mb = int(config.get("memory_limit_mb", 0) or
+                               int(os.environ.get("FMCP_DEFAULT_MEMORY_LIMIT_MB", "0")))
+                if limit_mb > 0:
+                    limit_bytes = limit_mb * 1024 * 1024
+                    resources["memory_limit_bytes"] = limit_bytes
+                    resources["memory_limit_human"] = f"{limit_mb} MB"
+                    resources["memory_usage_pct"] = round(rss / limit_bytes * 100, 1)
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to read resources for '{id}': {e}")
+
+    # Use health monitor's cached snapshot for CPU (fresh psutil call always returns 0.0)
+    # and for memory trend
+    monitor = getattr(manager, "_health_monitor", None)
+    if monitor:
+        resources["memory_trend"] = monitor.get_memory_trend(id)
+        snapshot = monitor._last_resource_snapshot.get(id)
+        if snapshot and status.get("state") == "running":
+            resources["cpu_percent"] = snapshot.get("cpu_percent")
+
+    # ── Concurrency ───────────────────────────────────────────────────────────
+    manager.get_concurrency_semaphore(id)  # ensure semaphore is initialized
+    conc_info = manager.get_concurrency_info(id)
+    _rej_counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
+    rejected_total = 0
+    if _rej_counter:
+        _key = _rej_counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
+        rejected_total = int(_rej_counter.samples.get(_key, 0))
+    concurrency = {
+        "max_concurrent_requests": conc_info["max_concurrent_requests"],
+        "active_requests": conc_info["active_requests"],
+        "available_slots": conc_info["available_slots"],
+        "rejected_total": rejected_total,
+    }
+
+    # ── Crash summary ─────────────────────────────────────────────────────────
+    crashes_summary = {"recent_crash_count": 0, "crashes_per_hour": 0.0}
+    try:
+        events = await manager.db.list_crash_events(id, limit=50)
+        crashes_summary["recent_crash_count"] = len(events)
+        now = datetime.utcnow()
+        one_hour_ago = (now - timedelta(hours=1)).timestamp()
+        crashes_last_hour = sum(
+            1 for e in events
+            if e.get("timestamp") and (
+                e["timestamp"].timestamp() if hasattr(e["timestamp"], "timestamp")
+                else float(e["timestamp"])
+            ) > one_hour_ago
+        )
+        crashes_summary["crashes_per_hour"] = float(crashes_last_hour)
+    except Exception as e:
+        logger.warning(f"Failed to load crash summary for '{id}': {e}")
 
     return {
         "id": id,
         "name": config.get("name"),
         "config": config,
-        "status": status
+        "status": status,
+        "resources": resources,
+        "concurrency": concurrency,
+        "crashes": crashes_summary,
     }
 
 
@@ -1808,8 +1897,6 @@ async def get_server_resources(request: Request, id: str, token: str = Depends(g
     rss = cpu = open_fds = threads = None
     status = "not_running"
     try:
-        if not _psutil_available:
-            raise ImportError("psutil not available")
         if pid and process and process.poll() is None:
             proc = _psutil.Process(pid)
             rss = proc.memory_info().rss
@@ -1858,6 +1945,43 @@ async def get_server_resources(request: Request, id: str, token: str = Depends(g
         "cpu_percent": cpu,
         "open_fds": open_fds,
         "threads": threads,
+    }
+
+
+# ==================== Concurrency Endpoint ====================
+
+@router.get("/servers/{id}/concurrency")
+async def get_server_concurrency(request: Request, id: str):
+    """
+    Return the concurrency limit and current active request count for a server.
+
+    - **max_concurrent_requests**: configured limit (null = unlimited)
+    - **active_requests**: requests currently holding a semaphore slot
+    - **available_slots**: free slots remaining (null = unlimited)
+    - **rejected_total**: lifetime rejected requests due to concurrency limit
+    """
+    server_manager = get_server_manager(request)
+
+    if id not in server_manager.configs:
+        raise HTTPException(status_code=404, detail=f"Server '{id}' not found")
+
+    # Ensure semaphore is initialized (lazy creation) before reading info
+    server_manager.get_concurrency_semaphore(id)
+    info = server_manager.get_concurrency_info(id)
+
+    # Attach lifetime rejection count from metrics
+    counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
+    rejected_total = 0
+    if counter is not None:
+        key = counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
+        rejected_total = int(counter.samples.get(key, 0))
+
+    return {
+        "server": id,
+        "max_concurrent_requests": info["max_concurrent_requests"],
+        "active_requests": info["active_requests"],
+        "available_slots": info["available_slots"],
+        "rejected_total": rejected_total,
     }
 
 
@@ -3166,6 +3290,33 @@ async def get_metrics_prometheus(
     collector = get_metrics_collector()
     return Response(
         content=collector.export_prometheus(),
+        media_type="text/plain; version=0.0.4"
+    )
+
+
+@router.get("/metrics/mcp")
+async def get_mcp_metrics_prometheus(
+    token: str = Depends(get_token)
+):
+    """
+    Get Prometheus-formatted metrics for all MCP servers.
+
+    Returns per-server metrics updated every health check cycle (~30s):
+    - fluidmcp_server_memory_rss_bytes{server_id} — RSS memory of the MCP process
+    - fluidmcp_server_cpu_percent{server_id} — CPU utilization of the MCP process
+    - fluidmcp_server_open_fds{server_id} — open file descriptors
+    - fluidmcp_active_requests{server_id} — requests currently in flight
+    - fluidmcp_requests_total{server_id, method, status} — total requests processed
+    - fluidmcp_requests_rejected_total{server_id, reason} — requests dropped by concurrency limit
+    - fluidmcp_server_restarts_total{server_id, reason} — total server restarts
+    - fluidmcp_server_status{server_id} — server state (0=stopped, 2=running, 3=error)
+    - fluidmcp_request_duration_seconds{server_id, method} — request latency histogram
+
+    Example:
+        curl http://localhost:8099/api/metrics/mcp
+    """
+    return Response(
+        content=_get_metrics_registry().render_all(),
         media_type="text/plain; version=0.0.4"
     )
 
