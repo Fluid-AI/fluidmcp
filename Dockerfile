@@ -9,6 +9,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    nano \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Microsoft ODBC Driver 18 (required for pyodbc/pymssql SQL Server support)
