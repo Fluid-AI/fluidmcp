@@ -767,6 +767,84 @@ class ServerManager:
             command = config.get("command")
             args = config.get("args", [])
             env_vars = config.get("env", {})
+
+            # --- env_file support ---
+            # Allows secrets/env vars to be stored in a .env file on disk rather than
+            # inlined in the config JSON. This keeps production configs clean and avoids
+            # committing secrets. Usage in config:
+            #
+            #   "env_file": "servers/myserver/.env"   (relative to working_dir)
+            #   "env_file": "/absolute/path/.env"
+            #
+            # See examples/env-file-config.json for the full config structure supported.
+            #
+            # Rules:
+            #   - Relative paths are resolved relative to working_dir.
+            #   - The file must reside under install_path or working_dir (prevents
+            #     path-traversal attacks reading files outside the server tree).
+            #   - Inline "env" keys overlay on top of file values, so per-run overrides
+            #     still work without modifying the file.
+            #   - Standard .env syntax: KEY=VALUE, # comments, blank lines ignored,
+            #     optional surrounding single/double quotes stripped from values.
+            env_file_path = config.get("env_file")
+            if env_file_path:
+                early_working_dir = config.get("working_dir", ".")
+                early_install_path = config.get("install_path", ".")
+                env_file_resolved = (
+                    Path(env_file_path).resolve()
+                    if Path(env_file_path).is_absolute()
+                    else (Path(early_working_dir) / env_file_path).resolve()
+                )
+                # Security: env_file must be under install_path or working_dir.
+                # Known limitation: if neither is explicitly set, both default to CWD,
+                # weakening this check. CWD=/ is the only dangerous edge case but won't
+                # occur in real deployments. Requiring install_path would break direct
+                # server configs (Format 1) that never set it, so we accept this trade-off.
+                install_resolved = Path(early_install_path).resolve()
+                working_resolved = Path(early_working_dir).resolve()
+                under_install = (
+                    env_file_resolved == install_resolved
+                    or install_resolved in env_file_resolved.parents
+                )
+                under_working = (
+                    env_file_resolved == working_resolved
+                    or working_resolved in env_file_resolved.parents
+                )
+                if not (under_install or under_working):
+                    logger.warning(
+                        f"env_file '{env_file_resolved}' is outside install_path/working_dir — skipping"
+                    )
+                elif not env_file_resolved.exists():
+                    logger.warning(f"env_file '{env_file_resolved}' not found — skipping")
+                else:
+                    file_env: Dict[str, str] = {}
+                    for line in env_file_resolved.read_text().splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" not in line:
+                            continue
+                        k, _, v = line.partition("=")
+                        k = k.strip()
+                        v = v.strip()
+                        if (v.startswith('"') and v.endswith('"')) or (
+                            v.startswith("'") and v.endswith("'")
+                        ):
+                            v = v[1:-1]
+                        file_env[k] = v
+                    # Inline env overlays on top of file env so per-run overrides still work
+                    env_vars = {**file_env, **env_vars}
+
+            # Promote TRANSPORT_TYPE from env_file to config transport (if not already set)
+            # Supports 3 transport declaration methods:
+            #   1. "transport": "http" directly in config (already set, untouched)
+            #   2. TRANSPORT_TYPE in inline env (promoted by apply_transport during config resolution)
+            #   3. TRANSPORT_TYPE in env_file (promoted here)
+            if not config.get("transport"):
+                _env_transport = env_vars.get("TRANSPORT_TYPE", "")
+                if _env_transport in ("sse", "http"):
+                    config["transport"] = _env_transport
+
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
             working_dir_path = Path(working_dir)
