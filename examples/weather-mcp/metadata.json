@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "weather_mcp": {
+      "command": "python",
+      "args": [
+        "server.py"
+      ],
+      "env": {
+        "MCP_PORT": "",
+        "TRANSPORT_TYPE": "http"
+      }
+    }
+  }
+}

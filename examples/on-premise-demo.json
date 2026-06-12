@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "addition_mcp": {
+      "command": "python",
+      "args": ["addition-mcp/server.py"],
+      "env": {
+        "MCP_PORT": "",
+        "TRANSPORT_TYPE": "http"
+      }
+    },
+    "echo_mcp": {
+      "command": "python",
+      "args": ["echo-mcp/server.py"],
+      "env": {
+        "MCP_PORT": "",
+        "TRANSPORT_TYPE": "http"
+      }
+    },
+    "weather_mcp": {
+      "command": "python",
+      "args": ["weather-mcp/server.py"],
+      "env": {
+        "MCP_PORT": "",
+        "TRANSPORT_TYPE": "http"
+      }
+    }
+  }
+}

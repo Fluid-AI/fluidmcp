@@ -21,10 +21,10 @@ import httpx
 import subprocess
 import threading
 
-from .config_resolver import ServerConfig, INSTALLATION_DIR
+from .config_resolver import ServerConfig, INSTALLATION_DIR, apply_transport
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
-from .package_launcher import launch_mcp_using_fastapi_proxy, create_dynamic_router
+from .package_launcher import create_dynamic_router
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
@@ -284,69 +284,63 @@ def run_servers(
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
 
-    # Launch each server and add its router
-    launched_servers = 0
+    # Launch each server via _spawn_mcp_process inside the FastAPI startup event so
+    # we run on uvicorn's event loop (required for async HTTP handshakes and HTTP transport).
     logger.debug(f"Processing {len(config.servers)} server(s) from configuration")
 
-    for server_name, server_cfg in config.servers.items():
-        logger.debug(f"Processing server: {server_name}")
-        install_path = server_cfg.get("install_path")
-        if not install_path:
-            logger.warning(f"No installation path for server '{server_name}', skipping")
-            continue
+    servers_to_launch = dict(config.servers)  # snapshot for startup closure
 
-        install_path = Path(install_path)
-        logger.debug(f"Installation path for {server_name}: {install_path}")
+    @app.on_event("startup")
+    async def _launch_mcp_servers():
+        for server_name, server_cfg in servers_to_launch.items():
+            logger.debug(f"Processing server: {server_name}")
+            install_path = server_cfg.get("install_path")
+            if not install_path:
+                logger.warning(f"No installation path for server '{server_name}', skipping")
+                continue
 
-        if not install_path.exists():
-            logger.warning(f"Installation path '{install_path}' does not exist, skipping")
-            continue
+            if not Path(install_path).exists():
+                logger.warning(f"Installation path '{install_path}' does not exist, skipping")
+                continue
 
-        metadata_path = install_path / "metadata.json"
-        if not metadata_path.exists():
-            logger.warning(f"No metadata.json in '{install_path}', skipping")
-            continue
+            try:
+                logger.info(f"Launching server '{server_name}' from: {install_path}")
 
-        try:
-            logger.info(f"Launching server '{server_name}' from: {install_path}")
+                spawn_cfg = {
+                    **server_cfg,
+                    "id": server_name,
+                    "name": server_name,
+                    "enabled": True,
+                    # Prefer working_dir already in server_cfg (set by config_resolver for
+                    # direct-command servers so relative paths like "server.py" resolve).
+                    # Fall back to install_path for package-installed servers.
+                    "working_dir": server_cfg.get("working_dir") or install_path,
+                }
+                # Store config before spawning so _spawn_mcp_process can read env overrides
+                server_manager.configs[server_name] = spawn_cfg
 
-            # Create or get lock for this server
-            if server_name not in _process_locks:
-                _process_locks[server_name] = threading.Lock()
+                process = await server_manager._spawn_mcp_process(server_name, spawn_cfg)
 
-            package_name, _router, process = launch_mcp_using_fastapi_proxy(
-                install_path,
-                _process_locks[server_name]
-            )
+                if process:
+                    # Register in server_manager.processes so the dynamic router can find it.
+                    server_manager.processes[server_name] = process
+                    # Wire up module-level tracking used by health/tools endpoints.
+                    _register_server_process(server_name, process)
+                    _initialize_server_metrics(server_name)
 
-            if process:
-                # Register in server_manager for dynamic router dispatch (same as serve)
-                server_manager.processes[server_name] = process
-                server_manager.start_times[server_name] = time.monotonic()
-                server_manager.configs[server_name] = {**server_cfg, "id": server_name, "name": server_name, "enabled": True}
+                    logger.debug(f"Successfully launched server {server_name}")
+                else:
+                    logger.error(f"Failed to launch server '{server_name}'")
 
-                # Also register in module-level dict (used by health/tools endpoints)
-                _register_server_process(server_name, process)
+            except Exception:
+                logger.exception(f"Error launching server '{server_name}'")
 
-                # Initialize metrics for the server
-                _initialize_server_metrics(server_name)
-
-                logger.info(f"Added {package_name} endpoints")
-                launched_servers += 1
-                logger.debug(f"Successfully launched server {server_name} ({launched_servers} total)")
-            else:
-                logger.error(f"Failed to launch server '{server_name}'")
-
-        except Exception:
-            logger.exception(f"Error launching server '{server_name}'")
-
-    logger.debug(f"Total MCP servers launched: {launched_servers}")
-    if launched_servers == 0 and not config.llm_models:
+    if not servers_to_launch and not config.llm_models:
         logger.warning("No servers or LLM models configured - nothing to launch")
         return
 
-    if launched_servers > 0:
-        logger.info(f"Successfully launched {launched_servers} MCP server(s)")
+    if servers_to_launch:
+        logger.info(f"Scheduled {len(servers_to_launch)} MCP server(s) to launch on startup")
 
     # Mount unified dynamic router (same as serve) — single router for all registered servers
     mcp_router = create_dynamic_router(server_manager)
@@ -385,9 +379,9 @@ def run_servers(
             except VLLMConfigError as e:
                 logger.error(f"vLLM configuration validation failed: {e}")
                 logger.error("Skipping vLLM models - will continue with other model types if configured")
-                if launched_servers > 0:
+                if len(servers_to_launch) > 0:
                     logger.info(
-                        f"Note: {launched_servers} MCP server(s) were launched successfully. "
+                        f"Note: {len(servers_to_launch)} MCP server(s) were launched successfully. "
                         "They will continue running."
                     )
                 # Don't return - continue to initialize Replicate models if configured
@@ -482,7 +476,7 @@ def run_servers(
         replicate_will_init = bool(replicate_models)  # Will be initialized on startup
 
         if not vllm_launched and not replicate_will_init:
-            if launched_servers == 0:
+            if len(servers_to_launch) == 0:
                 logger.error("No MCP servers or LLM models successfully configured - aborting")
                 return
             else:
@@ -1236,8 +1230,10 @@ def _install_packages_from_config(config: ServerConfig) -> None:
                 continue
 
             logger.debug(f"Package installed at: {dest_dir}")
-            # Update install_path in config
+            # Update install_path and working_dir in config
             server_cfg["install_path"] = str(dest_dir)
+            server_cfg["working_dir"] = str(dest_dir)
+            apply_transport(server_cfg)
 
             # Update env variables from config file
             metadata_path = dest_dir / "metadata.json"

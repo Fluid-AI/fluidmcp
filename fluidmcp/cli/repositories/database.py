@@ -760,7 +760,11 @@ class DatabaseManager(PersistenceBackend):
                     # Filter out placeholder and empty values
                     filtered_env = {
                         k: v for k, v in env.items()
-                        if v and v.strip() and not is_placeholder(v)
+                        if v
+                        and isinstance(v, str)
+                        and v.strip()
+                        and not v.strip().startswith("${")
+                        and not is_placeholder(v)
                     }
                     return filtered_env if filtered_env else None
                 return None

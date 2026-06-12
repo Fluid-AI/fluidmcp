@@ -46,8 +46,7 @@ dist/
 build/
 *.tar.gz
 
-# Examples & Docs
-examples/
+# Docs
 docs/
 
 # CI/CD
@@ -55,4 +54,4 @@ docs/
 
 # Old Dockerfile
 Dockerfile.run-mode
-entrypoint.sh
+W

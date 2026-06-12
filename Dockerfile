@@ -27,6 +27,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install fastmcp separately to avoid conflicts with pinned deps above
+# fastmcp==3.0.0 ships mcp==1.25.0 as its own dep; isolated install resolves cleanly
+RUN pip install --no-cache-dir fastmcp==3.0.0
+
 # Copy application code
 COPY . .
 
@@ -70,14 +74,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Docker EXPOSE does not resolve env vars at build time
 EXPOSE 8499
 
-# Production command with secure mode
-# ⚠️  CRITICAL: Set FMCP_BEARER_TOKEN in Railway dashboard to prevent token regeneration
-# ⚠️  CRITICAL: Set MONGODB_URI in Railway (provided by MongoDB service)
-# --require-persistence: Fail fast if MongoDB unavailable (no silent in-memory fallback)
-CMD fmcp serve \
-    --host 0.0.0.0 \
-    --port ${PORT} \
-    --secure \
-    --mongodb-uri ${MONGODB_URI} \
-    --database ${FMCP_DATABASE:-fluidmcp} \
-    --require-persistence
+# Entrypoint handles both modes:
+#   ON_PREMISE=true  → fmcp run (static config, no MongoDB)
+#   unset/false      → fmcp serve (Railway/cloud, MongoDB, bearer token)
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+ENTRYPOINT ["/app/entrypoint.sh"]
