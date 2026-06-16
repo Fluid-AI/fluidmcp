@@ -445,7 +445,7 @@ class ServerManager:
     def get_concurrency_semaphore(self, server_id: str) -> Optional[asyncio.Semaphore]:
         """Return the semaphore for server_id, or None if no limit is configured."""
         config = self.configs.get(server_id, {})
-        limit = int(config.get("max_concurrent_requests", 0))
+        limit = int(config.get("max_concurrent_requests") or 0)
         if limit <= 0:
             return None
         if server_id not in self._concurrency_semaphores:
@@ -455,7 +455,7 @@ class ServerManager:
     def get_concurrency_info(self, server_id: str) -> Dict[str, Any]:
         """Return concurrency limit and current active count for a server."""
         config = self.configs.get(server_id, {})
-        limit = int(config.get("max_concurrent_requests", 0))
+        limit = int(config.get("max_concurrent_requests") or 0)
         sem = self._concurrency_semaphores.get(server_id)
         active = (limit - sem._value) if sem and limit > 0 else None
         return {
@@ -2217,8 +2217,7 @@ class MCPHealthMonitor:
             gauge = registry.get_metric("fluidmcp_active_requests")
             if gauge is None:
                 return 0
-            key = gauge._get_label_key({"server_id": server_id})
-            return int(gauge.samples.get(key, 0))
+            return int(gauge.get_count({"server_id": server_id}))
         except Exception:
             return 0
 

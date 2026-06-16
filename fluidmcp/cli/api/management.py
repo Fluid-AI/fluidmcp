@@ -55,12 +55,6 @@ except ImportError:
 from ..services.llm_provider_registry import get_model_type, get_model_config, list_models_by_type
 from ..services.server_manager import classify_exit_code
 
-try:
-    import psutil as _psutil
-    _psutil_available = True
-except ImportError:
-    _psutil = None
-    _psutil_available = False
 from ..services.replicate_openai_adapter import replicate_chat_completion
 from ..services.replicate_client import ReplicateClient, get_replicate_client
 from ..services.llm_metrics import get_metrics_collector
@@ -272,7 +266,7 @@ async def log_audit_event(
             "action": action,
             "model_id": model_id,
             "client_ip": client_ip,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
             "status": status,
         }
 
@@ -1190,8 +1184,7 @@ async def get_server(request: Request, id: str):
     _rej_counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
     rejected_total = 0
     if _rej_counter:
-        _key = _rej_counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
-        rejected_total = int(_rej_counter.samples.get(_key, 0))
+        rejected_total = int(_rej_counter.get_count({"server_id": id, "reason": "concurrency_limit"}))
     concurrency = {
         "max_concurrent_requests": conc_info["max_concurrent_requests"],
         "active_requests": conc_info["active_requests"],
@@ -1200,20 +1193,12 @@ async def get_server(request: Request, id: str):
     }
 
     # ── Crash summary ─────────────────────────────────────────────────────────
-    crashes_summary = {"recent_crash_count": 0, "crashes_per_hour": 0.0}
+    crashes_summary = {"recent_crash_count": 0, "crashes_last_hour": 0}
     try:
-        events = await manager.db.list_crash_events(id, limit=50)
-        crashes_summary["recent_crash_count"] = len(events)
-        now = datetime.utcnow()
-        one_hour_ago = (now - timedelta(hours=1)).timestamp()
-        crashes_last_hour = sum(
-            1 for e in events
-            if e.get("timestamp") and (
-                e["timestamp"].timestamp() if hasattr(e["timestamp"], "timestamp")
-                else float(e["timestamp"])
-            ) > one_hour_ago
-        )
-        crashes_summary["crashes_per_hour"] = float(crashes_last_hour)
+        now = datetime.now(timezone.utc)
+        one_hour_ago_ts = (now - timedelta(hours=1)).timestamp()
+        crashes_summary["recent_crash_count"] = await manager.db.count_crash_events_since(id, 0)
+        crashes_summary["crashes_last_hour"] = await manager.db.count_crash_events_since(id, one_hour_ago_ts)
     except Exception as e:
         logger.warning(f"Failed to load crash summary for '{id}': {e}")
 
@@ -1396,8 +1381,7 @@ async def delete_server(
     # Clean up stale instance state so a re-clone of the same server ID starts fresh
     await manager.db.reset_instance_state(id)
 
-    from datetime import datetime
-    deleted_at = datetime.utcnow().isoformat()
+    deleted_at = datetime.now(timezone.utc).isoformat()
     logger.info(f"Soft deleted server configuration: {id}")
     return {
         "message": f"Server '{id}' deleted successfully",
@@ -1830,8 +1814,8 @@ async def get_server_crashes(
         if hasattr(crash.get("timestamp"), "isoformat"):
             crash["timestamp"] = crash["timestamp"].isoformat()
 
-    # crashes_per_hour: query the DB for the full count in the last hour,
-    # independent of the `limit` param so the metric is always accurate.
+    # crashes_last_hour: full count in the last hour, independent of the `limit`
+    # param so the metric is always accurate.
     now = datetime.now(timezone.utc)
     one_hour_ago_ts = (now - timedelta(hours=1)).timestamp()
     crashes_last_hour = await manager.db.count_crash_events_since(id, one_hour_ago_ts)
@@ -1843,7 +1827,7 @@ async def get_server_crashes(
     return {
         "server": id,
         "restart_count": restart_count,
-        "crashes_per_hour": crashes_last_hour,
+        "crashes_last_hour": crashes_last_hour,
         "crashes": crashes,
     }
 
@@ -1897,7 +1881,7 @@ async def get_server_resources(request: Request, id: str, token: str = Depends(g
     rss = cpu = open_fds = threads = None
     status = "not_running"
     try:
-        if pid and process and process.poll() is None:
+        if pid and process and _psutil_available and process.poll() is None:
             proc = _psutil.Process(pid)
             rss = proc.memory_info().rss
             cpu = proc.cpu_percent(interval=None)
@@ -1973,8 +1957,7 @@ async def get_server_concurrency(request: Request, id: str):
     counter = _get_metrics_registry().get_metric("fluidmcp_requests_rejected_total")
     rejected_total = 0
     if counter is not None:
-        key = counter._get_label_key({"server_id": id, "reason": "concurrency_limit"})
-        rejected_total = int(counter.samples.get(key, 0))
+        rejected_total = int(counter.get_count({"server_id": id, "reason": "concurrency_limit"}))
 
     return {
         "server": id,
@@ -2516,10 +2499,9 @@ async def stop_llm_model(
         db = get_db_manager()
         if db and hasattr(db, 'update_llm_model'):
             try:
-                from datetime import datetime
                 await db.update_llm_model(model_id, {
                     "state": "stopped",
-                    "stopped_at": datetime.utcnow().isoformat(),
+                    "stopped_at": datetime.now(timezone.utc).isoformat(),
                     "stop_method": stop_method
                 })
                 state_persisted = True
@@ -2609,10 +2591,9 @@ async def start_llm_model(
         # Update state in database
         state_persisted = False
         try:
-            from datetime import datetime
             await db.update_llm_model(model_id, {
                 "state": "running",
-                "started_at": datetime.utcnow().isoformat(),
+                "started_at": datetime.now(timezone.utc).isoformat(),
                 "stopped_at": None,
                 "stop_method": None
             })
