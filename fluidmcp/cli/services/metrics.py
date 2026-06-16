@@ -70,6 +70,12 @@ class Metric:
 
         return "\n".join(lines)
 
+    def get_count(self, label_values: Optional[Dict[str, str]] = None) -> float:
+        """Return the current value for the given label combination (0.0 if unseen)."""
+        key = self._get_label_key(label_values or {})
+        with self._lock:
+            return self.samples.get(key, 0.0)
+
     def clear_samples(self):
         """
         Clear all samples for this metric (thread-safe).

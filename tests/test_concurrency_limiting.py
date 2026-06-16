@@ -8,17 +8,21 @@ Covers:
 - Semaphore: created once and reused (singleton per server)
 - Semaphore: acquire/release under the limit
 - Semaphore slots: correct _value before and after acquire
+- 429 response when semaphore is full (most important behavior)
+- null/invalid max_concurrent_requests values
+- Enriched GET /api/servers/{id} response shape
 """
 import asyncio
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fluidmcp.cli.api.management import router
 from fluidmcp.cli.repositories import InMemoryBackend
 from fluidmcp.cli.services.server_manager import ServerManager
-from fluidmcp.cli.services.metrics import get_registry, MetricsCollector
+from fluidmcp.cli.services.metrics import get_registry
+from fluidmcp.cli.services.package_launcher import create_dynamic_router
 
 
 def make_app(server_manager, db_manager):
@@ -172,3 +176,102 @@ class TestGetConcurrencyInfo:
 
         sem.release()
         sem.release()
+
+
+# ---------------------------------------------------------------------------
+# 429 when semaphore is full
+# ---------------------------------------------------------------------------
+
+class TestConcurrencyLimiting429:
+    """The most important behavior: 429 + Retry-After when all slots are occupied."""
+
+    def _make_mcp_app(self, server_manager):
+        app = FastAPI()
+        mcp_router = create_dynamic_router(server_manager)
+        app.include_router(mcp_router)
+        return app
+
+    @pytest.mark.asyncio
+    async def test_429_when_semaphore_full(self, server_manager):
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": 1}
+        # Exhaust the one available slot manually
+        sem = server_manager.get_concurrency_semaphore("srv")
+        await sem.acquire()
+
+        # Use a mock so the 503 "process is None" guard doesn't fire before the semaphore check.
+        fake_process = MagicMock()
+        fake_process.poll.return_value = None  # pretend process is alive
+        server_manager.processes["srv"] = fake_process
+
+        app = self._make_mcp_app(server_manager)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/srv/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+
+        assert resp.status_code == 429
+        assert resp.headers.get("Retry-After") == "1"
+        assert "too many concurrent requests" in resp.text
+
+        sem.release()
+
+
+# ---------------------------------------------------------------------------
+# null / invalid max_concurrent_requests config values
+# ---------------------------------------------------------------------------
+
+class TestNullMaxConcurrentRequests:
+
+    def test_null_value_returns_none_semaphore(self, server_manager):
+        """'max_concurrent_requests': null must not crash with TypeError."""
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": None}
+        sem = server_manager.get_concurrency_semaphore("srv")
+        assert sem is None
+
+    def test_null_value_concurrency_info_unlimited(self, server_manager):
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": None}
+        info = server_manager.get_concurrency_info("srv")
+        assert info["max_concurrent_requests"] is None
+        assert info["active_requests"] is None
+        assert info["available_slots"] is None
+
+    def test_null_via_endpoint(self, client, server_manager):
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": None}
+        resp = client.get("/api/servers/srv/concurrency")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["max_concurrent_requests"] is None
+
+
+# ---------------------------------------------------------------------------
+# Enriched GET /api/servers/{id} response shape
+# ---------------------------------------------------------------------------
+
+class TestEnrichedServerGetShape:
+
+    def test_response_includes_debug_sections(self, client, server_manager):
+        """GET /api/servers/{id} must include resources, concurrency, and crashes sections."""
+        _register(server_manager, "srv", max_concurrent_requests=3)
+
+        resp = client.get("/api/servers/srv")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert "resources" in data, "missing 'resources' section"
+        assert "concurrency" in data, "missing 'concurrency' section"
+        assert "crashes" in data, "missing 'crashes' section"
+
+    def test_concurrency_section_shape(self, client, server_manager):
+        _register(server_manager, "srv", max_concurrent_requests=5)
+        data = client.get("/api/servers/srv").json()
+        conc = data["concurrency"]
+        assert conc["max_concurrent_requests"] == 5
+        assert conc["active_requests"] == 0
+        assert conc["available_slots"] == 5
+        assert "rejected_total" in conc
+
+    def test_crashes_section_uses_correct_field_name(self, client, server_manager):
+        """Field must be crashes_last_hour, not the old crashes_per_hour."""
+        _register(server_manager, "srv")
+        data = client.get("/api/servers/srv").json()
+        crashes = data["crashes"]
+        assert "crashes_last_hour" in crashes, "field renamed from crashes_per_hour"
+        assert "crashes_per_hour" not in crashes, "old field name must not be present"

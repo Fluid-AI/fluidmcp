@@ -588,14 +588,16 @@ def create_dynamic_router(server_manager):
                 return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
-            # Check if process is alive
-            if process.poll() is not None:
+            # Check if process is alive (stdio only — SSE/Network handles don't have .poll())
+            if not isinstance(process, (SseSubprocessHandle, NetworkSubprocessHandle)) and process.poll() is not None:
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
             # Concurrency limiting — try a non-blocking acquire; drop with 429 if full
             sem = server_manager.get_concurrency_semaphore(server_name)
             if sem is not None:
-                acquired = sem._value > 0  # peek: True if a slot is free
+                # sem._value peek is safe in asyncio: no await between check and acquire,
+                # so no other coroutine can interleave and take the slot.
+                acquired = sem._value > 0
                 if not acquired:
                     collector.record_rejected_request("concurrency_limit")
                     return Response(
@@ -692,6 +694,20 @@ def create_dynamic_router(server_manager):
         process = server_manager.processes.get(server_name)
         if process is None:
             raise HTTPException(503, f"Server '{server_name}' failed to start")
+
+        # Concurrency limiting for SSE — long-lived connections consume a slot for their duration
+        _sse_sem = server_manager.get_concurrency_semaphore(server_name)
+        if _sse_sem is not None:
+            # sem._value peek is safe in asyncio: no await between check and acquire
+            if _sse_sem._value <= 0:
+                collector.record_rejected_request("concurrency_limit")
+                return Response(
+                    content='{"error":"too many concurrent requests"}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "1"},
+                )
+            await _sse_sem.acquire()
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
@@ -827,6 +843,8 @@ def create_dynamic_router(server_manager):
                 # Record streaming metrics
                 collector.record_streaming_request(completion_status)
                 collector.decrement_active_streams()
+                if _sse_sem is not None:
+                    _sse_sem.release()
 
         return StreamingResponse(
             event_generator(),
