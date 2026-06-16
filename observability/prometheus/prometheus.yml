@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  # Attach these labels to every time series scraped here
+  external_labels:
+    cluster: "docker-compose"
+    environment: "local"
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  # ── FluidMCP Gateway ──────────────────────────────────────────────────────
+  - job_name: "fluidmcp"
+    metrics_path: "/metrics"
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    # If FMCP_BEARER_TOKEN is set, uncomment:
+    # bearer_token: "your-token-here"
+    static_configs:
+      - targets: ["fluidmcp:8099"]
+        labels:
+          service: "fluidmcp-gateway"
+          environment: "docker"
+
+  # ── Prometheus self-scrape ─────────────────────────────────────────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

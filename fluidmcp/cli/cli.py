@@ -22,26 +22,59 @@ from .services.package_list import get_latest_version_dir
 from .services.config_resolver import INSTALLATION_DIR
 
 
+def _json_log_sink(message) -> None:
+    """
+    Loguru sink that emits one JSON object per line to stderr.
+    Promtail scrapes these lines and ships them to Loki.
+    The trace_id / span_id fields are injected when an OTEL span is active
+    so Grafana can correlate logs ↔ traces.
+    """
+    record = message.record
+    trace_id = span_id = None
+    try:
+        from .context import get_trace_id, get_span_id
+        trace_id = get_trace_id()
+        span_id = get_span_id()
+    except Exception:
+        pass
+
+    entry = {
+        "timestamp": record["time"].isoformat(),
+        "level": record["level"].name,
+        "message": record["message"],
+        "service": "fluidmcp",
+        "logger": record["name"],
+        "file": record["file"].name,
+        "line": record["line"],
+    }
+    if trace_id:
+        entry["trace_id"] = trace_id
+    if span_id:
+        entry["span_id"] = span_id
+    if record["exception"]:
+        entry["exception"] = str(record["exception"])
+
+    sys.stderr.write(json.dumps(entry) + "\n")
+    sys.stderr.flush()
+
+
 def configure_logger(verbose: bool = False) -> None:
-    """
-    Configure loguru logger based on verbosity flag.
-
-    Args:
-        verbose: If True, set level to DEBUG; otherwise INFO
-    """
-    # Remove default handler
+    """Configure loguru.  JSON output when LOG_FORMAT=json (default in containers)."""
     logger.remove()
-
-    # Set level based on verbose flag
     log_level = "DEBUG" if verbose else "INFO"
+    log_format = os.getenv("LOG_FORMAT", "json").lower()
 
-    # Add new handler with specified level and simple format
-    logger.add(
-        sys.stderr,
-        level=log_level,
-        format="<level>{message}</level>",
-        colorize=True
-    )
+    if log_format == "json":
+        # Structured JSON lines — consumed by Promtail → Loki
+        logger.add(_json_log_sink, level=log_level, colorize=False)
+    else:
+        # Human-readable coloured output for local dev
+        logger.add(
+            sys.stderr,
+            level=log_level,
+            format="<level>{message}</level>",
+            colorize=True,
+        )
 
 
 
