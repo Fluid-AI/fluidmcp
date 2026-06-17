@@ -10,44 +10,40 @@ clients:
 
 scrape_configs:
 
-  # ── Scrape all Docker container logs ──────────────────────────────────────
-  # Promtail discovers containers via the Docker socket and tails their log files.
-  # For the fluidmcp container it parses the JSON log lines and promotes
-  # level, trace_id, and span_id as Loki labels so you can filter/correlate.
-  - job_name: docker
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
-        filters:
-          - name: status
-            values: ["running"]
+  # ── Docker json-file log scrape (no Docker socket required) ───────────────
+  # Docker writes each container's stdout/stderr to:
+  #   /var/lib/docker/containers/<container-id>/<container-id>-json.log
+  # Promtail reads these files directly (volume mounted :ro).
+  # The Docker json-file driver wraps each line in:
+  #   {"log":"<line>\n","stream":"stdout","time":"<rfc3339nano>","attrs":{"tag":"<tag>"}}
+  # We unwrap it with the "docker" pipeline stage and use the "tag" attr
+  # (set to "fluidmcp" in the compose logging.options) to identify the container.
+  - job_name: docker_files
 
-    relabel_configs:
-      # Use the container name as the Loki "container" label
-      - source_labels: ["__meta_docker_container_name"]
-        regex: "/(.*)"
-        target_label: container
-
-      # Keep the Docker image name for easy filtering
-      - source_labels: ["__meta_docker_container_image"]
-        target_label: image
-
-      # Expose the compose service name
-      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
-        target_label: service
-
-      # Set job=fluidmcp for the gateway container specifically
-      - source_labels: ["container"]
-        regex: "fluidmcp"
-        replacement: "fluidmcp"
-        target_label: job
+    static_configs:
+      - targets: ["localhost"]
+        labels:
+          job: docker
+          # Glob picks up every container's log file on this host
+          __path__: /var/lib/docker/containers/*/*-json.log
 
     pipeline_stages:
-      # Docker wraps container output in a JSON envelope; unwrap it first
+      # Unwrap the Docker json-file envelope
       - docker: {}
 
-      # FluidMCP emits JSON log lines (when LOG_FORMAT=json).
-      # Parse them and promote key fields as labels.
+      # Extract the "tag" attribute injected by the Docker json-file driver
+      - json:
+          expressions:
+            docker_tag: attrs.tag
+
+      # Promote the tag as a label so we can filter by container
+      - labels:
+          container:
+            source: docker_tag
+
+      # ── FluidMCP-specific enrichment ──────────────────────────────────────
+      # FluidMCP emits structured JSON log lines (LOG_FORMAT=json).
+      # Parse them and promote level, trace_id, span_id.
       - match:
           selector: '{container="fluidmcp"}'
           stages:
@@ -57,21 +53,23 @@ scrape_configs:
                   trace_id: trace_id
                   span_id: span_id
                   msg: message
-                  logger: logger
+                  svc: service
 
-            # Promote level as a Loki label (enables level-based filtering)
+            # level as a Loki label enables filter-by-severity in Grafana
             - labels:
                 level:
                   source: level
+                service:
+                  source: svc
 
-            # Attach trace/span IDs as structured metadata (Loki 2.9+)
-            # They appear in the log detail panel and enable Loki → Tempo links
+            # Structured metadata carries trace/span IDs into Loki's index
+            # enabling the Loki → Tempo "View Trace" button per log line
             - structured_metadata:
                 traceID:
                   source: trace_id
                 spanID:
                   source: span_id
 
-            # Use the parsed message as the log line (not the raw JSON)
+            # Replace the raw JSON envelope with the human-readable message
             - output:
                 source: msg

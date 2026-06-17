@@ -3,22 +3,21 @@ version: "3.9"
 # FluidMCP Full Observability Stack
 # ─────────────────────────────────
 # Signals collected:
-#   Logs    → Promtail scrapes FluidMCP stderr (JSON) → Loki
+#   Logs    → Promtail tails Docker json-file logs → Loki
 #   Metrics → Prometheus scrapes /metrics every 10 s
 #   Traces  → FluidMCP OTLP HTTP → Tempo
 #   UI      → Grafana (all three datasources pre-wired)
 #
 # Usage:
-#   docker compose -f docker-compose.observability.yml up --build
+#   cp .env.observability.example .env.observability
+#   # Edit .env.observability and set GF_SECURITY_ADMIN_PASSWORD
+#   docker compose -f docker-compose.observability.yml --env-file .env.observability up --build
 #
-# URLs:
+# URLs (all bound to 127.0.0.1 — localhost only):
 #   FluidMCP   http://localhost:8099
-#   Grafana    http://localhost:3000   (admin / admin)
+#   Grafana    http://localhost:3000   (credentials from .env.observability)
 #   Prometheus http://localhost:9090
 #   Tempo      http://localhost:3200   (API / query)
-#
-# Environment:
-#   Copy .env.observability.example → .env and fill in secrets before first run.
 
 services:
 
@@ -33,24 +32,21 @@ services:
     environment:
       PORT: "8099"
       PYTHONUNBUFFERED: "1"
-      LOG_FORMAT: "json"                          # emit JSON lines for Promtail
+      LOG_FORMAT: "json"
       OTEL_ENABLED: "true"
       OTEL_SERVICE_NAME: "fluidmcp"
       OTEL_SERVICE_VERSION: "2.0.0"
-      OTEL_EXPORTER: "jaeger"                     # sends to Tempo via OTLP HTTP
+      OTEL_EXPORTER: "jaeger"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4318/v1/traces"
-      # Uncomment and set a stable bearer token to avoid regeneration on restart:
       # FMCP_BEARER_TOKEN: "${FMCP_BEARER_TOKEN}"
-      # MongoDB (optional — omit to run without persistence):
       # MONGODB_URI: "mongodb://mongo:27017"
-    volumes:
-      # Named volume so Promtail can read the log file written by the container
-      - fluidmcp_logs:/var/log/fluidmcp
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "5"
+        # tag is embedded in each log line's attrs field;
+        # Promtail reads it to identify fluidmcp logs without the Docker socket.
         tag: "fluidmcp"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8099/health"]
@@ -64,11 +60,14 @@ services:
       - tempo
 
   # ── Prometheus ────────────────────────────────────────────────────────────
+  # Bound to 127.0.0.1: only accessible from the local machine.
+  # --web.enable-lifecycle is intentionally omitted (unauthenticated reload/quit).
+  # --web.enable-remote-write-receiver is omitted; Tempo uses its own storage.
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -79,20 +78,19 @@ services:
       - "--storage.tsdb.retention.time=15d"
       - "--web.console.libraries=/usr/share/prometheus/console_libraries"
       - "--web.console.templates=/usr/share/prometheus/consoles"
-      - "--web.enable-lifecycle"
-      # Enable remote-write receiver so Tempo can push exemplars back (optional)
-      - "--web.enable-remote-write-receiver"
     networks:
       - observability
 
   # ── Grafana Tempo (distributed tracing backend) ───────────────────────────
+  # 4318 (OTLP HTTP) bound to 127.0.0.1; FluidMCP reaches it via the internal
+  # Docker network (service name "tempo"), not through the host port.
   tempo:
     image: grafana/tempo:2.4.1
     container_name: tempo
     ports:
-      - "3200:3200"    # Tempo HTTP API / Grafana query
-      - "4317:4317"    # OTLP gRPC (optional, for gRPC exporters)
-      - "4318:4318"    # OTLP HTTP (FluidMCP sends here)
+      - "127.0.0.1:3200:3200"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
     volumes:
       - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
       - tempo_data:/var/tempo
@@ -105,7 +103,7 @@ services:
     image: grafana/loki:2.9.4
     container_name: loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./observability/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki_data:/loki
@@ -113,15 +111,17 @@ services:
     networks:
       - observability
 
-  # ── Promtail (log shipper: Docker logs → Loki) ────────────────────────────
+  # ── Promtail (log shipper: Docker json-file logs → Loki) ──────────────────
+  # No Docker socket mount. Promtail reads log files directly from
+  # /var/lib/docker/containers (already :ro) using a glob path.
+  # The container "tag" attribute (set in fluidmcp logging.options) is extracted
+  # from each log line's JSON envelope to identify the fluidmcp container.
   promtail:
     image: grafana/promtail:2.9.4
     container_name: promtail
     volumes:
       - ./observability/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
-      # Mount Docker socket so Promtail can discover and tail container logs
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock
     command: ["-config.file=/etc/promtail/promtail.yml"]
     depends_on:
       - loki
@@ -129,18 +129,23 @@ services:
       - observability
 
   # ── Grafana (visualization) ────────────────────────────────────────────────
+  # Bound to 127.0.0.1 — not exposed to the wider network.
+  # Admin password MUST be set via GF_SECURITY_ADMIN_PASSWORD in .env.observability.
+  # The compose file intentionally has no fallback default to prevent accidental
+  # deployment with a weak password.
   grafana:
     image: grafana/grafana:10.4.2
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD}"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
-      # Enable Tempo → Loki trace-to-logs and Loki → Tempo logs-to-traces links
       GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
+      # Disable anonymous access
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./examples/grafana-dashboard.json:/var/lib/grafana/dashboards/fluidmcp-metrics.json:ro
@@ -157,7 +162,6 @@ networks:
     driver: bridge
 
 volumes:
-  fluidmcp_logs:
   prometheus_data:
   tempo_data:
   loki_data:
