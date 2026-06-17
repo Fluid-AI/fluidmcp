@@ -337,29 +337,125 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
 
 
 def create_fastapi_jsonrpc_proxy(package_name: str, process: subprocess.Popen) -> FastAPI:
+    """
+    Legacy single-package proxy. Creates a standalone FastAPI app that forwards
+    JSON-RPC requests to one MCP subprocess over stdin/stdout.
+
+    Error map (what you'll see in logs → root cause):
+      [mcp.process_died]   BrokenPipeError/OSError on stdin write
+                           → MCP subprocess crashed or was killed externally.
+                             Check OS process table and stderr buffer.
+      [mcp.timeout]        readline_with_timeout returned ""
+                           → Subprocess is alive but not producing output.
+                             Could be a deadlock inside the tool, a blocked DB query,
+                             or an API call that never returned.
+      [mcp.bad_response]   json.JSONDecodeError on stdout line
+                           → Subprocess wrote non-JSON to stdout (e.g. a print()
+                             statement, a Python traceback, or a startup banner).
+                             Check stderr drainer logs for the actual error.
+      [mcp.error_response] JSON-RPC "error" field present in response
+                           → Tool executed but returned a protocol-level error.
+                             Common causes: DB connection refused, API key invalid,
+                             missing required argument, downstream API returned 4xx/5xx.
+      [mcp.lock_wait]      process_lock already held when a new request arrives
+                           → Two concurrent requests are competing for the same
+                             subprocess stdin/stdout pipe (which is single-threaded).
+                             One request will queue; high frequency = throughput bottleneck.
+    """
     app = FastAPI()
     process_lock = threading.Lock()
+
     @app.post(f"/{package_name}/mcp")
     async def proxy_jsonrpc(request: Request):
-        try:
-            jsonrpc_request = await request.body()
-            jsonrpc_str = jsonrpc_request.decode() if isinstance(jsonrpc_request, bytes) else jsonrpc_request
-            # Offload blocking stdin/stdout I/O to a worker thread
-            def _communicate(payload: str) -> str:
-                with process_lock:
-                    process.stdin.write(payload + "\n")
-                    process.stdin.flush()
-                    return readline_with_timeout(process, timeout=30.0)
+        t0 = time.monotonic()
+        raw = await request.body()
+        jsonrpc_str = raw.decode() if isinstance(raw, bytes) else raw
 
+        # Best-effort parse for log context — malformed bodies still get forwarded.
+        try:
+            parsed_req = json.loads(jsonrpc_str)
+        except json.JSONDecodeError:
+            parsed_req = {}
+
+        method = parsed_req.get("method", "unknown")
+        request_id = parsed_req.get("id", "-")
+        params = parsed_req.get("params", {})
+        tool_name = params.get("name") if method == "tools/call" else None
+        # Log argument keys only (not values) to avoid leaking secrets in logs.
+        tool_args_keys = sorted(params.get("arguments", {}).keys()) if method == "tools/call" else []
+
+        ctx = f"server={package_name} method={method} req_id={request_id}"
+        if tool_name:
+            ctx += f" tool={tool_name} args={tool_args_keys}"
+
+        logger.info(f"[mcp.call] {ctx}")
+
+        def _communicate(payload: str) -> str:
+            # Non-blocking acquire first; if the lock is taken, log a warning before
+            # blocking — this surfaces thread contention without adding overhead on
+            # the happy path.
+            acquired = process_lock.acquire(blocking=False)
+            if not acquired:
+                # CAUGHT: [mcp.lock_wait] — concurrent request already using this subprocess.
+                # Investigate if you see this frequently; it means requests are serialising
+                # and latency will stack.
+                logger.warning(f"[mcp.lock_wait] {ctx} — another request holds the process lock, queuing")
+                process_lock.acquire()
             try:
-                response_line = await asyncio.to_thread(_communicate, jsonrpc_str)
-            except (BrokenPipeError, OSError) as e:
-                return JSONResponse(status_code=503, content={"error": f"Process pipe broken: {e}"})
-            if not response_line:
-                return JSONResponse(status_code=504, content={"error": "MCP server did not respond within timeout"})
-            return JSONResponse(content=json.loads(response_line))
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
+                process.stdin.write(payload + "\n")
+                process.stdin.flush()
+                return readline_with_timeout(process, timeout=30.0)
+            finally:
+                process_lock.release()
+
+        try:
+            response_line = await asyncio.to_thread(_communicate, jsonrpc_str)
+        except (BrokenPipeError, OSError) as e:
+            # CAUGHT: [mcp.process_died] — stdin write failed.
+            # Root cause: subprocess exited (OOM, unhandled exception, SIGKILL).
+            # Next step: check `process.returncode` and the stderr drainer buffer
+            # for the crash reason.
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.error(f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
+            return JSONResponse(status_code=503, content={"error": f"Process pipe broken: {e}"})
+
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+        if not response_line:
+            # CAUGHT: [mcp.timeout] — readline returned "" after 30s.
+            # Root cause: tool is blocking (slow DB query, hung HTTP call, infinite loop).
+            # Next step: check the tool implementation and any downstream service it calls.
+            logger.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within 30s")
+            return JSONResponse(status_code=504, content={"error": "MCP server did not respond within timeout"})
+
+        try:
+            parsed_resp = json.loads(response_line)
+        except json.JSONDecodeError as e:
+            # CAUGHT: [mcp.bad_response] — stdout line is not valid JSON.
+            # Root cause: tool printed a plain string, Python traceback, or startup
+            # message to stdout. Check stderr drainer for the real error.
+            logger.error(f"[mcp.bad_response] {ctx} elapsed={elapsed_ms}ms — invalid JSON: {e} raw={response_line[:300]}")
+            return JSONResponse(status_code=502, content={"error": "MCP server returned invalid JSON"})
+
+        if "error" in parsed_resp:
+            # CAUGHT: [mcp.error_response] — JSON-RPC error object in response body.
+            # Root cause varies by error code:
+            #   -32700 Parse error        → gateway sent malformed JSON to the tool
+            #   -32600 Invalid request    → missing required JSON-RPC fields
+            #   -32601 Method not found   → tool name doesn't exist on this server
+            #   -32602 Invalid params     → wrong argument types or missing required args
+            #   -32603 Internal error     → tool threw an unhandled exception (DB down,
+            #                               API timeout, file not found, etc.)
+            #   Any other code            → tool-defined application error
+            err = parsed_resp["error"]
+            err_code = err.get("code") if isinstance(err, dict) else None
+            err_msg = err.get("message") if isinstance(err, dict) else str(err)
+            logger.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
+        else:
+            logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
+
+        return JSONResponse(content=parsed_resp)
+
     return app
 
 
@@ -475,9 +571,36 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30, stderr_k
     
 
 def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock: threading.Lock = None) -> APIRouter:
-    
+    """
+    Per-package router used by `fmcp run <package>` mode. Attaches to the shared
+    FastAPI app with bearer-token auth and Prometheus metrics.
 
-    # Create a lock if not provided
+    Error map (what you'll see in logs → root cause):
+      [mcp.call]           INFO  — request received; always emitted before any I/O.
+      [mcp.stdin]          DEBUG — raw payload sent to subprocess stdin (first 200 chars).
+      [mcp.lock_wait]      WARN  — concurrent request is already using this subprocess.
+                                   Requests are serialised per-process; high frequency here
+                                   means throughput is bottlenecked on a single subprocess.
+      [mcp.timeout]        WARN  — subprocess alive but no stdout within 30s.
+                                   Root cause: tool blocked on DB, API, or infinite loop.
+      [mcp.bad_response]   ERROR — stdout line was not valid JSON.
+                                   Root cause: tool wrote a plain string/traceback to stdout.
+                                   Check stderr drainer logs for the real error message.
+      [mcp.error_response] WARN  — JSON-RPC error in response body (tool ran, but failed).
+                                   Common causes by error code:
+                                     -32603 Internal error → DB refused connection, API
+                                            returned 4xx/5xx, file not found, unhandled exception
+                                     -32602 Invalid params → caller sent wrong argument types
+                                     -32601 Method not found → tool name doesn't exist
+      [mcp.process_died]   ERROR — BrokenPipeError/OSError writing to stdin.
+                                   Root cause: subprocess crashed (OOM, SIGKILL, unhandled
+                                   exception at top level). Check process.returncode and
+                                   stderr drainer buffer for crash details.
+      [mcp.error]          ERROR — unexpected exception not covered above (e.g. asyncio
+                                   cancellation, memory error, bug in gateway code).
+                                   Full traceback is included.
+    """
+
     if process_lock is None:
         process_lock = threading.Lock()
 
@@ -496,31 +619,37 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             }
         ), token: str = Depends(get_token)
     ):
-        # Initialize metrics collector
         collector = MetricsCollector(package_name)
         method = request.get("method", "unknown")
+        request_id = request.get("id", "-")
+        params = request.get("params", {})
+        tool_name = params.get("name") if method == "tools/call" else None
+        # Log argument keys only (not values) to avoid leaking secrets in logs.
+        tool_args_keys = sorted(params.get("arguments", {}).keys()) if method == "tools/call" else []
 
-        # Track request with metrics
+        ctx = f"server={package_name} method={method} req_id={request_id}"
+        if tool_name:
+            ctx += f" tool={tool_name} args={tool_args_keys}"
+
+        t0 = time.monotonic()
+
         with RequestTimer(collector, method):
             try:
-                # Extract all headers from incoming HTTP request
                 all_headers = dict(http_request.headers)
 
-                logger.info(f"[{package_name}] Received request: method={request.get('method')}, has_headers={bool(all_headers)}")
+                # LOGGED: [mcp.call] — first thing emitted for every request.
+                # If you see [mcp.call] but no [mcp.ok] or error follow-up, the
+                # request is still in-flight (or the process crashed with no pipe error).
+                logger.info(f"[mcp.call] {ctx}")
 
-                # Only inject headers if this is a tools/call request
-                if request.get("method") == "tools/call" and all_headers:
-                    params = request.get("params", {})
+                # Inject HTTP headers into tool arguments so downstream tools can
+                # forward auth headers (e.g. Authorization, X-Api-Key) to their APIs.
+                # Only done for tools/call — list/initialize don't need caller headers.
+                if method == "tools/call" and all_headers:
                     if "arguments" not in params:
                         params["arguments"] = {}
-
-                    logger.info(f"[{package_name}] HTTP headers: {list(all_headers.keys())}")
-                    logger.info(f"[{package_name}] Arguments before injection: {list(params.get('arguments', {}).keys())}")
-
                     params["arguments"]["headers"] = all_headers
                     request["params"] = params
-
-                    logger.info(f"[{package_name}] Arguments after injection: {list(params.get('arguments', {}).keys())}")
 
                 # The subprocess is already initialized at startup by initialize_mcp_server().
                 # Forwarding initialize again would cause readline() to block forever (deadlock).
@@ -541,27 +670,106 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                 if method == "notifications/initialized":
                     return Response(status_code=204)
 
-                # Offload blocking stdin/stdout I/O to a worker thread
                 msg = json.dumps(request)
-                logger.debug(f"[{package_name}] Sending to MCP stdin: {msg[:200]}...")
+                # LOGGED: [mcp.stdin] DEBUG — full payload preview before it enters the pipe.
+                # Useful when debugging argument injection or protocol-level mismatches.
+                logger.debug(f"[mcp.stdin] {ctx} payload={msg[:200]}")
 
                 def _communicate_mcp(payload: str) -> str:
-                    with process_lock:
+                    # Non-blocking acquire first; warn before blocking so lock contention
+                    # is visible in logs without adding overhead on the happy path.
+                    # LOGGED: [mcp.lock_wait] — only when contended.
+                    acquired = process_lock.acquire(blocking=False)
+                    if not acquired:
+                        logger.warning(f"[mcp.lock_wait] {ctx} — another request holds the process lock, queuing")
+                        process_lock.acquire()
+                    try:
                         process.stdin.write(payload + "\n")
                         process.stdin.flush()
                         return readline_with_timeout(process, timeout=30.0)
+                    finally:
+                        process_lock.release()
 
                 response_line = await asyncio.to_thread(_communicate_mcp, msg)
-                logger.debug(f"[{package_name}] Received from stdout: {response_line[:200]}...")
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
 
                 if not response_line:
+                    # CAUGHT: [mcp.timeout] — no output from subprocess within 30s.
+                    # Root cause: tool is blocked. Common culprits:
+                    #   • Database query with no timeout (connection refused hangs by default)
+                    #   • External HTTP API call with no timeout set
+                    #   • Tool stuck in a retry loop or waiting on a lock
+                    # Next step: check the tool's own logs and any downstream services it calls.
+                    logger.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within 30s")
                     return JSONResponse(status_code=504, content={"error": f"[{package_name}] MCP server did not respond within timeout"})
-                return JSONResponse(content=json.loads(response_line))
+
+                try:
+                    parsed = json.loads(response_line)
+                except json.JSONDecodeError as e:
+                    # CAUGHT: [mcp.bad_response] — stdout line is not valid JSON.
+                    # Root cause: tool wrote a plain-text message, Python traceback,
+                    # or startup banner to stdout instead of stderr.
+                    # Next step: look at stderr drainer logs ([{package_name}] stderr:)
+                    # for the actual error text.
+                    logger.error(f"[mcp.bad_response] {ctx} elapsed={elapsed_ms}ms — invalid JSON: {e} raw={response_line[:300]}")
+                    return JSONResponse(status_code=502, content={"error": "MCP server returned invalid JSON"})
+
+                if "error" in parsed:
+                    # CAUGHT: [mcp.error_response] — tool ran but returned a JSON-RPC error.
+                    # The tool itself is alive and responding; the error is application-level.
+                    # Error code guide:
+                    #   -32603 Internal error  → unhandled exception inside the tool
+                    #                            (DB down, API 5xx, missing env var, etc.)
+                    #   -32602 Invalid params  → caller passed wrong types or missing args
+                    #   -32601 Method not found → wrong tool name in the request
+                    #   -32700 Parse error     → gateway sent malformed JSON (should not happen)
+                    #   Custom codes           → tool-defined errors (check tool docs)
+                    err = parsed["error"]
+                    err_code = err.get("code") if isinstance(err, dict) else None
+                    err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                    logger.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
+                else:
+                    logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
+
+                return JSONResponse(content=parsed)
+
+            except (BrokenPipeError, OSError) as e:
+                # CAUGHT: [mcp.process_died] — stdin write raised a pipe error.
+                # Root cause: subprocess exited unexpectedly.
+                # Next step: check process.returncode and stderr drainer buffer for
+                # the crash reason (OOM kill, unhandled top-level exception, etc.).
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                logger.error(f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
+                collector.record_error("process_died")
+                return JSONResponse(status_code=503, content={"error": f"MCP process died: {e}"})
             except Exception as e:
-                logger.error(f"[{package_name}] Error in proxy: {e}", exc_info=True)
+                # CAUGHT: [mcp.error] — unexpected exception not covered above.
+                # Could be: asyncio.CancelledError, MemoryError, bug in gateway code,
+                # or an exception raised inside asyncio.to_thread's worker.
+                # Full traceback is logged; inspect exc_info for details.
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                logger.error(f"[mcp.error] {ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
                 return JSONResponse(status_code=500, content={"error": str(e)})
     
-    # New SSE endpoint
+    # SSE endpoint — used by clients that want streaming responses over a persistent connection.
+    # Unlike the /mcp endpoint (request→response), SSE streams multiple chunks until the tool
+    # signals completion with a "result" field.
+    #
+    # Error map for SSE (what you'll see in logs → root cause):
+    #   [mcp.sse.start]          INFO  — connection opened; always emitted first.
+    #   [mcp.sse.chunk]          DEBUG — each JSON chunk received from subprocess stdout.
+    #   [mcp.sse.timeout]        WARN  — readline returned "" (no data within 30s).
+    #                                    Root cause: tool stalled mid-stream. Could be a
+    #                                    slow API page, DB cursor stall, or generator paused.
+    #   [mcp.sse.error_response] WARN  — tool sent a JSON-RPC error chunk mid-stream.
+    #                                    Root cause: same as [mcp.error_response] above.
+    #                                    Stream is still forwarded to the client.
+    #   [mcp.sse.ok]             INFO  — final "result" chunk received; stream completed.
+    #   [mcp.sse.process_died]   ERROR — BrokenPipeError writing to stdin.
+    #                                    Root cause: subprocess crashed while streaming.
+    #                                    Check process.returncode and stderr drainer buffer.
+    #   [mcp.sse.error]          ERROR — unexpected exception inside the generator.
+    #                                    Full traceback included.
     @router.post(f"/{package_name}/sse", tags=[package_name])
     async def sse_stream(
         http_request: Request,
@@ -575,27 +783,37 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
             }
         ), token: str = Depends(get_token)
     ):
-        # Extract all headers from incoming HTTP request
+        sse_method = request.get("method", "unknown")
+        sse_request_id = request.get("id", "-")
+        sse_params = request.get("params", {})
+        sse_tool_name = sse_params.get("name") if sse_method == "tools/call" else None
+        # Log argument keys only (not values) to avoid leaking secrets in logs.
+        sse_tool_args_keys = sorted(sse_params.get("arguments", {}).keys()) if sse_method == "tools/call" else []
+
+        sse_ctx = f"server={package_name} method={sse_method} req_id={sse_request_id}"
+        if sse_tool_name:
+            sse_ctx += f" tool={sse_tool_name} args={sse_tool_args_keys}"
+
         all_headers = dict(http_request.headers)
 
-        # Only inject headers if this is a tools/call request
-        if request.get("method") == "tools/call" and all_headers:
-            params = request.get("params", {})
-            if "arguments" not in params:
-                params["arguments"] = {}
-            params["arguments"]["headers"] = all_headers
-            request["params"] = params
+        # Inject caller HTTP headers into tool arguments so downstream tools can
+        # forward auth tokens to their own APIs (same as the /mcp endpoint).
+        if sse_method == "tools/call" and all_headers:
+            if "arguments" not in sse_params:
+                sse_params["arguments"] = {}
+            sse_params["arguments"]["headers"] = all_headers
+            request["params"] = sse_params
 
-        # Initialize metrics collector
         collector = MetricsCollector(package_name)
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
+            t0 = time.monotonic()
             try:
-                # Track streaming session when generator starts
                 collector.increment_active_streams()
+                # LOGGED: [mcp.sse.start] — connection established, about to write to stdin.
+                logger.info(f"[mcp.sse.start] {sse_ctx}")
 
-                # Send request to MCP server (offloaded to worker thread)
                 msg = json.dumps(request)
 
                 def _send_request(payload: str) -> None:
@@ -605,32 +823,63 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
 
                 await asyncio.to_thread(_send_request, msg)
 
-                # Read from stdout and stream as SSE events
+                chunk_count = 0
                 while True:
                     response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
                     if not response_line:
+                        # CAUGHT: [mcp.sse.timeout] — no chunk arrived within 30s.
+                        # Root cause: generator inside the tool paused or stalled.
+                        # Could be a slow paginated API, a DB cursor that stopped
+                        # yielding, or the tool waiting on an external event.
+                        elapsed_ms = int((time.monotonic() - t0) * 1000)
+                        logger.warning(f"[mcp.sse.timeout] {sse_ctx} elapsed={elapsed_ms}ms chunks_received={chunk_count}")
                         break
 
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
+                    chunk_count += 1
+                    # LOGGED: [mcp.sse.chunk] DEBUG — each individual chunk from stdout.
+                    logger.debug(f"[mcp.sse.chunk] {sse_ctx} chunk={chunk_count} data={response_line.strip()[:200]}")
                     yield f"data: {response_line.strip()}\n\n"
 
                     try:
                         response_data = json.loads(response_line)
+                        if "error" in response_data:
+                            # CAUGHT: [mcp.sse.error_response] — tool sent an error chunk.
+                            # The stream is still forwarded to the client so it can handle
+                            # the error. Root cause: same as [mcp.error_response] on /mcp.
+                            err = response_data["error"]
+                            err_code = err.get("code") if isinstance(err, dict) else None
+                            err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                            elapsed_ms = int((time.monotonic() - t0) * 1000)
+                            logger.warning(f"[mcp.sse.error_response] {sse_ctx} elapsed={elapsed_ms}ms code={err_code} message={err_msg}")
+                            completion_status = "error_response"
                         if "result" in response_data:
+                            # LOGGED: [mcp.sse.ok] — tool signalled completion normally.
+                            elapsed_ms = int((time.monotonic() - t0) * 1000)
+                            logger.info(f"[mcp.sse.ok] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count}")
                             break
                     except json.JSONDecodeError:
+                        # Non-JSON lines are silently forwarded — some tools stream
+                        # progress text before the final JSON result.
                         pass
 
             except (BrokenPipeError, OSError) as e:
+                # CAUGHT: [mcp.sse.process_died] — subprocess exited while streaming.
+                # Root cause: OOM kill, unhandled exception, or SIGKILL during a long
+                # streaming operation. Check process.returncode and stderr drainer buffer.
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
                 completion_status = "broken_pipe"
-                collector.record_error("io_error")
+                collector.record_error("process_died")
+                logger.error(f"[mcp.sse.process_died] {sse_ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
                 yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
             except Exception as e:
+                # CAUGHT: [mcp.sse.error] — unexpected exception inside the generator.
+                # Could be an asyncio.CancelledError (client disconnected), MemoryError,
+                # or a bug in gateway code. Full traceback is included.
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
                 completion_status = "error"
-                # Send error as SSE event
+                logger.error(f"[mcp.sse.error] {sse_ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics
                 collector.record_streaming_request(completion_status)
                 collector.decrement_active_streams()
 
@@ -776,28 +1025,72 @@ def create_dynamic_router(server_manager):
         token: str = Depends(get_token)
     ):
         """
-        Proxy JSON-RPC requests to running MCP servers.
+        Dynamic proxy for the server-manager mode (fmcp serve).
+        Dispatches JSON-RPC requests to named running MCP subprocesses.
 
-        Args:
-            server_name: Name of the target server
-            request: JSON-RPC request payload
+        Error map (what you'll see in logs → root cause):
+          [mcp.not_found]      WARN  — server_name not in server_manager.processes.
+                                       Root cause: server was never started, failed to start,
+                                       or was stopped/evicted by the idle-timeout cleanup.
+                                       Check [mcp.process_dead] or startup logs.
+          [mcp.process_dead]   ERROR — process.poll() returned non-None before the request.
+                                       Root cause: subprocess exited between the last request
+                                       and this one. returncode and stderr tail are included.
+                                       Common causes: OOM, unhandled top-level exception,
+                                       external SIGKILL.
+          [mcp.call]           INFO  — request accepted and about to be forwarded.
+          [mcp.ok]             INFO  — successful response; elapsed time included.
+          [mcp.slow]           WARN  — successful but took >5s. Not an error yet, but worth
+                                       investigating the downstream tool or API.
+          [mcp.timeout]        WARN  — subprocess alive but no stdout within 30s.
+                                       Root cause: tool blocked (DB query, HTTP call, etc.).
+          [mcp.process_died]   ERROR — BrokenPipeError on stdin write.
+                                       Root cause: subprocess crashed during this request.
+                                       stderr tail is attached to the log line.
+          [mcp.bad_response]   ERROR — stdout line is not valid JSON.
+                                       Root cause: tool wrote plain text/traceback to stdout.
+                                       Check stderr drainer logs for the real error.
+          [mcp.error_response] WARN  — JSON-RPC error in response body.
+                                       Tool is alive but the operation failed. Error code guide:
+                                         -32603 Internal error → DB down, API 5xx, unhandled exception
+                                         -32602 Invalid params → wrong argument types/missing args
+                                         -32601 Method not found → wrong tool name
+          [mcp.error]          ERROR — unexpected exception (asyncio cancel, MemoryError, etc.).
         """
-        # Initialize metrics collector
         collector = MetricsCollector(server_name)
         method = request.get("method", "unknown")
 
-        # Track request with metrics (RequestTimer automatically records all errors)
-        # HTTPExceptions raised within this context are tracked as error_type="network_error"
-        # via RequestTimer.__exit__ → _categorize_error() → name-based matching
+        # RequestTimer automatically records error_type="network_error" for HTTPExceptions
+        # via RequestTimer.__exit__ → _categorize_error() → name-based matching.
+        params = request.get("params", {})
+        tool_name = params.get("name") if method == "tools/call" else None
+        # Log argument keys only (not values) to avoid leaking secrets in logs.
+        tool_args_keys = sorted(params.get("arguments", {}).keys()) if method == "tools/call" else []
+        request_id = request.get("id", "-")
+
+        ctx = f"server={server_name} method={method} req_id={request_id}"
+        if tool_name:
+            ctx += f" tool={tool_name} args={tool_args_keys}"
+
+        t0 = time.monotonic()
+
         with RequestTimer(collector, method):
-            # Check if server exists
+            # CAUGHT: [mcp.not_found] — server not in the live process registry.
+            # Could mean: server never started, startup failed, or idle-timeout evicted it.
             if server_name not in server_manager.processes:
+                logger.warning(f"[mcp.not_found] {ctx} — server not registered")
                 raise HTTPException(404, f"Server '{server_name}' not found or not running")
 
             process = server_manager.processes[server_name]
 
-            # Check if process is alive
+            # CAUGHT: [mcp.process_dead] — process exited before this request arrived.
+            # Attaches stderr tail so you can see the crash reason without digging through files.
             if process.poll() is not None:
+                stderr_tail = get_stderr_tail(server_name, 20)
+                logger.error(
+                    f"[mcp.process_dead] {ctx} — process exited (returncode={process.returncode})"
+                    + (f"\nstderr:\n{stderr_tail}" if stderr_tail else "")
+                )
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
             # The subprocess is already initialized at startup by initialize_mcp_server().
@@ -819,30 +1112,83 @@ def create_dynamic_router(server_manager):
             if method == "notifications/initialized":
                 return Response(status_code=204)
 
-            # ── SSE transport: forward via HTTP ─────────────────────────────
+            # LOGGED: [mcp.call] — last log before entering blocking I/O.
+            # If you see [mcp.call] with no follow-up, the request is in-flight.
+            logger.info(f"[mcp.call] {ctx}")
+
+            # ── SSE transport: server is an HTTP-based SSE subprocess, not a stdio process.
+            # Forward the request over HTTP instead of stdin/stdout.
             if isinstance(process, SseSubprocessHandle):
                 with RequestTimer(collector, request.get("method", "unknown")):
                     response = await _proxy_to_sse_server(process.sse_url, request)
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=sse_http")
                     return JSONResponse(content=response)
-            # ── stdio transport continues below ─────────────────────────────
+            # ── stdio transport: write to stdin, read from stdout ────────────
 
             try:
-                # Send request to MCP server
                 msg = json.dumps(request)
                 try:
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
+                    # CAUGHT: [mcp.process_died] — stdin write failed mid-request.
+                    # Root cause: subprocess crashed between process.poll() check above
+                    # and this write. Attaches stderr tail for crash diagnosis.
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    stderr_tail = get_stderr_tail(server_name, 20)
+                    logger.error(
+                        f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — broken pipe: {e}"
+                        + (f"\nstderr:\n{stderr_tail}" if stderr_tail else "")
+                    )
                     raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                # Read response with timeout — readline_with_timeout uses select() so the
-                # thread returns after 30s instead of blocking forever (no stuck threads).
+                # readline_with_timeout uses select() internally so this thread returns
+                # after 30s instead of blocking forever (no stuck asyncio worker threads).
                 response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
-                if not response_line:
-                    raise HTTPException(504, f"Server '{server_name}' timed out responding")
-                response_data = json.loads(response_line)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
 
-                # Update last_used_at for idle cleanup
+                if not response_line:
+                    # CAUGHT: [mcp.timeout] — subprocess alive but produced no output in 30s.
+                    # Root cause: tool is blocking on a slow operation. Common causes:
+                    #   • DB connection with no query timeout (hangs indefinitely on refusal)
+                    #   • HTTP call to an API with no timeout set
+                    #   • Tool waiting on a lock or resource held by another process
+                    logger.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within 30s")
+                    raise HTTPException(504, f"Server '{server_name}' timed out responding")
+
+                # LOGGED: [mcp.slow] — response arrived but took over 5s.
+                # Not an error but a leading indicator that the downstream is degraded.
+                if elapsed_ms > 5000:
+                    logger.warning(f"[mcp.slow] {ctx} elapsed={elapsed_ms}ms — response was slow")
+
+                try:
+                    response_data = json.loads(response_line)
+                except json.JSONDecodeError as e:
+                    # CAUGHT: [mcp.bad_response] — stdout line is not valid JSON.
+                    # Root cause: tool printed a plain-text error, Python traceback,
+                    # or startup message to stdout instead of stderr.
+                    # Next step: look at stderr drainer logs for the real error text.
+                    logger.error(f"[mcp.bad_response] {ctx} elapsed={elapsed_ms}ms — invalid JSON: {e} raw={response_line[:300]}")
+                    raise HTTPException(502, "MCP server returned invalid JSON")
+
+                if "error" in response_data:
+                    # CAUGHT: [mcp.error_response] — tool ran but returned a JSON-RPC error.
+                    # Tool is alive; this is an application-level failure, not a gateway failure.
+                    # Error code guide:
+                    #   -32603 Internal error  → unhandled exception in the tool
+                    #                            (DB refused connection, API 5xx, file missing, etc.)
+                    #   -32602 Invalid params  → wrong argument types or missing required args
+                    #   -32601 Method not found → tool name doesn't exist on this server
+                    #   -32700 Parse error     → gateway sent malformed JSON (should not happen)
+                    err = response_data["error"]
+                    err_code = err.get("code") if isinstance(err, dict) else None
+                    err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                    logger.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
+                else:
+                    logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
+
+                # Update last_used_at so the idle-timeout cleanup doesn't evict this server.
                 await server_manager.update_last_used(server_name)
 
                 return JSONResponse(content=response_data)
@@ -850,7 +1196,11 @@ def create_dynamic_router(server_manager):
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Error proxying request to '{server_name}': {e}")
+                # CAUGHT: [mcp.error] — unexpected exception not covered above.
+                # Could be asyncio.CancelledError (client disconnected mid-request),
+                # MemoryError, or a bug in gateway code. Full traceback is included.
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                logger.error(f"[mcp.error] {ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
                 raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/sse", tags=["mcp"])
@@ -894,13 +1244,32 @@ def create_dynamic_router(server_manager):
         if process.poll() is not None:
             raise HTTPException(503, f"Server '{server_name}' is not running")
 
+        # SSE error map for this path (server_manager mode):
+        #   [mcp.sse.start]          INFO  — connection open, stdin write about to happen.
+        #   [mcp.sse.chunk]          DEBUG — each chunk forwarded from subprocess stdout.
+        #   [mcp.sse.keepalive]      DEBUG — 30s readline timeout with process still alive;
+        #                                    a keep-alive comment is sent to hold the connection.
+        #                                    Repeated keepalives mean the tool is running slowly.
+        #   [mcp.sse.process_exited] ERROR — readline returned "" and process.poll() is set.
+        #                                    Root cause: subprocess crashed mid-stream.
+        #                                    returncode and stderr tail are attached.
+        #   [mcp.sse.error_response] WARN  — tool sent a JSON-RPC error chunk in the stream.
+        #                                    Root cause: same as [mcp.error_response] above.
+        #   [mcp.sse.non_json]       DEBUG — non-JSON line received; silently forwarded.
+        #                                    Some tools stream progress text before the final result.
+        #   [mcp.sse.ok]             INFO  — "result" chunk received; stream completed normally.
+        #   sse_proxy_error (metric) — httpx error when forwarding to SseSubprocessHandle.
+        #                              Root cause: the external SSE HTTP server is unreachable
+        #                              or returned an HTTP error (connect timeout, 5xx, etc.).
+        #   [mcp.sse.error]          ERROR — unexpected exception in the generator.
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
             try:
-                # Track streaming session when generator starts executing
                 collector.increment_active_streams()
 
                 # ── SSE transport: forward to external HTTP server ───────────
+                # SseSubprocessHandle wraps an MCP server that speaks HTTP/SSE natively
+                # (e.g. servers started with supergateway). Forward via httpx instead of stdin.
                 if isinstance(process, SseSubprocessHandle):
                     import httpx
                     messages_url = f"{process.sse_url.rstrip('/')}/messages/"
@@ -922,10 +1291,13 @@ def create_dynamic_router(server_manager):
                                         except json.JSONDecodeError:
                                             pass
                     except Exception as e:
+                        # CAUGHT: sse_proxy_error metric — httpx failed to reach the
+                        # external SSE server. Could be a connect timeout (server not
+                        # ready), HTTP 5xx, or network-level failure.
                         completion_status = "error"
                         collector.record_error("sse_proxy_error")
                         yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                    return  # done for SSE — don't fall through to stdin path
+                    return  # done for SSE transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
                 msg = json.dumps(request)
@@ -933,56 +1305,88 @@ def create_dynamic_router(server_manager):
                     process.stdin.write(msg + "\n")
                     process.stdin.flush()
                 except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
+                    # CAUGHT: broken_pipe on stdin write at stream start.
+                    # completion_status intentionally differs from fluidmcp_errors_total
+                    # error_type="io_error": the metrics label tracks how the stream
+                    # *ended* (for per-stream analysis), while the counter tracks the
+                    # global rate of I/O failures (for alerting). Same root cause,
+                    # different observability scope.
                     completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
                     collector.record_error("io_error")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
 
+                sse_method = request.get("method", "unknown")
+                sse_params = request.get("params", {})
+                sse_tool_name = sse_params.get("name") if sse_method == "tools/call" else None
+                # Log argument keys only (not values) to avoid leaking secrets in logs.
+                sse_tool_args_keys = sorted(sse_params.get("arguments", {}).keys()) if sse_method == "tools/call" else []
+                sse_ctx = f"server={server_name} method={sse_method} req_id={request.get('id', '-')}"
+                if sse_tool_name:
+                    sse_ctx += f" tool={sse_tool_name} args={sse_tool_args_keys}"
+                t0_sse = time.monotonic()
+                chunk_count = 0
+
+                # LOGGED: [mcp.sse.start] — stdin write succeeded; reading loop begins.
+                logger.info(f"[mcp.sse.start] {sse_ctx}")
+
                 while True:
                     response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
                     if not response_line:
-                        # Distinguish real EOF (process exited) from a timeout
+                        elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                         if process.poll() is not None:
-                            logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
+                            # CAUGHT: [mcp.sse.process_exited] — subprocess exited mid-stream.
+                            # readline returned "" because the pipe closed (EOF), not a timeout.
+                            # process.returncode tells you how it died; stderr tail shows why.
+                            stderr_tail = get_stderr_tail(server_name, 20)
+                            logger.error(
+                                f"[mcp.sse.process_exited] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count} returncode={process.returncode}"
+                                + (f"\nstderr:\n{stderr_tail}" if stderr_tail else "")
+                            )
                             break
-                        # Timeout with process still alive — send SSE keep-alive and continue
-                        logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
+                        # Process is alive but produced nothing in 30s — send a keep-alive
+                        # SSE comment to prevent the client from closing the connection.
+                        # LOGGED: [mcp.sse.keepalive] DEBUG — expected for slow-running tools.
+                        logger.debug(f"[mcp.sse.keepalive] {sse_ctx} elapsed={elapsed_ms}ms")
                         yield ": keep-alive\n\n"
                         continue
 
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
+                    chunk_count += 1
+                    # LOGGED: [mcp.sse.chunk] DEBUG — one line from subprocess stdout.
+                    logger.debug(f"[mcp.sse.chunk] {sse_ctx} chunk={chunk_count} data={response_line.strip()[:200]}")
                     yield f"data: {response_line.strip()}\n\n"
 
-                    # Check if response is final
                     try:
                         response_data = json.loads(response_line)
+                        if "error" in response_data:
+                            # CAUGHT: [mcp.sse.error_response] — tool sent an error chunk.
+                            # Stream is still forwarded to the client.
+                            # Root cause: same as [mcp.error_response] on the /mcp endpoint.
+                            err = response_data["error"]
+                            err_code = err.get("code") if isinstance(err, dict) else None
+                            err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            logger.warning(f"[mcp.sse.error_response] {sse_ctx} elapsed={elapsed_ms}ms code={err_code} message={err_msg}")
+                            completion_status = "error_response"
                         if "result" in response_data:
+                            # LOGGED: [mcp.sse.ok] — tool completed normally.
+                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            logger.info(f"[mcp.sse.ok] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count}")
                             break
                     except json.JSONDecodeError:
-                        # Non-JSON lines are expected in the stream; ignore them but continue reading
-                        logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
+                        # LOGGED: [mcp.sse.non_json] DEBUG — non-JSON line silently forwarded.
+                        # Some tools stream plain-text progress messages before the final result.
+                        logger.debug(f"[mcp.sse.non_json] {sse_ctx} chunk={chunk_count} raw={response_line.strip()[:200]}")
 
             except Exception as e:
+                # CAUGHT: [mcp.sse.error] — unexpected exception in the generator.
+                # Could be asyncio.CancelledError (client disconnected), MemoryError,
+                # or a bug in gateway code. Full traceback is included.
+                elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                 completion_status = "error"
-                logger.exception(f"Error in event generator for '{server_name}': {e}")
+                logger.error(f"[mcp.sse.error] {sse_ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
-                # Record streaming metrics
                 collector.record_streaming_request(completion_status)
                 collector.decrement_active_streams()
 
