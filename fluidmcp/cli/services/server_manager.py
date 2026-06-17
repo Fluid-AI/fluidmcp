@@ -858,21 +858,24 @@ class ServerManager:
             else:
                 preexec_fn = None
 
-            # Spawn subprocess
+            # Spawn subprocess — always use PIPE for stderr so the drainer can
+            # forward lines to both the terminal and the log file.
+            log_fh = None if stderr_fh == subprocess.PIPE else stderr_fh
             process = subprocess.Popen(
                 cmd_list,
                 cwd=str(working_dir),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=stderr_fh,
+                stderr=subprocess.PIPE,
                 env=env,
                 text=True,
                 bufsize=1,
                 preexec_fn=preexec_fn
             )
 
-            # Drain stderr continuously so the 64 KB pipe buffer never fills
-            start_stderr_drainer(process, id)
+            # Drain stderr continuously so the 64 KB pipe buffer never fills.
+            # log_fh mirrors lines to the on-disk log file as well.
+            start_stderr_drainer(process, id, log_fh=log_fh)
 
             # Give process a moment to start
             await asyncio.sleep(0.5)

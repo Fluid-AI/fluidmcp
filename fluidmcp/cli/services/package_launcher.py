@@ -27,12 +27,16 @@ security = HTTPBearer(auto_error=False)
 _stderr_buffers: Dict[str, tuple] = {}  # key -> (threading.Lock, deque)
 
 
-def start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
+def start_stderr_drainer(process: subprocess.Popen, key: str, log_fh=None) -> None:
     """Start a daemon thread that continuously drains stderr for a subprocess.
 
     Without this, any MCP server that writes enough to stderr will fill the
     64 KB OS pipe buffer and freeze — stopping stdout communication too.
     The buffer stores the last 200 lines for crash diagnosis.
+
+    Args:
+        log_fh: Optional open file handle to mirror stderr lines into (in addition
+                to the in-memory buffer and terminal logger).
     """
     lock = threading.Lock()
     buf: deque = deque(maxlen=200)
@@ -40,11 +44,19 @@ def start_stderr_drainer(process: subprocess.Popen, key: str) -> None:
 
     def _drain() -> None:
         try:
+            if process.stderr is None:
+                return
             for line in process.stderr:
                 stripped = line.rstrip()
                 with lock:
                     buf.append(stripped)
-                logger.debug("[{}] stderr: {}", key, stripped)
+                logger.info("[{}] {}", key, stripped)
+                if log_fh:
+                    try:
+                        log_fh.write(line)
+                        log_fh.flush()
+                    except (OSError, ValueError):
+                        pass
         except (OSError, ValueError):
             pass  # Expected: pipe closed when process exits
         except Exception:
