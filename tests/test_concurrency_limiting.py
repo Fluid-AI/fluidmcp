@@ -12,7 +12,6 @@ Covers:
 - null/invalid max_concurrent_requests values
 - Enriched GET /api/servers/{id} response shape
 """
-import asyncio
 import pytest
 from unittest.mock import MagicMock
 from fastapi import FastAPI
@@ -23,6 +22,7 @@ from fluidmcp.cli.repositories import InMemoryBackend
 from fluidmcp.cli.services.server_manager import ServerManager
 from fluidmcp.cli.services.metrics import get_registry
 from fluidmcp.cli.services.package_launcher import create_dynamic_router
+from fluidmcp.cli.services.network_handle import NetworkSubprocessHandle
 
 
 def make_app(server_manager, db_manager):
@@ -213,6 +213,29 @@ class TestConcurrencyLimiting429:
 
         sem.release()
 
+    @pytest.mark.asyncio
+    async def test_429_network_transport_when_semaphore_full(self, server_manager):
+        """Network/SSE-backed servers must also be blocked when the semaphore is full."""
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": 1}
+        sem = server_manager.get_concurrency_semaphore("srv")
+        await sem.acquire()
+
+        # Build a real NetworkSubprocessHandle with a mock subprocess so isinstance() passes
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = None  # looks alive for the fast-path check
+        handle = NetworkSubprocessHandle(fake_proc, base_url="http://127.0.0.1:9999", transport="sse")
+        server_manager.processes["srv"] = handle
+
+        app = self._make_mcp_app(server_manager)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/srv/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+
+        assert resp.status_code == 429
+        assert resp.headers.get("Retry-After") == "1"
+
+        sem.release()
+        await handle.aclose()
+
 
 # ---------------------------------------------------------------------------
 # null / invalid max_concurrent_requests config values
@@ -275,3 +298,19 @@ class TestEnrichedServerGetShape:
         crashes = data["crashes"]
         assert "crashes_last_hour" in crashes, "field renamed from crashes_per_hour"
         assert "crashes_per_hour" not in crashes, "old field name must not be present"
+
+    def test_unauthenticated_request_is_rejected(self, server_manager, backend, monkeypatch):
+        """GET /api/servers/{id} must require auth in secure mode — it returns protected debug telemetry."""
+        monkeypatch.setenv("FMCP_SECURE_MODE", "true")
+        monkeypatch.setenv("FMCP_BEARER_TOKEN", "test-secret")
+        _register(server_manager, "srv")
+        # Build a client with no Authorization header
+        app = FastAPI()
+        app.include_router(router, prefix="/api")
+        app.state.server_manager = server_manager
+        app.state.db_manager = backend
+        unauthed_client = TestClient(app, raise_server_exceptions=False)
+        resp = unauthed_client.get("/api/servers/srv")
+        assert resp.status_code in (401, 403), (
+            f"Expected 401/403 for unauthenticated request, got {resp.status_code}"
+        )
