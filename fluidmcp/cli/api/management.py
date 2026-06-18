@@ -1935,7 +1935,7 @@ async def get_server_resources(request: Request, id: str, token: str = Depends(g
 # ==================== Concurrency Endpoint ====================
 
 @router.get("/servers/{id}/concurrency")
-async def get_server_concurrency(request: Request, id: str):
+async def get_server_concurrency(request: Request, id: str, token: str = Depends(get_token)):
     """
     Return the concurrency limit and current active request count for a server.
 
