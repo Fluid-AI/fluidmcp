@@ -1,7 +1,6 @@
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-  # Attach these labels to every time series scraped here
+  scrape_interval: 10s       # uniform interval — all jobs inherit this
+  evaluation_interval: 10s   # alert rules evaluated at the same cadence
   external_labels:
     cluster: "docker-compose"
     environment: "local"
@@ -13,7 +12,6 @@ scrape_configs:
   # ── FluidMCP Gateway ──────────────────────────────────────────────────────
   - job_name: "fluidmcp"
     metrics_path: "/metrics"
-    scrape_interval: 10s
     scrape_timeout: 5s
     # If FMCP_BEARER_TOKEN is set, uncomment:
     # bearer_token: "your-token-here"

@@ -31,10 +31,23 @@ from .context import set_trace_id, set_span_id, clear_context
 
 
 class TraceContextMiddleware(BaseHTTPMiddleware):
-    """Inject OTEL trace/span IDs into per-request contextvars for log correlation."""
+    """Inject OTEL trace/span IDs into per-request contextvars for log correlation.
+
+    This middleware must be added AFTER instrument_fastapi_app() so that it sits
+    inside the FastAPIInstrumentor ASGI wrapper. Starlette reverses add_middleware()
+    order, meaning the last-added middleware runs first. By adding this one after
+    FastAPIInstrumentor wraps the app, the OTEL span is already active when
+    dispatch() is called, so span.is_recording() reliably returns True.
+
+    The trace/span IDs are extracted after call_next() returns so we capture the
+    span that was active during the entire request, not just at entry.
+    """
 
     async def dispatch(self, request, call_next):
         clear_context()
+        response = await call_next(request)
+        # Extract trace context after call_next: the OTEL span is guaranteed
+        # to exist here because FastAPIInstrumentor creates it around call_next.
         try:
             from opentelemetry import trace
             span = trace.get_current_span()
@@ -45,7 +58,7 @@ class TraceContextMiddleware(BaseHTTPMiddleware):
                     set_span_id(format(ctx.span_id, "016x"))
         except Exception as exc:
             logger.debug(f"TraceContextMiddleware: {exc}")
-        return await call_next(request)
+        return response
 
 
 import sentry_sdk
@@ -190,9 +203,6 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_headers=["*"],
     )
 
-    # Inject OTEL trace/span IDs into contextvars for log correlation
-    app.add_middleware(TraceContextMiddleware)
-
     # Add request size limiting middleware for security (prevent DoS via large payloads)
     # Max 10MB request body size (configurable via MAX_REQUEST_SIZE_MB env var)
     # Uses Starlette's exception to ensure proper handling and prevent bypassing
@@ -302,6 +312,12 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     # Instrument FastAPI with OpenTelemetry — captures HTTP request spans.
     # Must be called AFTER all routes/middleware are registered.
     instrument_fastapi_app(app)
+
+    # TraceContextMiddleware is added AFTER instrument_fastapi_app() so it sits
+    # inside the FastAPIInstrumentor ASGI wrapper in the middleware stack.
+    # Starlette reverses add_middleware() order (last-added runs outermost), so
+    # adding this here means the OTEL span is already active when dispatch() runs.
+    app.add_middleware(TraceContextMiddleware)
 
     # Add a health check endpoint with actual connection verification
     # NOTE: /health (and /metrics below) are intentionally NOT instrumented with

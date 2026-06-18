@@ -1,6 +1,6 @@
 groups:
   - name: fluidmcp
-    interval: 30s
+    interval: 10s
     rules:
       - alert: FluidMCPDown
         expr: up{job="fluidmcp"} == 0

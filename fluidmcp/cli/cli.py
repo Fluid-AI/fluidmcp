@@ -59,10 +59,12 @@ def _json_log_sink(message) -> None:
 
 
 def configure_logger(verbose: bool = False) -> None:
-    """Configure loguru.  JSON output when LOG_FORMAT=json (default in containers)."""
+    """Configure loguru. Default: human-readable colour output for local dev.
+    Set LOG_FORMAT=json (done automatically in docker-compose.observability.yml)
+    to emit structured JSON lines consumed by Promtail → Loki."""
     logger.remove()
     log_level = "DEBUG" if verbose else "INFO"
-    log_format = os.getenv("LOG_FORMAT", "json").lower()
+    log_format = os.getenv("LOG_FORMAT", "text").lower()
 
     if log_format == "json":
         # Structured JSON lines — consumed by Promtail → Loki
