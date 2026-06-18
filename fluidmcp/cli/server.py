@@ -16,6 +16,8 @@ import secrets
 from pathlib import Path
 from uvicorn import Config, Server
 
+from starlette.middleware.base import BaseHTTPMiddleware
+
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
 from .services.server_manager import ServerManager, MCPHealthMonitor
 from .api.management import router as mgmt_router
@@ -24,6 +26,39 @@ from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
+from .otel import init_otel, instrument_fastapi_app
+from .context import set_trace_id, set_span_id, clear_context
+
+
+class TraceContextMiddleware(BaseHTTPMiddleware):
+    """Inject OTEL trace/span IDs into per-request contextvars for log correlation.
+
+    This middleware must be added AFTER instrument_fastapi_app() so that it sits
+    inside the FastAPIInstrumentor ASGI wrapper. Starlette reverses add_middleware()
+    order, meaning the last-added middleware runs first. By adding this one after
+    FastAPIInstrumentor wraps the app, the OTEL span is already active when
+    dispatch() is called, so span.is_recording() reliably returns True.
+
+    The trace/span IDs are extracted after call_next() returns so we capture the
+    span that was active during the entire request, not just at entry.
+    """
+
+    async def dispatch(self, request, call_next):
+        clear_context()
+        response = await call_next(request)
+        # Extract trace context after call_next: the OTEL span is guaranteed
+        # to exist here because FastAPIInstrumentor creates it around call_next.
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span and span.is_recording():
+                ctx = span.get_span_context()
+                if ctx.is_valid:
+                    set_trace_id(format(ctx.trace_id, "032x"))
+                    set_span_id(format(ctx.span_id, "016x"))
+        except Exception as exc:
+            logger.debug(f"TraceContextMiddleware: {exc}")
+        return response
 
 
 import sentry_sdk
@@ -130,6 +165,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     Returns:
         FastAPI application
     """
+    # Initialize OpenTelemetry before app creation so FastAPI instrumentation
+    # can wrap the ASGI app at the correct layer.
+    init_otel()
+
     app = FastAPI(
         title="FluidMCP Gateway",
         description="Unified gateway for MCP servers with dynamic management",
@@ -270,6 +309,16 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
 
+    # Instrument FastAPI with OpenTelemetry — captures HTTP request spans.
+    # Must be called AFTER all routes/middleware are registered.
+    instrument_fastapi_app(app)
+
+    # TraceContextMiddleware is added AFTER instrument_fastapi_app() so it sits
+    # inside the FastAPIInstrumentor ASGI wrapper in the middleware stack.
+    # Starlette reverses add_middleware() order (last-added runs outermost), so
+    # adding this here means the OTEL span is already active when dispatch() runs.
+    app.add_middleware(TraceContextMiddleware)
+
     # Add a health check endpoint with actual connection verification
     # NOTE: /health (and /metrics below) are intentionally NOT instrumented with
     # RequestTimer to avoid high-cardinality metric pollution from frequent load
@@ -393,6 +442,10 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     @app.on_event("shutdown")
     async def shutdown_event():
         """Clean up resources on application shutdown."""
+        # Flush and close OTEL spans before anything else closes
+        from .otel import shutdown_otel
+        await asyncio.to_thread(shutdown_otel)
+
         from .api.management import cleanup_http_client
         await cleanup_http_client()
         logger.info("HTTP client cleaned up")

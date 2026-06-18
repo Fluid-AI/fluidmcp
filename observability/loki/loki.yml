@@ -1,0 +1,45 @@
+# auth_enabled: false is safe for local development only.
+# For any non-local deployment, enable authentication and place Loki
+# behind a reverse proxy with TLS. See: https://grafana.com/docs/loki/latest/operations/authentication/
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+# Schema for chunk storage
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# Retention: keep logs for 7 days
+limits_config:
+  retention_period: 168h
+  # Allow high-cardinality JSON fields from FluidMCP
+  max_label_names_per_series: 30
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+# Enable structured metadata for trace correlation
+feature_flags:
+  otlp_incoming_metadata: true

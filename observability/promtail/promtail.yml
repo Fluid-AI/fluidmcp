@@ -1,0 +1,75 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+
+  # ── Docker json-file log scrape (no Docker socket required) ───────────────
+  # Docker writes each container's stdout/stderr to:
+  #   /var/lib/docker/containers/<container-id>/<container-id>-json.log
+  # Promtail reads these files directly (volume mounted :ro).
+  # The Docker json-file driver wraps each line in:
+  #   {"log":"<line>\n","stream":"stdout","time":"<rfc3339nano>","attrs":{"tag":"<tag>"}}
+  # We unwrap it with the "docker" pipeline stage and use the "tag" attr
+  # (set to "fluidmcp" in the compose logging.options) to identify the container.
+  - job_name: docker_files
+
+    static_configs:
+      - targets: ["localhost"]
+        labels:
+          job: docker
+          # Glob picks up every container's log file on this host
+          __path__: /var/lib/docker/containers/*/*-json.log
+
+    pipeline_stages:
+      # Unwrap the Docker json-file envelope
+      - docker: {}
+
+      # Extract the "tag" attribute injected by the Docker json-file driver
+      - json:
+          expressions:
+            docker_tag: attrs.tag
+
+      # Promote the tag as a label so we can filter by container
+      - labels:
+          container:
+            source: docker_tag
+
+      # ── FluidMCP-specific enrichment ──────────────────────────────────────
+      # FluidMCP emits structured JSON log lines (LOG_FORMAT=json).
+      # Parse them and promote level, trace_id, span_id.
+      - match:
+          selector: '{container="fluidmcp"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  trace_id: trace_id
+                  span_id: span_id
+                  msg: message
+                  svc: service
+
+            # level as a Loki label enables filter-by-severity in Grafana
+            - labels:
+                level:
+                  source: level
+                service:
+                  source: svc
+
+            # Structured metadata carries trace/span IDs into Loki's index
+            # enabling the Loki → Tempo "View Trace" button per log line
+            - structured_metadata:
+                traceID:
+                  source: trace_id
+                spanID:
+                  source: span_id
+
+            # Replace the raw JSON envelope with the human-readable message
+            - output:
+                source: msg
