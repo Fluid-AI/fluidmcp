@@ -51,7 +51,7 @@ def start_stderr_drainer(process: subprocess.Popen, key: str, log_fh=None) -> No
                 stripped = line.rstrip()
                 with lock:
                     buf.append(stripped)
-                logger.info("[{}] {}", key, stripped)
+                logger.debug("[{}] {}", key, stripped)
                 if log_fh:
                     try:
                         log_fh.write(line)
@@ -873,7 +873,10 @@ def create_mcp_router(package_name: str, process: subprocess.Popen, process_lock
                             completion_status = "error_response"
                         if "result" in response_data:
                             # LOGGED: [mcp.sse.ok] — tool signalled completion normally.
+                            # Reset completion_status to "success" even if a prior chunk
+                            # contained an error — the stream ended cleanly with a result.
                             elapsed_ms = int((time.monotonic() - t0) * 1000)
+                            completion_status = "success"
                             logger.info(f"[mcp.sse.ok] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count}")
                             break
                     except json.JSONDecodeError:
@@ -1176,9 +1179,11 @@ def create_dynamic_router(server_manager):
                     logger.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within 30s")
                     raise HTTPException(504, f"Server '{server_name}' timed out responding")
 
-                # LOGGED: [mcp.slow] — response arrived but took over 5s.
+                # LOGGED: [mcp.slow] — response arrived but took longer than threshold.
                 # Not an error but a leading indicator that the downstream is degraded.
-                if elapsed_ms > 5000:
+                # Configure via FMCP_SLOW_REQUEST_MS (default: 5000).
+                _slow_ms = int(os.getenv("FMCP_SLOW_REQUEST_MS", "5000"))
+                if elapsed_ms > _slow_ms:
                     logger.warning(f"[mcp.slow] {ctx} elapsed={elapsed_ms}ms — response was slow")
 
                 try:
@@ -1319,6 +1324,17 @@ def create_dynamic_router(server_manager):
                     return  # done for SSE transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
+                sse_method = request.get("method", "unknown")
+                sse_params = request.get("params", {})
+                sse_tool_name = sse_params.get("name") if sse_method == "tools/call" else None
+                # Log argument keys only (not values) to avoid leaking secrets in logs.
+                sse_tool_args_keys = sorted(sse_params.get("arguments", {}).keys()) if sse_method == "tools/call" else []
+                sse_ctx = f"server={server_name} method={sse_method} req_id={request.get('id', '-')}"
+                if sse_tool_name:
+                    sse_ctx += f" tool={sse_tool_name} args={sse_tool_args_keys}"
+                t0_sse = time.monotonic()
+                chunk_count = 0
+
                 msg = json.dumps(request)
                 try:
                     process.stdin.write(msg + "\n")
@@ -1330,21 +1346,12 @@ def create_dynamic_router(server_manager):
                     # *ended* (for per-stream analysis), while the counter tracks the
                     # global rate of I/O failures (for alerting). Same root cause,
                     # different observability scope.
+                    elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                     completion_status = "broken_pipe"
                     collector.record_error("io_error")
+                    logger.error(f"[mcp.sse.process_died] {sse_ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
                     yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
-
-                sse_method = request.get("method", "unknown")
-                sse_params = request.get("params", {})
-                sse_tool_name = sse_params.get("name") if sse_method == "tools/call" else None
-                # Log argument keys only (not values) to avoid leaking secrets in logs.
-                sse_tool_args_keys = sorted(sse_params.get("arguments", {}).keys()) if sse_method == "tools/call" else []
-                sse_ctx = f"server={server_name} method={sse_method} req_id={request.get('id', '-')}"
-                if sse_tool_name:
-                    sse_ctx += f" tool={sse_tool_name} args={sse_tool_args_keys}"
-                t0_sse = time.monotonic()
-                chunk_count = 0
 
                 # LOGGED: [mcp.sse.start] — stdin write succeeded; reading loop begins.
                 logger.info(f"[mcp.sse.start] {sse_ctx}")
@@ -1389,7 +1396,10 @@ def create_dynamic_router(server_manager):
                             completion_status = "error_response"
                         if "result" in response_data:
                             # LOGGED: [mcp.sse.ok] — tool completed normally.
+                            # Reset completion_status to "success" even if a prior chunk
+                            # contained an error — the stream ended cleanly with a result.
                             elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            completion_status = "success"
                             logger.info(f"[mcp.sse.ok] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count}")
                             break
                     except json.JSONDecodeError:
