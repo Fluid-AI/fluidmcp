@@ -43,6 +43,7 @@ def start_stderr_drainer(process: subprocess.Popen, key: str, log_fh=None) -> No
     _stderr_buffers[key] = (lock, buf)
 
     def _drain() -> None:
+        nonlocal log_fh
         try:
             if process.stderr is None:
                 return
@@ -56,7 +57,13 @@ def start_stderr_drainer(process: subprocess.Popen, key: str, log_fh=None) -> No
                         log_fh.write(line)
                         log_fh.flush()
                     except (OSError, ValueError):
-                        pass
+                        # Permanent write failure (disk full, file deleted) — close and
+                        # stop trying so the FD is not leaked for the process lifetime.
+                        try:
+                            log_fh.close()
+                        except Exception:
+                            pass
+                        log_fh = None
         except (OSError, ValueError):
             pass  # Expected: pipe closed when process exits
         except Exception:

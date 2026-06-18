@@ -883,16 +883,11 @@ class ServerManager:
             # Check if process is still alive
             if process.poll() is not None:
                 self._close_stderr_log(id)
-                if stderr_fh == subprocess.PIPE and process.stderr:
-                    try:
-                        _, stderr_output = await asyncio.wait_for(
-                            asyncio.to_thread(process.communicate),
-                            timeout=2.0
-                        )
-                    except Exception:
-                        stderr_output = ""
-                else:
-                    stderr_output = self._read_crash_stderr(id)
+                # Always read crash output from the log file or the drainer's
+                # in-memory buffer — never call process.communicate() here since
+                # the drainer thread is already consuming the same PIPE, and a
+                # concurrent communicate() would race/deadlock against it.
+                stderr_output = self._read_crash_stderr(id) or get_stderr_tail(id)
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 clear_stderr_buffer(id)
                 return None
@@ -1085,13 +1080,8 @@ class ServerManager:
             if process.poll() is not None:
                 stderr_out = self._read_crash_stderr(id) or ""
                 # If no rotated log available, fall back to the subprocess pipe
-                if not stderr_out and getattr(process, "stderr", None) is not None:
-                    try:
-                        _, stderr_data = process.communicate(timeout=0.5)
-                        if stderr_data:
-                            stderr_out = stderr_data.decode(errors="replace") if isinstance(stderr_data, (bytes, bytearray)) else str(stderr_data)
-                    except Exception:
-                        pass
+                if not stderr_out:
+                    stderr_out = get_stderr_tail(id)
                 logger.error(
                     f"[{id}] SSE server process died before HTTP became ready "
                     f"(exit code {process.returncode}). stderr: {stderr_out[:500]}"
