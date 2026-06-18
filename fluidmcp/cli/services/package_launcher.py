@@ -557,48 +557,16 @@ def create_dynamic_router(server_manager):
             if process is None:
                 raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-            # ── Network transport: forward via HTTP ──────────────────────────
-            if isinstance(process, NetworkSubprocessHandle):
-                logger.info(f"[mcp.call] {ctx}")
-                if process.transport == "http":
-                    try:
-                        _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
-                        response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
-                    except HTTPException as exc:
-                        if exc.status_code == 504:
-                            # Gateway timed out — subprocess is unresponsive. Fire-and-forget
-                            # an immediate restart without waiting for the next health-check cycle.
-                            monitor = getattr(server_manager, "_health_monitor", None)
-                            if monitor is not None:
-                                logger.error(
-                                    f"[RESTART] '{server_name}' — 504 from subprocess, "
-                                    f"scheduling immediate restart"
-                                )
-                                asyncio.ensure_future(monitor.trigger_restart(server_name))
-                            else:
-                                logger.error(
-                                    f"[RESTART] '{server_name}' — 504 from subprocess but "
-                                    f"health monitor not available, server will not auto-restart"
-                                )
-                        raise
-                else:
-                    response = await _proxy_to_sse_server(process.base_url, request)
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=network")
-                return JSONResponse(content=response)
-            # ── stdio transport continues below ─────────────────────────────
-
             # Check if process is alive (stdio only — SSE/Network handles don't have .poll())
             if not isinstance(process, (SseSubprocessHandle, NetworkSubprocessHandle)) and process.poll() is not None:
                 raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
 
-            # Concurrency limiting — try a non-blocking acquire; drop with 429 if full
+            # Concurrency limiting — wraps ALL transport paths (network, SSE, stdio).
+            # sem._value peek is safe in asyncio: no await between check and acquire,
+            # so no other coroutine can interleave and take the slot.
             sem = server_manager.get_concurrency_semaphore(server_name)
             if sem is not None:
-                # sem._value peek is safe in asyncio: no await between check and acquire,
-                # so no other coroutine can interleave and take the slot.
-                acquired = sem._value > 0
-                if not acquired:
+                if sem._value <= 0:
                     collector.record_rejected_request("concurrency_limit")
                     return Response(
                         content='{"error":"too many concurrent requests"}',
@@ -609,13 +577,38 @@ def create_dynamic_router(server_manager):
                 await sem.acquire()
 
             try:
+                # ── Network transport: forward via HTTP ──────────────────────────
+                if isinstance(process, NetworkSubprocessHandle):
+                    if process.transport == "http":
+                        try:
+                            _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
+                            response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
+                        except HTTPException as exc:
+                            if exc.status_code == 504:
+                                monitor = getattr(server_manager, "_health_monitor", None)
+                                if monitor is not None:
+                                    logger.error(
+                                        f"[RESTART] '{server_name}' — 504 from subprocess, "
+                                        f"scheduling immediate restart"
+                                    )
+                                    asyncio.ensure_future(monitor.trigger_restart(server_name))
+                                else:
+                                    logger.error(
+                                        f"[RESTART] '{server_name}' — 504 from subprocess but "
+                                        f"health monitor not available, server will not auto-restart"
+                                    )
+                            raise
+                    else:
+                        response = await _proxy_to_sse_server(process.base_url, request)
+                    return JSONResponse(content=response)
+
                 # ── SSE transport: forward via HTTP ─────────────────────────────
                 if isinstance(process, SseSubprocessHandle):
                     with RequestTimer(collector, request.get("method", "unknown")):
                         response = await _proxy_to_sse_server(process.sse_url, request)
                         return JSONResponse(content=response)
-                # ── stdio transport continues below ─────────────────────────────
 
+                # ── stdio transport ──────────────────────────────────────────────
                 try:
                     # Send request to MCP server
                     msg = json.dumps(request)

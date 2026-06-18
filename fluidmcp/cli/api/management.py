@@ -1110,7 +1110,7 @@ async def list_servers(request: Request, enabled_only: bool = True, include_dele
 
 
 @router.get("/servers/{id}")
-async def get_server(request: Request, id: str):
+async def get_server(request: Request, id: str, token: str = Depends(get_token)):
     """
     Get detailed information about a specific server, including debug fields:
     - status: state, pid, uptime, restart_count, stability, exit_code
