@@ -236,6 +236,46 @@ class TestConcurrencyLimiting429:
         sem.release()
         await handle.aclose()
 
+    @pytest.mark.asyncio
+    async def test_429_tools_list_when_semaphore_full(self, server_manager):
+        """GET /{server}/mcp/tools/list must return 429 when the semaphore is full."""
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": 1}
+        sem = server_manager.get_concurrency_semaphore("srv")
+        await sem.acquire()
+
+        fake_process = MagicMock()
+        fake_process.poll.return_value = None
+        server_manager.processes["srv"] = fake_process
+
+        app = self._make_mcp_app(server_manager)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/srv/mcp/tools/list")
+
+        assert resp.status_code == 429
+        assert resp.headers.get("Retry-After") == "1"
+
+        sem.release()
+
+    @pytest.mark.asyncio
+    async def test_429_tools_call_when_semaphore_full(self, server_manager):
+        """POST /{server}/mcp/tools/call must return 429 when the semaphore is full."""
+        server_manager.configs["srv"] = {"id": "srv", "max_concurrent_requests": 1}
+        sem = server_manager.get_concurrency_semaphore("srv")
+        await sem.acquire()
+
+        fake_process = MagicMock()
+        fake_process.poll.return_value = None
+        server_manager.processes["srv"] = fake_process
+
+        app = self._make_mcp_app(server_manager)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/srv/mcp/tools/call", json={"name": "read_file", "arguments": {}})
+
+        assert resp.status_code == 429
+        assert resp.headers.get("Retry-After") == "1"
+
+        sem.release()
+
 
 # ---------------------------------------------------------------------------
 # null / invalid max_concurrent_requests config values
@@ -299,18 +339,29 @@ class TestEnrichedServerGetShape:
         assert "crashes_last_hour" in crashes, "field renamed from crashes_per_hour"
         assert "crashes_per_hour" not in crashes, "old field name must not be present"
 
+    def _make_unauthed_client(self, server_manager, backend):
+        app = FastAPI()
+        app.include_router(router, prefix="/api")
+        app.state.server_manager = server_manager
+        app.state.db_manager = backend
+        return TestClient(app, raise_server_exceptions=False)
+
     def test_unauthenticated_request_is_rejected(self, server_manager, backend, monkeypatch):
         """GET /api/servers/{id} must require auth in secure mode — it returns protected debug telemetry."""
         monkeypatch.setenv("FMCP_SECURE_MODE", "true")
         monkeypatch.setenv("FMCP_BEARER_TOKEN", "test-secret")
         _register(server_manager, "srv")
-        # Build a client with no Authorization header
-        app = FastAPI()
-        app.include_router(router, prefix="/api")
-        app.state.server_manager = server_manager
-        app.state.db_manager = backend
-        unauthed_client = TestClient(app, raise_server_exceptions=False)
-        resp = unauthed_client.get("/api/servers/srv")
+        resp = self._make_unauthed_client(server_manager, backend).get("/api/servers/srv")
         assert resp.status_code in (401, 403), (
             f"Expected 401/403 for unauthenticated request, got {resp.status_code}"
+        )
+
+    def test_concurrency_endpoint_unauthenticated_is_rejected(self, server_manager, backend, monkeypatch):
+        """GET /api/servers/{id}/concurrency must require auth in secure mode."""
+        monkeypatch.setenv("FMCP_SECURE_MODE", "true")
+        monkeypatch.setenv("FMCP_BEARER_TOKEN", "test-secret")
+        _register(server_manager, "srv")
+        resp = self._make_unauthed_client(server_manager, backend).get("/api/servers/srv/concurrency")
+        assert resp.status_code in (401, 403), (
+            f"Expected 401/403 for unauthenticated concurrency request, got {resp.status_code}"
         )
