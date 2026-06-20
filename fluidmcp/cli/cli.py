@@ -573,7 +573,7 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
 
             # Mount unified dynamic router (same as serve)
             mcp_router = create_dynamic_router(server_manager)
-            app.include_router(mcp_router, tags=["mcp"])
+            app.include_router(mcp_router, prefix=os.environ.get("MCP_ROOT_PATH", ""), tags=["mcp"])
 
             _add_health_endpoint(app)
             _add_metrics_endpoint(app)

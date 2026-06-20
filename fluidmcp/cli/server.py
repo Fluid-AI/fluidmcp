@@ -264,7 +264,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
-    app.include_router(mcp_router, tags=["mcp"])
+    app.include_router(mcp_router, prefix=os.environ.get("MCP_ROOT_PATH", ""), tags=["mcp"])
     logger.info("Dynamic MCP router mounted")
 
     # Serve frontend from backend (single-port deployment)
