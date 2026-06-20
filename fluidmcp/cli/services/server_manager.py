@@ -923,12 +923,19 @@ class ServerManager:
             else:
                 preexec_fn = None
 
+            # Network-transport servers communicate over HTTP, not stdout.
+            # Redirect stdout to DEVNULL to prevent pipe buffer deadlock:
+            # if nobody reads the pipe, the 64KB kernel buffer fills and the
+            # subprocess blocks on the next write, freezing the event loop.
+            is_network_transport = config.get("transport") in ("sse", "http")
+            stdout_target = subprocess.DEVNULL if is_network_transport else subprocess.PIPE
+
             # Spawn subprocess
             process = subprocess.Popen(
                 cmd_list,
                 cwd=str(working_dir),
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=stdout_target,
                 stderr=stderr_fh,
                 env=env,
                 text=True,
