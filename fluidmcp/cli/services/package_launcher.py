@@ -20,6 +20,12 @@ from .network_handle import NetworkSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
+
+def _sanitize_log_field(value: str, max_len: int = 200) -> str:
+    """Strip CR/LF/control characters from user-controlled values before logging."""
+    sanitized = "".join(ch for ch in str(value) if ch.isprintable() and ch not in "\r\n")
+    return sanitized[:max_len]
+
 # Max seconds to wait for an MCP subprocess to write a response line.
 # Overridable via the MCP_READ_TIMEOUT environment variable.
 #
@@ -527,11 +533,11 @@ def create_dynamic_router(server_manager):
         """
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
-        method = request.get("method", "unknown")
+        method = _sanitize_log_field(request.get("method", "unknown"))
         params = request.get("params", {})
-        tool_name = params.get("name") if method == "tools/call" else None
-        tool_args_keys = sorted(params.get("arguments", {}).keys()) if method == "tools/call" else []
-        request_id = request.get("id", "-")
+        tool_name = _sanitize_log_field(params.get("name", "")) if method == "tools/call" else None
+        tool_args_keys = [_sanitize_log_field(k) for k in sorted(params.get("arguments", {}).keys())] if method == "tools/call" else []
+        request_id = _sanitize_log_field(str(request.get("id", "-")))
 
         ctx = f"server={server_name} method={method} req_id={request_id}"
         if tool_name:
@@ -715,11 +721,11 @@ def create_dynamic_router(server_manager):
                     return  # done for network transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
-                sse_method = request.get("method", "unknown")
+                sse_method = _sanitize_log_field(request.get("method", "unknown"))
                 sse_params = request.get("params", {})
-                sse_tool_name = sse_params.get("name") if sse_method == "tools/call" else None
-                sse_tool_args_keys = sorted(sse_params.get("arguments", {}).keys()) if sse_method == "tools/call" else []
-                sse_ctx = f"server={server_name} method={sse_method} req_id={request.get('id', '-')}"
+                sse_tool_name = _sanitize_log_field(sse_params.get("name", "")) if sse_method == "tools/call" else None
+                sse_tool_args_keys = [_sanitize_log_field(k) for k in sorted(sse_params.get("arguments", {}).keys())] if sse_method == "tools/call" else []
+                sse_ctx = f"server={server_name} method={sse_method} req_id={_sanitize_log_field(str(request.get('id', '-')))}"
                 if sse_tool_name:
                     sse_ctx += f" tool={sse_tool_name} args={sse_tool_args_keys}"
                 t0_sse = time.monotonic()
