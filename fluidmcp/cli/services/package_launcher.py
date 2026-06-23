@@ -542,7 +542,26 @@ def create_dynamic_router(server_manager):
             # ── Network transport: forward via HTTP ──────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
                 if process.transport == "http":
-                    response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
+                    try:
+                        _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
+                        response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
+                    except HTTPException as exc:
+                        if exc.status_code == 504:
+                            # Gateway timed out — subprocess is unresponsive. Fire-and-forget
+                            # an immediate restart without waiting for the next health-check cycle.
+                            monitor = getattr(server_manager, "_health_monitor", None)
+                            if monitor is not None:
+                                logger.error(
+                                    f"[RESTART] '{server_name}' — 504 from subprocess, "
+                                    f"scheduling immediate restart"
+                                )
+                                asyncio.ensure_future(monitor.trigger_restart(server_name))
+                            else:
+                                logger.error(
+                                    f"[RESTART] '{server_name}' — 504 from subprocess but "
+                                    f"health monitor not available, server will not auto-restart"
+                                )
+                        raise
                 else:
                     response = await _proxy_to_sse_server(process.base_url, request)
                 return JSONResponse(content=response)
