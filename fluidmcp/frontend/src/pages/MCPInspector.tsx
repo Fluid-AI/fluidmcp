@@ -2418,6 +2418,11 @@ export default function MCPInspector() {
                         setSelectedResourceUri(null);
                         setResourceContent(null);
                       }}
+                      onSelectTemplate={(uri) => {
+                        setSelectedResourceUri(uri);
+                        setResourceContent(null);
+                        setTemplateParams({});
+                      }}
                       onLoadResource={async (resource, uri) => {
                         setSelectedResourceUri(resource.uri);
                         setResourceContent(null);

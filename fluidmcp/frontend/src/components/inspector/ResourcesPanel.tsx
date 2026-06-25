@@ -19,6 +19,7 @@ interface ResourcesPanelProps {
   setTemplateParams: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onRefresh: () => void;
   onLoadResource: (resource: MCPResource, uri: string) => void;
+  onSelectTemplate: (uri: string) => void;
 }
 
 export const ResourcesPanel: React.FC<ResourcesPanelProps> = ({
@@ -32,6 +33,7 @@ export const ResourcesPanel: React.FC<ResourcesPanelProps> = ({
   setTemplateParams,
   onRefresh,
   onLoadResource,
+  onSelectTemplate,
 }) => {
   const loadResource = (resource: MCPResource, uri: string) => {
     onLoadResource(resource, uri);
@@ -80,9 +82,7 @@ export const ResourcesPanel: React.FC<ResourcesPanelProps> = ({
                   key={r.uri}
                   onClick={() => {
                     if (r.isTemplate) {
-                      setSelectedResourceUri(r.uri);
-                      setResourceContent(null);
-                      setTemplateParams({});
+                      onSelectTemplate(r.uri);
                     } else {
                       if (isSelected) return;
                       loadResource(r, r.uri);
