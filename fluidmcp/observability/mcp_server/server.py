@@ -431,6 +431,15 @@ async def correlate(trace_id: str, log_window: str = "1h") -> Dict[str, Any]:
           - logs: log lines matching the trace_id
           - log_count: total matching log lines
     """
+    if not re.fullmatch(r"[0-9a-f]{32}", trace_id):
+        return CorrelationResult(
+            trace_id=trace_id,
+            trace=None,
+            logs=[],
+            log_count=0,
+            error="Invalid trace_id: must be exactly 32 lowercase hex characters",
+        ).model_dump()
+
     # Fetch trace and logs in parallel
     trace_task = asyncio.create_task(tempo_client.get_trace(trace_id=trace_id))
     logs_task = asyncio.create_task(
