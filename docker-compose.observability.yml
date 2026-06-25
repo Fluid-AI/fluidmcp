@@ -33,7 +33,7 @@ services:
       dockerfile: Dockerfile
     container_name: fluidmcp
     ports:
-      - "8099:8099"
+      - "127.0.0.1:8099:8099"
     environment:
       PORT: "8099"
       PYTHONUNBUFFERED: "1"
@@ -41,7 +41,7 @@ services:
       OTEL_ENABLED: "true"
       OTEL_SERVICE_NAME: "fluidmcp"
       OTEL_SERVICE_VERSION: "2.0.0"
-      OTEL_EXPORTER: "jaeger"
+      OTEL_EXPORTER: "otlp"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4318/v1/traces"
       # FMCP_BEARER_TOKEN: "${FMCP_BEARER_TOKEN}"
       # MONGODB_URI: "mongodb://mongo:27017"

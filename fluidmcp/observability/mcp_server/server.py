@@ -25,6 +25,7 @@ Environment variables:
 """
 import asyncio
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -210,6 +211,15 @@ async def get_trace(trace_id: str) -> Dict[str, Any]:
     Returns:
         TraceDetail with full span list, total duration, and error count.
     """
+    if not re.fullmatch(r"[0-9a-f]{32}", trace_id):
+        return TraceDetail(
+            trace_id=trace_id,
+            duration_ms=0,
+            span_count=0,
+            error_count=0,
+            spans=[],
+            error="Invalid trace_id: must be exactly 32 lowercase hex characters",
+        ).model_dump()
     result = await tempo_client.get_trace(trace_id=trace_id)
     return result.model_dump()
 
@@ -266,7 +276,12 @@ async def get_service_health() -> Dict[str, Any]:
             resp.raise_for_status()
             health = resp.json()
         gateway_status = health.get("status", "unknown")
-        db_status = health.get("database", {}).get("status", "unknown")
+        db_raw = health.get("database", {})
+        # /health may return database as a plain string or as {"status": "..."} object
+        if isinstance(db_raw, str):
+            db_status = db_raw
+        else:
+            db_status = db_raw.get("status", "unknown")
     except Exception as exc:
         gateway_status = f"unreachable ({exc})"
 

@@ -31,8 +31,11 @@ def _parse_duration_ms(duration_str: str) -> float:
     try:
         if duration_str.endswith("ms"):
             return float(duration_str[:-2])
-        if duration_str.endswith("µs") or duration_str.endswith("us"):
-            return float(duration_str.rstrip("µs").rstrip("us")) / 1000
+        # µs is a two-byte UTF-8 sequence; check it before the plain "us" fallback
+        if duration_str.endswith("µs"):
+            return float(duration_str[: -len("µs")]) / 1000
+        if duration_str.endswith("us"):
+            return float(duration_str[:-2]) / 1000
         if duration_str.endswith("s"):
             return float(duration_str[:-1]) * 1000
         return float(duration_str)
