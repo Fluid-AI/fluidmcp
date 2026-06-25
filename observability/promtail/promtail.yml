@@ -29,8 +29,9 @@ scrape_configs:
 
       # Drop all logs that are NOT from the fluidmcp container before storage.
       # This prevents other Docker containers' logs from being queryable via Loki/MCP.
-      - drop:
+      - match:
           selector: '{container!="fluidmcp"}'
+          action: drop
 
       - match:
           selector: '{container="fluidmcp"}'
