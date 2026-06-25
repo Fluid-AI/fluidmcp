@@ -1,7 +1,6 @@
 import React from "react";
-import { apiClient } from "@/services/api";
 
-interface PromptsPanel {
+interface PromptsPanelProps {
   prompts: any[];
   promptsLoading: boolean;
   selectedPrompt: any | null;
@@ -11,13 +10,11 @@ interface PromptsPanel {
   promptResult: any;
   setPromptResult: (r: any) => void;
   promptResultLoading: boolean;
-  setPromptResultLoading: (v: boolean) => void;
-  sessionId: string;
-  selectedServerId: string;
   onRefresh: () => void;
+  onGetPrompt: () => void;
 }
 
-export const PromptsPanel: React.FC<PromptsPanel> = ({
+export const PromptsPanel: React.FC<PromptsPanelProps> = ({
   prompts,
   promptsLoading,
   selectedPrompt,
@@ -27,9 +24,8 @@ export const PromptsPanel: React.FC<PromptsPanel> = ({
   promptResult,
   setPromptResult,
   promptResultLoading,
-  setPromptResultLoading,
-  sessionId,
   onRefresh,
+  onGetPrompt,
 }) => {
   return (
     <div style={{ display: "flex", flex: 1, minHeight: 0, gap: "0.75rem", overflow: "hidden" }}>
@@ -157,19 +153,7 @@ export const PromptsPanel: React.FC<PromptsPanel> = ({
               )}
               <button
                 disabled={promptResultLoading}
-                onClick={async () => {
-                  if (!sessionId) return;
-                  setPromptResultLoading(true);
-                  setPromptResult(null);
-                  try {
-                    const res = await apiClient.getInspectorPrompt(sessionId, selectedPrompt.name, promptArgs);
-                    setPromptResult(res);
-                  } catch (e: any) {
-                    setPromptResult({ error: e.message });
-                  } finally {
-                    setPromptResultLoading(false);
-                  }
-                }}
+                onClick={onGetPrompt}
                 style={{
                   marginTop: "0.6rem", padding: "0.35rem 0.85rem",
                   background: "rgba(99,102,241,0.85)", border: "none", borderRadius: "6px",

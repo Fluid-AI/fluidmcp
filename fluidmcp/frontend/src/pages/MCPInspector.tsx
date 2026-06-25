@@ -8,6 +8,10 @@ import { JsonResultView } from '../components/result/JsonResultView';
 import { McpContentView } from '../components/result/McpContentView';
 import { WidgetSandbox } from '../components/WidgetSandbox';
 import { PanelGroup, Panel , PanelResizeHandle} from 'react-resizable-panels';
+import { LogsPanel } from '../components/inspector/LogsPanel';
+import { ResourcesPanel } from '../components/inspector/ResourcesPanel';
+import { PromptsPanel } from '../components/inspector/PromptsPanel';
+import { AddServerModal } from '../components/inspector/AddServerModal';
 
 // Compact collapsible result bubble for chat mode
 function ChatResultBubble({ result, initialView = "formatted", hideTabSwitcher = false }: { result: unknown; initialView?: "formatted" | "raw"; hideTabSwitcher?: boolean }) {
@@ -1660,150 +1664,24 @@ export default function MCPInspector() {
                   minSize={12}
                   style={{ display: "flex", flexDirection: "column", overflow: "hidden" }}
                 >
-                  <div
-                    style={{
-                      border: "1px solid rgba(63,63,70,0.5)",
-                      borderRadius: "0.75rem",
-                      background: "linear-gradient(to bottom right, rgba(39,39,42,0.9), rgba(24,24,27,0.9))",
-                      height: "100%",
-                      boxSizing: "border-box",
-                      display: "flex",
-                      flexDirection: "column",
-                      overflow: "hidden",
+                  <LogsPanel
+                    logs={logs}
+                    filteredLogs={filteredLogs}
+                    logFilter={logFilter}
+                    setLogFilter={setLogFilter}
+                    logSearch={logSearch}
+                    setLogSearch={setLogSearch}
+                    logsRef={logsRef}
+                    selectedServerId={selectedServerId}
+                    hasSession={!!selectedServer?.session_id}
+                    logColors={logColors}
+                    onClear={() => {
+                      if (!selectedServerId) return;
+                      const currentOffset = logsClearedOffsetRef.current[selectedServerId] ?? 0;
+                      logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [selectedServerId]: currentOffset + logs.length };
+                      setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }));
                     }}
-                  >
-                    {/* Logs header */}
-                    <div style={{ padding: "0.6rem 0.75rem 0.4rem", flexShrink: 0, borderBottom: "1px solid rgba(63,63,70,0.3)" }}>
-                      {/* Title row */}
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.4rem" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          <span style={{ fontSize: "0.75rem", fontWeight: "600", color: "rgba(255,255,255,0.7)", fontFamily: "monospace" }}>LOGS</span>
-                          {logs.length > 0 && (
-                            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)" }}>
-                              {filteredLogs.length}{logFilter !== 'all' ? `/${logs.length}` : ''}
-                            </span>
-                          )}
-                        </div>
-                        {logs.length > 0 && selectedServerId && (
-                          <button
-                            onClick={() => {
-                              if (!selectedServerId) return;
-                              const currentOffset = logsClearedOffsetRef.current[selectedServerId] ?? 0;
-                              logsClearedOffsetRef.current = { ...logsClearedOffsetRef.current, [selectedServerId]: currentOffset + logs.length };
-                              setLogsByServer(prev => ({ ...prev, [selectedServerId]: [] }));
-                            }}
-                            style={{ fontSize: "0.65rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.35)", cursor: "pointer", padding: "0.1rem 0.35rem" }}
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </div>
-                      {/* Log search input */}
-                      <div style={{ position: "relative", marginBottom: "0.35rem" }}>
-                        <input
-                          value={logSearch}
-                          onChange={e => setLogSearch(e.target.value)}
-                          placeholder="Search logs..."
-                          style={{
-                            width: "100%", boxSizing: "border-box",
-                            padding: "0.2rem 1.4rem 0.2rem 1.5rem",
-                            fontSize: "0.68rem", borderRadius: "4px",
-                            border: "1px solid rgba(63,63,70,0.5)",
-                            background: "rgba(0,0,0,0.25)", color: "#fff",
-                          }}
-                        />
-                        <span style={{ position: "absolute", left: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", pointerEvents: "none" }}>⌕</span>
-                        {logSearch && (
-                          <span
-                            onClick={() => setLogSearch('')}
-                            style={{ position: "absolute", right: "0.4rem", top: "50%", transform: "translateY(-50%)", fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", cursor: "pointer", lineHeight: 1 }}
-                          >✕</span>
-                        )}
-                      </div>
-                      {/* Filter pills */}
-                      <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
-                        {([
-                          { key: 'all', label: 'All', count: logs.length },
-                          { key: 'connect', label: 'Connect', count: logs.filter(l => l.type === 'connect').length },
-                          { key: 'tool_call', label: 'Tool', count: logs.filter(l => l.type === 'tool_call' || l.type === 'tool_result').length },
-                          { key: 'tool_error', label: 'Error', count: logs.filter(l => l.type === 'tool_error').length },
-                          { key: 'chat', label: 'Chat', count: logs.filter(l => l.type === 'chat').length },
-                        ] as const).map(pill => (
-                          <button
-                            key={pill.key}
-                            onClick={() => setLogFilter(pill.key)}
-                            style={{
-                              fontSize: "0.65rem", padding: "0.1rem 0.45rem",
-                              borderRadius: "999px", cursor: "pointer",
-                              border: logFilter === pill.key ? "1px solid rgba(99,102,241,0.7)" : "1px solid rgba(63,63,70,0.5)",
-                              background: logFilter === pill.key ? "rgba(99,102,241,0.2)" : "transparent",
-                              color: logFilter === pill.key ? "rgba(165,180,252,1)" : "rgba(255,255,255,0.4)",
-                              fontFamily: "monospace",
-                              transition: "all 0.1s",
-                            }}
-                          >
-                            {pill.label}{pill.count > 0 ? ` (${pill.count})` : ''}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Logs content */}
-                    <div
-                      ref={logsRef}
-                      style={{
-                        flex: 1,
-                        overflowY: "auto",
-                        overflowX: "hidden",
-                        padding: "0.5rem 0.75rem",
-                        fontFamily: "monospace",
-                        fontSize: "0.78rem",
-                      }}
-                    >
-                      {filteredLogs.length === 0 ? (
-                        <div style={{
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          height: "100%", color: "rgba(255,255,255,0.35)", fontSize: "0.8rem",
-                        }}>
-                          {selectedServer?.session_id ? (logFilter !== 'all' || logSearch ? "No matching logs" : "No logs yet") : "Connect to a server to see logs"}
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                          {[...filteredLogs].reverse().map((log, i) => {
-                            const color = logColors[log.type] || "#9ca3af";
-                            return (
-                              <div
-                                key={i}
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns: "70px 90px 1fr",
-                                  gap: "0.5rem",
-                                  paddingBottom: "3px",
-                                  borderBottom: "1px solid rgba(63,63,70,0.2)",
-                                  borderLeft: `2px solid ${color}`,
-                                  paddingLeft: "0.4rem",
-                                  alignItems: "start",
-                                }}
-                              >
-                                {/* Time */}
-                                <span style={{ opacity: 0.45, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {new Date(log.timestamp).toLocaleTimeString()}
-                                </span>
-                                {/* Type */}
-                                <span style={{ color, fontWeight: "700", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {log.type.toUpperCase()}
-                                </span>
-                                {/* Message */}
-                                <span style={{ color: "rgba(255,255,255,0.75)", wordBreak: "break-word", overflowWrap: "break-word" }}>
-                                  {log.message}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  />
                 </Panel>
 
               </PanelGroup>
@@ -2525,222 +2403,40 @@ export default function MCPInspector() {
 
                   {/* ── RESOURCES MODE ─── */}
                   {mode === "resources" && selectedServer?.status === "connected" && (
-                    <div style={{ display: "flex", flex: 1, minHeight: 0, gap: "0.75rem", overflow: "hidden" }}>
-
-                      {/* Resource list — left column */}
-                      <div style={{
-                        width: "38%", flexShrink: 0, display: "flex", flexDirection: "column",
-                        border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.5rem", overflow: "hidden",
-                      }}>
-                        <div style={{
-                          padding: "0.5rem 0.75rem", borderBottom: "1px solid rgba(63,63,70,0.4)",
-                          display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
-                          background: "rgba(24,24,27,0.6)",
-                        }}>
-                          <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "rgba(255,255,255,0.7)" }}>
-                            Resources {resources.length > 0 && <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>({resources.length})</span>}
-                          </span>
-                          <button
-                            onClick={() => {
-                              if (!selectedServer?.session_id || !selectedServerId) return;
-                              setResourcesByServer(prev => { const next = { ...prev }; delete next[selectedServerId]; return next; });
-                              setSelectedResourceUri(null);
-                              setResourceContent(null);
-                            }}
-                            style={{ fontSize: "0.65rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.35)", cursor: "pointer", padding: "0.1rem 0.35rem" }}
-                          >
-                            Refresh
-                          </button>
-                        </div>
-                        <div style={{ flex: 1, overflowY: "auto" }}>
-                          {resourcesLoading ? (
-                            <div style={{ padding: "1rem", textAlign: "center", color: "rgba(255,255,255,0.35)", fontSize: "0.75rem" }}>
-                              Loading resources...
-                            </div>
-                          ) : resources.length === 0 ? (
-                            <div style={{ padding: "1rem", textAlign: "center", color: "rgba(255,255,255,0.35)", fontSize: "0.75rem" }}>
-                              No resources found
-                            </div>
-                          ) : (
-                            resources.map(r => {
-                              const isSelected = r.uri === selectedResourceUri;
-                              // Extract {param} names from template URIs
-                              const templateVars = r.isTemplate
-                                ? (r.uri.match(/\{([^}]+)\}/g) ?? []).map(v => v.slice(1, -1))
-                                : [];
-                              const loadResource = async (uri: string) => {
-                                setSelectedResourceUri(r.uri);
-                                setResourceContent(null);
-                                setResourceContentLoading(true);
-                                try {
-                                  const res = await apiClient.readInspectorResource(selectedServer.session_id!, uri);
-                                  const first = res?.contents?.[0];
-                                  setResourceContent({
-                                    text: first?.text ?? first?.content ?? res?.text ?? "",
-                                    blob: first?.blob,
-                                    mimeType: first?.mimeType ?? r.mimeType ?? "text/plain",
-                                  });
-                                } catch {
-                                  setResourceContent({ text: "Failed to load resource.", mimeType: "text/plain" });
-                                } finally {
-                                  setResourceContentLoading(false);
-                                }
-                              };
-                              return (
-                                <div
-                                  key={r.uri}
-                                  onClick={() => {
-                                    if (r.isTemplate) {
-                                      // Just select — param form shows in right panel
-                                      setSelectedResourceUri(r.uri);
-                                      setResourceContent(null);
-                                      setTemplateParams({});
-                                    } else {
-                                      if (isSelected) return;
-                                      loadResource(r.uri);
-                                    }
-                                  }}
-                                  style={{
-                                    padding: "0.55rem 0.75rem",
-                                    borderBottom: "1px solid rgba(63,63,70,0.25)",
-                                    cursor: "pointer",
-                                    background: isSelected ? "rgba(99,102,241,0.12)" : "transparent",
-                                    borderLeft: isSelected ? "2px solid rgba(99,102,241,0.8)" : "2px solid transparent",
-                                    transition: "background 0.1s",
-                                  }}
-                                >
-                                  <div style={{ fontSize: "0.75rem", fontWeight: 600, color: isSelected ? "rgba(165,180,252,1)" : "rgba(255,255,255,0.85)", wordBreak: "break-all" }}>
-                                    {r.name || r.uri}
-                                  </div>
-                                  {r.name && (
-                                    <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.1rem", wordBreak: "break-all" }}>
-                                      {r.uri}
-                                    </div>
-                                  )}
-                                  <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.25rem", flexWrap: "wrap" }}>
-                                    {r.mimeType && (
-                                      <span style={{
-                                        fontSize: "0.6rem", padding: "0.05rem 0.35rem", borderRadius: "999px",
-                                        background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)",
-                                        color: "rgba(165,180,252,0.8)", fontFamily: "monospace",
-                                      }}>
-                                        {r.mimeType}
-                                      </span>
-                                    )}
-                                    {r.isTemplate && (
-                                      <span style={{
-                                        fontSize: "0.6rem", padding: "0.05rem 0.35rem", borderRadius: "999px",
-                                        background: "rgba(245,158,11,0.15)", border: "1px solid rgba(245,158,11,0.3)",
-                                        color: "rgba(252,211,77,0.9)", fontFamily: "monospace",
-                                      }}>
-                                        template
-                                      </span>
-                                    )}
-                                  </div>
-                                  {r.description && (
-                                    <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>
-                                      {r.description}
-                                    </div>
-                                  )}
-                                  {/* Inline param form for selected templates */}
-                                  {r.isTemplate && isSelected && templateVars.length > 0 && (
-                                    <div
-                                      onClick={e => e.stopPropagation()}
-                                      style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}
-                                    >
-                                      {templateVars.map(v => (
-                                        <div key={v} style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                                          <span style={{ fontSize: "0.65rem", color: "rgba(252,211,77,0.8)", fontFamily: "monospace", flexShrink: 0 }}>{v}</span>
-                                          <input
-                                            value={templateParams[v] ?? ""}
-                                            onChange={e => setTemplateParams(prev => ({ ...prev, [v]: e.target.value }))}
-                                            placeholder={v}
-                                            style={{
-                                              flex: 1, padding: "0.2rem 0.4rem", fontSize: "0.7rem",
-                                              background: "rgba(0,0,0,0.3)", border: "1px solid rgba(63,63,70,0.6)",
-                                              borderRadius: "4px", color: "#fff",
-                                            }}
-                                          />
-                                        </div>
-                                      ))}
-                                      <button
-                                        onClick={() => {
-                                          let uri = r.uri;
-                                          templateVars.forEach(v => { uri = uri.replace(`{${v}}`, encodeURIComponent(templateParams[v] ?? "")); });
-                                          loadResource(uri);
-                                        }}
-                                        style={{
-                                          marginTop: "0.15rem", padding: "0.25rem 0.5rem", fontSize: "0.7rem",
-                                          background: "rgba(99,102,241,0.8)", border: "none", borderRadius: "4px",
-                                          color: "#fff", cursor: "pointer", alignSelf: "flex-end",
-                                        }}
-                                      >
-                                        Load
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Resource content viewer — right column */}
-                      <div style={{
-                        flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
-                        border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.5rem", overflow: "hidden",
-                      }}>
-                        {!selectedResourceUri ? (
-                          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: "0.8rem" }}>
-                            Select a resource to view its content
-                          </div>
-                        ) : resourceContentLoading ? (
-                          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)", fontSize: "0.75rem" }}>
-                            Loading...
-                          </div>
-                        ) : resourceContent ? (() => {
-                          const mime = resourceContent.mimeType ?? "text/plain";
-                          const text = resourceContent.text ?? "";
-                          const isImage = mime.startsWith("image/");
-                          const isJson = mime.includes("json") || (() => { try { JSON.parse(text); return text.trim().startsWith("{") || text.trim().startsWith("["); } catch { return false; } })();
-                          return (
-                            <>
-                              <div style={{
-                                padding: "0.4rem 0.75rem", borderBottom: "1px solid rgba(63,63,70,0.4)",
-                                display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0,
-                                background: "rgba(24,24,27,0.6)",
-                              }}>
-                                <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", wordBreak: "break-all", flex: 1 }}>{selectedResourceUri}</span>
-                                <span style={{
-                                  fontSize: "0.6rem", padding: "0.05rem 0.35rem", borderRadius: "999px", flexShrink: 0,
-                                  background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)",
-                                  color: "rgba(165,180,252,0.8)", fontFamily: "monospace",
-                                }}>{mime}</span>
-                              </div>
-                              <div style={{ flex: 1, overflow: "auto", padding: "0.75rem" }}>
-                                {isImage ? (
-                                  <img
-                                    src={resourceContent.blob ? `data:${mime};base64,${resourceContent.blob}` : text}
-                                    alt={selectedResourceUri}
-                                    style={{ maxWidth: "100%", borderRadius: "4px" }}
-                                  />
-                                ) : (
-                                  <pre style={{
-                                    margin: 0, fontSize: "0.75rem", lineHeight: 1.6,
-                                    color: isJson ? "#a5f3fc" : "rgba(255,255,255,0.8)",
-                                    fontFamily: "ui-monospace, monospace",
-                                    whiteSpace: "pre-wrap", wordBreak: "break-word",
-                                  }}>
-                                    {isJson ? (() => { try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; } })() : text}
-                                  </pre>
-                                )}
-                              </div>
-                            </>
-                          );
-                        })() : null}
-                      </div>
-                    </div>
+                    <ResourcesPanel
+                      resources={resources}
+                      resourcesLoading={resourcesLoading}
+                      selectedResourceUri={selectedResourceUri}
+                      setSelectedResourceUri={setSelectedResourceUri}
+                      resourceContent={resourceContent}
+                      resourceContentLoading={resourceContentLoading}
+                      templateParams={templateParams}
+                      setTemplateParams={setTemplateParams}
+                      onRefresh={() => {
+                        if (!selectedServer?.session_id || !selectedServerId) return;
+                        setResourcesByServer(prev => { const next = { ...prev }; delete next[selectedServerId]; return next; });
+                        setSelectedResourceUri(null);
+                        setResourceContent(null);
+                      }}
+                      onLoadResource={async (resource, uri) => {
+                        setSelectedResourceUri(resource.uri);
+                        setResourceContent(null);
+                        setResourceContentLoading(true);
+                        try {
+                          const res = await apiClient.readInspectorResource(selectedServer.session_id!, uri);
+                          const first = res?.contents?.[0];
+                          setResourceContent({
+                            text: first?.text ?? first?.content ?? res?.text ?? "",
+                            blob: first?.blob,
+                            mimeType: first?.mimeType ?? resource.mimeType ?? "text/plain",
+                          });
+                        } catch {
+                          setResourceContent({ text: "Failed to load resource.", mimeType: "text/plain" });
+                        } finally {
+                          setResourceContentLoading(false);
+                        }
+                      }}
+                    />
                   )}
 
                   {/* Empty states */}
@@ -2771,212 +2467,35 @@ export default function MCPInspector() {
 
                   {/* ── PROMPTS MODE ─── */}
                   {mode === "prompts" && selectedServer?.status === "connected" && (
-                    <div style={{ display: "flex", flex: 1, minHeight: 0, gap: "0.75rem", overflow: "hidden" }}>
-
-                      {/* Prompt list — left column */}
-                      <div style={{
-                        width: "38%", flexShrink: 0, display: "flex", flexDirection: "column",
-                        border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.5rem", overflow: "hidden",
-                      }}>
-                        <div style={{
-                          padding: "0.5rem 0.75rem", borderBottom: "1px solid rgba(63,63,70,0.4)",
-                          display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0,
-                          background: "rgba(24,24,27,0.6)",
-                        }}>
-                          <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "rgba(255,255,255,0.7)" }}>
-                            Prompts {prompts.length > 0 && <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>({prompts.length})</span>}
-                          </span>
-                          <button
-                            onClick={() => {
-                              if (!selectedServerId) return;
-                              setPromptsByServer(prev => { const n = { ...prev }; delete n[selectedServerId]; return n; });
-                              setSelectedPrompt(null); setPromptArgs({}); setPromptResult(null);
-                            }}
-                            style={{ fontSize: "0.65rem", background: "none", border: "1px solid rgba(63,63,70,0.5)", borderRadius: "4px", color: "rgba(255,255,255,0.35)", cursor: "pointer", padding: "0.1rem 0.35rem" }}
-                          >
-                            Refresh
-                          </button>
-                        </div>
-                        <div style={{ flex: 1, overflowY: "auto" }}>
-                          {promptsLoading ? (
-                            <div style={{ padding: "1rem", textAlign: "center", color: "rgba(255,255,255,0.35)", fontSize: "0.75rem" }}>Loading prompts...</div>
-                          ) : prompts.length === 0 ? (
-                            <div style={{ padding: "1rem", textAlign: "center", color: "rgba(255,255,255,0.35)", fontSize: "0.75rem" }}>No prompts found</div>
-                          ) : (
-                            prompts.map((p: any) => {
-                              const isSelected = selectedPrompt?.name === p.name;
-                              const argCount = p.arguments?.length ?? 0;
-                              return (
-                                <div
-                                  key={p.name}
-                                  onClick={() => {
-                                    setSelectedPrompt(p);
-                                    setPromptArgs({});
-                                    setPromptResult(null);
-                                  }}
-                                  style={{
-                                    padding: "0.55rem 0.75rem",
-                                    borderBottom: "1px solid rgba(63,63,70,0.25)",
-                                    cursor: "pointer",
-                                    background: isSelected ? "rgba(99,102,241,0.12)" : "transparent",
-                                    borderLeft: isSelected ? "2px solid rgba(99,102,241,0.8)" : "2px solid transparent",
-                                    transition: "background 0.1s",
-                                  }}
-                                >
-                                  <div style={{ fontSize: "0.75rem", fontWeight: 600, color: isSelected ? "rgba(165,180,252,1)" : "rgba(255,255,255,0.85)" }}>
-                                    {p.name}
-                                  </div>
-                                  {p.description && (
-                                    <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.4)", marginTop: "0.15rem" }}>
-                                      {p.description}
-                                    </div>
-                                  )}
-                                  {argCount > 0 && (
-                                    <div style={{ marginTop: "0.25rem", display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
-                                      {p.arguments.map((a: any) => (
-                                        <span key={a.name} style={{
-                                          fontSize: "0.6rem", padding: "0.05rem 0.35rem", borderRadius: "999px",
-                                          background: a.required ? "rgba(99,102,241,0.15)" : "rgba(63,63,70,0.4)",
-                                          border: `1px solid ${a.required ? "rgba(99,102,241,0.3)" : "rgba(63,63,70,0.6)"}`,
-                                          color: a.required ? "rgba(165,180,252,0.9)" : "rgba(255,255,255,0.4)",
-                                          fontFamily: "monospace",
-                                        }}>
-                                          {a.name}{a.required ? "" : "?"}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Prompt detail + result — right column */}
-                      <div style={{
-                        flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
-                        border: "1px solid rgba(63,63,70,0.5)", borderRadius: "0.5rem", overflow: "hidden",
-                      }}>
-                        {!selectedPrompt ? (
-                          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: "0.8rem" }}>
-                            Select a prompt to fill its arguments
-                          </div>
-                        ) : (
-                          <>
-                            {/* Header */}
-                            <div style={{
-                              padding: "0.5rem 0.75rem", borderBottom: "1px solid rgba(63,63,70,0.4)",
-                              background: "rgba(24,24,27,0.6)", flexShrink: 0,
-                            }}>
-                              <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{selectedPrompt.name}</div>
-                              {selectedPrompt.description && (
-                                <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginTop: "0.15rem" }}>{selectedPrompt.description}</div>
-                              )}
-                            </div>
-
-                            {/* Argument form */}
-                            <div style={{ padding: "0.75rem", flexShrink: 0, borderBottom: "1px solid rgba(63,63,70,0.3)" }}>
-                              {(selectedPrompt.arguments?.length ?? 0) === 0 ? (
-                                <div style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic" }}>No arguments required</div>
-                              ) : (
-                                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                                  {selectedPrompt.arguments.map((a: any) => (
-                                    <div key={a.name}>
-                                      <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.2rem", fontFamily: "monospace" }}>
-                                        {a.name}{a.required ? <span style={{ color: "rgba(239,68,68,0.8)" }}> *</span> : <span style={{ color: "rgba(255,255,255,0.25)" }}> (optional)</span>}
-                                      </div>
-                                      {a.description && (
-                                        <div style={{ fontSize: "0.62rem", color: "rgba(255,255,255,0.3)", marginBottom: "0.2rem" }}>{a.description}</div>
-                                      )}
-                                      <input
-                                        value={promptArgs[a.name] ?? ""}
-                                        onChange={e => setPromptArgs(prev => ({ ...prev, [a.name]: e.target.value }))}
-                                        placeholder={a.name}
-                                        style={{
-                                          width: "100%", boxSizing: "border-box",
-                                          padding: "0.3rem 0.5rem", fontSize: "0.75rem",
-                                          background: "rgba(0,0,0,0.3)", border: "1px solid rgba(63,63,70,0.6)",
-                                          borderRadius: "4px", color: "#fff",
-                                        }}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              <button
-                                disabled={promptResultLoading}
-                                onClick={async () => {
-                                  if (!selectedServer?.session_id) return;
-                                  setPromptResultLoading(true);
-                                  setPromptResult(null);
-                                  try {
-                                    const res = await apiClient.getInspectorPrompt(selectedServer.session_id, selectedPrompt.name, promptArgs);
-                                    setPromptResult(res);
-                                  } catch (e: any) {
-                                    setPromptResult({ error: e.message });
-                                  } finally {
-                                    setPromptResultLoading(false);
-                                  }
-                                }}
-                                style={{
-                                  marginTop: "0.6rem", padding: "0.35rem 0.85rem",
-                                  background: "rgba(99,102,241,0.85)", border: "none", borderRadius: "6px",
-                                  color: "#fff", fontWeight: 600, fontSize: "0.75rem",
-                                  cursor: promptResultLoading ? "not-allowed" : "pointer",
-                                  opacity: promptResultLoading ? 0.6 : 1,
-                                }}
-                              >
-                                {promptResultLoading ? "Loading..." : "Get Prompt"}
-                              </button>
-                            </div>
-
-                            {/* Messages preview */}
-                            <div style={{ flex: 1, overflowY: "auto", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                              {promptResult?.error ? (
-                                <div style={{ fontSize: "0.75rem", color: "#fca5a5", padding: "0.5rem", background: "rgba(239,68,68,0.1)", borderRadius: "6px", border: "1px solid rgba(239,68,68,0.3)" }}>
-                                  Error: {promptResult.error}
-                                </div>
-                              ) : promptResult?.messages ? (
-                                promptResult.messages.map((msg: any, i: number) => {
-                                  // Unwrap role from nested message objects if SDK wraps them
-                                  const role = msg.role ?? msg?.content?.role ?? "user";
-                                  const rawContent = msg.content ?? msg;
-                                  const text = typeof rawContent === "string"
-                                    ? rawContent
-                                    : typeof rawContent?.text === "string"
-                                      ? rawContent.text
-                                      : Array.isArray(rawContent)
-                                        ? rawContent.map((c: any) => c.text ?? JSON.stringify(c)).join("\n")
-                                        : typeof rawContent === "object" && rawContent !== null && "text" in rawContent
-                                          ? rawContent.text
-                                          : JSON.stringify(rawContent, null, 2);
-                                  return (
-                                  <div key={i} style={{
-                                    padding: "0.5rem 0.75rem",
-                                    borderRadius: "8px",
-                                    background: role === "user" ? "rgba(37,99,235,0.15)" : "rgba(39,39,42,0.8)",
-                                    border: `1px solid ${role === "user" ? "rgba(59,130,246,0.3)" : "rgba(63,63,70,0.5)"}`,
-                                  }}>
-                                    <div style={{ fontSize: "0.62rem", fontWeight: 700, color: role === "user" ? "rgba(147,197,253,0.9)" : "rgba(165,180,252,0.9)", marginBottom: "0.3rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                                      {role}
-                                    </div>
-                                    <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.8)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-                                      {text}
-                                    </div>
-                                  </div>
-                                  );
-                                })
-                              ) : !promptResultLoading && (
-                                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: "0.75rem", textAlign: "center", marginTop: "1rem" }}>
-                                  Fill in arguments and click Get Prompt
-                                </div>
-                              )}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
+                    <PromptsPanel
+                      prompts={prompts}
+                      promptsLoading={promptsLoading}
+                      selectedPrompt={selectedPrompt}
+                      setSelectedPrompt={setSelectedPrompt}
+                      promptArgs={promptArgs}
+                      setPromptArgs={setPromptArgs}
+                      promptResult={promptResult}
+                      setPromptResult={setPromptResult}
+                      promptResultLoading={promptResultLoading}
+                      onRefresh={() => {
+                        if (!selectedServerId) return;
+                        setPromptsByServer(prev => { const n = { ...prev }; delete n[selectedServerId]; return n; });
+                        setSelectedPrompt(null); setPromptArgs({}); setPromptResult(null);
+                      }}
+                      onGetPrompt={async () => {
+                        if (!selectedServer?.session_id) return;
+                        setPromptResultLoading(true);
+                        setPromptResult(null);
+                        try {
+                          const res = await apiClient.getInspectorPrompt(selectedServer.session_id, selectedPrompt.name, promptArgs);
+                          setPromptResult(res);
+                        } catch (e: any) {
+                          setPromptResult({ error: e.message });
+                        } finally {
+                          setPromptResultLoading(false);
+                        }
+                      }}
+                    />
                   )}
 
                   {mode === "prompts" && (!selectedServer || selectedServer.status !== "connected") && (
@@ -2997,283 +2516,22 @@ export default function MCPInspector() {
 
       {/* ── ADD SERVER MODAL ─────────────────────────────────────────────── */}
       {showAddModal && (
-        <div
-          onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
-          onKeyDown={(e) => { if (e.key === "Escape") { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); } }}
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "#18181b", padding: "2rem", borderRadius: "0.75rem",
-              width: "420px", border: "1px solid rgba(63,63,70,0.6)",
-            }}
-          >
-            <h2 style={{ fontSize: "1.3rem", marginBottom: "1rem" }}>Connect MCP Server</h2>
-
-            <form onSubmit={(e) => { e.preventDefault(); handleConnect(); }} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div>
-                <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.3rem", display: "block" }}>
-                  Server Name <span style={{ color: "rgba(255,255,255,0.3)" }}>(optional)</span>
-                </label>
-                <input
-                  autoFocus
-                  placeholder="e.g. My Weather Server"
-                  style={{
-                    width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
-                    border: "1px solid rgba(63,63,70,0.6)",
-                    background: "#09090b", color: "#fff", boxSizing: "border-box",
-                  }}
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.3rem" }}>
-                  <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>Transport</label>
-                  <span
-                    title="HTTP: stateless request/response. SSE: persistent connection for servers that push notifications. stdio: spawn a local MCP server by command (e.g. npx -y @modelcontextprotocol/server-filesystem /tmp)."
-                    style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", cursor: "help", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "50%", width: "14px", height: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
-                  >?</span>
-                </div>
-                <select
-                  value={transport}
-                  onChange={(e) => { setTransport(e.target.value); setUrl(""); setCommand(""); }}
-                  style={{
-                    width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
-                    border: "1px solid rgba(63,63,70,0.6)",
-                    background: "#09090b", color: "#fff",
-                  }}
-                >
-                  <option value="http">HTTP</option>
-                  <option value="sse">SSE</option>
-                  <option value="stdio">STDIO (local subprocess)</option>
-                </select>
-              </div>
-
-              {transport === "stdio" ? (
-                <div>
-                  <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.3rem", display: "block" }}>
-                    Command
-                  </label>
-                  <input
-                    placeholder="npx -y @modelcontextprotocol/server-filesystem /tmp"
-                    style={{
-                      width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
-                      border: "1px solid rgba(63,63,70,0.6)",
-                      background: "#09090b", color: "#fff", boxSizing: "border-box",
-                      fontFamily: "ui-monospace, monospace", fontSize: "0.8rem",
-                    }}
-                    value={command}
-                    onChange={(e) => setCommand(e.target.value)}
-                  />
-                  <p style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.3)", marginTop: "0.3rem", marginBottom: 0 }}>
-                    The server will be spawned as a subprocess on the FluidMCP backend machine.
-                  </p>
-
-                  {/* Environment Variables */}
-                  <div style={{ marginTop: "0.9rem" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
-                      <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.5)" }}>
-                        Environment Variables <span style={{ color: "rgba(255,255,255,0.25)", fontWeight: 400 }}>(optional)</span>
-                        <span
-                          title="Env vars are passed to the subprocess at spawn time and cannot be changed while the server is running. Reconnect to update them."
-                          style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.3)", cursor: "help", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "50%", width: "14px", height: "14px", display: "inline-flex", alignItems: "center", justifyContent: "center", marginLeft: "0.3rem", flexShrink: 0 }}
-                        >?</span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setEnvVars(prev => [...prev, { key: "", value: "" }])}
-                        style={{
-                          fontSize: "0.72rem", padding: "0.2rem 0.55rem",
-                          borderRadius: "0.3rem", border: "1px solid rgba(99,102,241,0.4)",
-                          background: "rgba(99,102,241,0.1)", color: "rgba(200,200,255,0.8)",
-                          cursor: "pointer",
-                        }}
-                      >+ Add</button>
-                    </div>
-                    {envVars.map((ev, i) => (
-                      <div key={i} style={{ display: "flex", gap: "0.4rem", marginBottom: "0.35rem", alignItems: "center" }}>
-                        <input
-                          placeholder="KEY"
-                          value={ev.key}
-                          onChange={(e) => setEnvVars(prev => prev.map((x, j) => j === i ? { ...x, key: e.target.value } : x))}
-                          style={{
-                            flex: "0 0 38%", padding: "0.4rem 0.5rem", borderRadius: "0.3rem",
-                            border: "1px solid rgba(63,63,70,0.6)", background: "#09090b",
-                            color: "#fff", fontSize: "0.78rem", fontFamily: "ui-monospace, monospace",
-                          }}
-                        />
-                        <input
-                          placeholder="value"
-                          value={ev.value}
-                          onChange={(e) => setEnvVars(prev => prev.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
-                          style={{
-                            flex: 1, padding: "0.4rem 0.5rem", borderRadius: "0.3rem",
-                            border: "1px solid rgba(63,63,70,0.6)", background: "#09090b",
-                            color: "#fff", fontSize: "0.78rem",
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setEnvVars(prev => prev.filter((_, j) => j !== i))}
-                          style={{
-                            background: "transparent", border: "none", color: "rgba(255,100,100,0.6)",
-                            cursor: "pointer", fontSize: "1rem", lineHeight: 1, padding: "0 0.2rem",
-                          }}
-                        >×</button>
-                      </div>
-                    ))}
-                    {envVars.length === 0 && (
-                      <p style={{ fontSize: "0.71rem", color: "rgba(255,255,255,0.2)", marginTop: "0.2rem", marginBottom: 0 }}>
-                        e.g. API_KEY, OPENAI_API_KEY, …
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <input
-                    placeholder="Server URL"
-                    style={{
-                      width: "100%", padding: "0.6rem", borderRadius: "0.4rem",
-                      border: "1px solid rgba(63,63,70,0.6)",
-                      background: "#09090b", color: "#fff", boxSizing: "border-box",
-                    }}
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                  />
-                  {recentUrls.length > 0 && (
-                    <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                      <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.35)", alignSelf: "center" }}>Recent:</span>
-                      {recentUrls.map(u => (
-                        <button
-                          key={u}
-                          type="button"
-                          onClick={() => setUrl(u)}
-                          style={{
-                            fontSize: "0.72rem", padding: "0.15rem 0.5rem",
-                            borderRadius: "999px", border: "1px solid rgba(99,102,241,0.35)",
-                            background: url === u ? "rgba(99,102,241,0.2)" : "rgba(99,102,241,0.07)",
-                            color: "rgba(200,200,255,0.75)", cursor: "pointer",
-                            maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          }}
-                          title={u}
-                        >
-                          {u.replace(/^https?:\/\//, "").slice(0, 35)}{u.replace(/^https?:\/\//, "").length > 35 ? "…" : ""}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Auth — not shown for stdio (local subprocess, no auth needed) */}
-              {transport !== "stdio" && (
-                <>
-                  <div style={{ marginTop: "1rem" }}>
-                    <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
-                      Auth Type
-                    </label>
-                    <select
-                      value={authType}
-                      onChange={(e) => setAuthType(e.target.value as any)}
-                      style={{
-                        width: "100%", marginTop: "0.3rem", padding: "0.5rem",
-                        borderRadius: "0.4rem", background: "#18181b", color: "#fff",
-                        border: "1px solid rgba(63,63,70,0.6)"
-                      }}
-                    >
-                      <option value="none">None</option>
-                      <option value="bearer">Bearer Token</option>
-                      <option value="header">Header Token</option>
-                    </select>
-                  </div>
-
-                  {authType === "bearer" && (
-                    <div style={{ marginTop: "0.8rem" }}>
-                      <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
-                        Token
-                      </label>
-                      <input
-                        type="password"
-                        value={token}
-                        onChange={(e) => setToken(e.target.value)}
-                        placeholder="Enter bearer token"
-                        style={{
-                          width: "100%", marginTop: "0.3rem", padding: "0.5rem",
-                          borderRadius: "0.4rem", background: "#18181b", color: "#fff",
-                          border: "1px solid rgba(63,63,70,0.6)"
-                        }}
-                      />
-                    </div>
-                  )}
-
-                  {authType === "header" && (
-                    <div style={{ marginTop: "0.8rem" }}>
-                      <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>
-                        Header Key
-                      </label>
-                      <input
-                        value={headerKey}
-                        onChange={(e) => setHeaderKey(e.target.value)}
-                        placeholder="X-Api-Key"
-                        style={{
-                          width: "100%", marginTop: "0.3rem", padding: "0.5rem",
-                          borderRadius: "0.4rem", background: "#18181b", color: "#fff",
-                          border: "1px solid rgba(63,63,70,0.6)"
-                        }}
-                      />
-                      <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)", marginTop: "0.5rem", display: "block" }}>
-                        Header Value
-                      </label>
-                      <input
-                        type="password"
-                        value={headerValue}
-                        onChange={(e) => setHeaderValue(e.target.value)}
-                        placeholder="Enter token"
-                        style={{
-                          width: "100%", marginTop: "0.3rem", padding: "0.5rem",
-                          borderRadius: "0.4rem", background: "#18181b", color: "#fff",
-                          border: "1px solid rgba(63,63,70,0.6)"
-                        }}
-                      />
-                    </div>
-                  )}
-                </>
-              )}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
-                <button
-                  type="button"
-                  onClick={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
-                  style={{
-                    background: "transparent", border: "1px solid rgba(63,63,70,0.6)",
-                    padding: "0.5rem 1rem", borderRadius: "0.4rem", color: "#fff",
-                  }}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={connecting}
-                  style={{
-                    background: "#fff", color: "#000",
-                    padding: "0.5rem 1rem", borderRadius: "0.4rem", fontWeight: "600",
-                  }}
-                >
-                  {connecting ? "Connecting..." : "Connect"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <AddServerModal
+          connecting={connecting}
+          url={url} setUrl={setUrl}
+          command={command} setCommand={setCommand}
+          transport={transport} setTransport={setTransport}
+          authType={authType} setAuthType={setAuthType}
+          token={token} setToken={setToken}
+          headerKey={headerKey} setHeaderKey={setHeaderKey}
+          headerValue={headerValue} setHeaderValue={setHeaderValue}
+          customName={customName} setCustomName={setCustomName}
+          envVars={envVars} setEnvVars={setEnvVars}
+          recentUrls={recentUrls}
+          onClose={() => { setShowAddModal(false); setCustomName(""); setUrl(""); setCommand(""); setEnvVars([]); setTransport("http"); setAuthType("none"); setToken(""); setHeaderKey(""); setHeaderValue(""); }}
+          onConnect={handleConnect}
+        />
       )}
-
     </div>
   );
 }

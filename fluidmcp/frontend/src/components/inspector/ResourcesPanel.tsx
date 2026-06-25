@@ -1,5 +1,4 @@
 import React from "react";
-import { apiClient } from "@/services/api";
 
 interface MCPResource {
   uri: string;
@@ -15,14 +14,11 @@ interface ResourcesPanelProps {
   selectedResourceUri: string | null;
   setSelectedResourceUri: (uri: string | null) => void;
   resourceContent: { text?: string; blob?: string; mimeType?: string } | null;
-  setResourceContent: (c: { text?: string; blob?: string; mimeType?: string } | null) => void;
   resourceContentLoading: boolean;
-  setResourceContentLoading: (v: boolean) => void;
   templateParams: Record<string, string>;
   setTemplateParams: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  sessionId: string;
-  selectedServerId: string;
   onRefresh: () => void;
+  onLoadResource: (resource: MCPResource, uri: string) => void;
 }
 
 export const ResourcesPanel: React.FC<ResourcesPanelProps> = ({
@@ -31,31 +27,14 @@ export const ResourcesPanel: React.FC<ResourcesPanelProps> = ({
   selectedResourceUri,
   setSelectedResourceUri,
   resourceContent,
-  setResourceContent,
   resourceContentLoading,
-  setResourceContentLoading,
   templateParams,
   setTemplateParams,
-  sessionId,
   onRefresh,
+  onLoadResource,
 }) => {
-  const loadResource = async (resource: MCPResource, uri: string) => {
-    setSelectedResourceUri(resource.uri);
-    setResourceContent(null);
-    setResourceContentLoading(true);
-    try {
-      const res = await apiClient.readInspectorResource(sessionId, uri);
-      const first = res?.contents?.[0];
-      setResourceContent({
-        text: first?.text ?? first?.content ?? res?.text ?? "",
-        blob: first?.blob,
-        mimeType: first?.mimeType ?? resource.mimeType ?? "text/plain",
-      });
-    } catch {
-      setResourceContent({ text: "Failed to load resource.", mimeType: "text/plain" });
-    } finally {
-      setResourceContentLoading(false);
-    }
+  const loadResource = (resource: MCPResource, uri: string) => {
+    onLoadResource(resource, uri);
   };
 
   return (
