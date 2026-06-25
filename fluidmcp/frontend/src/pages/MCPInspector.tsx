@@ -570,20 +570,15 @@ export default function MCPInspector() {
     updateChat(prev => prev.filter((m: ChatMessage) => m.id !== thinkingMsg.id))
 
     if (res.clarification_needed) {
+      // No runId — render as standalone assistant bubble, not inside an ExecutionRunBlock
       const assistantMsg: ChatMessage = {
         id: generateId(),
-        runId,
         type: "assistant",
         content: res.message,
         timestamp: Date.now(),
         perfMark: performance.now()
       }
       updateChat(prev => [...prev, assistantMsg])
-      // save run (no tool call — just clarification)
-      setExecutionHistoryByServer(prev => ({
-        ...prev,
-        [capturedServerId]: [{ runId, serverId: capturedServerId, startTime: runStartTime, endTime: Date.now(), steps: runSteps }, ...(prev[capturedServerId] ?? [])]
-      }))
       return
     }
 
