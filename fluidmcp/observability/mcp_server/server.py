@@ -28,6 +28,20 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+# LogQL stream selectors that must appear in every query to scope it to FluidMCP.
+# This prevents MCP callers from reading logs from unrelated services.
+_REQUIRED_LOGQL_SELECTORS = ('service="fluidmcp"', "service='fluidmcp'", 'container="fluidmcp"', "container='fluidmcp'")
+
+
+def _assert_logql_scoped(logql: str) -> Optional[str]:
+    """Return an error string if logql does not scope to the fluidmcp service, else None."""
+    if not any(sel in logql for sel in _REQUIRED_LOGQL_SELECTORS):
+        return (
+            'LogQL query must include a FluidMCP scope selector, e.g. {service="fluidmcp"} '
+            "or {container=\"fluidmcp\"}. Queries that read from other services are not permitted."
+        )
+    return None
+
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -135,6 +149,9 @@ async def query_logs(
         LogsResult with a list of LogLine objects (timestamp, message, labels,
         trace_id, span_id when available).
     """
+    err = _assert_logql_scoped(logql)
+    if err:
+        return LogsResult(query=logql, lines=[], total=0, error=err).model_dump()
     limit = min(limit, 500)
     result = await loki_client.query_logs(logql=logql, start=start, end=end, limit=limit)
     return result.model_dump()
