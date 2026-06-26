@@ -620,7 +620,7 @@ def create_dynamic_router(server_manager):
                 if "error" in response_data:
                     err = response_data["error"]
                     err_code = err.get("code") if isinstance(err, dict) else None
-                    err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                    err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
                     logger.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
                 else:
                     logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
@@ -789,7 +789,7 @@ def create_dynamic_router(server_manager):
                         if "error" in response_data:
                             err = response_data["error"]
                             err_code = err.get("code") if isinstance(err, dict) else None
-                            err_msg = err.get("message") if isinstance(err, dict) else str(err)
+                            err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
                             elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                             logger.warning(f"[mcp.sse.error_response] {sse_ctx} elapsed={elapsed_ms}ms code={err_code} message={err_msg}")
                             completion_status = "error_response"
