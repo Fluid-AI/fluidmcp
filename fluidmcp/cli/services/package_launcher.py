@@ -20,6 +20,12 @@ from .network_handle import NetworkSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
+
+def _sanitize_log_field(value: str, max_len: int = 200) -> str:
+    """Strip CR/LF/control characters from user-controlled values before logging."""
+    sanitized = "".join(ch for ch in str(value) if ch.isprintable() and ch not in "\r\n")
+    return sanitized[:max_len]
+
 # Max seconds to wait for an MCP subprocess to write a response line.
 # Overridable via the MCP_READ_TIMEOUT environment variable.
 #
@@ -527,7 +533,17 @@ def create_dynamic_router(server_manager):
         """
         # Initialize metrics collector
         collector = MetricsCollector(server_name)
-        method = request.get("method", "unknown")
+        method = _sanitize_log_field(request.get("method", "unknown"))
+        params = request.get("params", {})
+        tool_name = _sanitize_log_field(params.get("name", "")) if method == "tools/call" else None
+        tool_args_keys = [_sanitize_log_field(k) for k in sorted(params.get("arguments", {}).keys())] if method == "tools/call" else []
+        request_id = _sanitize_log_field(str(request.get("id", "-")))
+
+        ctx = f"server={server_name} method={method} req_id={request_id}"
+        if tool_name:
+            ctx += f" tool={tool_name} args={tool_args_keys}"
+
+        t0 = time.monotonic()
 
         # Track request with metrics (RequestTimer automatically records all errors)
         # HTTPExceptions raised within this context are tracked as error_type="network_error"
@@ -541,6 +557,7 @@ def create_dynamic_router(server_manager):
 
             # ── Network transport: forward via HTTP ──────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
+                logger.info(f"[mcp.call] {ctx}")
                 if process.transport == "http":
                     try:
                         _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
@@ -564,17 +581,30 @@ def create_dynamic_router(server_manager):
                         raise
                 else:
                     response = await _proxy_to_sse_server(process.base_url, request)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=network")
                 return JSONResponse(content=response)
             # ── stdio transport continues below ─────────────────────────────
 
             try:
-                # Send request to MCP server
                 msg = json.dumps(request)
-                async with _get_io_lock(server_name):
+                logger.info(f"[mcp.call] {ctx}")
+
+                io_lock = _get_io_lock(server_name)
+                # Non-blocking acquire first; warn before blocking so contention is
+                # visible in logs without adding overhead on the happy path.
+                if not io_lock.locked():
+                    await io_lock.acquire()
+                else:
+                    logger.warning(f"[mcp.lock_wait] {ctx} — another request holds the I/O lock, queuing")
+                    await io_lock.acquire()
+                try:
                     try:
                         process.stdin.write(msg + "\n")
                         process.stdin.flush()
                     except (BrokenPipeError, OSError) as e:
+                        elapsed_ms = int((time.monotonic() - t0) * 1000)
+                        logger.error(f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
                         raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
                     # Wait for the MCP subprocess to write its JSON-RPC response.
@@ -586,10 +616,33 @@ def create_dynamic_router(server_manager):
                     response_line = await asyncio.to_thread(
                         _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
                     )
-                    if not response_line:
-                        # Empty string means select() timed out — server did not respond.
-                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
-                response_data = json.loads(response_line)
+                finally:
+                    io_lock.release()
+
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+                if not response_line:
+                    # Empty string means select() timed out — server did not respond.
+                    logger.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within {_MCP_READ_TIMEOUT}s")
+                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
+
+                _slow_ms = int(os.getenv("FMCP_SLOW_REQUEST_MS", "5000"))
+                if elapsed_ms > _slow_ms:
+                    logger.warning(f"[mcp.slow] {ctx} elapsed={elapsed_ms}ms — response was slow")
+
+                try:
+                    response_data = json.loads(response_line)
+                except json.JSONDecodeError as e:
+                    logger.error(f"[mcp.bad_response] {ctx} elapsed={elapsed_ms}ms — invalid JSON: {e} raw={response_line[:300]}")
+                    raise HTTPException(502, "MCP server returned invalid JSON")
+
+                if "error" in response_data:
+                    err = response_data["error"]
+                    err_code = err.get("code") if isinstance(err, dict) else None
+                    err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
+                    logger.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
+                else:
+                    logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
 
                 # Update last_used_at for idle cleanup
                 await server_manager.update_last_used(server_name)
@@ -599,7 +652,8 @@ def create_dynamic_router(server_manager):
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Error proxying request to '{server_name}': {e}")
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                logger.error(f"[mcp.error] {ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
                 raise HTTPException(500, f"Error communicating with server: {str(e)}")
 
     @router.post("/{server_name}/sse", tags=["mcp"])
@@ -686,6 +740,16 @@ def create_dynamic_router(server_manager):
                     return  # done for network transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
+                sse_method = _sanitize_log_field(request.get("method", "unknown"))
+                sse_params = request.get("params", {})
+                sse_tool_name = _sanitize_log_field(sse_params.get("name", "")) if sse_method == "tools/call" else None
+                sse_tool_args_keys = [_sanitize_log_field(k) for k in sorted(sse_params.get("arguments", {}).keys())] if sse_method == "tools/call" else []
+                sse_ctx = f"server={server_name} method={sse_method} req_id={_sanitize_log_field(str(request.get('id', '-')))}"
+                if sse_tool_name:
+                    sse_ctx += f" tool={sse_tool_name} args={sse_tool_args_keys}"
+                t0_sse = time.monotonic()
+                chunk_count = 0
+
                 msg = json.dumps(request)
                 async with _get_io_lock(server_name):
                     try:
@@ -706,11 +770,15 @@ def create_dynamic_router(server_manager):
                         # In other words, both labels refer to the same underlying condition but are
                         # scoped for different troubleshooting workflows: global error rates versus
                         # per-stream termination reasons.
+                        elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                         completion_status = "broken_pipe"
-                        # Record in global error metric for monitoring
                         collector.record_error("io_error")
+                        logger.error(f"[mcp.sse.process_died] {sse_ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
                         yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                         return
+
+                # LOGGED: [mcp.sse.start] — stdin write succeeded; reading loop begins.
+                logger.info(f"[mcp.sse.start] {sse_ctx}")
 
                 while True:
                     # Read the next line from the MCP subprocess for streaming.
@@ -723,28 +791,41 @@ def create_dynamic_router(server_manager):
                         _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
                     )
                     if not response_line:
+                        elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                         if response_line == "":
                             # Timeout: server never wrote data within the deadline.
-                            logger.warning(f"SSE stream for '{server_name}' timed out waiting for stdout after {_MCP_READ_TIMEOUT}s")
+                            logger.warning(f"[mcp.sse.timeout] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count} — server did not respond within {_MCP_READ_TIMEOUT}s")
                             yield f"data: {json.dumps({'error': f'Server did not respond within {_MCP_READ_TIMEOUT} seconds'})}\n\n"
                         # Either timeout or EOF — stop streaming either way.
                         break
 
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
+                    chunk_count += 1
+                    logger.debug(f"[mcp.sse.chunk] {sse_ctx} chunk={chunk_count} data={response_line.strip()[:200]}")
                     yield f"data: {response_line.strip()}\n\n"
 
-                    # Check if response is final
                     try:
                         response_data = json.loads(response_line)
+                        if "error" in response_data:
+                            err = response_data["error"]
+                            err_code = err.get("code") if isinstance(err, dict) else None
+                            err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
+                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            logger.warning(f"[mcp.sse.error_response] {sse_ctx} elapsed={elapsed_ms}ms code={err_code} message={err_msg}")
+                            completion_status = "error_response"
                         if "result" in response_data:
+                            # Reset to success even if a prior chunk contained an error —
+                            # the stream ended cleanly with a result.
+                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            completion_status = "success"
+                            logger.info(f"[mcp.sse.ok] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count}")
                             break
                     except json.JSONDecodeError:
-                        # Non-JSON lines are expected in the stream; ignore them but continue reading
-                        logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
+                        logger.debug(f"[mcp.sse.non_json] {sse_ctx} chunk={chunk_count} raw={response_line.strip()[:200]}")
 
             except Exception as e:
+                elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                 completion_status = "error"
-                logger.exception(f"Error in event generator for '{server_name}': {e}")
+                logger.error(f"[mcp.sse.error] {sse_ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
             finally:
                 # Record streaming metrics
