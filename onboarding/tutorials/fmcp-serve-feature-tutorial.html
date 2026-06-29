@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FMCP Serve Flow &#x2014; FluidMCP Tutorial</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:rgba(210,168,255,0.15);--accent:#d2a8ff;--accent2:#58a6ff;--accent3:#3fb950;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+  .sidebar{width:280px;min-height:100vh;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100}
+  .sidebar-header{padding:24px 20px 16px;border-bottom:1px solid var(--border)}
+  .sidebar-logo{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+  .sidebar-title{font-size:15px;font-weight:700;color:var(--text);line-height:1.3}
+  .sidebar-progress{padding:12px 20px;border-bottom:1px solid var(--border)}
+  .progress-label{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;justify-content:space-between}
+  .progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s}
+  .nav-list{flex:1;overflow-y:auto;padding:12px 0}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;transition:all 0.2s;border-left:3px solid transparent}
+  .nav-item:hover{background:rgba(210,168,255,0.06)}
+  .nav-item.active{background:rgba(210,168,255,0.1);border-left-color:var(--accent)}
+  .nav-item.done .nav-badge{background:var(--accent3)}
+  .nav-badge{width:22px;height:22px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--text2);flex-shrink:0}
+  .nav-label{font-size:13px;color:var(--text2);line-height:1.3}
+  .nav-item.active .nav-label{color:var(--text);font-weight:500}
+  .main{margin-left:280px;flex:1;min-height:100vh}
+  .lesson{display:none;padding:48px 56px;max-width:900px;animation:slideInUp 0.4s ease both}
+  .lesson.active{display:block}
+  @keyframes slideInUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+  .lesson-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(210,168,255,0.1);border:1px solid rgba(210,168,255,0.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+  .lesson-title{font-size:32px;font-weight:700;color:var(--text);margin-bottom:8px;line-height:1.2}
+  .lesson-subtitle{font-size:15px;color:var(--text2);margin-bottom:36px;line-height:1.6}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-bottom:28px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;transition:all 0.25s;animation:slideInUp 0.4s ease both}
+  .card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,0.4);border-color:rgba(210,168,255,0.3)}
+  .card:nth-child(1){animation-delay:0.05s}.card:nth-child(2){animation-delay:0.1s}.card:nth-child(3){animation-delay:0.15s}
+  .card-icon{font-size:24px;margin-bottom:10px}.card-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .card-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .code-block{background:#010409;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
+  .code-header{background:var(--bg3);padding:8px 16px;border-bottom:1px solid var(--border)}
+  .code-lang{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
+  .code-body{padding:18px 20px;overflow-x:auto}
+  .code-body pre{font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;color:#c9d1d9;white-space:pre}
+  .kw{color:#ff7b72}.str{color:#a5d6ff}.cm{color:#8b949e;font-style:italic}.fn{color:#d2a8ff}.num{color:#79c0ff}.var{color:#ffa657}
+  .info-box{background:rgba(210,168,255,0.07);border:1px solid rgba(210,168,255,0.25);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .warn-box{background:rgba(247,129,102,0.07);border:1px solid rgba(247,129,102,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .ok-box{background:rgba(63,185,80,0.07);border:1px solid rgba(63,185,80,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .box-icon{font-size:18px;flex-shrink:0;margin-top:1px}.box-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .box-text strong{color:var(--text)}
+  .directory-tree{background:#010409;border:1px solid rgba(210,168,255,0.2);border-radius:10px;padding:20px;margin-bottom:20px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.8}
+  .dir-line{margin-bottom:4px}
+  .dir-icon{color:var(--accent2);margin-right:8px}
+  .dir-name{color:var(--text)}
+  .dir-highlight{color:var(--accent);font-weight:600}
+  .dir-comment{color:var(--text3);margin-left:12px}
+  .dir-indent-1{padding-left:24px}
+  .dir-indent-2{padding-left:48px}
+  .dir-indent-3{padding-left:72px}
+  .flow-table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px}
+  .flow-table th{background:var(--bg3);padding:10px 14px;text-align:left;color:var(--text2);font-weight:600;font-size:12px;text-transform:uppercase;border-bottom:1px solid var(--border)}
+  .flow-table td{padding:10px 14px;border-bottom:1px solid rgba(210,168,255,0.07);color:var(--text2);vertical-align:top}
+  .flow-table td:first-child{color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600}
+  .flow-table tr:last-child td{border-bottom:none}
+  h3{font-size:16px;font-weight:600;color:var(--text);margin:24px 0 12px}
+  p{font-size:14px;color:var(--text2);line-height:1.7;margin-bottom:14px}
+  code{font-family:'JetBrains Mono',monospace;background:rgba(210,168,255,0.1);padding:2px 6px;border-radius:4px;font-size:12px;color:var(--accent)}
+  .complete-btn{display:inline-flex;align-items:center;gap:8px;margin-top:32px;padding:12px 24px;background:linear-gradient(135deg,var(--accent),#8b5cf6);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s}
+  .complete-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(210,168,255,0.3)}
+  .complete-btn.done{background:linear-gradient(135deg,var(--accent3),#238636)}
+  .flow-diagram{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:24px}
+  .flow-step{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px}
+  .flow-step-number{display:inline-block;width:24px;height:24px;background:var(--accent);color:#000;border-radius:50%;text-align:center;line-height:24px;font-weight:700;font-size:12px;margin-right:12px}
+  .flow-step-title{display:inline;font-weight:600;color:var(--text)}
+  .flow-step-desc{margin-top:8px;color:var(--text2);font-size:13px}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">&#x1F680; FluidMCP</div>
+    <div class="sidebar-title">FMCP Serve Flow</div>
+  </div>
+  <div class="sidebar-progress">
+    <div class="progress-label"><span>Progress</span><span id="prog-txt">0 / 9</span></div>
+    <div class="progress-bar"><div class="progress-fill" id="prog-fill" style="width:0%"></div></div>
+  </div>
+  <nav class="nav-list" id="nav"></nav>
+</aside>
+<main class="main" id="main"></main>
+<script>
+const lessons = [
+  {
+    id:1,title:"Introduction",sub:"Standalone API server for dynamic MCP management with MongoDB persistence",
+    content:`
+      <p>The <code>fmcp serve</code> command creates a production-ready API server that manages MCP servers dynamically via REST API, with MongoDB persistence and bearer token authentication.</p>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F511;</div><div class="card-title">Secure by Default</div><div class="card-text">Bearer token authentication protects all endpoints. Tokens auto-generate or load from environment variables.</div></div>
+        <div class="card"><div class="card-icon">&#x1F4BE;</div><div class="card-title">MongoDB Persistence</div><div class="card-text">Server configs, instance state, and logs survive restarts. Falls back to in-memory storage for development.</div></div>
+        <div class="card"><div class="card-icon">&#x1F4E1;</div><div class="card-title">Dynamic Routing</div><div class="card-text">Routes created on-demand when servers start. Each MCP server gets its own endpoint namespace.</div></div>
+      </div>
+      <div class="info-box"><div class="box-icon">&#x2139;</div><div class="box-text"><strong>Command:</strong> <code>fmcp serve --secure</code> starts the server on port 8099 with NO pre-loaded MCP servers. All servers are added via REST API.</div></div>
+      <h3>Key Differences from <code>fmcp run</code></h3>
+      <table class="flow-table">
+        <thead><tr><th>Aspect</th><th>fmcp run</th><th>fmcp serve</th></tr></thead>
+        <tbody>
+          <tr><td>Server Loading</td><td>Pre-loaded from config</td><td>None at startup (added via API)</td></tr>
+          <tr><td>Configuration</td><td>Static (config file)</td><td>Dynamic (REST API)</td></tr>
+          <tr><td>Persistence</td><td>Not required</td><td>Recommended (MongoDB)</td></tr>
+          <tr><td>Use Case</td><td>Quick testing</td><td>Production deployment</td></tr>
+          <tr><td>Management</td><td>CLI only</td><td>REST API + Frontend UI</td></tr>
+        </tbody>
+      </table>
+      <h3>Server Startup Flow</h3>
+      <div class="flow-diagram">
+        <div class="flow-step">
+          <span class="flow-step-number">1</span>
+          <span class="flow-step-title">Parse CLI Args</span>
+          <div class="flow-step-desc">Validate flags, generate/load bearer token, resolve MongoDB URI</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">2</span>
+          <span class="flow-step-title">Connect to MongoDB</span>
+          <div class="flow-step-desc">3 retry attempts with exponential backoff (2s, 4s, 8s), or fallback to in-memory</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">3</span>
+          <span class="flow-step-title">Initialize Managers</span>
+          <div class="flow-step-desc">Create ServerManager for lifecycle, start idle cleanup background task</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">4</span>
+          <span class="flow-step-title">Create FastAPI App</span>
+          <div class="flow-step-desc">Add CORS middleware, request size limiter (10MB), bearer token auth</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">5</span>
+          <span class="flow-step-title">Add Routes</span>
+          <div class="flow-step-desc">Management API (<code>/api/*</code>), Dynamic MCP Router (<code>/{server}/*</code>), health, metrics</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">6</span>
+          <span class="flow-step-title">Serve Frontend</span>
+          <div class="flow-step-desc">Mount built React app at root path (<code>/</code>)</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">7</span>
+          <span class="flow-step-title">Start Uvicorn</span>
+          <div class="flow-step-desc">Bind to <code>0.0.0.0:8099</code>, listen for HTTP requests</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">8</span>
+          <span class="flow-step-title">Ready for API Calls</span>
+          <div class="flow-step-desc">Server running with empty MCP server list. Use <code>/api/servers</code> to add servers.</div>
+        </div>
+      </div>
+    `
+  },
+  {
+    id:2,title:"Architecture",sub:"Component relationships and layered structure",
+    content:`
+      <p>FMCP Serve uses a layered architecture with clear separation between API routers, orchestration, persistence, and infrastructure layers.</p>
+      <h3>Layer Overview</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">text</span></div><div class="code-body"><pre>┌─── ENTRY / CLI ─────────────────────────────────────┐
+│  cli.py · serve command handler                     │
+│  Parses args, bootstraps server                     │
+└──────────────────────────────────────────────────────┘
+                      ↓
+┌─── APPLICATION LAYER ───────────────────────────────┐
+│  server.py · create_app()                           │
+│  FastAPI app with CORS, auth, size limiter          │
+└──────────────────────────────────────────────────────┘
+         ↓              ↓              ↓
+┌─── API ROUTERS ──┐ ┌─ MANAGERS ───┐ ┌─ STORAGE ───┐
+│  management.py   │ │ server_      │ │ MongoDB OR  │
+│  • CRUD servers  │→│ manager.py   │→│ InMemory    │
+│  • Start/stop    │ │ • Lifecycle  │ │ Backend     │
+│  • Logs          │ │ • Idle timer │ │             │
+│                  │ │ • PID lock   │ │             │
+│  package_        │ └──────────────┘ └─────────────┘
+│  launcher.py     │
+│  • Dynamic MCP   │
+│    routing       │
+└──────────────────┘</pre></div></div>
+      <h3>Key Components</h3>
+      <table class="flow-table">
+        <thead><tr><th>Component</th><th>File</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td>Serve Handler</td><td>cli.py</td><td>CLI entry, parse args, bootstrap server</td></tr>
+          <tr><td>FastAPI App</td><td>server.py · create_app()</td><td>App creation with middleware stack</td></tr>
+          <tr><td>Lifespan Manager</td><td>server.py · lifespan()</td><td>Startup/shutdown lifecycle hooks</td></tr>
+          <tr><td>Management API</td><td>api/management.py</td><td>REST endpoints for server CRUD</td></tr>
+          <tr><td>Server Manager</td><td>services/server_manager.py</td><td>Orchestrate MCP server lifecycle</td></tr>
+          <tr><td>Dynamic Router</td><td>services/package_launcher.py</td><td>Create routes on-demand for MCP servers</td></tr>
+          <tr><td>Database Manager</td><td>repositories/database.py</td><td>MongoDB connection and queries</td></tr>
+          <tr><td>In-Memory Backend</td><td>repositories/memory.py</td><td>Fallback ephemeral storage</td></tr>
+          <tr><td>Auth Middleware</td><td>auth.py</td><td>Bearer token validation</td></tr>
+          <tr><td>Frontend Routes</td><td>services/frontend_utils.py</td><td>Serve React static files</td></tr>
+        </tbody>
+      </table>
+      <div class="ok-box"><div class="box-icon">&#x2705;</div><div class="box-text"><strong>MongoDB Collections:</strong> <code>fluidmcp_servers</code> (configs), <code>fluidmcp_server_instances</code> (runtime state), <code>fluidmcp_server_logs</code> (capped 100MB), <code>fluidmcp_llm_models</code>, <code>fluidmcp_llm_model_versions</code></div></div>
+    `
+  },
+  {
+    id:3,title:"Directory Structure",sub:"Complete codebase organization for FMCP Serve",
+    content:`
+      <p>Understanding where the code lives is essential for navigating and modifying the FMCP Serve feature.</p>
+      <h3>Complete File Organization</h3>
+      <div class="directory-tree">
+        <div class="dir-line">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">fluidmcp/</span>
+        </div>
+
+        <div class="dir-line dir-indent-1">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">cli/</span>
+        </div>
+
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">cli.py</span>
+          <span class="dir-comment"># Entry point - serve command parser</span>
+        </div>
+
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">server.py</span>
+          <span class="dir-comment"># FastAPI app, middleware, routes</span>
+        </div>
+
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">api/</span>
+        </div>
+
+        <div class="dir-line dir-indent-3">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">management.py</span>
+          <span class="dir-comment"># Management API routes</span>
+        </div>
+
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">services/</span>
+        </div>
+
+        <div class="dir-line dir-indent-3">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">server_manager.py</span>
+          <span class="dir-comment"># Server lifecycle orchestration</span>
+        </div>
+
+        <div class="dir-line dir-indent-3">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">package_launcher.py</span>
+          <span class="dir-comment"># Dynamic MCP router creation</span>
+        </div>
+
+        <div class="dir-line dir-indent-3">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-name">frontend_utils.py</span>
+          <span class="dir-comment"># React app serving</span>
+        </div>
+
+        <div class="dir-line dir-indent-2">
+          <span class="dir-icon">&#x1F4C1;</span>
+          <span class="dir-name">repositories/</span>
+        </div>
+
+        <div class="dir-line dir-indent-3">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-highlight">database.py</span>
+          <span class="dir-comment"># MongoDB connection & queries</span>
+        </div>
+
+        <div class="dir-line dir-indent-3">
+          <span class="dir-icon">&#x1F4C4;</span>
+          <span class="dir-name">memory.py</span>
+          <span class="dir-comment"># In-memory fallback backend</span>
+        </div>
+      </div>
+      <div class="warn-box"><div class="box-icon">&#x26A0;</div><div class="box-text"><strong>Token Storage:</strong> Bearer token saved to <code>~/.fmcp/tokens/current_token.txt</code> with <code>0o600</code> permissions (owner read/write only).</div></div>
+    `
+  },
+  {
+    id:4,title:"MongoDB Persistence",sub:"Connection handling, retry logic, and fallback behavior",
+    content:`
+      <h3>Connection Process</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">python</span></div><div class="code-body"><pre><span class="cm"># repositories/database.py</span>
+<span class="kw">class</span> <span class="fn">DatabaseManager</span>:
+    <span class="kw">async def</span> <span class="fn">connect</span>(self, uri, database):
+        <span class="cm"># Retry logic with exponential backoff</span>
+        <span class="kw">for</span> attempt <span class="kw">in</span> range(<span class="num">3</span>):
+            <span class="kw">try</span>:
+                self.client = AsyncIOMotorClient(
+                    uri,
+                    serverSelectionTimeoutMS=<span class="num">30000</span>,
+                    connectTimeoutMS=<span class="num">10000</span>,
+                    socketTimeoutMS=<span class="num">45000</span>,
+                    retryWrites=<span class="kw">True</span>,
+                    w=<span class="str">"majority"</span>
+                )
+                <span class="cm"># Ping to verify connection</span>
+                <span class="kw">await</span> self.client.admin.command(<span class="str">'ping'</span>)
+                self.db = self.client[database]
+                logger.info(<span class="str">"MongoDB connected"</span>)
+                <span class="kw">return</span>
+            <span class="kw">except</span> Exception <span class="kw">as</span> e:
+                delay = <span class="num">2</span> ** attempt  <span class="cm"># 2s, 4s, 8s</span>
+                <span class="kw">await</span> asyncio.sleep(delay)</pre></div></div>
+      <h3>Configuration Priority</h3>
+      <table class="flow-table">
+        <thead><tr><th>Setting</th><th>Priority Order</th></tr></thead>
+        <tbody>
+          <tr><td>Bearer Token</td><td>CLI <code>--token</code> > Env <code>FMCP_BEARER_TOKEN</code> > Auto-generate</td></tr>
+          <tr><td>MongoDB URI</td><td>CLI <code>--mongodb-uri</code> > Env <code>MONGODB_URI</code> > <code>mongodb://localhost:27017</code></td></tr>
+          <tr><td>Port</td><td>CLI <code>--port</code> > Env <code>PORT</code> > Default <code>8099</code></td></tr>
+          <tr><td>CORS Origins</td><td>CLI <code>--allowed-origins</code> > Env <code>FMCP_ALLOWED_ORIGINS</code> > Localhost only</td></tr>
+        </tbody>
+      </table>
+      <h3>Startup Modes</h3>
+      <table class="flow-table">
+        <thead><tr><th>Mode</th><th>Command</th><th>Persistence</th></tr></thead>
+        <tbody>
+          <tr><td>Secure + MongoDB</td><td><code>fmcp serve --secure</code></td><td>MongoDB</td></tr>
+          <tr><td>Secure + In-Memory</td><td><code>fmcp serve --secure --in-memory</code></td><td>None</td></tr>
+          <tr><td>Insecure + In-Memory</td><td><code>fmcp serve --in-memory</code></td><td>None</td></tr>
+          <tr><td>Require Persistence</td><td><code>fmcp serve --require-persistence</code></td><td>MongoDB (fail if unavailable)</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Fallback Behavior:</strong> If MongoDB connection fails and <code>--require-persistence</code> is NOT set, server continues with <code>InMemoryBackend</code>. All data lost on restart.</div></div>
+    `
+  },
+  {
+    id:5,title:"Bearer Token Auth",sub:"Token generation, storage, and validation",
+    content:`
+      <h3>Token Generation</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">python</span></div><div class="code-body"><pre><span class="cm"># server.py:72-92</span>
+<span class="kw">def</span> <span class="fn">save_token_to_file</span>(token):
+    token_dir = Path.home() / <span class="str">".fmcp"</span> / <span class="str">"tokens"</span>
+    token_dir.mkdir(parents=<span class="kw">True</span>, exist_ok=<span class="kw">True</span>)
+
+    token_file = token_dir / <span class="str">"current_token.txt"</span>
+    token_file.write_text(token)
+
+    <span class="cm"># Set secure permissions (owner read/write only)</span>
+    token_file.chmod(<span class="num">0o600</span>)
+
+    logger.info(<span class="str">f"Token saved to {token_file}"</span>)
+
+<span class="cm"># In main() function</span>
+<span class="kw">if</span> secure_mode:
+    token = args.token <span class="kw">or</span> os.getenv(<span class="str">"FMCP_BEARER_TOKEN"</span>)
+    <span class="kw">if not</span> token:
+        <span class="cm"># Auto-generate if not provided</span>
+        token = secrets.token_urlsafe(<span class="num">32</span>)
+        save_token_to_file(token)
+        os.environ[<span class="str">"FMCP_BEARER_TOKEN"</span>] = token</pre></div></div>
+      <h3>Request Validation</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">python</span></div><div class="code-body"><pre><span class="cm"># Middleware validates Authorization header</span>
+<span class="var">@app.middleware</span>(<span class="str">"http"</span>)
+<span class="kw">async def</span> <span class="fn">auth_middleware</span>(request, call_next):
+    <span class="kw">if</span> request.url.path <span class="kw">in</span> [<span class="str">"/health"</span>, <span class="str">"/metrics"</span>, <span class="str">"/docs"</span>]:
+        <span class="kw">return await</span> call_next(request)
+
+    auth_header = request.headers.get(<span class="str">"Authorization"</span>)
+    <span class="kw">if not</span> auth_header <span class="kw">or not</span> auth_header.startswith(<span class="str">"Bearer "</span>):
+        <span class="kw">return</span> JSONResponse(
+            status_code=<span class="num">401</span>,
+            content={<span class="str">"detail"</span>: <span class="str">"Missing or invalid token"</span>}
+        )
+
+    token = auth_header.split(<span class="str">" "</span>)[<span class="num">1</span>]
+    expected = os.getenv(<span class="str">"FMCP_BEARER_TOKEN"</span>)
+    <span class="kw">if</span> token != expected:
+        <span class="kw">return</span> JSONResponse(status_code=<span class="num">401</span>, content={<span class="str">"detail"</span>: <span class="str">"Invalid token"</span>})
+
+    <span class="kw">return await</span> call_next(request)</pre></div></div>
+      <h3>Example API Request</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">bash</span></div><div class="code-body"><pre><span class="cm"># Add server with authentication</span>
+curl -X POST http://localhost:8099/api/servers \
+  -H <span class="str">"Authorization: Bearer YOUR_TOKEN"</span> \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "server_id": "filesystem",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    }
+  }'</span></pre></div></div>
+      <div class="warn-box"><div class="box-icon">&#x26A0;</div><div class="box-text"><strong>Railway Deployment:</strong> Always set <code>FMCP_BEARER_TOKEN</code> environment variable manually. Auto-generated tokens regenerate on every restart, breaking authentication.</div></div>
+    `
+  },
+  {
+    id:6,title:"Server Lifecycle",sub:"Starting, stopping, and managing MCP servers",
+    content:`
+      <h3>ServerManager Orchestration</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">python</span></div><div class="code-body"><pre><span class="cm"># services/server_manager.py</span>
+<span class="kw">class</span> <span class="fn">ServerManager</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, db_manager):
+        self.db = db_manager
+        self.processes = {}  <span class="cm"># In-memory process registry</span>
+        self.clients = {}    <span class="cm"># MCP client connections</span>
+        self.locks = {}      <span class="cm"># PID-based optimistic locking</span>
+
+        <span class="cm"># Start background idle cleanup task</span>
+        asyncio.create_task(self._idle_cleanup_loop())
+
+    <span class="kw">async def</span> <span class="fn">start_server</span>(self, server_id):
+        <span class="cm"># Load config from database</span>
+        config = <span class="kw">await</span> self.db.get_server(server_id)
+
+        <span class="cm"># Spawn subprocess</span>
+        process = subprocess.Popen(
+            [config[<span class="str">"command"</span>]] + config[<span class="str">"args"</span>],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=config.get(<span class="str">"env"</span>, {})
+        )
+
+        <span class="cm"># Store in registry</span>
+        self.processes[server_id] = process
+
+        <span class="cm"># Initialize MCP connection</span>
+        <span class="kw">await</span> self._initialize_mcp(server_id, process)
+
+        <span class="cm"># Update database</span>
+        <span class="kw">await</span> self.db.update_instance(server_id, {
+            <span class="str">"status"</span>: <span class="str">"running"</span>,
+            <span class="str">"pid"</span>: process.pid,
+            <span class="str">"started_at"</span>: datetime.utcnow()
+        })</pre></div></div>
+      <h3>Idle Cleanup</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">python</span></div><div class="code-body"><pre><span class="kw">async def</span> <span class="fn">_idle_cleanup_loop</span>(self):
+    <span class="kw">while</span> <span class="kw">True</span>:
+        <span class="kw">await</span> asyncio.sleep(<span class="num">300</span>)  <span class="cm"># Every 5 minutes</span>
+
+        <span class="kw">for</span> server_id, process <span class="kw">in</span> self.processes.items():
+            instance = <span class="kw">await</span> self.db.get_instance(server_id)
+            last_activity = instance.get(<span class="str">"last_activity"</span>)
+
+            <span class="cm"># Stop if idle > 1 hour</span>
+            <span class="kw">if</span> last_activity <span class="kw">and</span> (datetime.utcnow() - last_activity).seconds > <span class="num">3600</span>:
+                logger.info(<span class="str">f"Stopping idle server: {server_id}"</span>)
+                <span class="kw">await</span> self.stop_server(server_id)</pre></div></div>
+      <h3>Management API Endpoints</h3>
+      <table class="flow-table">
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>/api/servers</td><td>POST</td><td>Create server configuration</td></tr>
+          <tr><td>/api/servers</td><td>GET</td><td>List all servers</td></tr>
+          <tr><td>/api/servers/{id}</td><td>GET</td><td>Get server details</td></tr>
+          <tr><td>/api/servers/{id}</td><td>PUT</td><td>Update server config</td></tr>
+          <tr><td>/api/servers/{id}</td><td>DELETE</td><td>Delete server</td></tr>
+          <tr><td>/api/servers/{id}/start</td><td>POST</td><td>Start MCP subprocess</td></tr>
+          <tr><td>/api/servers/{id}/stop</td><td>POST</td><td>Stop MCP subprocess</td></tr>
+          <tr><td>/api/servers/{id}/restart</td><td>POST</td><td>Restart server</td></tr>
+          <tr><td>/api/servers/{id}/logs</td><td>GET</td><td>Get server logs</td></tr>
+        </tbody>
+      </table>
+      <div class="ok-box"><div class="box-icon">&#x2705;</div><div class="box-text"><strong>Optimistic Locking:</strong> Uses PID to prevent race conditions. If PID changed since read, operation fails with <code>409 Conflict</code>.</div></div>
+    `
+  },
+  {
+    id:7,title:"Dynamic MCP Routing",sub:"Creating routes on-demand when servers start",
+    content:`
+      <h3>Router Creation</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">python</span></div><div class="code-body"><pre><span class="cm"># services/package_launcher.py</span>
+<span class="kw">def</span> <span class="fn">create_dynamic_router</span>(server_manager):
+    router = APIRouter()
+
+    <span class="cm"># JSON-RPC proxy endpoint</span>
+    <span class="var">@router.post</span>(<span class="str">"/{server_id}/mcp"</span>)
+    <span class="kw">async def</span> <span class="fn">proxy_mcp_request</span>(server_id: str, request: dict):
+        process = server_manager.processes.get(server_id)
+        <span class="kw">if not</span> process:
+            <span class="kw">raise</span> HTTPException(<span class="num">404</span>, <span class="str">"Server not running"</span>)
+
+        <span class="cm"># Write to subprocess stdin</span>
+        process.stdin.write(json.dumps(request).encode() + <span class="str">b"\\n"</span>)
+        <span class="kw">await</span> process.stdin.drain()
+
+        <span class="cm"># Read from subprocess stdout</span>
+        response = <span class="kw">await</span> process.stdout.readline()
+        <span class="kw">return</span> json.loads(response)
+
+    <span class="cm"># Server-Sent Events endpoint</span>
+    <span class="var">@router.post</span>(<span class="str">"/{server_id}/sse"</span>)
+    <span class="kw">async def</span> <span class="fn">sse_stream</span>(server_id: str):
+        process = server_manager.processes.get(server_id)
+
+        <span class="kw">async def</span> <span class="fn">event_generator</span>():
+            <span class="kw">while</span> <span class="kw">True</span>:
+                line = <span class="kw">await</span> process.stdout.readline()
+                <span class="kw">yield</span> <span class="str">f"data: {line.decode()}\\n\\n"</span>
+
+        <span class="kw">return</span> StreamingResponse(
+            event_generator(),
+            media_type=<span class="str">"text/event-stream"</span>
+        )
+
+    <span class="kw">return</span> router</pre></div></div>
+      <h3>Available Dynamic Endpoints</h3>
+      <table class="flow-table">
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td>/{server}/mcp</td><td>POST</td><td>JSON-RPC proxy to MCP subprocess</td></tr>
+          <tr><td>/{server}/sse</td><td>POST</td><td>Server-Sent Events streaming</td></tr>
+          <tr><td>/{server}/mcp/tools/list</td><td>GET</td><td>List available tools</td></tr>
+          <tr><td>/{server}/mcp/tools/call</td><td>POST</td><td>Execute a tool</td></tr>
+          <tr><td>/{server}/mcp/resources/list</td><td>GET</td><td>List resources</td></tr>
+          <tr><td>/{server}/mcp/resources/read</td><td>POST</td><td>Read resource</td></tr>
+          <tr><td>/{server}/mcp/prompts/list</td><td>GET</td><td>List prompts</td></tr>
+          <tr><td>/{server}/mcp/prompts/get</td><td>POST</td><td>Get prompt</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Last Activity Tracking:</strong> Every MCP request updates <code>last_activity</code> timestamp in MongoDB to prevent idle cleanup.</div></div>
+    `
+  },
+  {
+    id:8,title:"Error Handling",sub:"Common errors and troubleshooting",
+    content:`
+      <h3>Common Error Scenarios</h3>
+      <table class="flow-table">
+        <thead><tr><th>Error</th><th>Cause</th><th>Solution</th></tr></thead>
+        <tbody>
+          <tr><td>MongoDB connection failed</td><td>URI incorrect or MongoDB unavailable</td><td>Verify <code>MONGODB_URI</code>, check MongoDB status</td></tr>
+          <tr><td>401 Unauthorized</td><td>Missing or invalid bearer token</td><td>Check <code>Authorization: Bearer TOKEN</code> header</td></tr>
+          <tr><td>413 Payload Too Large</td><td>Request body exceeds 10MB</td><td>Reduce request size or increase limit in <code>server.py</code></td></tr>
+          <tr><td>404 Server not found</td><td>Server ID doesn't exist</td><td>Verify server ID with <code>GET /api/servers</code></td></tr>
+          <tr><td>409 Conflict</td><td>Optimistic locking failed (PID changed)</td><td>Retry operation, another process modified server</td></tr>
+          <tr><td>500 MCP subprocess crashed</td><td>MCP server process terminated</td><td>Check logs with <code>GET /api/servers/{id}/logs</code></td></tr>
+        </tbody>
+      </table>
+      <h3>Debugging Checklist</h3>
+      <div class="cards">
+        <div class="card"><div class="card-icon">&#x1F50D;</div><div class="card-title">Health Endpoint</div><div class="card-text">Check <code>GET /health</code> for database connection status and persistence mode.</div></div>
+        <div class="card"><div class="card-icon">&#x1F4CA;</div><div class="card-title">Metrics Endpoint</div><div class="card-text">Access <code>GET /metrics</code> for Prometheus metrics (request count, latency, etc.)</div></div>
+        <div class="card"><div class="card-icon">&#x1F4DD;</div><div class="card-title">Server Logs</div><div class="card-text">Query <code>GET /api/servers/{id}/logs</code> for MCP subprocess stderr output.</div></div>
+      </div>
+      <h3>Health Endpoint Response</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">json</span></div><div class="code-body"><pre>{
+  <span class="str">"status"</span>: <span class="str">"healthy"</span>,
+  <span class="str">"database"</span>: <span class="str">"connected"</span>,
+  <span class="str">"persistence_enabled"</span>: <span class="kw">true</span>,
+  <span class="str">"server_count"</span>: <span class="num">3</span>,
+  <span class="str">"running_count"</span>: <span class="num">2</span>
+}</pre></div></div>
+      <div class="warn-box"><div class="box-icon">&#x26A0;</div><div class="box-text"><strong>Crash Loop:</strong> If MongoDB misconfigured with <code>--require-persistence</code>, container enters crash loop. This is intentional. Fix MongoDB to resolve.</div></div>
+    `
+  },
+  {
+    id:9,title:"Production Deployment",sub:"Railway deployment and best practices",
+    content:`
+      <h3>Railway Quick Start</h3>
+      <div class="flow-diagram">
+        <div class="flow-step">
+          <span class="flow-step-number">1</span>
+          <span class="flow-step-title">Add MongoDB Service</span>
+          <div class="flow-step-desc">Railway → New → Database → MongoDB</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">2</span>
+          <span class="flow-step-title">Connect Repository</span>
+          <div class="flow-step-desc">Railway → New → GitHub Repo → fluidmcp (branch: <code>fluidmcp_V1</code>)</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">3</span>
+          <span class="flow-step-title">Set Bearer Token</span>
+          <div class="flow-step-desc">Generate: <code>openssl rand -hex 32</code>, set as <code>FMCP_BEARER_TOKEN</code></div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">4</span>
+          <span class="flow-step-title">Deploy</span>
+          <div class="flow-step-desc">Railway auto-detects <code>Dockerfile</code> and deploys</div>
+        </div>
+        <div class="flow-step">
+          <span class="flow-step-number">5</span>
+          <span class="flow-step-title">Verify</span>
+          <div class="flow-step-desc">Check <code>/health</code> endpoint shows <code>database: "connected"</code></div>
+        </div>
+      </div>
+      <h3>Environment Variables</h3>
+      <table class="flow-table">
+        <thead><tr><th>Variable</th><th>Source</th><th>Required</th></tr></thead>
+        <tbody>
+          <tr><td>PORT</td><td>Railway (automatic)</td><td>No</td></tr>
+          <tr><td>MONGODB_URI</td><td>Railway MongoDB service</td><td>No</td></tr>
+          <tr><td>FMCP_BEARER_TOKEN</td><td>Manual (set this!)</td><td>Yes</td></tr>
+          <tr><td>FMCP_ALLOWED_ORIGINS</td><td>Manual (optional)</td><td>No</td></tr>
+          <tr><td>FMCP_DATABASE</td><td>Manual (optional)</td><td>No</td></tr>
+        </tbody>
+      </table>
+      <h3>Example API Usage</h3>
+      <div class="code-block"><div class="code-header"><span class="code-lang">bash</span></div><div class="code-body"><pre><span class="cm"># Add server</span>
+curl -X POST https://your-app.railway.app/api/servers \
+  -H <span class="str">"Authorization: Bearer YOUR_TOKEN"</span> \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+    "server_id": "filesystem",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    }
+  }'</span>
+
+<span class="cm"># Start server</span>
+curl -X POST https://your-app.railway.app/api/servers/filesystem/start \
+  -H <span class="str">"Authorization: Bearer YOUR_TOKEN"</span>
+
+<span class="cm"># List servers</span>
+curl -X GET https://your-app.railway.app/api/servers \
+  -H <span class="str">"Authorization: Bearer YOUR_TOKEN"</span></pre></div></div>
+      <div class="ok-box"><div class="box-icon">&#x2705;</div><div class="box-text"><strong>Complete Documentation:</strong> See <code>docs/RAILWAY_DEPLOYMENT.md</code> for full deployment guide, API documentation, and troubleshooting.</div></div>
+      <div class="info-box"><div class="box-icon">&#x1F4A1;</div><div class="box-text"><strong>Next Steps:</strong> Explore the <strong>GitHub Clone Tutorial</strong> to learn how FluidMCP clones repositories and launches MCP servers from GitHub.</div></div>
+    `
+  }
+];
+
+const nav=document.getElementById('nav'),main=document.getElementById('main');
+const progFill=document.getElementById('prog-fill'),progTxt=document.getElementById('prog-txt');
+const DONE_KEY='fmcp_serve_done';let done=JSON.parse(localStorage.getItem(DONE_KEY)||'[]');
+function updateProgress(){const p=Math.round(done.length/lessons.length*100);progFill.style.width=p+'%';progTxt.textContent=done.length+' / '+lessons.length}
+lessons.forEach((l,i)=>{
+  const ni=document.createElement('div');
+  ni.className='nav-item'+(i===0?' active':'')+(done.includes(l.id)?' done':'');
+  ni.innerHTML=`<div class="nav-badge">${done.includes(l.id)?'&#x2713;':l.id}</div><div class="nav-label">${l.title}</div>`;
+  ni.addEventListener('click',()=>showLesson(i));nav.appendChild(ni);
+  const sec=document.createElement('section');
+  sec.className='lesson'+(i===0?' active':'');
+  sec.innerHTML=`<div class="lesson-badge">&#x1F680; Lesson ${l.id}</div><h1 class="lesson-title">${l.title}</h1><p class="lesson-subtitle">${l.sub}</p>${l.content}
+    <button class="complete-btn ${done.includes(l.id)?'done':''}" onclick="markDone(${l.id},this)">${done.includes(l.id)?'&#x2713; Completed':'&#x2713; Mark Complete'}</button>
+    <div style="margin-top:20px;display:flex;gap:12px">
+      ${i>0?`<button onclick="showLesson(${i-1})" style="padding:10px 18px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text2);cursor:pointer;font-size:13px">&#x2190; Prev</button>`:''}
+      ${i<lessons.length-1?`<button onclick="showLesson(${i+1})" style="padding:10px 18px;background:var(--accent);border:none;border-radius:8px;color:#000;cursor:pointer;font-size:13px;font-weight:600">Next &#x2192;</button>`:''}</div>`;
+  main.appendChild(sec);
+});
+function showLesson(idx){document.querySelectorAll('.lesson').forEach((s,i)=>s.classList.toggle('active',i===idx));document.querySelectorAll('.nav-item').forEach((n,i)=>n.classList.toggle('active',i===idx));window.scrollTo(0,0)}
+function markDone(id,btn){if(!done.includes(id))done.push(id);localStorage.setItem(DONE_KEY,JSON.stringify(done));btn.textContent='✓ Completed';btn.classList.add('done');const ni=nav.querySelectorAll('.nav-item')[id-1];ni.classList.add('done');ni.querySelector('.nav-badge').innerHTML='&#x2713;';updateProgress()}
+updateProgress();
+</script>
+</body>
+</html>
