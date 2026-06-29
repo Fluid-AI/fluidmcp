@@ -85,9 +85,10 @@ class ServerManager:
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
 
-        # Concurrency semaphores: server_id -> asyncio.Semaphore
-        # Created lazily when max_concurrent_requests is set in the server config.
-        self._concurrency_semaphores: Dict[str, asyncio.Semaphore] = {}
+        # Concurrency semaphores: server_id -> (configured_limit, asyncio.Semaphore)
+        # Stored as a tuple so we can detect when the configured limit changes and
+        # recreate the semaphore with the new value instead of keeping a stale one.
+        self._concurrency_semaphores: Dict[str, tuple] = {}
 
         # Event loop for async operations
         self._loop = None
@@ -443,20 +444,35 @@ class ServerManager:
             return await self._stop_server_unlocked(id, force)
 
     def get_concurrency_semaphore(self, server_id: str) -> Optional[asyncio.Semaphore]:
-        """Return the semaphore for server_id, or None if no limit is configured."""
+        """Return the semaphore for server_id, or None if no limit is configured.
+
+        The cache stores (configured_limit, semaphore) tuples so that a config
+        change (e.g. raising or lowering max_concurrent_requests) automatically
+        produces a fresh semaphore rather than continuing to enforce the stale
+        value for the lifetime of the process.
+        """
         config = self.configs.get(server_id, {})
         limit = int(config.get("max_concurrent_requests") or 0)
         if limit <= 0:
+            # Remove any stale semaphore if the limit was removed from config.
+            self._concurrency_semaphores.pop(server_id, None)
             return None
-        if server_id not in self._concurrency_semaphores:
-            self._concurrency_semaphores[server_id] = asyncio.Semaphore(limit)
-        return self._concurrency_semaphores[server_id]
+        cached = self._concurrency_semaphores.get(server_id)
+        if cached is None or cached[0] != limit:
+            # No cached semaphore, or the cached one was built for a different
+            # limit.  Recreate it.  Any coroutines already holding the old
+            # semaphore will release it normally; new requests use the fresh one.
+            sem = asyncio.Semaphore(limit)
+            self._concurrency_semaphores[server_id] = (limit, sem)
+            return sem
+        return cached[1]
 
     def get_concurrency_info(self, server_id: str) -> Dict[str, Any]:
         """Return concurrency limit and current active count for a server."""
         config = self.configs.get(server_id, {})
         limit = int(config.get("max_concurrent_requests") or 0)
-        sem = self._concurrency_semaphores.get(server_id)
+        cached = self._concurrency_semaphores.get(server_id)
+        sem = cached[1] if cached else None
         active = (limit - sem._value) if sem and limit > 0 else None
         return {
             "server_id": server_id,

@@ -11,12 +11,18 @@ Metrics exposed:
 """
 
 import math
+import re
 import time
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
 from threading import Lock
 
 from loguru import logger
+
+
+def _escape_label_value(value: str) -> str:
+    """Escape a Prometheus label value per the text exposition spec."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 class Metric:
@@ -63,7 +69,7 @@ class Metric:
         with self._lock:
             for key, value in sorted(self.samples.items()):
                 if self.labels:
-                    label_str = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
+                    label_str = ",".join(f'{label}="{_escape_label_value(val)}"' for label, val in zip(self.labels, key))
                     lines.append(f"{self.name}{{{label_str}}} {value}")
                 else:
                     lines.append(f"{self.name} {value}")
@@ -230,7 +236,7 @@ class Histogram(Metric):
             for key, hist in sorted(self.histograms.items()):
                 base_labels = ""
                 if self.labels:
-                    base_labels = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
+                    base_labels = ",".join(f'{label}="{_escape_label_value(val)}"' for label, val in zip(self.labels, key))
 
                 # Emit bucket counts
                 cumulative = 0
