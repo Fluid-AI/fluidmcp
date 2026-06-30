@@ -1975,6 +1975,7 @@ async def get_server_debug(
     request: Request,
     id: str,
     stderr_lines: int = Query(default=20, ge=1, le=200),
+    token: str = Depends(get_token),
 ):
     """
     Full debug snapshot for a server in a single request.

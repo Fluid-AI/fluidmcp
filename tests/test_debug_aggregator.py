@@ -223,3 +223,27 @@ class TestDebugAggregatorCrashes:
         data = client.get("/api/servers/srv/debug").json()
         assert data["crashes"]["crashes_per_hour"] == 1.0
         assert data["crashes"]["recent_crash_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Auth enforcement
+# ---------------------------------------------------------------------------
+
+class TestDebugAggregatorAuth:
+
+    def _make_unauthed_client(self, server_manager, backend):
+        app = FastAPI()
+        app.include_router(router, prefix="/api")
+        app.state.server_manager = server_manager
+        app.state.db_manager = backend
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_unauthenticated_request_is_rejected(self, server_manager, backend, monkeypatch):
+        """GET /api/servers/{id}/debug must require auth in secure mode — it returns sensitive diagnostics."""
+        monkeypatch.setenv("FMCP_SECURE_MODE", "true")
+        monkeypatch.setenv("FMCP_BEARER_TOKEN", "test-secret")
+        _register(server_manager, "srv")
+        resp = self._make_unauthed_client(server_manager, backend).get("/api/servers/srv/debug")
+        assert resp.status_code in (401, 403), (
+            f"Expected 401/403 for unauthenticated debug request, got {resp.status_code}"
+        )
