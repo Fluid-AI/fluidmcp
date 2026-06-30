@@ -16,7 +16,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
+from fastapi.responses import Response
 from .network_handle import NetworkSubprocessHandle
+from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
 
@@ -555,106 +557,95 @@ def create_dynamic_router(server_manager):
             if process is None:
                 raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-            # ── Network transport: forward via HTTP ──────────────────────────
-            if isinstance(process, NetworkSubprocessHandle):
-                logger.info(f"[mcp.call] {ctx}")
-                if process.transport == "http":
-                    try:
-                        _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
-                        response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
-                    except HTTPException as exc:
-                        if exc.status_code == 504:
-                            # Gateway timed out — subprocess is unresponsive. Fire-and-forget
-                            # an immediate restart without waiting for the next health-check cycle.
-                            monitor = getattr(server_manager, "_health_monitor", None)
-                            if monitor is not None:
-                                logger.error(
-                                    f"[RESTART] '{server_name}' — 504 from subprocess, "
-                                    f"scheduling immediate restart"
-                                )
-                                asyncio.ensure_future(monitor.trigger_restart(server_name))
-                            else:
-                                logger.error(
-                                    f"[RESTART] '{server_name}' — 504 from subprocess but "
-                                    f"health monitor not available, server will not auto-restart"
-                                )
-                        raise
-                else:
-                    response = await _proxy_to_sse_server(process.base_url, request)
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=network")
-                return JSONResponse(content=response)
-            # ── stdio transport continues below ─────────────────────────────
+            # Check if process is alive (stdio only — SSE/Network handles don't have .poll())
+            if not isinstance(process, (SseSubprocessHandle, NetworkSubprocessHandle)) and process.poll() is not None:
+                raise HTTPException(503, f"Server '{server_name}' is not running (process died)")
+
+            # Concurrency limiting — wraps ALL transport paths (network, SSE, stdio).
+            # sem._value peek is safe in asyncio: no await between check and acquire,
+            # so no other coroutine can interleave and take the slot.
+            sem = server_manager.get_concurrency_semaphore(server_name)
+            if sem is not None:
+                if sem._value <= 0:
+                    collector.record_rejected_request("concurrency_limit")
+                    return Response(
+                        content='{"error":"too many concurrent requests"}',
+                        status_code=429,
+                        media_type="application/json",
+                        headers={"Retry-After": "1"},
+                    )
+                await sem.acquire()
 
             try:
-                msg = json.dumps(request)
-                logger.info(f"[mcp.call] {ctx}")
+                # ── Network transport: forward via HTTP ──────────────────────────
+                if isinstance(process, NetworkSubprocessHandle):
+                    if process.transport == "http":
+                        try:
+                            _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
+                            response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
+                        except HTTPException as exc:
+                            if exc.status_code == 504:
+                                monitor = getattr(server_manager, "_health_monitor", None)
+                                if monitor is not None:
+                                    logger.error(
+                                        f"[RESTART] '{server_name}' — 504 from subprocess, "
+                                        f"scheduling immediate restart"
+                                    )
+                                    asyncio.ensure_future(monitor.trigger_restart(server_name))
+                                else:
+                                    logger.error(
+                                        f"[RESTART] '{server_name}' — 504 from subprocess but "
+                                        f"health monitor not available, server will not auto-restart"
+                                    )
+                            raise
+                    else:
+                        response = await _proxy_to_sse_server(process.base_url, request)
+                    return JSONResponse(content=response)
 
-                io_lock = _get_io_lock(server_name)
-                # Non-blocking acquire first; warn before blocking so contention is
-                # visible in logs without adding overhead on the happy path.
-                if not io_lock.locked():
-                    await io_lock.acquire()
-                else:
-                    logger.warning(f"[mcp.lock_wait] {ctx} — another request holds the I/O lock, queuing")
-                    await io_lock.acquire()
+                # ── SSE transport: forward via HTTP ─────────────────────────────
+                if isinstance(process, SseSubprocessHandle):
+                    with RequestTimer(collector, request.get("method", "unknown")):
+                        response = await _proxy_to_sse_server(process.sse_url, request)
+                        return JSONResponse(content=response)
+
+                # ── stdio transport ──────────────────────────────────────────────
                 try:
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        elapsed_ms = int((time.monotonic() - t0) * 1000)
-                        logger.error(f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
-                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                    # Send request to MCP server
+                    msg = json.dumps(request)
+                    async with _get_io_lock(server_name):
+                        try:
+                            process.stdin.write(msg + "\n")
+                            process.stdin.flush()
+                        except (BrokenPipeError, OSError) as e:
+                            raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                    # Wait for the MCP subprocess to write its JSON-RPC response.
-                    # _readline_with_timeout runs in a thread (via to_thread) and uses
-                    # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
-                    # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
-                    # A plain readline() here would block the thread forever on a hung server,
-                    # eventually exhausting the pool and making all healthy servers unreachable.
-                    response_line = await asyncio.to_thread(
-                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
-                    )
-                finally:
-                    io_lock.release()
-
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-
-                if not response_line:
-                    # Empty string means select() timed out — server did not respond.
-                    logger.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within {_MCP_READ_TIMEOUT}s")
-                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
-
-                _slow_ms = int(os.getenv("FMCP_SLOW_REQUEST_MS", "5000"))
-                if elapsed_ms > _slow_ms:
-                    logger.warning(f"[mcp.slow] {ctx} elapsed={elapsed_ms}ms — response was slow")
-
-                try:
+                        # Wait for the MCP subprocess to write its JSON-RPC response.
+                        # _readline_with_timeout runs in a thread (via to_thread) and uses
+                        # select() internally, so the thread itself exits after _MCP_READ_TIMEOUT
+                        # seconds if the server hangs — freeing the ThreadPoolExecutor slot.
+                        # A plain readline() here would block the thread forever on a hung server,
+                        # eventually exhausting the pool and making all healthy servers unreachable.
+                        response_line = await asyncio.to_thread(
+                            _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                        )
+                        if not response_line:
+                            # Empty string means select() timed out — server did not respond.
+                            raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
                     response_data = json.loads(response_line)
-                except json.JSONDecodeError as e:
-                    logger.error(f"[mcp.bad_response] {ctx} elapsed={elapsed_ms}ms — invalid JSON: {e} raw={response_line[:300]}")
-                    raise HTTPException(502, "MCP server returned invalid JSON")
 
-                if "error" in response_data:
-                    err = response_data["error"]
-                    err_code = err.get("code") if isinstance(err, dict) else None
-                    err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
-                    logger.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
-                else:
-                    logger.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
+                    # Update last_used_at for idle cleanup
+                    await server_manager.update_last_used(server_name)
 
-                # Update last_used_at for idle cleanup
-                await server_manager.update_last_used(server_name)
+                    return JSONResponse(content=response_data)
 
-                return JSONResponse(content=response_data)
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                elapsed_ms = int((time.monotonic() - t0) * 1000)
-                logger.error(f"[mcp.error] {ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}", exc_info=True)
-                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error proxying request to '{server_name}': {e}")
+                    raise HTTPException(500, f"Error communicating with server: {str(e)}")
+            finally:
+                if sem is not None:
+                    sem.release()
 
     @router.post("/{server_name}/sse", tags=["mcp"])
     async def sse_stream(
@@ -696,6 +687,20 @@ def create_dynamic_router(server_manager):
         process = server_manager.processes.get(server_name)
         if process is None:
             raise HTTPException(503, f"Server '{server_name}' failed to start")
+
+        # Concurrency limiting for SSE — long-lived connections consume a slot for their duration
+        _sse_sem = server_manager.get_concurrency_semaphore(server_name)
+        if _sse_sem is not None:
+            # sem._value peek is safe in asyncio: no await between check and acquire
+            if _sse_sem._value <= 0:
+                collector.record_rejected_request("concurrency_limit")
+                return Response(
+                    content='{"error":"too many concurrent requests"}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "1"},
+                )
+            await _sse_sem.acquire()
 
         async def event_generator() -> AsyncIterator[str]:
             completion_status = "success"
@@ -831,6 +836,8 @@ def create_dynamic_router(server_manager):
                 # Record streaming metrics
                 collector.record_streaming_request(completion_status)
                 collector.decrement_active_streams()
+                if _sse_sem is not None:
+                    _sse_sem.release()
 
         return StreamingResponse(
             event_generator(),
@@ -851,50 +858,67 @@ def create_dynamic_router(server_manager):
         if process is None:
             raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-        # ── Network transport ────────────────────────────────────────────────
-        if isinstance(process, NetworkSubprocessHandle):
-            payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
-            if process.transport == "http":
-                response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
-            else:
-                response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
-            return JSONResponse(content=response)
-        # ── stdio transport continues below ──────────────────────────────────
+        collector = MetricsCollector(server_name)
+        sem = server_manager.get_concurrency_semaphore(server_name)
+        if sem is not None:
+            if sem._value <= 0:
+                collector.record_rejected_request("concurrency_limit")
+                return Response(
+                    content='{"error":"too many concurrent requests"}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "1"},
+                )
+            await sem.acquire()
 
         try:
-            request_payload = {
-                "id": 1,
-                "jsonrpc": "2.0",
-                "method": "tools/list"
-            }
+            # ── Network transport ────────────────────────────────────────────────
+            if isinstance(process, NetworkSubprocessHandle):
+                payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+                if process.transport == "http":
+                    response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
+                else:
+                    response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
+                return JSONResponse(content=response)
+            # ── stdio transport continues below ──────────────────────────────────
 
-            msg = json.dumps(request_payload)
-            async with _get_io_lock(server_name):
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            try:
+                request_payload = {
+                    "id": 1,
+                    "jsonrpc": "2.0",
+                    "method": "tools/list"
+                }
 
-                # Wait for the tools/list response from the MCP subprocess.
-                # _readline_with_timeout runs inside the thread and uses select() to
-                # enforce the timeout at the OS level, ensuring the thread returns and
-                # its pool slot is freed if this server hangs.
-                response_line = await asyncio.to_thread(
-                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
-                )
-                if not response_line:
-                    # select() timed out — no response received within the deadline.
-                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
-            response_data = json.loads(response_line)
+                msg = json.dumps(request_payload)
+                async with _get_io_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            return JSONResponse(content=response_data)
+                    # Wait for the tools/list response from the MCP subprocess.
+                    # _readline_with_timeout runs inside the thread and uses select() to
+                    # enforce the timeout at the OS level, ensuring the thread returns and
+                    # its pool slot is freed if this server hangs.
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
+                    if not response_line:
+                        # select() timed out — no response received within the deadline.
+                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
+                response_data = json.loads(response_line)
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error listing tools for '{server_name}': {e}")
-            raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                return JSONResponse(content=response_data)
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error listing tools for '{server_name}': {e}")
+                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+        finally:
+            if sem is not None:
+                sem.release()
 
     @router.post("/{server_name}/mcp/tools/call", tags=["mcp"])
     async def call_tool(
@@ -917,66 +941,83 @@ def create_dynamic_router(server_manager):
         if process is None:
             raise HTTPException(503, f"Server '{server_name}' failed to start")
 
-        # ── Network transport ────────────────────────────────────────────────
-        if isinstance(process, NetworkSubprocessHandle):
-            if "name" not in request_body:
-                raise HTTPException(400, "Tool name is required")
-            payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
-            if process.transport == "http":
-                response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
-            else:
-                response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
-            return JSONResponse(content=response)
-        # ── stdio transport continues below ──────────────────────────────────
+        collector = MetricsCollector(server_name)
+        sem = server_manager.get_concurrency_semaphore(server_name)
+        if sem is not None:
+            if sem._value <= 0:
+                collector.record_rejected_request("concurrency_limit")
+                return Response(
+                    content='{"error":"too many concurrent requests"}',
+                    status_code=429,
+                    media_type="application/json",
+                    headers={"Retry-After": "1"},
+                )
+            await sem.acquire()
 
         try:
-            if "name" not in request_body:
-                raise HTTPException(400, "Tool name is required")
+            # ── Network transport ────────────────────────────────────────────────
+            if isinstance(process, NetworkSubprocessHandle):
+                if "name" not in request_body:
+                    raise HTTPException(400, "Tool name is required")
+                payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
+                if process.transport == "http":
+                    response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
+                else:
+                    response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
+                return JSONResponse(content=response)
+            # ── stdio transport continues below ──────────────────────────────────
 
-            request_payload = {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": request_body
-            }
+            try:
+                if "name" not in request_body:
+                    raise HTTPException(400, "Tool name is required")
 
-            msg = json.dumps(request_payload)
-            async with _get_io_lock(server_name):
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                request_payload = {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": request_body
+                }
 
-                # Wait for the tool execution response from the MCP subprocess.
-                # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
-                # _readline_with_timeout uses select() inside the thread so the thread
-                # exits on timeout rather than blocking the ThreadPoolExecutor slot forever.
-                # Without this, a single hanging tool call occupies a thread indefinitely;
-                # enough concurrent hangs will exhaust the pool and block all other servers.
-                response_line = await asyncio.to_thread(
-                    _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
-                )
-                if not response_line:
-                    # select() timed out — persist the failure for observability before raising.
-                    await server_manager.db.save_log_entry({
-                        "server_name": server_name,
-                        "stream": "error",
-                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
-                    })
-                    raise HTTPException(504, "Tool execution timed out")
+                msg = json.dumps(request_payload)
+                async with _get_io_lock(server_name):
+                    try:
+                        process.stdin.write(msg + "\n")
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-            response_data = json.loads(response_line)
+                    # Wait for the tool execution response from the MCP subprocess.
+                    # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
+                    # _readline_with_timeout uses select() inside the thread so the thread
+                    # exits on timeout rather than blocking the ThreadPoolExecutor slot forever.
+                    # Without this, a single hanging tool call occupies a thread indefinitely;
+                    # enough concurrent hangs will exhaust the pool and block all other servers.
+                    response_line = await asyncio.to_thread(
+                        _readline_with_timeout, process.stdout, _MCP_READ_TIMEOUT
+                    )
+                    if not response_line:
+                        # select() timed out — persist the failure for observability before raising.
+                        await server_manager.db.save_log_entry({
+                            "server_name": server_name,
+                            "stream": "error",
+                            "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
+                        })
+                        raise HTTPException(504, "Tool execution timed out")
 
-            # Update last_used_at for idle cleanup
-            await server_manager.update_last_used(server_name)
+                response_data = json.loads(response_line)
 
-            return JSONResponse(content=response_data)
+                # Update last_used_at for idle cleanup
+                await server_manager.update_last_used(server_name)
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error calling tool on '{server_name}': {e}")
-            raise HTTPException(500, f"Error communicating with server: {str(e)}")
+                return JSONResponse(content=response_data)
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error calling tool on '{server_name}': {e}")
+                raise HTTPException(500, f"Error communicating with server: {str(e)}")
+        finally:
+            if sem is not None:
+                sem.release()
 
     return router

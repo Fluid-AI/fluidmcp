@@ -85,6 +85,11 @@ class ServerManager:
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
 
+        # Concurrency semaphores: server_id -> (configured_limit, asyncio.Semaphore)
+        # Stored as a tuple so we can detect when the configured limit changes and
+        # recreate the semaphore with the new value instead of keeping a stale one.
+        self._concurrency_semaphores: Dict[str, tuple] = {}
+
         # Event loop for async operations
         self._loop = None
 
@@ -438,6 +443,44 @@ class ServerManager:
         async with lock:
             return await self._stop_server_unlocked(id, force)
 
+    def get_concurrency_semaphore(self, server_id: str) -> Optional[asyncio.Semaphore]:
+        """Return the semaphore for server_id, or None if no limit is configured.
+
+        The cache stores (configured_limit, semaphore) tuples so that a config
+        change (e.g. raising or lowering max_concurrent_requests) automatically
+        produces a fresh semaphore rather than continuing to enforce the stale
+        value for the lifetime of the process.
+        """
+        config = self.configs.get(server_id, {})
+        limit = int(config.get("max_concurrent_requests") or 0)
+        if limit <= 0:
+            # Remove any stale semaphore if the limit was removed from config.
+            self._concurrency_semaphores.pop(server_id, None)
+            return None
+        cached = self._concurrency_semaphores.get(server_id)
+        if cached is None or cached[0] != limit:
+            # No cached semaphore, or the cached one was built for a different
+            # limit.  Recreate it.  Any coroutines already holding the old
+            # semaphore will release it normally; new requests use the fresh one.
+            sem = asyncio.Semaphore(limit)
+            self._concurrency_semaphores[server_id] = (limit, sem)
+            return sem
+        return cached[1]
+
+    def get_concurrency_info(self, server_id: str) -> Dict[str, Any]:
+        """Return concurrency limit and current active count for a server."""
+        config = self.configs.get(server_id, {})
+        limit = int(config.get("max_concurrent_requests") or 0)
+        cached = self._concurrency_semaphores.get(server_id)
+        sem = cached[1] if cached else None
+        active = (limit - sem._value) if sem and limit > 0 else None
+        return {
+            "server_id": server_id,
+            "max_concurrent_requests": limit if limit > 0 else None,
+            "active_requests": active,
+            "available_slots": sem._value if sem and limit > 0 else None,
+        }
+
     def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
         """
         Get or create an operation lock for a server.
@@ -559,6 +602,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "failed",
+                    "transport": None,
+                    "url": None,
                     "pid": None,
                     "uptime": None,
                     "restart_count": 0,
@@ -586,6 +631,8 @@ class ServerManager:
                         return {
                             "id": id,
                             "state": "failed",
+                            "transport": None,
+                            "url": None,
                             "pid": None,
                             "uptime": None,
                             "restart_count": instance.get("restart_count", 0),
@@ -619,6 +666,8 @@ class ServerManager:
                     return {
                         "id": id,
                         "state": "failed",
+                        "transport": None,
+                        "url": None,
                         "pid": None,
                         "uptime": None,
                         "restart_count": instance.get("restart_count", 0),
@@ -630,6 +679,8 @@ class ServerManager:
             return {
                 "id": id,
                 "state": state,
+                "transport": None,
+                "url": None,
                 "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
@@ -641,6 +692,8 @@ class ServerManager:
         return {
             "id": id,
             "state": "not_found",
+            "transport": None,
+            "url": None,
             "pid": None,
             "uptime": None,
             "restart_count": 0,
@@ -2158,6 +2211,7 @@ class MCPHealthMonitor:
                 return  # skip this cycle; next cycle will have a real reading
             rss = proc.memory_info().rss
             cpu = proc.cpu_percent(interval=None)
+            open_fds = proc.num_fds() if hasattr(proc, "num_fds") else None
             # Update ring buffer for memory trend
             if server_id not in self._memory_history:
                 self._memory_history[server_id] = deque(maxlen=3)
@@ -2165,9 +2219,19 @@ class MCPHealthMonitor:
             snapshot = {
                 "memory_rss_bytes": rss,
                 "cpu_percent": cpu,
+                "open_fds": open_fds,
                 "active_requests": self._get_active_requests(server_id),
             }
             self._last_resource_snapshot[server_id] = snapshot
+            # Emit per-server Prometheus gauges
+            collector = MetricsCollector(server_id)
+            collector.set_server_memory_rss(rss)
+            collector.set_server_cpu_percent(cpu)
+            if open_fds is not None:
+                collector.set_server_open_fds(open_fds)
+            uptime = self._sm.get_uptime(server_id)
+            if uptime is not None:
+                collector.set_uptime(uptime)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -2180,8 +2244,7 @@ class MCPHealthMonitor:
             gauge = registry.get_metric("fluidmcp_active_requests")
             if gauge is None:
                 return 0
-            key = gauge._get_label_key({"server_id": server_id})
-            return int(gauge.samples.get(key, 0))
+            return int(gauge.get_count({"server_id": server_id}))
         except Exception:
             return 0
 
