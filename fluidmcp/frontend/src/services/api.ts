@@ -65,9 +65,6 @@ class ApiClient {
     endpoint: string,
     options?: RequestInit & { signal?: AbortSignal }
   ): Promise<T> {
-    // AbortController lifecycle is owned by hooks/components, not apiClient
-    // This method accepts optional signal for request cancellation
-
     // Create timeout controller (30 seconds default)
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), 30000);
@@ -84,6 +81,7 @@ class ApiClient {
           ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
           ...options?.headers,
         },
+        credentials: 'include', // IMPORTANT: Send httpOnly cookies with all requests
         ...options,
         signal,
       });
@@ -141,6 +139,24 @@ class ApiClient {
     return this.request(`/api/servers/${serverId}/restart`, { method: 'POST' });
   }
 
+  async addServer(config: any): Promise<{ message: string; server_id: string }> {
+    return this.request(`/api/servers`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async updateServer(serverId: string, config: any): Promise<{ message: string }> {
+    return this.request(`/api/servers/${serverId}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async deleteServer(serverId: string): Promise<{ message: string }> {
+    return this.request(`/api/servers/${serverId}`, { method: 'DELETE' });
+  }
+
   // Tool Discovery & Execution APIs
   async getServerTools(serverId: string, options?: { signal?: AbortSignal }): Promise<ToolsResponse> {
     return this.request<ToolsResponse>(`/api/servers/${serverId}/tools`, options);
@@ -178,6 +194,11 @@ class ApiClient {
         body: JSON.stringify(env),
       }
     );
+  }
+
+  // Authentication APIs
+  async getAuthConfig(options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request('/auth/config', options);
   }
 
   // LLM Model Management APIs
@@ -261,24 +282,13 @@ class ApiClient {
   }
 
   // Server Configuration Management (CRUD)
-  async addServer(config: any): Promise<{ message: string; id: string; name: string }> {
-    return this.request('/api/servers', {
-      method: 'POST',
-      body: JSON.stringify(config),
-    });
+
+  async getCurrentUser(options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request('/auth/me', options);
   }
 
-  async updateServer(serverId: string, config: any): Promise<{ message: string; config: any }> {
-    return this.request(`/api/servers/${serverId}`, {
-      method: 'PUT',
-      body: JSON.stringify(config),
-    });
-  }
-
-  async deleteServer(serverId: string): Promise<{ message: string; deleted_at: string }> {
-    return this.request(`/api/servers/${serverId}`, {
-      method: 'DELETE',
-    });
+  async logout(): Promise<{ logout_url: string; message: string }> {
+    return this.request('/auth/logout', { method: 'POST' });
   }
 
   // Inspector Tools APIs

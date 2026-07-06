@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+
+  # -------------------- PROMETHEUS --------------------
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  # -------------------- LOKI --------------------
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+
+  # -------------------- TEMPO (TRACES) --------------------
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"  
+
+  # -------------------- OTEL COLLECTOR --------------------
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-config.yaml:/etc/otel/config.yaml
+    ports:
+      - "4318:4318"  # OTLP HTTP
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+
+  # -------------------- GRAFANA --------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
