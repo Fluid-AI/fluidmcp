@@ -156,6 +156,14 @@ async def connect_server(body: ConnectRequest):
 
     auth_dict = body.auth.model_dump() if body.auth else {}
 
+    # OAuth sessions can be created directly with an existing refresh token
+    # (e.g. resumed from a prior authorize/callback flow), bypassing the
+    # oauth_authorize validation entirely. Validate token_url here too, or a
+    # malicious/compromised frontend could point token refresh at an internal
+    # address (SSRF) or a plaintext http endpoint (credential leak).
+    if auth_dict.get("type") == "oauth" and auth_dict.get("token_url"):
+        _validate_oauth_url(auth_dict["token_url"], "auth.token_url")
+
     session = InspectorSession(
         url=body.url or "stdio://local",
         command=body.command,
@@ -435,13 +443,20 @@ def _pkce_pair() -> tuple[str, str]:
 
 
 def _validate_oauth_url(url: str, field: str) -> None:
-    """Ensure an OAuth endpoint URL is a valid public https URL."""
+    """
+    Ensure an OAuth endpoint URL is a valid public https URL.
+
+    https is required (not just http/https) because these endpoints receive
+    client secrets and refresh tokens — http would put those credentials on
+    the wire in plaintext. Private/internal addresses are blocked to prevent
+    SSRF via an attacker-supplied token_url (e.g. cloud metadata endpoints).
+    """
     try:
         parsed = urlparse(url)
     except Exception:
         raise HTTPException(400, f"Invalid {field}")
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(400, f"{field} must be http/https")
+    if parsed.scheme != "https":
+        raise HTTPException(400, f"{field} must use https")
     host = parsed.hostname or ""
     if not host:
         raise HTTPException(400, f"{field} must include a host")

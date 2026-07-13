@@ -153,6 +153,11 @@ class InspectorSession:
         # Shared httpx client for HTTP/POST requests
         self._client: Optional[httpx.AsyncClient] = None
 
+        # Streamable-HTTP session id (RFC draft): captured from the Mcp-Session-Id
+        # response header on the first request and replayed on every subsequent
+        # request. Stateful servers reject requests missing this header with 400.
+        self._mcp_session_id: Optional[str] = None
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _next_id(self) -> int:
@@ -174,6 +179,8 @@ class InspectorSession:
             headers["Authorization"] = f"Bearer {self.auth['token']}"
         elif auth_type == "oauth" and self.auth.get("access_token"):
             headers["Authorization"] = f"Bearer {self.auth['access_token']}"
+        if self._mcp_session_id:
+            headers["Mcp-Session-Id"] = self._mcp_session_id
         headers.update(self.extra_headers)
         return headers
 
@@ -538,6 +545,12 @@ class InspectorSession:
                 response = await client.post(self.url, json=request, headers=self._build_headers())
             except Exception as e:
                 logger.warning(f"Inspector: OAuth 401 retry failed — {e}")
+        # Streamable-HTTP: capture the session id so it can be replayed on every
+        # subsequent request. Servers only send this on the initialize response,
+        # but checking on every response is harmless and self-healing on reconnect.
+        new_session_id = response.headers.get("mcp-session-id")
+        if new_session_id:
+            self._mcp_session_id = new_session_id
         response.raise_for_status()
         return response.json()
 
