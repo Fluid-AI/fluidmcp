@@ -448,8 +448,10 @@ def _validate_oauth_url(url: str, field: str) -> None:
 
     https is required (not just http/https) because these endpoints receive
     client secrets and refresh tokens — http would put those credentials on
-    the wire in plaintext. Private/internal addresses are blocked to prevent
-    SSRF via an attacker-supplied token_url (e.g. cloud metadata endpoints).
+    the wire in plaintext. Private/internal addresses are blocked, including
+    via DNS: a hostname is resolved and every returned address is checked, so
+    an attacker-controlled domain that resolves to a private/internal address
+    (e.g. cloud metadata IPs) is rejected the same as a literal internal IP.
     """
     try:
         parsed = urlparse(url)
@@ -460,12 +462,23 @@ def _validate_oauth_url(url: str, field: str) -> None:
     host = parsed.hostname or ""
     if not host:
         raise HTTPException(400, f"{field} must include a host")
+
     try:
         addr = ipaddress.ip_address(host)
+        addresses = [addr]
+    except ValueError:
+        # Hostname, not a literal IP — resolve it so DNS rebinding to a
+        # private/internal address is caught, not just literal IPs.
+        import socket
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            raise HTTPException(400, f"{field} host could not be resolved")
+        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+
+    for addr in addresses:
         if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
             raise HTTPException(400, f"{field} must not point to a private/internal address")
-    except ValueError:
-        pass  # hostname — fine
 
 
 @router.post("/inspector/oauth/authorize")
