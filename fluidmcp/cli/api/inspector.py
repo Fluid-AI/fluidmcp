@@ -22,6 +22,14 @@ from ..auth import verify_token
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
+# The OAuth authorization server redirects the user's browser here directly —
+# there is no way for that redirect to carry our bearer token, so this one
+# endpoint cannot sit behind verify_token or OAuth would 401 in secure mode.
+# It only exchanges a one-time authorization code (bound to a server-side PKCE
+# verifier keyed by a random state) for tokens; it exposes no other inspector
+# functionality, so it's safe to leave unauthenticated.
+public_router = APIRouter()
+
 # In-memory session store: session_id -> InspectorSession
 sessions: Dict[str, InspectorSession] = {}
 
@@ -520,7 +528,7 @@ async def oauth_authorize(body: OAuthAuthorizeRequest):
     return {"redirect_url": redirect_url, "state": state}
 
 
-@router.get("/inspector/oauth/callback")
+@public_router.get("/inspector/oauth/callback")
 async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
     """
     OAuth 2.0 redirect callback.
@@ -529,8 +537,11 @@ async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None
     access.  This endpoint exchanges the authorization code for tokens and
     stores them in oauth_pending so the frontend can poll for the result.
 
-    On success the browser is redirected to /ui/oauth-callback so the popup
-    page can read the result via window.opener.postMessage and close itself.
+    The response is a small inline HTML page (see _oauth_popup_html) that
+    posts the result to window.opener via postMessage and closes itself —
+    this endpoint is unauthenticated (public_router) since the browser lands
+    here straight from the authorization server's redirect, with no bearer
+    token attached.
     """
     from fastapi.responses import HTMLResponse
 
@@ -631,10 +642,18 @@ def _oauth_popup_html(token: Optional[dict], error: Optional[str]) -> str:
     Posts a message to the opener window then closes the popup.
     """
     if error:
-        import html as _html
-        payload = json.dumps({"error": _html.escape(str(error))})
+        payload = json.dumps({"error": str(error)})
     else:
         payload = json.dumps({"token": token})
+
+    # token/error values ultimately come from the OAuth token endpoint's
+    # response, which is untrusted (that endpoint is user-supplied and could
+    # be malicious or compromised). A literal "</script>" in any string value
+    # would close this script block early regardless of JSON escaping, since
+    # the HTML parser tokenizes it before any JS parsing happens. Escaping
+    # the slash prevents that without corrupting the JSON for JS to parse.
+    payload = payload.replace("</", "<\\/")
+
     return f"""<!DOCTYPE html>
 <html>
 <head><title>OAuth Callback</title></head>

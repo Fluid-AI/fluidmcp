@@ -22,7 +22,7 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
-from .api.inspector import router as inspector_router, cleanup_sessions
+from .api.inspector import router as inspector_router, public_router as inspector_public_router, cleanup_sessions
 from .auth import verify_token
 
 
@@ -260,6 +260,9 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
     # Include Inspector API
     app.include_router(inspector_router, prefix="/api", tags=["inspector"])
+    # OAuth callback is hit directly by the authorization server's redirect and
+    # cannot carry our bearer token, so it's mounted unauthenticated separately.
+    app.include_router(inspector_public_router, prefix="/api", tags=["inspector"])
     logger.info("Inspector API mounted at /api")
 
     # Include Dynamic MCP Router
