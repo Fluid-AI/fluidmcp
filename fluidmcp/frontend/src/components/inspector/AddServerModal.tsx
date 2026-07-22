@@ -1,4 +1,13 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
+import apiClient, { BASE_URL } from "@/services/api";
+
+export interface OAuthToken {
+  access_token: string;
+  refresh_token?: string;
+  expires_at?: number;
+  token_url: string;
+  client_id: string;
+}
 
 interface AddServerModalProps {
   connecting: boolean;
@@ -8,8 +17,8 @@ interface AddServerModalProps {
   setCommand: (v: string) => void;
   transport: string;
   setTransport: (v: string) => void;
-  authType: "none" | "bearer" | "header";
-  setAuthType: (v: "none" | "bearer" | "header") => void;
+  authType: "none" | "bearer" | "header" | "oauth";
+  setAuthType: (v: "none" | "bearer" | "header" | "oauth") => void;
   token: string;
   setToken: (v: string) => void;
   headerKey: string;
@@ -21,6 +30,8 @@ interface AddServerModalProps {
   envVars: { key: string; value: string }[];
   setEnvVars: React.Dispatch<React.SetStateAction<{ key: string; value: string }[]>>;
   recentUrls: string[];
+  oauthToken: OAuthToken | null;
+  setOAuthToken: (t: OAuthToken | null) => void;
   onClose: () => void;
   onConnect: () => void;
 }
@@ -37,9 +48,106 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
   customName, setCustomName,
   envVars, setEnvVars,
   recentUrls,
+  oauthToken, setOAuthToken,
   onClose,
   onConnect,
 }) => {
+  const [oauthAuthUrl, setOauthAuthUrl] = useState("");
+  const [oauthTokenUrl, setOauthTokenUrl] = useState("");
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthScopes, setOauthScopes] = useState("");
+  const [oauthAuthorizing, setOauthAuthorizing] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+
+  const redirectUri = `${BASE_URL}/api/inspector/oauth/callback`;
+
+  const handleAuthorize = useCallback(async () => {
+    if (!oauthAuthUrl || !oauthTokenUrl || !oauthClientId) {
+      setOauthError("Authorization URL, Token URL, and Client ID are required.");
+      return;
+    }
+    setOauthError(null);
+    setOauthAuthorizing(true);
+    setOAuthToken(null);
+
+    try {
+      const { redirect_url, state } = await apiClient.startOAuthFlow({
+        authorization_url: oauthAuthUrl,
+        token_url: oauthTokenUrl,
+        client_id: oauthClientId,
+        redirect_uri: redirectUri,
+        scopes: oauthScopes,
+      });
+
+      const popup = window.open(redirect_url, "oauth_popup", "width=520,height=640,resizable=yes");
+      if (!popup) {
+        setOauthError("Popup blocked. Please allow popups for this site.");
+        setOauthAuthorizing(false);
+        return;
+      }
+
+      // Poll backend for result with exponential backoff (1s → 2s → 4s, cap 5s).
+      // popup.closed must NOT stop polling — the popup closes intentionally
+      // as soon as our callback page runs window.close(). Keep polling until
+      // we get a result or the hard deadline passes.
+      const deadline = Date.now() + 10 * 60 * 1000;
+      let popupClosedAt: number | null = null;
+      let pollInterval = 1000;
+
+      const poll = async () => {
+        // Track when popup first closed so we can give a grace period
+        if (popup.closed && popupClosedAt === null) {
+          popupClosedAt = Date.now();
+        }
+
+        // Hard deadline
+        if (Date.now() > deadline) {
+          setOauthAuthorizing(false);
+          setOauthError("Authorization timed out.");
+          return;
+        }
+
+        // If popup has been closed for >15s with no result, user probably cancelled
+        if (popupClosedAt !== null && Date.now() - popupClosedAt > 15000) {
+          setOauthAuthorizing(false);
+          setOauthError("Authorization cancelled or failed.");
+          return;
+        }
+
+        try {
+          const result = await apiClient.pollOAuthResult(state);
+          if (result.status === "complete" && result.token) {
+            setOAuthToken({
+              access_token: result.token.access_token,
+              refresh_token: result.token.refresh_token,
+              expires_at: result.token.expires_at,
+              token_url: oauthTokenUrl,
+              client_id: oauthClientId,
+            });
+            setOauthAuthorizing(false);
+            popup.close();
+            return;
+          }
+        } catch {
+          // transient error — keep polling
+        }
+        pollInterval = Math.min(pollInterval * 2, 5000);
+        setTimeout(poll, pollInterval);
+      };
+      setTimeout(poll, pollInterval);
+    } catch (e: any) {
+      setOauthError(e?.message ?? "Failed to start OAuth flow.");
+      setOauthAuthorizing(false);
+    }
+  }, [oauthAuthUrl, oauthTokenUrl, oauthClientId, oauthScopes, redirectUri, setOAuthToken]);
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%", padding: "0.5rem", borderRadius: "0.4rem",
+    border: "1px solid rgba(63,63,70,0.6)",
+    background: "#18181b", color: "#fff", boxSizing: "border-box",
+    fontSize: "0.85rem",
+  };
+
   return (
     <div
       onClick={onClose}
@@ -223,7 +331,7 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
                 <label style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.7)" }}>Auth Type</label>
                 <select
                   value={authType}
-                  onChange={(e) => setAuthType(e.target.value as "none" | "bearer" | "header")}
+                  onChange={(e) => setAuthType(e.target.value as "none" | "bearer" | "header" | "oauth")}
                   style={{
                     width: "100%", marginTop: "0.3rem", padding: "0.5rem",
                     borderRadius: "0.4rem", background: "#18181b", color: "#fff",
@@ -233,8 +341,76 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
                   <option value="none">None</option>
                   <option value="bearer">Bearer Token</option>
                   <option value="header">Header Token</option>
+                  <option value="oauth">OAuth 2.0 (PKCE)</option>
                 </select>
               </div>
+
+              {authType === "oauth" && (
+                <div style={{ marginTop: "0.8rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+                  <div>
+                    <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.6)", display: "block", marginBottom: "0.25rem" }}>Authorization URL</label>
+                    <input
+                      value={oauthAuthUrl}
+                      onChange={(e) => setOauthAuthUrl(e.target.value)}
+                      placeholder="https://provider.example.com/oauth/authorize"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.6)", display: "block", marginBottom: "0.25rem" }}>Token URL</label>
+                    <input
+                      value={oauthTokenUrl}
+                      onChange={(e) => setOauthTokenUrl(e.target.value)}
+                      placeholder="https://provider.example.com/oauth/token"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.6)", display: "block", marginBottom: "0.25rem" }}>Client ID</label>
+                    <input
+                      value={oauthClientId}
+                      onChange={(e) => setOauthClientId(e.target.value)}
+                      placeholder="your-client-id"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.6)", display: "block", marginBottom: "0.25rem" }}>
+                      Scopes <span style={{ color: "rgba(255,255,255,0.3)" }}>(space-separated, optional)</span>
+                    </label>
+                    <input
+                      value={oauthScopes}
+                      onChange={(e) => setOauthScopes(e.target.value)}
+                      placeholder="read write"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAuthorize}
+                    disabled={oauthAuthorizing}
+                    style={{
+                      padding: "0.5rem 1rem", borderRadius: "0.4rem", fontWeight: 600,
+                      background: oauthToken ? "rgba(16,185,129,0.15)" : "rgba(99,102,241,0.15)",
+                      border: `1px solid ${oauthToken ? "rgba(16,185,129,0.4)" : "rgba(99,102,241,0.4)"}`,
+                      color: oauthToken ? "#10b981" : "rgba(165,180,252,0.9)",
+                      cursor: oauthAuthorizing ? "default" : "pointer",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    {oauthAuthorizing ? "Waiting for authorization…" : oauthToken ? "✓ Authorized — re-authorize" : "Authorize"}
+                  </button>
+                  {oauthError && (
+                    <p style={{ margin: 0, fontSize: "0.75rem", color: "#ef4444" }}>{oauthError}</p>
+                  )}
+                  {oauthToken && (
+                    <p style={{ margin: 0, fontSize: "0.72rem", color: "rgba(16,185,129,0.8)" }}>
+                      Token obtained
+                      {oauthToken.expires_at ? ` · expires ${new Date(oauthToken.expires_at * 1000).toLocaleTimeString()}` : ""}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {authType === "bearer" && (
                 <div style={{ marginTop: "0.8rem" }}>

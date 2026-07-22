@@ -185,6 +185,11 @@ class InspectorSession:
         # Auto-incrementing request ID (avoids hardcoded 1/2/3 collisions)
         self._req_id = 0
 
+        # Streamable-HTTP session id (RFC draft): captured from the Mcp-Session-Id
+        # response header on the first request and replayed on every subsequent
+        # request. Stateful servers reject requests missing this header with 400.
+        self._mcp_session_id: Optional[str] = None
+
         # SSE state
         self._sse_post_url: Optional[str] = None
         self._sse_ready = asyncio.Event()      # set once endpoint URL is known
@@ -196,11 +201,6 @@ class InspectorSession:
 
         # Shared httpx client for HTTP/POST requests
         self._client: Optional[httpx.AsyncClient] = None
-
-        # Streamable-HTTP session id (RFC draft): captured from the Mcp-Session-Id
-        # response header on the first request and replayed on every subsequent
-        # request. Stateful servers reject requests missing this header with 400.
-        self._mcp_session_id: Optional[str] = None
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -217,7 +217,7 @@ class InspectorSession:
         return self._client
 
     def _build_headers(self) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
         auth_type = self.auth.get("type")
         if auth_type == "bearer" and self.auth.get("token"):
             headers["Authorization"] = f"Bearer {self.auth['token']}"
@@ -597,10 +597,24 @@ class InspectorSession:
         # Streamable-HTTP: capture the session id so it can be replayed on every
         # subsequent request. Servers only send this on the initialize response,
         # but checking on every response is harmless and self-healing on reconnect.
-        new_session_id = response.headers.get("mcp-session-id")
-        if new_session_id:
-            self._mcp_session_id = new_session_id
+        session_id_header = response.headers.get("mcp-session-id")
+        if session_id_header:
+            self._mcp_session_id = session_id_header
+            logger.debug(f"Inspector: captured mcp-session-id={session_id_header}")
+
         response.raise_for_status()
+
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            # FastMCP streamable-HTTP can respond to a single POST with an SSE
+            # stream instead of a plain JSON body. Extract the first data: line.
+            for line in response.text.splitlines():
+                if line.startswith("data:"):
+                    payload = line[len("data:"):].strip()
+                    if payload:
+                        return json.loads(payload)
+            raise Exception("No data event found in SSE response")
+
         return response.json()
 
     # ── Public API ────────────────────────────────────────────────────────────
