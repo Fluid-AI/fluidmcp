@@ -3,12 +3,13 @@ import re
 import time
 import json
 import shlex
+import socket
 import asyncio
 import ipaddress
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
-from urllib.parse import urlparse
+from typing import Optional, Dict, Any, List, Tuple
+from urllib.parse import urlparse, urlunparse
 import httpx
 from loguru import logger
 from fastapi import HTTPException
@@ -35,6 +36,49 @@ def _validate_url(url: str) -> None:
 
     if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
         raise ValueError("Connections to private/internal addresses are not allowed")
+
+
+def resolve_pinned_target(url: str, field: str = "URL") -> Tuple[str, str]:
+    """
+    Resolve url's hostname exactly once, reject it if any resolved address is
+    private/internal, and return (pinned_url, original_host) where pinned_url
+    has the hostname replaced by one validated IP literal.
+
+    Validating a hostname string once and then letting httpx independently
+    re-resolve it at request time leaves a DNS-rebinding window open: an
+    attacker-controlled domain can resolve to a public address for the check
+    and to a private/metadata address moments later for the real connection.
+    Resolving once here, immediately before connecting, and pointing the
+    actual request straight at that address closes the window. Callers must
+    still send `original_host` as the Host header and as the "sni_hostname"
+    request extension so virtual hosting and TLS certificate validation keep
+    working against an IP-literal URL.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        raise HTTPException(400, f"{field} must include a host")
+
+    try:
+        addr = ipaddress.ip_address(host)
+        addresses = [addr]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            raise HTTPException(400, f"{field} host could not be resolved")
+        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+
+    for a in addresses:
+        if a.is_private or a.is_loopback or a.is_link_local or a.is_reserved:
+            raise HTTPException(400, f"{field} must not point to a private/internal address")
+
+    pinned_ip = addresses[0]
+    netloc = f"[{pinned_ip}]" if pinned_ip.version == 6 else str(pinned_ip)
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    pinned_url = urlunparse(parsed._replace(netloc=netloc))
+    return pinned_url, host
 
 
 # ── Per-binary argument schemas ───────────────────────────────────────────────
@@ -192,14 +236,19 @@ class InspectorSession:
         if not (refresh_token and token_url and client_id):
             return
         client = self._get_client()
+        pinned_url, original_host = resolve_pinned_target(token_url, "token_url")
         resp = await client.post(
-            token_url,
+            pinned_url,
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,
                 "client_id": client_id,
             },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": original_host,
+            },
+            extensions={"sni_hostname": original_host},
         )
         resp.raise_for_status()
         data = resp.json()

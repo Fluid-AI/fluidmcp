@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from ..services.inspector_session import InspectorSession
+from ..services.inspector_session import InspectorSession, resolve_pinned_target
 from ..auth import verify_token
 
 router = APIRouter(dependencies=[Depends(verify_token)])
@@ -452,14 +452,16 @@ def _pkce_pair() -> tuple[str, str]:
 
 def _validate_oauth_url(url: str, field: str) -> None:
     """
-    Ensure an OAuth endpoint URL is a valid public https URL.
+    Fast-fail check that an OAuth endpoint URL is a valid public https URL.
 
-    https is required (not just http/https) because these endpoints receive
-    client secrets and refresh tokens — http would put those credentials on
-    the wire in plaintext. Private/internal addresses are blocked, including
-    via DNS: a hostname is resolved and every returned address is checked, so
-    an attacker-controlled domain that resolves to a private/internal address
-    (e.g. cloud metadata IPs) is rejected the same as a literal internal IP.
+    https is required because these endpoints receive client secrets and
+    refresh tokens — http would put those credentials on the wire in
+    plaintext. This is a convenience check only (bad input is rejected
+    immediately instead of failing later mid-flow) — it resolves the
+    hostname the same way resolve_pinned_target does, but does NOT pin the
+    result. The actual token-endpoint POSTs (oauth_callback, _auto_refresh)
+    call resolve_pinned_target again immediately before connecting so there
+    is no DNS-rebinding window between "checked" and "connected".
     """
     try:
         parsed = urlparse(url)
@@ -467,26 +469,7 @@ def _validate_oauth_url(url: str, field: str) -> None:
         raise HTTPException(400, f"Invalid {field}")
     if parsed.scheme != "https":
         raise HTTPException(400, f"{field} must use https")
-    host = parsed.hostname or ""
-    if not host:
-        raise HTTPException(400, f"{field} must include a host")
-
-    try:
-        addr = ipaddress.ip_address(host)
-        addresses = [addr]
-    except ValueError:
-        # Hostname, not a literal IP — resolve it so DNS rebinding to a
-        # private/internal address is caught, not just literal IPs.
-        import socket
-        try:
-            infos = socket.getaddrinfo(host, None)
-        except socket.gaierror:
-            raise HTTPException(400, f"{field} host could not be resolved")
-        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
-
-    for addr in addresses:
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-            raise HTTPException(400, f"{field} must not point to a private/internal address")
+    resolve_pinned_target(url, field)
 
 
 @router.post("/inspector/oauth/authorize")
@@ -561,9 +544,10 @@ async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None
         return HTMLResponse(_oauth_popup_html(None, "state_expired"))
 
     try:
+        pinned_url, original_host = resolve_pinned_target(entry["token_url"], "token_url")
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
-                entry["token_url"],
+                pinned_url,
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
@@ -571,7 +555,11 @@ async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None
                     "client_id": entry["client_id"],
                     "code_verifier": entry["verifier"],
                 },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Host": original_host,
+                },
+                extensions={"sni_hostname": original_host},
             )
             resp.raise_for_status()
             token_data = resp.json()
