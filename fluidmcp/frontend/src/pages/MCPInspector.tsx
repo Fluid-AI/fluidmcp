@@ -1162,7 +1162,6 @@ export default function MCPInspector() {
                       resources={resources}
                       resourcesLoading={resourcesLoading}
                       selectedResourceUri={selectedResourceUri}
-                      setSelectedResourceUri={setSelectedResourceUri}
                       resourceContent={resourceContent}
                       resourceContentLoading={resourceContentLoading}
                       templateParams={templateParams}
