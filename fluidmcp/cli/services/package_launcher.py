@@ -7,7 +7,7 @@ import asyncio
 import time
 import threading
 import httpx
-from typing import Union, Dict, Any, Iterator, AsyncIterator
+from typing import Union, Dict, Any, Iterator, AsyncIterator, Optional, Tuple
 from pathlib import Path
 from loguru import logger
 from fastapi import Request, APIRouter, Body, Depends, HTTPException
@@ -149,7 +149,7 @@ async def _proxy_to_http_server(
     timeout: float = 60.0,
     session_id: str = None,
     client: httpx.AsyncClient = None,
-) -> dict:
+) -> Tuple[Optional[dict], Optional[str]]:
     """
     Forward a JSON-RPC request to a streamable-http MCP server via POST /mcp.
 
@@ -163,7 +163,11 @@ async def _proxy_to_http_server(
                     handshake). When None a fresh short-lived client is created.
 
     Returns:
-        Parsed JSON response dict.
+        (response, upstream_session_id) — response is the parsed JSON-RPC
+        response dict, or None for a JSON-RPC *notification* (a payload with
+        no "id"), since the spec defines no response body for those (servers
+        typically ack with an empty 202). upstream_session_id is the
+        Mcp-Session-Id header from this response, if the upstream sent one.
 
     Raises:
         HTTPException on any HTTP or connection error.
@@ -175,6 +179,10 @@ async def _proxy_to_http_server(
     if session_id:
         headers["mcp-session-id"] = session_id
 
+    # A JSON-RPC notification (no "id") gets no JSON-RPC response by spec —
+    # don't attempt to parse one, or an empty/non-JSON ack body raises here.
+    is_notification = "id" not in payload
+
     # Use the caller-supplied shared pool when available. If not (e.g. tool
     # discovery at startup, or SSE fallback paths), create a short-lived client
     # and close it in the finally block so connections don't leak.
@@ -185,15 +193,20 @@ async def _proxy_to_http_server(
     try:
         resp = await client.post(mcp_url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
+        upstream_session_id = resp.headers.get("mcp-session-id")
+
+        if is_notification:
+            return None, upstream_session_id
+
         # FastMCP returns text/event-stream even for non-streaming responses.
         # Unwrap the SSE envelope to get the plain JSON-RPC payload.
         content_type = resp.headers.get("content-type", "")
         if "text/event-stream" in content_type:
             for line in resp.text.splitlines():
                 if line.startswith("data: "):
-                    return json.loads(line[6:])
+                    return json.loads(line[6:]), upstream_session_id
             raise Exception(f"No data line in SSE response: {resp.text!r}")
-        return resp.json()
+        return resp.json(), upstream_session_id
     except httpx.HTTPStatusError as e:
         raise HTTPException(
             e.response.status_code,
@@ -579,10 +592,11 @@ def create_dynamic_router(server_manager):
             try:
                 # ── Network transport: forward via HTTP ──────────────────────────
                 if isinstance(process, NetworkSubprocessHandle):
+                    upstream_session_id = None
                     if process.transport == "http":
                         try:
                             _http_timeout = float(os.environ.get("FMCP_HTTP_PROXY_TIMEOUT", "60"))
-                            response = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
+                            response, upstream_session_id = await _proxy_to_http_server(process.base_url, request, timeout=_http_timeout, session_id=process.session_id, client=process.http_client)
                         except HTTPException as exc:
                             if exc.status_code == 504:
                                 monitor = getattr(server_manager, "_health_monitor", None)
@@ -600,7 +614,12 @@ def create_dynamic_router(server_manager):
                             raise
                     else:
                         response = await _proxy_to_sse_server(process.base_url, request)
-                    return JSONResponse(content=response)
+                    response_headers = {"Mcp-Session-Id": upstream_session_id} if upstream_session_id else None
+                    if response is None:
+                        # JSON-RPC notification (e.g. notifications/initialized) — the
+                        # spec defines no response body for these; ack with empty 202.
+                        return Response(status_code=202, headers=response_headers)
+                    return JSONResponse(content=response, headers=response_headers)
 
                 # ── SSE transport: forward via HTTP ─────────────────────────────
                 if isinstance(process, SseSubprocessHandle):
@@ -712,8 +731,10 @@ def create_dynamic_router(server_manager):
                 if isinstance(process, NetworkSubprocessHandle):
                     if process.transport == "http":
                         try:
-                            response = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
-                            yield f"data: {json.dumps(response)}\n\n"
+                            response, _upstream_session_id = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
+                            if response is not None:
+                                # JSON-RPC notifications have no response to relay.
+                                yield f"data: {json.dumps(response)}\n\n"
                         except Exception as e:
                             completion_status = "error"
                             collector.record_error("http_proxy_error")
@@ -876,7 +897,7 @@ def create_dynamic_router(server_manager):
             if isinstance(process, NetworkSubprocessHandle):
                 payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
                 if process.transport == "http":
-                    response = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
+                    response, _upstream_session_id = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
                 else:
                     response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
                 return JSONResponse(content=response)
@@ -961,7 +982,7 @@ def create_dynamic_router(server_manager):
                     raise HTTPException(400, "Tool name is required")
                 payload = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body}
                 if process.transport == "http":
-                    response = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
+                    response, _upstream_session_id = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
                 else:
                     response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
                 return JSONResponse(content=response)
