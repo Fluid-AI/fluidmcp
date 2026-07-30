@@ -12,7 +12,6 @@ interface ResourcesPanelProps {
   resources: MCPResource[];
   resourcesLoading: boolean;
   selectedResourceUri: string | null;
-  setSelectedResourceUri: (uri: string | null) => void;
   resourceContent: { text?: string; blob?: string; mimeType?: string } | null;
   resourceContentLoading: boolean;
   templateParams: Record<string, string>;
@@ -26,7 +25,6 @@ export const ResourcesPanel: React.FC<ResourcesPanelProps> = ({
   resources,
   resourcesLoading,
   selectedResourceUri,
-  setSelectedResourceUri,
   resourceContent,
   resourceContentLoading,
   templateParams,
