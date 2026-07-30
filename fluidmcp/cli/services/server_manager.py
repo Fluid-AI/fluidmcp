@@ -823,6 +823,59 @@ class ServerManager:
             env_vars = config.get("env", {})
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
+
+            # Load env_file if specified, merging before inline env (inline takes precedence)
+            env_file_path = config.pop("env_file", None)
+            if env_file_path:
+                env_file_resolved = (
+                    Path(env_file_path).resolve()
+                    if Path(env_file_path).is_absolute()
+                    else (Path(working_dir) / env_file_path).resolve()
+                )
+                # Security: env_file must be under install_path or working_dir
+                install_resolved = Path(install_path).resolve()
+                working_resolved = Path(working_dir).resolve()
+                under_install = (
+                    env_file_resolved == install_resolved
+                    or install_resolved in env_file_resolved.parents
+                )
+                under_working = (
+                    env_file_resolved == working_resolved
+                    or working_resolved in env_file_resolved.parents
+                )
+                if not (under_install or under_working):
+                    logger.warning(
+                        f"env_file '{env_file_resolved}' is outside install_path/working_dir — skipping"
+                    )
+                elif not env_file_resolved.exists():
+                    logger.warning(f"env_file '{env_file_resolved}' not found — skipping")
+                else:
+                    file_env: Dict[str, str] = {}
+                    for line in env_file_resolved.read_text().splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" not in line:
+                            continue
+                        k, _, v = line.partition("=")
+                        k = k.strip()
+                        v = v.strip()
+                        if (v.startswith('"') and v.endswith('"')) or (
+                            v.startswith("'") and v.endswith("'")
+                        ):
+                            v = v[1:-1]
+                        file_env[k] = v
+                    # Inline env overlays on top of file env
+                    env_vars = {**file_env, **env_vars}
+
+            # Promote TRANSPORT_TYPE from env_file to config transport (if not already set)
+            # Supports transport declaration via inline env (apply_transport during config
+            # resolution, before env_file is loaded) or via env_file (here, once it's loaded).
+            if not config.get("transport"):
+                _env_transport = env_vars.get("TRANSPORT_TYPE", "")
+                if _env_transport in ("sse", "http"):
+                    config["transport"] = _env_transport
+
             working_dir_path = Path(working_dir)
 
             # 🔹 Auto-reclone if directory missing (Railway ephemeral container fix)
