@@ -62,7 +62,7 @@ from ..services import omni_adapter
 from ..services.network_handle import NetworkSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
-from ..services.metrics import get_registry as _get_metrics_registry
+from ..services.metrics import MetricsCollector, get_registry as _get_metrics_registry
 
 try:
     import psutil as _psutil
@@ -2372,6 +2372,7 @@ async def run_tool(
         Tool execution result
     """
     manager = get_server_manager(request)
+    collector = MetricsCollector(id)
 
     # Auto-start the server if it's stopped but has a valid, enabled config
     if id not in manager.processes or manager.processes[id].poll() is not None:
@@ -2392,6 +2393,7 @@ async def run_tool(
         raise HTTPException(503, f"Server '{id}' failed to start")
 
     # Send tools/call request
+    t0 = time.monotonic()
     try:
         import json
 
@@ -2410,25 +2412,33 @@ async def run_tool(
         process.stdin.flush()
 
         # Read response with 30 second timeout
-        response_line = await asyncio.wait_for(
-            asyncio.to_thread(process.stdout.readline),
-            timeout=30.0
-        )
+        try:
+            response_line = await asyncio.wait_for(
+                asyncio.to_thread(process.stdout.readline),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            collector.record_tool_call(tool_name, "timeout", time.monotonic() - t0)
+            raise HTTPException(504, "Tool execution timeout (>30s)")
 
         response = json.loads(response_line.strip())
 
         if "error" in response:
+            collector.record_tool_call(tool_name, "error", time.monotonic() - t0)
             raise HTTPException(500, truncate_error(f"Tool execution error: {response['error']}"))
 
+        collector.record_tool_call(tool_name, "success", time.monotonic() - t0)
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
 
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Tool execution timeout (>30s)")
     except json.JSONDecodeError as e:
+        collector.record_tool_call(tool_name, "parse_error", time.monotonic() - t0)
         logger.error(f"Failed to parse tool response for '{tool_name}' on '{id}': {e}")
         raise HTTPException(500, "Failed to parse tool response")
+    except HTTPException:
+        raise
     except Exception as e:
+        collector.record_tool_call(tool_name, "error", time.monotonic() - t0)
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
         raise HTTPException(500, "Tool execution failed")
 
