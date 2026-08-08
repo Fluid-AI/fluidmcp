@@ -4,18 +4,31 @@ import asyncio
 import time
 import json
 import ipaddress
+import hashlib
+import base64
+import os
+import secrets
 from typing import Dict, Any, Optional, AsyncGenerator
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
+import httpx
 from fastapi import APIRouter, HTTPException, Body, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
-from ..services.inspector_session import InspectorSession
+from ..services.inspector_session import InspectorSession, resolve_pinned_target
 from ..auth import verify_token
 
 router = APIRouter(dependencies=[Depends(verify_token)])
+
+# The OAuth authorization server redirects the user's browser here directly —
+# there is no way for that redirect to carry our bearer token, so this one
+# endpoint cannot sit behind verify_token or OAuth would 401 in secure mode.
+# It only exchanges a one-time authorization code (bound to a server-side PKCE
+# verifier keyed by a random state) for tokens; it exposes no other inspector
+# functionality, so it's safe to leave unauthenticated.
+public_router = APIRouter()
 
 # In-memory session store: session_id -> InspectorSession
 sessions: Dict[str, InspectorSession] = {}
@@ -23,12 +36,35 @@ sessions: Dict[str, InspectorSession] = {}
 SESSION_TTL = 1800   # 30 minutes in seconds
 CLEANUP_INTERVAL = 300  # Run cleanup every 5 minutes
 
+# Pending OAuth exchanges: state -> { verifier, token_url, client_id, redirect_uri, result? }
+# Entries expire after OAUTH_STATE_TTL seconds.
+oauth_pending: Dict[str, Dict[str, Any]] = {}
+OAUTH_STATE_TTL = 600  # 10 minutes
+
 
 # ─── Request Models ────────────────────────────────────────────────────────────
 
 class AuthConfig(BaseModel):
-    type: str = "none"        # "none" | "bearer"
+    type: str = "none"        # "none" | "bearer" | "header" | "oauth"
     token: Optional[str] = None
+    # OAuth fields (only used when type == "oauth")
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
+    expires_at: Optional[float] = None   # Unix timestamp
+    token_url: Optional[str] = None      # token endpoint for refresh
+    client_id: Optional[str] = None
+
+
+class OAuthAuthorizeRequest(BaseModel):
+    authorization_url: str
+    token_url: str
+    client_id: str
+    redirect_uri: str
+    scopes: Optional[str] = ""   # space-separated
+
+
+class OAuthRefreshRequest(BaseModel):
+    pass  # uses credentials stored in the session
 
 
 class ConnectRequest(BaseModel):
@@ -127,6 +163,14 @@ async def connect_server(body: ConnectRequest):
         _validate_mcp_url(body.url)
 
     auth_dict = body.auth.model_dump() if body.auth else {}
+
+    # OAuth sessions can be created directly with an existing refresh token
+    # (e.g. resumed from a prior authorize/callback flow), bypassing the
+    # oauth_authorize validation entirely. Validate token_url here too, or a
+    # malicious/compromised frontend could point token refresh at an internal
+    # address (SSRF) or a plaintext http endpoint (credential leak).
+    if auth_dict.get("type") == "oauth" and auth_dict.get("token_url"):
+        _validate_oauth_url(auth_dict["token_url"], "auth.token_url")
 
     session = InspectorSession(
         url=body.url or "stdio://local",
@@ -396,6 +440,221 @@ async def export_server(session_id: str):
         "resources": resources,
         "prompts": prompts,
     }
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """Generate a PKCE (code_verifier, code_challenge) pair using S256 method."""
+    verifier = base64.urlsafe_b64encode(os.urandom(40)).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def _validate_oauth_url(url: str, field: str) -> None:
+    """
+    Fast-fail check that an OAuth endpoint URL is a valid public https URL.
+
+    https is required because these endpoints receive client secrets and
+    refresh tokens — http would put those credentials on the wire in
+    plaintext. This is a convenience check only (bad input is rejected
+    immediately instead of failing later mid-flow) — it resolves the
+    hostname the same way resolve_pinned_target does, but does NOT pin the
+    result. The actual token-endpoint POSTs (oauth_callback, _auto_refresh)
+    call resolve_pinned_target again immediately before connecting so there
+    is no DNS-rebinding window between "checked" and "connected".
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        raise HTTPException(400, f"Invalid {field}")
+    if parsed.scheme != "https":
+        raise HTTPException(400, f"{field} must use https")
+    resolve_pinned_target(url, field)
+
+
+@router.post("/inspector/oauth/authorize")
+async def oauth_authorize(body: OAuthAuthorizeRequest):
+    """
+    Start an OAuth 2.0 PKCE flow.
+
+    Generates a PKCE verifier/challenge pair and a random state token,
+    stores them in oauth_pending, and returns the full authorization URL
+    the frontend should open in a popup.
+    """
+    _validate_oauth_url(body.authorization_url, "authorization_url")
+    _validate_oauth_url(body.token_url, "token_url")
+
+    verifier, challenge = _pkce_pair()
+    state = secrets.token_urlsafe(24)
+
+    oauth_pending[state] = {
+        "verifier": verifier,
+        "token_url": body.token_url,
+        "client_id": body.client_id,
+        "redirect_uri": body.redirect_uri,
+        "created_at": time.time(),
+        "result": None,
+    }
+
+    params = {
+        "response_type": "code",
+        "client_id": body.client_id,
+        "redirect_uri": body.redirect_uri,
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    if body.scopes:
+        params["scope"] = body.scopes
+
+    redirect_url = f"{body.authorization_url}?{urlencode(params)}"
+    return {"redirect_url": redirect_url, "state": state}
+
+
+@public_router.get("/inspector/oauth/callback")
+async def oauth_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    """
+    OAuth 2.0 redirect callback.
+
+    The authorization server redirects here after the user approves or denies
+    access.  This endpoint exchanges the authorization code for tokens and
+    stores them in oauth_pending so the frontend can poll for the result.
+
+    The response is a small inline HTML page (see _oauth_popup_html) that
+    posts the result to window.opener via postMessage and closes itself —
+    this endpoint is unauthenticated (public_router) since the browser lands
+    here straight from the authorization server's redirect, with no bearer
+    token attached.
+    """
+    from fastapi.responses import HTMLResponse
+
+    if error:
+        return HTMLResponse(_oauth_popup_html(None, error))
+
+    if not state or not code:
+        return HTMLResponse(_oauth_popup_html(None, "missing_code_or_state"))
+
+    entry = oauth_pending.get(state)
+    if not entry:
+        return HTMLResponse(_oauth_popup_html(None, "invalid_or_expired_state"))
+
+    # Expire stale entries
+    if time.time() - entry["created_at"] > OAUTH_STATE_TTL:
+        oauth_pending.pop(state, None)
+        return HTMLResponse(_oauth_popup_html(None, "state_expired"))
+
+    try:
+        pinned_url, original_host = resolve_pinned_target(entry["token_url"], "token_url")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                pinned_url,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": entry["redirect_uri"],
+                    "client_id": entry["client_id"],
+                    "code_verifier": entry["verifier"],
+                },
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Host": original_host,
+                },
+                extensions={"sni_hostname": original_host},
+            )
+            resp.raise_for_status()
+            token_data = resp.json()
+    except Exception as e:
+        logger.warning(f"OAuth callback: token exchange failed — {e}")
+        oauth_pending.pop(state, None)
+        return HTMLResponse(_oauth_popup_html(None, f"token_exchange_failed: {e}"))
+
+    result = {
+        "access_token": token_data.get("access_token"),
+        "refresh_token": token_data.get("refresh_token"),
+        "expires_at": time.time() + token_data.get("expires_in", 3600),
+        "token_url": entry["token_url"],
+        "client_id": entry["client_id"],
+    }
+    entry["result"] = result
+    logger.info(f"OAuth callback: token exchange succeeded for state={state[:8]}…")
+    return HTMLResponse(_oauth_popup_html(result, None))
+
+
+@router.get("/inspector/oauth/result/{state}")
+async def oauth_result(state: str):
+    """
+    Poll for an OAuth token result after the popup has completed.
+
+    The frontend opens the authorization URL in a popup.  While the popup is
+    open the frontend polls this endpoint until a result appears (max
+    OAUTH_STATE_TTL seconds).  Once consumed the entry is removed.
+    """
+    entry = oauth_pending.get(state)
+    if not entry:
+        raise HTTPException(404, "OAuth state not found or already consumed")
+    if time.time() - entry["created_at"] > OAUTH_STATE_TTL:
+        oauth_pending.pop(state, None)
+        raise HTTPException(410, "OAuth state expired")
+    if entry["result"] is None:
+        return {"status": "pending"}
+    result = entry.pop("result")
+    oauth_pending.pop(state, None)
+    return {"status": "complete", "token": result}
+
+
+@router.post("/inspector/{session_id}/oauth/refresh")
+async def oauth_refresh(session_id: str):
+    """
+    Manually trigger an OAuth token refresh for an active session.
+    Useful when the frontend detects imminent expiry and wants to refresh
+    before the next tool call.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    if session.auth.get("type") != "oauth":
+        raise HTTPException(400, "Session does not use OAuth auth")
+    try:
+        await session._auto_refresh()
+    except Exception as e:
+        raise HTTPException(502, f"Token refresh failed: {e}")
+    return {
+        "access_token": session.auth.get("access_token"),
+        "expires_at": session.auth.get("expires_at"),
+    }
+
+
+def _oauth_popup_html(token: Optional[dict], error: Optional[str]) -> str:
+    """
+    Minimal HTML page returned to the OAuth popup after the callback.
+    Posts a message to the opener window then closes the popup.
+    """
+    if error:
+        payload = json.dumps({"error": str(error)})
+    else:
+        payload = json.dumps({"token": token})
+
+    # token/error values ultimately come from the OAuth token endpoint's
+    # response, which is untrusted (that endpoint is user-supplied and could
+    # be malicious or compromised). A literal "</script>" in any string value
+    # would close this script block early regardless of JSON escaping, since
+    # the HTML parser tokenizes it before any JS parsing happens. Escaping
+    # the slash prevents that without corrupting the JSON for JS to parse.
+    payload = payload.replace("</", "<\\/")
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>OAuth Callback</title></head>
+<body>
+<script>
+  try {{
+    window.opener.postMessage({payload}, window.location.origin);
+  }} catch(e) {{}}
+  window.close();
+</script>
+<p>Authentication complete. You may close this window.</p>
+</body>
+</html>"""
 
 
 @router.post("/inspector/{session_id}/chat/stream")
