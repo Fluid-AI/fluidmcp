@@ -59,7 +59,7 @@ from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
-from ..services.package_launcher import readline_with_timeout
+from ..services.package_launcher import _readline_with_timeout
 
 # Per-server stdio locks — prevents concurrent requests from interleaving
 # stdin writes and stdout reads on the same JSON-RPC channel.
@@ -1964,7 +1964,7 @@ async def run_tool(
             with stdio_lock:
                 process.stdin.write(payload + "\n")
                 process.stdin.flush()
-                return readline_with_timeout(process, timeout=30.0)
+                return _readline_with_timeout(process.stdout, timeout=30.0)
 
         response_line = await asyncio.to_thread(_communicate_tool, msg)
         if not response_line:

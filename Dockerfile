@@ -74,10 +74,4 @@ EXPOSE 8099
 # ⚠️  CRITICAL: Set FMCP_BEARER_TOKEN in Railway dashboard to prevent token regeneration
 # ⚠️  CRITICAL: Set MONGODB_URI in Railway (provided by MongoDB service)
 # --require-persistence: Fail fast if MongoDB unavailable (no silent in-memory fallback)
-CMD fmcp serve \
-    --host 0.0.0.0 \
-    --port ${PORT} \
-    --secure \
-    --mongodb-uri ${MONGODB_URI} \
-    --database ${FMCP_DATABASE:-fluidmcp} \
-    --require-persistence
+CMD ["sh", "-c", "fmcp serve --host 0.0.0.0 --port ${PORT} --secure --mongodb-uri ${MONGODB_URI} --database ${FMCP_DATABASE:-fluidmcp} --require-persistence"]
