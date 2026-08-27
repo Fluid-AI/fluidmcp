@@ -90,7 +90,7 @@ def get_frontend_dist_path() -> Optional[Path]:
 def setup_frontend_routes(
     app: FastAPI,
     host: str = "0.0.0.0",
-    port: int = 8099
+    port: int = 8499
 ) -> bool:
     """
     Set up frontend routes for serving the built UI.

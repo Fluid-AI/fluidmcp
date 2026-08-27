@@ -24,13 +24,13 @@ Metrics are collected automatically when requests are made to LLM endpoints. No 
 
 ```bash
 # Prometheus format (for Grafana, Datadog, etc.)
-curl http://localhost:8099/api/metrics
+curl http://localhost:8499/api/metrics
 
 # JSON format (for custom dashboards)
-curl http://localhost:8099/api/metrics/json
+curl http://localhost:8499/api/metrics/json
 
 # Specific model
-curl http://localhost:8099/api/metrics/models/llama-2-70b
+curl http://localhost:8499/api/metrics/models/llama-2-70b
 ```
 
 ---
@@ -114,7 +114,7 @@ Returns detailed metrics for a specific model.
 
 **Example:**
 ```bash
-curl http://localhost:8099/api/metrics/models/llama-2-70b
+curl http://localhost:8499/api/metrics/models/llama-2-70b
 ```
 
 **Response:**
@@ -153,10 +153,10 @@ Reset metrics for specific model or all models.
 **Examples:**
 ```bash
 # Reset all metrics
-curl -X POST http://localhost:8099/api/metrics/reset
+curl -X POST http://localhost:8499/api/metrics/reset
 
 # Reset specific model
-curl -X POST "http://localhost:8099/api/metrics/reset?model_id=llama-2-70b"
+curl -X POST "http://localhost:8499/api/metrics/reset?model_id=llama-2-70b"
 ```
 
 ---
@@ -167,7 +167,7 @@ curl -X POST "http://localhost:8099/api/metrics/reset?model_id=llama-2-70b"
 
 In Grafana, add FluidMCP as a Prometheus data source:
 
-- **URL**: `http://localhost:8099/api/metrics`
+- **URL**: `http://localhost:8499/api/metrics`
 - **Scrape interval**: 15s (recommended)
 - **HTTP Method**: GET
 
@@ -252,7 +252,7 @@ Add to `datadog.yaml`:
 ```yaml
 openmetrics_check:
   instances:
-    - prometheus_url: http://localhost:8099/api/metrics
+    - prometheus_url: http://localhost:8499/api/metrics
       namespace: "fluidmcp"
       metrics:
         - fluidmcp_llm_*
@@ -276,7 +276,7 @@ Use metrics to estimate API costs:
 
 **Replicate (Llama 2 70B: ~$0.65/1M tokens):**
 ```bash
-curl http://localhost:8099/api/metrics/json | jq '.models["llama-2-70b"].tokens.total'
+curl http://localhost:8499/api/metrics/json | jq '.models["llama-2-70b"].tokens.total'
 # Output: 57500
 # Cost: 57500 * $0.65 / 1000000 = $0.037
 ```
@@ -292,7 +292,7 @@ curl http://localhost:8099/api/metrics/json | jq '.models["llama-2-70b"].tokens.
 ```python
 import requests
 
-response = requests.get("http://localhost:8099/api/metrics/json")
+response = requests.get("http://localhost:8499/api/metrics/json")
 data = response.json()
 
 total_cost = 0
@@ -321,7 +321,7 @@ Metrics track three latency statistics per model:
 
 **Identify slow requests:**
 ```bash
-curl http://localhost:8099/api/metrics/json | \
+curl http://localhost:8499/api/metrics/json | \
   jq '.models | to_entries[] | select(.value.latency.max_seconds > 10)'
 ```
 
@@ -330,7 +330,7 @@ curl http://localhost:8099/api/metrics/json | \
 **Alert on low success rate:**
 ```bash
 # Check if success rate < 95%
-curl http://localhost:8099/api/metrics/json | \
+curl http://localhost:8499/api/metrics/json | \
   jq '.models | to_entries[] | select(.value.requests.success_rate_percent < 95)'
 ```
 
@@ -350,7 +350,7 @@ pip install locust
 fluidmcp run config.json --file --start-server
 
 # Run load test (web UI)
-locust -f examples/load_test_locust.py --host=http://localhost:8099
+locust -f examples/load_test_locust.py --host=http://localhost:8499
 
 # Open browser: http://localhost:8089
 # Configure: 10 users, spawn rate 2/sec, duration 60s
@@ -360,7 +360,7 @@ locust -f examples/load_test_locust.py --host=http://localhost:8099
 
 ```bash
 locust -f examples/load_test_locust.py \
-  --host=http://localhost:8099 \
+  --host=http://localhost:8499 \
   --users 10 \
   --spawn-rate 2 \
   --run-time 60s \
@@ -372,7 +372,7 @@ locust -f examples/load_test_locust.py \
 ```bash
 # High load stress test
 MODEL_ID=llama-2-70b locust -f examples/load_test_locust.py \
-  --host=http://localhost:8099 \
+  --host=http://localhost:8499 \
   --user-class StressTestUser \
   --users 50 \
   --spawn-rate 10 \
@@ -392,12 +392,12 @@ MODEL_ID=llama-2-70b locust -f examples/load_test_locust.py \
 **Verify metrics are being collected:**
 ```bash
 # Make a request
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "test-model", "messages": [{"role": "user", "content": "test"}]}'
 
 # Check metrics
-curl http://localhost:8099/api/metrics/models/test-model
+curl http://localhost:8499/api/metrics/models/test-model
 ```
 
 ### High Latency
@@ -411,10 +411,10 @@ curl http://localhost:8099/api/metrics/models/test-model
 **Debug:**
 ```bash
 # Check model health
-curl -X POST http://localhost:8099/api/llm/models/model-id/health-check
+curl -X POST http://localhost:8499/api/llm/models/model-id/health-check
 
 # Check error rates
-curl http://localhost:8099/api/metrics/json | jq '.models["model-id"].errors_by_status'
+curl http://localhost:8499/api/metrics/json | jq '.models["model-id"].errors_by_status'
 ```
 
 ### Token Count Accuracy
@@ -442,7 +442,7 @@ Alert when success rate drops below 95%:
 Reset metrics daily and track token usage:
 ```bash
 # Cron job: Reset metrics at midnight
-0 0 * * * curl -X POST http://localhost:8099/api/metrics/reset
+0 0 * * * curl -X POST http://localhost:8499/api/metrics/reset
 ```
 
 ### 3. Capacity Planning

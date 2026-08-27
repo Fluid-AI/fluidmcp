@@ -48,7 +48,7 @@ Start the server:
 fluidmcp run /path/to/config.json --file --start-server
 ```
 
-The server will be available at `http://localhost:8099`
+The server will be available at `http://localhost:8499`
 
 ### Using via MCP Protocol
 
@@ -134,10 +134,10 @@ You can also call the MCP server directly via HTTP:
 
 ```bash
 # List available tools
-curl http://localhost:8099/api-client/mcp/tools/list
+curl http://localhost:8499/api-client/mcp/tools/list
 
 # Make a request
-curl -X POST http://localhost:8099/api-client/mcp/tools/call \
+curl -X POST http://localhost:8499/api-client/mcp/tools/call \
   -H "Content-Type: application/json" \
   -d '{
     "name": "make_http_request",

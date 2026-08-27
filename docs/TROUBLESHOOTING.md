@@ -295,7 +295,7 @@ Understanding these failure modes will help users debug issues quickly and confi
         - This is a GitHub Codespaces infrastructure issue, not a FluidMCP bug
         - The issue occurs when port visibility is changed multiple times
         - Once a port is "stuck", switching to a fresh port number resolves it
-        - Port 8099 vs 8100 makes no functional difference - use whichever works
+        - Port 8499 vs 8100 makes no functional difference - use whichever works
 
 
 10. Final Note
