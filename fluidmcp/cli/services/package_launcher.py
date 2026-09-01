@@ -114,6 +114,31 @@ def readline_with_timeout(process: subprocess.Popen, timeout: float = 30.0) -> s
     except (OSError, ValueError):
         return ""
 
+
+async def _read_response_locked(process: subprocess.Popen, timeout: float) -> str:
+    """Read one stdout line while holding a server's I/O lock, cancellation-safe.
+
+    ``asyncio.to_thread()`` cannot interrupt the blocking select()/readline()
+    running in its worker thread. If the awaiting coroutine is cancelled (e.g.
+    an HTTP client disconnect) while this call is in flight, the worker thread
+    keeps running until it returns on its own. Without shielding it, the
+    caller's ``async with io_lock`` block would unwind and release the lock
+    immediately, letting a new request start reading the same stdout pipe
+    while the abandoned reader is still consuming it — reintroducing response
+    corruption between requests. Shielding the read and waiting for it to
+    finish (bounded by `timeout` via readline_with_timeout) before re-raising
+    keeps the lock held until the pipe is actually free again.
+    """
+    read_task = asyncio.ensure_future(
+        asyncio.to_thread(readline_with_timeout, process, timeout)
+    )
+    try:
+        return await asyncio.shield(read_task)
+    except asyncio.CancelledError:
+        await read_task
+        raise
+
+
 def find_metadata_file(base_dir: Path) -> Path:
     """
     Find metadata.json in repo.
@@ -839,16 +864,13 @@ def create_dynamic_router(server_manager):
                     except (BrokenPipeError, OSError) as e:
                         raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                    response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+                    # readline_with_timeout uses select() so the thread returns after
+                    # 30s instead of blocking forever (no stuck threads).
+                    response_line = await _read_response_locked(process, 30.0)
 
                 if not response_line:
                     raise HTTPException(504, f"Server '{server_name}' timed out responding")
 
-                # Read response with timeout — readline_with_timeout uses select() so the
-                # thread returns after 30s instead of blocking forever (no stuck threads).
-                response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
-                if not response_line:
-                    raise HTTPException(504, f"Server '{server_name}' timed out responding")
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -947,22 +969,6 @@ def create_dynamic_router(server_manager):
 
                 msg = json.dumps(request)
                 async with io_lock:
-                while True:
-                    response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
-                    if not response_line:
-                        # Distinguish real EOF (process exited) from a timeout
-                        if process.poll() is not None:
-                            logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
-                            break
-                        # Timeout with process still alive — send SSE keep-alive and continue
-                        logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
-                        yield ": keep-alive\n\n"
-                        continue
-
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
-                    yield f"data: {response_line.strip()}\n\n"
-
-                    # Check if response is final
                     try:
                         await asyncio.to_thread(process.stdin.write, msg + "\n")
                         await asyncio.to_thread(process.stdin.flush)
@@ -989,10 +995,20 @@ def create_dynamic_router(server_manager):
 
                     lines_read = 0
                     while lines_read < _SSE_MAX_LINES:
-                        # Non-blocking I/O with asyncio.to_thread
-                        response_line = await asyncio.to_thread(process.stdout.readline)
+                        # readline_with_timeout (via _read_response_locked) bounds the
+                        # blocking read to 30s and stays cancellation-safe, so a client
+                        # disconnect mid-read can't leave an abandoned reader racing the
+                        # next request for this server's stdout.
+                        response_line = await _read_response_locked(process, 30.0)
                         if not response_line:
-                            break
+                            # Distinguish real EOF (process exited) from a timeout
+                            if process.poll() is not None:
+                                logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
+                                break
+                            # Timeout with process still alive — send SSE keep-alive and continue
+                            logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
+                            yield ": keep-alive\n\n"
+                            continue
 
                         lines_read += 1
                         logger.debug(f"Received from MCP: {response_line.strip()}")
@@ -1058,14 +1074,16 @@ def create_dynamic_router(server_manager):
             if io_lock is None:
                 raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
 
-            # Non-blocking I/O — readline_with_timeout uses select() so the thread
-            # returns after 30s instead of blocking forever (no stuck threads).
-            response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
-            if not response_line:
-                raise HTTPException(504, f"Server '{server_name}' timed out responding")
-            response_data = json.loads(response_line)
+            async with io_lock:
+                try:
+                    await asyncio.to_thread(process.stdin.write, json.dumps(request_payload) + "\n")
+                    await asyncio.to_thread(process.stdin.flush)
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
 
-                response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+                # readline_with_timeout uses select() so the thread returns after
+                # 30s instead of blocking forever (no stuck threads).
+                response_line = await _read_response_locked(process, 30.0)
 
             if not response_line:
                 raise HTTPException(504, f"Server '{server_name}' timed out responding")
@@ -1133,9 +1151,17 @@ def create_dynamic_router(server_manager):
             if io_lock is None:
                 raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
 
-            # Tool execution with timeout — readline_with_timeout uses select() so the
-            # thread returns after 60s instead of blocking forever (no stuck threads).
-            response_line = await asyncio.to_thread(readline_with_timeout, process, 60.0)
+            async with io_lock:
+                try:
+                    await asyncio.to_thread(process.stdin.write, json.dumps(request_payload) + "\n")
+                    await asyncio.to_thread(process.stdin.flush)
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+
+                # Tool execution with timeout — readline_with_timeout uses select() so the
+                # thread returns after 60s instead of blocking forever (no stuck threads).
+                response_line = await _read_response_locked(process, 60.0)
+
             if not response_line:
                 # Log timeout failure
                 await server_manager.db.save_log_entry({
