@@ -63,6 +63,7 @@ from ..services.network_handle import NetworkSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
 from ..services.metrics import MetricsCollector, get_registry as _get_metrics_registry
+from ..services.tool_error_tracker import record_tool_outcome as _record_tool_outcome
 
 try:
     import psutil as _psutil
@@ -86,6 +87,25 @@ RATE_LIMIT_MODEL_LIST = (60, 60)           # 60 req/min - permissive for read op
 RATE_LIMIT_CHAT_COMPLETIONS = (60, 60)     # 60 req/min - permissive for production inference
 RATE_LIMIT_COMPLETIONS = (60, 60)          # 60 req/min - permissive for production inference
 RATE_LIMIT_MODELS_GET = (120, 60)          # 120 req/min - very permissive for metadata reads
+
+
+def _extract_result_text(result: Dict[str, Any]) -> str:
+    """Extract readable text from an MCP tool result's content blocks.
+
+    Used to classify tool-level failures, where the real error message lives in
+    result.content[].text rather than in a JSON-RPC error object.
+    """
+    content = result.get("content")
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        joined = " ".join(p for p in parts if p).strip()
+        if joined:
+            return joined[:500]
+    return str(result)[:500]
 
 
 def truncate_error(error_msg: str) -> str:
@@ -2419,26 +2439,43 @@ async def run_tool(
             )
         except asyncio.TimeoutError:
             collector.record_tool_call(tool_name, "timeout", time.monotonic() - t0)
+            _record_tool_outcome(id, tool_name, "timeout", "tool execution timed out after 30s")
             raise HTTPException(504, "Tool execution timeout (>30s)")
 
         response = json.loads(response_line.strip())
 
         if "error" in response:
             collector.record_tool_call(tool_name, "error", time.monotonic() - t0)
+            _record_tool_outcome(id, tool_name, "error", str(response["error"]))
             raise HTTPException(500, truncate_error(f"Tool execution error: {response['error']}"))
 
+        result = response.get("result", {})
+
+        # An MCP server reports a tool-level failure inside a successful
+        # JSON-RPC result via isError, not as a JSON-RPC error. Treating that as
+        # a success is the easiest way to under-report real failures — a broken
+        # SQL connection surfaces here, not in the error branch above.
+        if isinstance(result, dict) and result.get("isError"):
+            collector.record_tool_call(tool_name, "tool_error", time.monotonic() - t0)
+            _record_tool_outcome(id, tool_name, "tool_error", _extract_result_text(result))
+            logger.warning(f"Tool '{tool_name}' on '{id}' returned isError")
+            return result
+
         collector.record_tool_call(tool_name, "success", time.monotonic() - t0)
+        _record_tool_outcome(id, tool_name, "success")
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
-        return response.get("result", {})
+        return result
 
     except json.JSONDecodeError as e:
         collector.record_tool_call(tool_name, "parse_error", time.monotonic() - t0)
+        _record_tool_outcome(id, tool_name, "parse_error", f"unparseable response: {e}")
         logger.error(f"Failed to parse tool response for '{tool_name}' on '{id}': {e}")
         raise HTTPException(500, "Failed to parse tool response")
     except HTTPException:
         raise
     except Exception as e:
         collector.record_tool_call(tool_name, "error", time.monotonic() - t0)
+        _record_tool_outcome(id, tool_name, "error", str(e))
         logger.exception(f"Tool execution failed for '{tool_name}' on '{id}': {e}")
         raise HTTPException(500, "Tool execution failed")
 

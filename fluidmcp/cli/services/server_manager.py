@@ -30,6 +30,11 @@ from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
+from .config_validator import validate_server_config as _validate_server_config
+from .dependency_probe import DependencyProbe
+from .event_bus import emit as _emit
+from .tool_error_tracker import get_tool_error_tracker
+from ..models.events import EventType as _ET, Severity as _Sev
 
 
 def _parse_mcp_response(resp) -> dict:
@@ -95,6 +100,11 @@ class ServerManager:
 
         # Health checker for process validation
         self.health_checker = HealthChecker()
+
+        # Pre-flight config validation results: server_id -> validation dict.
+        # Surfaced by the monitoring API so a missing credential is visible
+        # before anyone calls a tool and discovers it the hard way.
+        self.config_issues: Dict[str, Dict[str, Any]] = {}
 
         # Stale PID update cache to throttle database writes
         # Maps server_id -> last_update_timestamp
@@ -243,6 +253,51 @@ class ServerManager:
             # Get display name from config
             name = config.get("name", id)
 
+            # ── Pre-flight config validation ──────────────────────────────
+            # Catches missing/placeholder credentials and unreachable commands
+            # BEFORE spawning. Without this a server with a placeholder password
+            # starts cleanly and looks healthy until the first tool call fails.
+            # Warn-and-start by default: a server may legitimately read
+            # credentials from a mounted file, so blocking would cause outages.
+            try:
+                validation = _validate_server_config(id, config)
+                if validation["valid"]:
+                    self.config_issues.pop(id, None)
+                else:
+                    self.config_issues[id] = validation
+                    if validation["errors"]:
+                        _emit(
+                            _ET.SERVER_CONFIG_INVALID,
+                            server_id=id,
+                            server_name=name,
+                            failure_category="missing_credentials",
+                            failure_owner="customer",
+                            missing_env=validation["missing_env"],
+                            placeholder_env=validation["placeholder_env"],
+                            unresolved_env=validation["unresolved_env"],
+                            errors=validation["errors"],
+                            remediation=validation["remediation"],
+                            blocking=validation["blocking"],
+                        )
+                    if validation["blocking"]:
+                        logger.error(
+                            f"Server '{name}' (id: {id}) not started: invalid "
+                            f"configuration and strict_config is enabled"
+                        )
+                        await self.db.save_instance_state({
+                            "server_id": id,
+                            "state": "failed",
+                            "last_error": validation["remediation"],
+                        })
+                        await self.record_transition(
+                            id, "config_error", reason=validation["remediation"],
+                            failure_category="missing_credentials",
+                        )
+                        return False
+            except Exception as e:
+                # Validation must never prevent a start on its own.
+                logger.warning(f"Config validation failed for '{id}' (continuing): {e}")
+
             # Spawn the MCP process with timeout
             logger.info(f"Starting server '{name}' (id: {id})...")
             try:
@@ -307,6 +362,26 @@ class ServerManager:
             self.start_times[id] = time.monotonic()
             collector.set_uptime(0.0)  # Just started
 
+            # Reset per-server runtime tracking so a restarted server starts
+            # from a clean slate rather than inheriting the old error rate.
+            try:
+                get_tool_error_tracker().reset(id)
+                health_monitor = getattr(self, "_health_monitor", None)
+                probe = getattr(health_monitor, "_dependency_probe", None) if health_monitor else None
+                if probe is not None:
+                    probe.reset(id)
+            except Exception as e:
+                logger.debug(f"Could not reset runtime tracking for '{id}': {e}")
+
+            _emit(
+                _ET.SERVER_STARTED,
+                server_id=id,
+                server_name=name,
+                pid=process.pid,
+                transport=getattr(process, "transport", "stdio"),
+            )
+            await self.record_transition(id, "running", reason="started")
+
             return True
 
         except Exception as e:
@@ -322,6 +397,15 @@ class ServerManager:
                 "state": "failed",
                 "last_error": str(e)
             })
+
+            _emit(
+                _ET.SERVER_RESTART_FAILED,
+                server_id=id,
+                server_name=name,
+                error=str(e)[:500],
+                phase="start",
+            )
+            await self.record_transition(id, "failed", reason=f"start failed: {e}"[:300])
 
             return False
 
@@ -1562,17 +1646,89 @@ class ServerManager:
                 await self.db.save_crash_event(crash_event)
             except Exception as e:
                 logger.error(f"Failed to save crash event for server '{id}': {e}")
+
+            # Classify the crash and emit a monitoring event. The classifier runs
+            # over stderr as well as the exit code, so an OOM-by-message is
+            # caught even when the exit code is a generic 1.
+            try:
+                from .failure_classifier import diagnose as _diagnose
+                from ..utils.error_utils import redact_secrets as _redact
+                # Classify on the raw stderr, publish the redacted form: this
+                # payload is pushed to webhooks and stored by external systems.
+                verdict = _diagnose(exit_code=exit_code, stderr=stderr_tail or None)
+                safe_stderr = _redact(stderr_tail or "")[:2000]
+                _emit(
+                    _ET.SERVER_CRASHED,
+                    server_id=id,
+                    server_name=server_name,
+                    exit_code=exit_code,
+                    exit_category=exit_info["category"],
+                    exit_label=exit_info["label"],
+                    exit_description=exit_info["description"],
+                    uptime_seconds=uptime,
+                    stderr_tail=safe_stderr,
+                    failure_category=verdict.get("failure_category"),
+                    failure_owner=verdict.get("failure_owner"),
+                    summary=verdict.get("summary"),
+                    remediation=verdict.get("remediation"),
+                    restart_would_help=verdict.get("restart_would_help"),
+                    memory_bytes_at_crash=crash_event.get("memory_bytes_at_crash"),
+                )
+                await self.record_transition(
+                    id, "failed",
+                    from_state="running",
+                    reason=exit_info["description"],
+                    failure_category=verdict.get("failure_category"),
+                )
+            except Exception as e:
+                logger.debug(f"Could not emit crash event for '{id}': {e}")
             uptime_str = f"{uptime:.1f}s" if uptime is not None else "unknown"
             logger.warning(
                 f"Server '{id}' crashed (exit_code={exit_code} [{exit_info['label']}], uptime={uptime_str})"
             )
         else:
             logger.info(f"Cleaned up server '{id}'")
+            try:
+                _emit(
+                    _ET.SERVER_STOPPED,
+                    server_id=id,
+                    server_name=(self.configs.get(id) or {}).get("name", id),
+                    exit_code=exit_code,
+                    uptime_seconds=uptime,
+                    intentional=intentional,
+                )
+                await self.record_transition(
+                    id, "stopped", from_state="running",
+                    reason="intentional stop" if intentional else "clean exit",
+                )
+            except Exception as e:
+                logger.debug(f"Could not emit stop event for '{id}': {e}")
 
         # Clean up health monitor per-server state after crash event is saved
         if health_monitor is not None:
             health_monitor._last_resource_snapshot.pop(id, None)
             health_monitor._memory_history.pop(id, None)
+
+    async def record_transition(
+        self,
+        server_id: str,
+        to_state: str,
+        from_state: Optional[str] = None,
+        reason: Optional[str] = None,
+        failure_category: Optional[str] = None,
+    ) -> None:
+        """Record a state change for uptime/SLA accounting. Never raises."""
+        try:
+            await self.db.save_state_transition({
+                "server_id": server_id,
+                "from_state": from_state,
+                "to_state": to_state,
+                "timestamp": datetime.utcnow(),
+                "reason": reason,
+                "failure_category": failure_category,
+            })
+        except Exception as e:
+            logger.debug(f"Could not record state transition for '{server_id}': {e}")
 
     def get_uptime(self, server_id: str) -> Optional[float]:
         """
@@ -1937,6 +2093,14 @@ class MCPHealthMonitor:
         # Stability tracking: sliding window of restart timestamps (10 min)
         self._restart_timestamps: Dict[str, List[float]] = {}
 
+        # Latch so a memory warning is emitted once per threshold crossing
+        # rather than on every monitor cycle.
+        self._memory_warned: Dict[str, bool] = {}
+
+        # Active dependency probing — catches a broken database connection on an
+        # idle server, which no passive signal can see.
+        self._dependency_probe = DependencyProbe()
+
     def start(self) -> None:
         """Start the background health monitor."""
         if self._running:
@@ -1962,6 +2126,19 @@ class MCPHealthMonitor:
 
     def is_running(self) -> bool:
         return self._running and self._monitor_task is not None and not self._monitor_task.done()
+
+    async def _safe_transition(self, server_id: str, to_state: str, **kwargs) -> None:
+        """Record a state transition, swallowing every failure.
+
+        Monitoring bookkeeping sits inline in the restart path, so an exception
+        here would abort the restart itself — exactly the failure mode this
+        wrapper exists to prevent. A missing transition record costs an accurate
+        uptime figure; a skipped restart costs an outage.
+        """
+        try:
+            await self._sm.record_transition(server_id, to_state, **kwargs)
+        except Exception as e:
+            logger.debug(f"Transition record failed for '{server_id}' -> {to_state}: {e}")
 
     def _calculate_restart_delay(self, server_id: str) -> float:
         """Exponential backoff: base_delay * 2^min(count, MAX_BACKOFF_EXPONENT)."""
@@ -2019,6 +2196,18 @@ class MCPHealthMonitor:
             logger.warning(
                 f"[{server_id}] HTTP ping timed out after {timeout}s — PID alive but "
                 f"server unresponsive, treating as zombie"
+            )
+            _emit(
+                _ET.SERVER_ZOMBIE,
+                server_id=server_id,
+                server_name=(self._sm.configs.get(server_id) or {}).get("name", server_id),
+                ping_timeout_seconds=timeout,
+                failure_category="unresponsive",
+                failure_owner="fluidmcp",
+                summary=(
+                    "The MCP process is alive but stopped answering HTTP requests. "
+                    "FluidMCP will restart it."
+                ),
             )
             return True
         except Exception as e:
@@ -2145,6 +2334,10 @@ class MCPHealthMonitor:
             self._update_resource_snapshot(server_id, process)
             # Check resource thresholds and kill/restart if exceeded
             await self._check_resource_thresholds(server_id, process)
+            # Passive degradation: has the tool error rate crossed a threshold?
+            await self._check_degradation(server_id)
+            # Active dependency probe: is the server's database still reachable?
+            await self._check_dependency(server_id, process)
             return
 
         # Evict stale PID from warm-up tracking so the next restart gets a fresh warm-up
@@ -2196,6 +2389,22 @@ class MCPHealthMonitor:
         if should_restart and self._restart_counts.get(server_id, 0) >= max_restarts:
             logger.warning(f"MCP server '{server_id}' reached max restarts ({max_restarts})")
             should_restart = False
+            _emit(
+                _ET.SERVER_RESTART_FAILED,
+                server_id=server_id,
+                server_name=config.get("name", server_id),
+                max_restarts=max_restarts,
+                exit_code=exit_code,
+                exhausted=True,
+                summary=(
+                    f"Server has exhausted its {max_restarts} restart attempts and "
+                    f"will not be restarted again. It requires manual intervention."
+                ),
+                remediation=(
+                    "Investigate the crash cause via GET /api/monitoring/servers/"
+                    f"{server_id}/diagnosis, fix it, then POST /api/servers/{server_id}/start"
+                ),
+            )
 
         if not should_restart:
             # Still clean up DB state even if not restarting
@@ -2214,6 +2423,16 @@ class MCPHealthMonitor:
             # Exponential backoff before acquiring lock
             delay = self._calculate_restart_delay(server_id)
             logger.info(f"Restarting MCP server '{server_id}' in {delay:.0f}s (attempt {count + 1}/{max_restarts})")
+            _emit(
+                _ET.SERVER_RESTARTING,
+                server_id=server_id,
+                server_name=config.get("name", server_id),
+                attempt=count + 1,
+                max_restarts=max_restarts,
+                backoff_seconds=delay,
+                exit_code=exit_code,
+            )
+            await self._safe_transition(server_id, "restarting", reason="restart policy")
             await asyncio.sleep(delay)
 
             op_lock = self._sm._get_operation_lock(server_id)
@@ -2239,8 +2458,26 @@ class MCPHealthMonitor:
             await self._check_stability(server_id)
             if success:
                 logger.info(f"MCP server '{server_id}' restarted successfully")
+                _emit(
+                    _ET.SERVER_RESTARTED,
+                    server_id=server_id,
+                    server_name=config.get("name", server_id),
+                    attempt=count + 1,
+                )
             else:
                 logger.error(f"MCP server '{server_id}' failed to restart")
+                _emit(
+                    _ET.SERVER_RESTART_FAILED,
+                    server_id=server_id,
+                    server_name=config.get("name", server_id),
+                    attempt=count + 1,
+                    max_restarts=max_restarts,
+                    summary=(
+                        f"Restart attempt {count + 1} of {max_restarts} failed. "
+                        f"The server is down."
+                    ),
+                )
+                await self._safe_transition(server_id, "failed", reason="restart failed")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -2364,6 +2601,25 @@ class MCPHealthMonitor:
                     f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
                     f"(>= {memory_kill_pct}%), killing to protect other servers"
                 )
+                _emit(
+                    _ET.RESOURCE_MEMORY_KILLED,
+                    server_id=server_id,
+                    server_name=config.get("name", server_id),
+                    memory_usage_pct=round(mem_pct, 1),
+                    memory_rss_bytes=snapshot.get("memory_rss_bytes"),
+                    memory_limit_bytes=memory_limit_bytes,
+                    threshold_pct=memory_kill_pct,
+                    failure_category="oom",
+                    failure_owner="fluidmcp",
+                    summary=(
+                        f"Server was killed at {mem_pct:.0f}% of its memory limit to "
+                        f"protect other servers on the host."
+                    ),
+                    remediation=(
+                        "Raise memory_limit_mb for this server, or investigate the "
+                        "memory leak. Check memory_trend for a rising pattern."
+                    ),
+                )
                 # Terminate the process; _restart_under_policy handles cleanup + restart
                 if self._sm.processes.get(server_id) is process:
                     process.terminate()
@@ -2383,6 +2639,26 @@ class MCPHealthMonitor:
                     f"[RESOURCE] {server_id} memory at {mem_pct:.1f}% of limit "
                     f"(>= {memory_warn_pct}%) — approaching kill threshold"
                 )
+                # Emitted once per crossing rather than every cycle, so a server
+                # parked just above the warn line does not flood the feed.
+                if not self._memory_warned.get(server_id):
+                    self._memory_warned[server_id] = True
+                    _emit(
+                        _ET.RESOURCE_MEMORY_WARNING,
+                        server_id=server_id,
+                        server_name=config.get("name", server_id),
+                        memory_usage_pct=round(mem_pct, 1),
+                        memory_rss_bytes=snapshot.get("memory_rss_bytes"),
+                        threshold_pct=memory_warn_pct,
+                        kill_threshold_pct=memory_kill_pct,
+                        memory_trend=self.get_memory_trend(server_id),
+                        summary=(
+                            f"Server is at {mem_pct:.0f}% of its memory limit and will "
+                            f"be killed at {memory_kill_pct:.0f}%."
+                        ),
+                    )
+            else:
+                self._memory_warned.pop(server_id, None)
 
         # --- CPU stuck policy ---
         try:
@@ -2422,6 +2698,20 @@ class MCPHealthMonitor:
                     f"[RESOURCE] {server_id} CPU stuck at {cpu_pct:.1f}% "
                     f"for {cpu_kill_cycles} consecutive cycles, restarting"
                 )
+                _emit(
+                    _ET.RESOURCE_CPU_STUCK,
+                    server_id=server_id,
+                    server_name=config.get("name", server_id),
+                    cpu_percent=round(cpu_pct, 1),
+                    consecutive_cycles=cpu_kill_cycles,
+                    threshold_pct=cpu_warn_pct,
+                    failure_category="cpu_stuck",
+                    failure_owner="fluidmcp",
+                    summary=(
+                        f"Server pegged CPU at {cpu_pct:.0f}% for {cpu_kill_cycles} "
+                        f"consecutive checks and is being restarted."
+                    ),
+                )
                 # Terminate the process; _restart_under_policy handles cleanup + restart
                 if self._sm.processes.get(server_id) is process:
                     process.terminate()
@@ -2437,6 +2727,119 @@ class MCPHealthMonitor:
         else:
             # Reset counter on any healthy cycle
             self._high_cpu_cycles.pop(server_id, None)
+
+    async def _check_degradation(self, server_id: str) -> None:
+        """Emit degraded/recovered based on tool-call error rates.
+
+        This is the failure class the process watchdog structurally cannot see:
+        PID alive, HTTP answering, and every tool call failing because a
+        dependency is broken.
+        """
+        try:
+            tracker = get_tool_error_tracker()
+            transition = tracker.evaluate(server_id)
+            if transition is None:
+                return
+
+            name = (self._sm.configs.get(server_id) or {}).get("name", server_id)
+
+            if transition["transition"] == "degraded":
+                last_error = transition.get("last_error") or {}
+                failing = transition.get("failing_tools") or []
+                tool_names = [t["tool"] for t in failing]
+                _emit(
+                    _ET.SERVER_DEGRADED,
+                    server_id=server_id,
+                    server_name=name,
+                    error_rate_5m=transition["error_rate_5m"],
+                    calls_5m=transition["samples"],
+                    failing_tools=failing,
+                    failure_category=last_error.get("failure_category"),
+                    failure_owner=last_error.get("failure_owner"),
+                    last_error=last_error.get("message"),
+                    remediation=last_error.get("remediation"),
+                    summary=(
+                        f"Server process is healthy but "
+                        + (
+                            f"tool(s) {', '.join(tool_names)} are failing"
+                            if tool_names else
+                            f"{transition['error_rate_5m'] * 100:.0f}% of tool calls are failing"
+                        )
+                        + ". Restarting will not help if the cause is a dependency."
+                    ),
+                )
+                await self._sm.record_transition(
+                    server_id, "degraded", from_state="running",
+                    reason="tool error rate above threshold",
+                    failure_category=last_error.get("failure_category"),
+                )
+            else:
+                _emit(
+                    _ET.SERVER_RECOVERED,
+                    server_id=server_id,
+                    server_name=name,
+                    error_rate_5m=transition["error_rate_5m"],
+                    reason="tool error rate returned to normal",
+                )
+                await self._sm.record_transition(
+                    server_id, "running", from_state="degraded", reason="recovered"
+                )
+        except Exception as e:
+            logger.debug(f"Degradation check failed for '{server_id}': {e}")
+
+    async def _check_dependency(self, server_id: str, process) -> None:
+        """Run the configured health probe, if it is due.
+
+        Opt-in per server via ``health_probe``. A restart is triggered only when
+        the server explicitly asks for it: restarting rarely fixes wrong
+        credentials, and a restart loop actively hides the real fault.
+        """
+        try:
+            config = self._sm.configs.get(server_id) or {}
+            probe_config = DependencyProbe.probe_config(config)
+            if not probe_config:
+                return
+            if not self._dependency_probe.due(server_id, probe_config):
+                return
+
+            result = await self._dependency_probe.run(server_id, process, probe_config)
+            if result is None:
+                return
+
+            name = config.get("name", server_id)
+
+            if result["transition"] == "failed":
+                _emit(
+                    _ET.SERVER_DEPENDENCY_FAILED,
+                    server_id=server_id,
+                    server_name=name,
+                    **{k: v for k, v in result.items() if k != "transition"},
+                )
+                await self._sm.record_transition(
+                    server_id, "degraded", from_state="running",
+                    reason=f"dependency probe failed ({result.get('tool')})",
+                    failure_category=result.get("failure_category"),
+                )
+
+                if config.get("restart_on_dependency_failure"):
+                    logger.warning(
+                        f"[probe] '{server_id}' restart_on_dependency_failure is set — "
+                        f"restarting"
+                    )
+                    await self.trigger_restart(server_id)
+            else:
+                _emit(
+                    _ET.SERVER_RECOVERED,
+                    server_id=server_id,
+                    server_name=name,
+                    reason=f"dependency probe recovered ({result.get('tool')})",
+                )
+                await self._sm.record_transition(
+                    server_id, "running", from_state="degraded",
+                    reason="dependency recovered",
+                )
+        except Exception as e:
+            logger.debug(f"Dependency probe failed for '{server_id}': {e}")
 
     async def _check_stability(self, server_id: str) -> None:
         """Record a restart timestamp and flag server as unstable if flapping."""
@@ -2459,6 +2862,22 @@ class MCPHealthMonitor:
                 f"[ALERT] {server_id} has restarted {len(timestamps)} times "
                 f"in the last 10 minutes — marking unstable"
             )
+            _emit(
+                _ET.SERVER_UNSTABLE,
+                server_id=server_id,
+                server_name=(self._sm.configs.get(server_id) or {}).get("name", server_id),
+                restarts_in_window=len(timestamps),
+                window_seconds=window,
+                threshold=storm_threshold,
+                summary=(
+                    f"Server has restarted {len(timestamps)} times in 10 minutes — it is "
+                    f"crash-looping, not recovering."
+                ),
+                remediation=(
+                    "Treat this as one incident, not one per crash. Check "
+                    f"GET /api/monitoring/servers/{server_id}/diagnosis for the cause."
+                ),
+            )
             try:
                 instance = await self._sm.db.get_instance_state(server_id) or {}
                 instance["server_id"] = server_id
@@ -2475,5 +2894,12 @@ class MCPHealthMonitor:
                 instance["stability"] = "stable"
                 await self._sm.db.save_instance_state(instance)
                 logger.info(f"[ALERT] {server_id} stability cleared after 5 minutes of healthy operation")
+                _emit(
+                    _ET.SERVER_RECOVERED,
+                    server_id=server_id,
+                    server_name=(self._sm.configs.get(server_id) or {}).get("name", server_id),
+                    reason="stable for 5 minutes after restart storm",
+                )
+                await self._sm.record_transition(server_id, "running", reason="recovered")
         except Exception as e:
             logger.error(f"Failed to clear stability flag for '{server_id}': {e}")

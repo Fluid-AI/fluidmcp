@@ -28,6 +28,11 @@ class InMemoryBackend(PersistenceBackend):
         self._logs: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self._llm_models: Dict[str, Dict[str, Any]] = {}
         self._crash_events: Dict[str, deque] = {}
+        # Monitoring: events ring, boot records, state transitions, webhooks
+        self._events: deque = deque(maxlen=5000)
+        self._boot_records: List[Dict[str, Any]] = []
+        self._state_transitions: deque = deque(maxlen=5000)
+        self._webhooks: Dict[str, Dict[str, Any]] = {}
         self._connected = False
 
     async def connect(self) -> bool:
@@ -44,6 +49,10 @@ class InMemoryBackend(PersistenceBackend):
         self._logs.clear()
         self._llm_models.clear()
         self._crash_events.clear()
+        self._events.clear()
+        self._boot_records.clear()
+        self._state_transitions.clear()
+        self._webhooks.clear()
         self._connected = False
         logger.info("Disconnected in-memory backend")
 
@@ -344,3 +353,167 @@ class InMemoryBackend(PersistenceBackend):
         except Exception as e:
             logger.error(f"Error updating LLM model '{model_id}' in memory: {e}")
             return False
+
+    # ==================== Monitoring Events ====================
+
+    async def save_event(self, event: Dict[str, Any]) -> bool:
+        """Append a monitoring event to the in-memory ring."""
+        self._events.append(dict(event))
+        return True
+
+    async def list_events_since(
+        self,
+        since: Optional[int] = None,
+        limit: int = 100,
+        severity: Optional[str] = None,
+        server_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        boot_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List events with seq > since, oldest first."""
+        from ..models.events import SEVERITY_ORDER, Severity
+
+        min_rank = 0
+        if severity:
+            try:
+                min_rank = SEVERITY_ORDER[Severity(severity)]
+            except (ValueError, KeyError):
+                min_rank = 0
+
+        results: List[Dict[str, Any]] = []
+        for event in self._events:
+            if since is not None and event.get("seq", 0) <= since:
+                continue
+            if boot_id and event.get("boot_id") != boot_id:
+                continue
+            if server_id and event.get("server_id") != server_id:
+                continue
+            if event_type and event.get("type") != event_type:
+                continue
+            if min_rank:
+                try:
+                    rank = SEVERITY_ORDER[Severity(event.get("severity", "info"))]
+                except (ValueError, KeyError):
+                    rank = 0
+                if rank < min_rank:
+                    continue
+            results.append(dict(event))
+
+        results.sort(key=lambda e: e.get("seq", 0))
+        return results[:limit]
+
+    async def count_events_since(
+        self,
+        since_ts: float,
+        severity: Optional[str] = None,
+        server_id: Optional[str] = None,
+    ) -> int:
+        """Count events since a UTC POSIX timestamp."""
+        from datetime import datetime as _dt, timezone as _tz
+
+        count = 0
+        for event in self._events:
+            ts = event.get("timestamp")
+            if not ts:
+                continue
+            try:
+                parsed = _dt.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                if parsed.timestamp() <= since_ts:
+                    continue
+            except Exception:
+                continue
+            if severity and event.get("severity") != severity:
+                continue
+            if server_id and event.get("server_id") != server_id:
+                continue
+            count += 1
+        return count
+
+    # ==================== Gateway Boot Records ====================
+
+    async def save_boot_record(self, record: Dict[str, Any]) -> int:
+        """Store a boot record and return the boot count for this gateway."""
+        self._boot_records.append(dict(record))
+        gateway_id = record.get("gateway_id")
+        return sum(1 for r in self._boot_records if r.get("gateway_id") == gateway_id)
+
+    async def list_boot_records(
+        self, gateway_id: Optional[str] = None, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """List recent boot records, most recent first."""
+        records = [
+            dict(r) for r in self._boot_records
+            if gateway_id is None or r.get("gateway_id") == gateway_id
+        ]
+        return list(reversed(records))[:limit]
+
+    # ==================== State Transitions ====================
+
+    async def save_state_transition(self, transition: Dict[str, Any]) -> bool:
+        """Append a state transition."""
+        self._state_transitions.append(dict(transition))
+        return True
+
+    async def list_state_transitions(
+        self,
+        server_id: Optional[str] = None,
+        since_ts: Optional[float] = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """List state transitions, oldest first."""
+        from datetime import datetime as _dt, timezone as _tz
+
+        results: List[Dict[str, Any]] = []
+        for transition in self._state_transitions:
+            if server_id and transition.get("server_id") != server_id:
+                continue
+            if since_ts is not None:
+                ts = transition.get("timestamp")
+                if ts is None:
+                    continue
+                try:
+                    parsed = _dt.fromisoformat(ts.replace("Z", "+00:00")) if isinstance(ts, str) else ts
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=_tz.utc)
+                    if parsed.timestamp() < since_ts:
+                        continue
+                except Exception:
+                    continue
+            results.append(dict(transition))
+        return results[:limit]
+
+    # ==================== Webhook Receivers ====================
+
+    async def save_webhook(self, webhook: Dict[str, Any]) -> bool:
+        """Create or replace a webhook receiver."""
+        webhook_id = webhook.get("id")
+        if not webhook_id:
+            return False
+        self._webhooks[webhook_id] = dict(webhook)
+        return True
+
+    async def list_webhooks(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """List webhook receivers."""
+        return [
+            dict(w) for w in self._webhooks.values()
+            if not enabled_only or w.get("enabled", True)
+        ]
+
+    async def get_webhook(self, webhook_id: str) -> Optional[Dict[str, Any]]:
+        """Get one webhook receiver."""
+        webhook = self._webhooks.get(webhook_id)
+        return dict(webhook) if webhook else None
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        """Delete a webhook receiver."""
+        return self._webhooks.pop(webhook_id, None) is not None
+
+    async def set_webhook_enabled(self, webhook_id: str, enabled: bool) -> bool:
+        """Enable or disable a webhook receiver."""
+        webhook = self._webhooks.get(webhook_id)
+        if not webhook:
+            return False
+        webhook["enabled"] = enabled
+        return True

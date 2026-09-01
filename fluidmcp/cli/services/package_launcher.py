@@ -17,6 +17,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
+from .tool_error_tracker import record_tool_outcome as _record_tool_outcome
 from .network_handle import NetworkSubprocessHandle
 from .sse_handle import SseSubprocessHandle
 
@@ -26,6 +27,35 @@ security = HTTPBearer(auto_error=False)
 def _is_unfilled(v) -> bool:
     """Return True if the LLM left this parameter at its None default."""
     return v is None
+
+
+def _tool_label(request: dict) -> str:
+    """Name to attribute an outcome to.
+
+    For tools/call this is the tool name, so a single failing endpoint is
+    visible; for anything else the JSON-RPC method is a good enough bucket.
+    """
+    method = request.get("method") or "unknown"
+    if method == "tools/call":
+        params = request.get("params")
+        if isinstance(params, dict) and params.get("name"):
+            return str(params["name"])
+    return str(method)
+
+
+def _mcp_result_text(result: dict) -> str:
+    """Readable text from an MCP tool result's content blocks."""
+    content = result.get("content")
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        joined = " ".join(p for p in parts if p).strip()
+        if joined:
+            return joined[:500]
+    return str(result)[:500]
 
 
 def _sanitize_log_field(value: str, max_len: int = 200) -> str:
@@ -835,6 +865,10 @@ def create_dynamic_router(server_manager):
                             #   • HTTP call to an API with no timeout set
                             #   • Tool waiting on a lock or resource held by another process
                             _log.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within {_MCP_READ_TIMEOUT}s")
+                            _record_tool_outcome(
+                                server_name, _tool_label(request), "timeout",
+                                f"no response within {_MCP_READ_TIMEOUT}s",
+                            )
                             raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
 
                     # LOGGED: [mcp.slow] — response arrived but took longer than threshold.
@@ -867,8 +901,29 @@ def create_dynamic_router(server_manager):
                         err_code = err.get("code") if isinstance(err, dict) else None
                         err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
                         _log.warning(f"[mcp.error_response] {ctx} elapsed={elapsed_ms}ms — code={err_code} message={err_msg}")
+                        _record_tool_outcome(
+                            server_name, _tool_label(request), "error",
+                            err.get("message") if isinstance(err, dict) else str(err),
+                        )
                     else:
-                        _log.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
+                        # A tool-level failure arrives as isError inside a
+                        # successful result, not as a JSON-RPC error. This is
+                        # where a broken SQL connection actually shows up.
+                        _result = response_data.get("result")
+                        if isinstance(_result, dict) and _result.get("isError"):
+                            _text = _mcp_result_text(_result)
+                            _log.warning(
+                                f"[mcp.tool_error] {ctx} elapsed={elapsed_ms}ms — "
+                                f"isError: {_sanitize_log_field(_text)}"
+                            )
+                            _record_tool_outcome(
+                                server_name, _tool_label(request), "tool_error", _text
+                            )
+                        else:
+                            _log.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms")
+                            _record_tool_outcome(
+                                server_name, _tool_label(request), "success"
+                            )
 
                     # Update last_used_at so the idle-timeout cleanup doesn't evict this server.
                     await server_manager.update_last_used(server_name)
