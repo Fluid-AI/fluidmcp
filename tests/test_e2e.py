@@ -245,10 +245,20 @@ class TestE2EGitHubServerFlow:
 
         This is a true E2E test that verifies the entire flow works.
         """
-        # Check if uv is available
-        import shutil
+        # Check if uv is available and meets minimum version
+        import shutil, subprocess as _sp
         if not shutil.which("uv"):
             pytest.skip("uv not installed - required to run Python MCP servers")
+        # python-sdk requires uv >= 0.9.5
+        try:
+            uv_ver = _sp.check_output(["uv", "--version"], text=True).strip().split()[-1]
+            from packaging.version import Version
+            if Version(uv_ver) < Version("0.9.5"):
+                pytest.skip(f"uv {uv_ver} too old - python-sdk requires >= 0.9.5")
+        except ImportError:
+            pytest.skip("Cannot determine uv version: 'packaging' not installed — skipping to avoid running with unsupported uv")
+        except Exception:
+            pytest.skip("Cannot determine uv version — skipping to avoid running with unsupported uv")
 
         install_dir = tmp_path / ".fmcp-packages"
         install_dir.mkdir(parents=True)

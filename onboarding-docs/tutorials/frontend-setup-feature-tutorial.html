@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<!--
+  FluidMCP Frontend Setup Tutorial
+
+  HOW TO VIEW:
+  Option 1: Open directly in your browser (drag into Chrome/Firefox/Edge)
+  Option 2: python3 -m http.server 8080 → http://localhost:8080/frontend-setup-feature-tutorial.html
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FluidMCP &#x2014; Frontend Setup &amp; Details</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d1117;--bg2:#161b22;--bg3:#1c2128;--border:rgba(210,168,255,0.15);--accent:#d2a8ff;--accent2:#58a6ff;--accent3:#3fb950;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+  .sidebar{width:280px;min-height:100vh;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100}
+  .sidebar-header{padding:24px 20px 16px;border-bottom:1px solid var(--border)}
+  .sidebar-logo{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:2px;margin-bottom:6px}
+  .sidebar-title{font-size:15px;font-weight:700;color:var(--text);line-height:1.3}
+  .sidebar-progress{padding:12px 20px;border-bottom:1px solid var(--border)}
+  .progress-label{font-size:11px;color:var(--text2);margin-bottom:6px;display:flex;justify-content:space-between}
+  .progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.4s}
+  .nav-list{flex:1;overflow-y:auto;padding:12px 0}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;transition:all 0.2s;border-left:3px solid transparent}
+  .nav-item:hover{background:rgba(210,168,255,0.06)}
+  .nav-item.active{background:rgba(210,168,255,0.1);border-left-color:var(--accent)}
+  .nav-item.done .nav-badge{background:var(--accent3);color:#000}
+  .nav-badge{width:22px;height:22px;border-radius:50%;background:var(--bg3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:var(--text2);flex-shrink:0}
+  .nav-label{font-size:13px;color:var(--text2);line-height:1.3}
+  .nav-item.active .nav-label{color:var(--text);font-weight:500}
+  .main{margin-left:280px;flex:1;min-height:100vh}
+  .lesson{display:none;padding:48px 56px;max-width:900px;animation:slideInUp 0.4s ease both}
+  .lesson.active{display:block}
+  @keyframes slideInUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+  .lesson-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(210,168,255,0.1);border:1px solid rgba(210,168,255,0.25);border-radius:20px;padding:4px 14px;font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+  .lesson-title{font-size:32px;font-weight:700;color:var(--text);margin-bottom:8px;line-height:1.2}
+  .lesson-subtitle{font-size:15px;color:var(--text2);margin-bottom:36px;line-height:1.6}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-bottom:28px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:22px;transition:all 0.25s;animation:slideInUp 0.4s ease both}
+  .card:hover{transform:translateY(-4px);box-shadow:0 16px 40px rgba(0,0,0,0.4);border-color:rgba(210,168,255,0.3)}
+  .card:nth-child(1){animation-delay:0.05s}.card:nth-child(2){animation-delay:0.1s}.card:nth-child(3){animation-delay:0.15s}.card:nth-child(4){animation-delay:0.2s}
+  .card-icon{font-size:24px;margin-bottom:10px}.card-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px}
+  .card-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .code-block{background:#010409;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px}
+  .code-header{background:var(--bg3);padding:8px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .code-lang{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
+  .code-copy{background:transparent;border:1px solid var(--border);color:var(--text2);padding:4px 12px;border-radius:6px;font-size:11px;cursor:pointer;transition:all 0.2s}
+  .code-copy:hover{background:var(--bg2);border-color:var(--accent)}
+  .code-copy.copied{background:var(--accent3);border-color:var(--accent3);color:#000}
+  .code-body{padding:18px 20px;overflow-x:auto}
+  .code-body pre{font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.7;color:#c9d1d9;white-space:pre}
+  .kw{color:#ff7b72}.str{color:#a5d6ff}.cm{color:#8b949e;font-style:italic}.fn{color:#d2a8ff}.num{color:#79c0ff}.var{color:#ffa657}.tag{color:#7ee787}
+  .info-box{background:rgba(210,168,255,0.07);border:1px solid rgba(210,168,255,0.25);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .warn-box{background:rgba(247,129,102,0.07);border:1px solid rgba(247,129,102,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .ok-box{background:rgba(63,185,80,0.07);border:1px solid rgba(63,185,80,0.3);border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;gap:12px}
+  .box-icon{font-size:18px;flex-shrink:0;margin-top:1px}.box-text{font-size:13px;color:var(--text2);line-height:1.6}
+  .box-text strong{color:var(--text)}
+  .dir-tree{background:#010409;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.8}
+  .dir-line{color:var(--text3)}
+  .dir-line.dir-highlight{color:var(--accent);font-weight:600}
+  .dir-line.dir-dim{color:var(--text3);opacity:0.5}
+  .dir-comment{color:var(--text2);font-style:italic}
+  h3{font-size:16px;font-weight:600;color:var(--text);margin:24px 0 12px}
+  p{font-size:14px;color:var(--text2);line-height:1.7;margin-bottom:14px}
+  ul,ol{margin:0 0 14px 20px;color:var(--text2);font-size:14px;line-height:1.7}
+  li{margin-bottom:4px}
+  .complete-btn{display:inline-flex;align-items:center;gap:8px;margin-top:32px;padding:12px 24px;background:linear-gradient(135deg,var(--accent),#8b5cf6);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s}
+  .complete-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(210,168,255,0.3)}
+  .complete-btn.done{background:linear-gradient(135deg,var(--accent3),#238636)}
+  .table-wrap{overflow-x:auto;margin-bottom:20px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:var(--bg3);color:var(--text);font-weight:600;padding:10px 14px;text-align:left;border:1px solid var(--border)}
+  td{padding:10px 14px;border:1px solid var(--border);color:var(--text2);vertical-align:top}
+  td code,th code{font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--bg3);padding:2px 6px;border-radius:4px;color:var(--accent)}
+  .step-list{counter-reset:steps;list-style:none;margin:0 0 20px 0}
+  .step-list li{counter-increment:steps;display:flex;gap:14px;margin-bottom:16px;align-items:flex-start}
+  .step-num{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#000;flex-shrink:0;margin-top:1px}
+  .step-content{flex:1}
+  .step-content strong{font-size:14px;color:var(--text);display:block;margin-bottom:4px}
+  .step-content span{font-size:13px;color:var(--text2);line-height:1.6}
+  .flow-diagram{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:24px;margin-bottom:20px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:2}
+  .flow-node{color:var(--accent);font-weight:600}
+  .flow-arrow{color:var(--text3)}
+  .flow-label{color:var(--text2);font-style:italic}
+  .command-box{background:#010409;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .command-box code{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);flex:1}
+  .command-box button{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;transition:all 0.2s}
+  .command-box button:hover{background:var(--accent);color:#000}
+  @media(max-width:768px){
+    .sidebar{width:100%;min-height:auto;position:relative}
+    .main{margin-left:0}
+    .lesson{padding:24px 20px}
+  }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">FluidMCP</div>
+    <div class="sidebar-title">Frontend Setup &amp; Details</div>
+  </div>
+  <div class="sidebar-progress">
+    <div class="progress-label">
+      <span>Progress</span>
+      <span id="progress-text">0 / 7</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+  </div>
+  <ul class="nav-list" id="nav-list">
+    <li class="nav-item active" data-lesson="0" onclick="goTo(0)">
+      <div class="nav-badge">1</div>
+      <div class="nav-label">Welcome &amp; Overview</div>
+    </li>
+    <li class="nav-item" data-lesson="1" onclick="goTo(1)">
+      <div class="nav-badge">2</div>
+      <div class="nav-label">Directory Structure</div>
+    </li>
+    <li class="nav-item" data-lesson="2" onclick="goTo(2)">
+      <div class="nav-badge">3</div>
+      <div class="nav-label">Tech Stack</div>
+    </li>
+    <li class="nav-item" data-lesson="3" onclick="goTo(3)">
+      <div class="nav-badge">4</div>
+      <div class="nav-label">Local Dev Setup</div>
+    </li>
+    <li class="nav-item" data-lesson="4" onclick="goTo(4)">
+      <div class="nav-badge">5</div>
+      <div class="nav-label">Frontend &#x2194; Backend</div>
+    </li>
+    <li class="nav-item" data-lesson="5" onclick="goTo(5)">
+      <div class="nav-badge">6</div>
+      <div class="nav-label">Build &amp; Deploy</div>
+    </li>
+    <li class="nav-item" data-lesson="6" onclick="goTo(6)">
+      <div class="nav-badge">7</div>
+      <div class="nav-label">Next Steps</div>
+    </li>
+  </ul>
+</nav>
+
+<!-- MAIN CONTENT -->
+<main class="main">
+
+  <!-- LESSON 1: Welcome & Overview -->
+  <section class="lesson active" id="lesson-0">
+    <div class="lesson-badge">Lesson 1 &bull; 1 min</div>
+    <h1 class="lesson-title">Welcome to the FluidMCP Frontend</h1>
+    <p class="lesson-subtitle">A React SPA served by the FastAPI backend &#x2014; your UI for managing MCP servers, running tools, and chatting with LLM models.</p>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">&#x26A1;</div>
+        <div class="card-title">React + TypeScript + Vite</div>
+        <div class="card-text">Modern SPA with type safety and fast builds. No separate frontend server in production &#x2014; Python serves the built <code>dist/</code> folder.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F3D7;</div>
+        <div class="card-title">9 Pages, 11 Custom Hooks</div>
+        <div class="card-text">Each page is a route. All data fetching and state lives in custom hooks &#x2014; no Redux or Zustand.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F517;</div>
+        <div class="card-title">Single API Client</div>
+        <div class="card-text"><code>services/api.ts</code> is the only file that calls <code>fetch()</code>. All 30+ typed methods live there as a singleton.</div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F4CC;</div>
+      <div class="box-text"><strong>Where it lives:</strong> <code>fluidmcp/frontend/</code> inside the monorepo. Built output goes to <code>fluidmcp/frontend/dist/</code> which the Python backend serves at <code>/ui</code>. Note: <code>/docs</code> is the Swagger API docs (FastAPI built-in), not the frontend.</div>
+    </div>
+
+    <h3>What you can do in the UI</h3>
+    <ul>
+      <li>Browse all MCP servers and their run status (Dashboard)</li>
+      <li>Add, edit, delete and start/stop servers (Manage Servers)</li>
+      <li>Execute MCP tools with auto-generated forms (Tool Runner)</li>
+      <li>Manage and test LLM models with a chat interface (LLM Models + Playground)</li>
+      <li>View server logs and environment variables (Server Details)</li>
+    </ul>
+
+    <button class="complete-btn" onclick="complete(0)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 2: Directory Structure (MANDATORY) -->
+  <section class="lesson" id="lesson-1">
+    <div class="lesson-badge">Lesson 2 &bull; 2 min</div>
+    <h1 class="lesson-title">Directory Structure &amp; Organisation</h1>
+    <p class="lesson-subtitle">The frontend is entirely inside <code>fluidmcp/frontend/src/</code>. Here is what every folder and key file is for.</p>
+
+    <div class="dir-tree">
+      <div class="dir-line dir-highlight">fluidmcp/frontend/</div>
+      <div class="dir-line">&#x251C;&#x2500;&#x2500; src/</div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; <span style="color:var(--accent2)">App.tsx</span>               <span class="dir-comment"># Router &#x2014; defines all 9 routes</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; <span style="color:var(--accent2)">main.tsx</span>              <span class="dir-comment"># React entry point, mounts &lt;App /&gt;</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; index.css             <span class="dir-comment"># Global CSS imports</span></div>
+      <div class="dir-line">&#x2502;   &#x251C;&#x2500;&#x2500; styles/globals.css    <span class="dir-comment"># CSS variables and base styles</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;</div>
+      <div class="dir-line dir-highlight">&#x2502;   &#x251C;&#x2500;&#x2500; pages/                <span class="dir-comment"># One file per page (9 total)</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; Dashboard.tsx         <span class="dir-comment"># / &#x2014; server overview cards</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; Status.tsx            <span class="dir-comment"># /status &#x2014; active server monitor</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; ServerDetails.tsx     <span class="dir-comment"># /servers/:id &#x2014; tools, logs, env</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; ToolRunner.tsx        <span class="dir-comment"># /servers/:id/tools/:tool &#x2014; execute tools</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; ManageServers.tsx     <span class="dir-comment"># /servers/manage &#x2014; CRUD operations</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; LLMModels.tsx         <span class="dir-comment"># /llm/models &#x2014; LLM model list</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; LLMModelDetails.tsx   <span class="dir-comment"># /llm/models/:id &#x2014; health &amp; logs</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; LLMPlayground.tsx     <span class="dir-comment"># /llm/playground &#x2014; chat interface</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x2514;&#x2500;&#x2500; Documentation.tsx     <span class="dir-comment"># /documentation &#x2014; embedded docs</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;</div>
+      <div class="dir-line dir-highlight">&#x2502;   &#x251C;&#x2500;&#x2500; components/           <span class="dir-comment"># Reusable UI components</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; ui/                   <span class="dir-comment"># shadcn/ui primitives (Button, Dialog&#x2026;)</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; form/                 <span class="dir-comment"># Dynamic JSON Schema form renderers</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; result/               <span class="dir-comment"># Tool result viewers (JSON/Table/Text/MCP)</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; ServerCard.tsx        <span class="dir-comment"># Server status card used on Dashboard</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; Navbar.tsx            <span class="dir-comment"># Top navigation bar</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x2514;&#x2500;&#x2500; Footer.tsx            <span class="dir-comment"># Page footer</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;</div>
+      <div class="dir-line dir-highlight">&#x2502;   &#x251C;&#x2500;&#x2500; hooks/                <span class="dir-comment"># All data-fetching &amp; business logic (11 hooks)</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; useServers.ts         <span class="dir-comment"># Server list, start/stop</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; useServerDetails.ts   <span class="dir-comment"># Single server data + status polling</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; useServerManagement.ts<span class="dir-comment"># Add / edit / delete servers</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; useServerEnv.ts       <span class="dir-comment"># Env variable CRUD for a server</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; useToolRunner.ts      <span class="dir-comment"># Tool execution + localStorage history</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; useLLMModels.ts       <span class="dir-comment"># LLM model list and management</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; usePolling.ts         <span class="dir-comment"># Generic interval polling utility</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x2514;&#x2500;&#x2500; useDebounce.ts        <span class="dir-comment"># Debounce for search inputs</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;</div>
+      <div class="dir-line dir-highlight">&#x2502;   &#x251C;&#x2500;&#x2500; services/             <span class="dir-comment"># Non-React utilities</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; <span style="color:var(--accent2)">api.ts</span>                <span class="dir-comment"># Singleton ApiClient &#x2014; the only fetch() caller</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x251C;&#x2500;&#x2500; toolHistory.ts        <span class="dir-comment"># localStorage tool execution history</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;   &#x2514;&#x2500;&#x2500; toast.ts              <span class="dir-comment"># Toast notification helpers</span></div>
+      <div class="dir-line">&#x2502;   &#x2502;</div>
+      <div class="dir-line">&#x2502;   &#x2514;&#x2500;&#x2500; types/                <span class="dir-comment"># TypeScript type definitions</span></div>
+      <div class="dir-line">&#x2502;       &#x251C;&#x2500;&#x2500; server.ts             <span class="dir-comment"># Server, Tool, EnvVar types</span></div>
+      <div class="dir-line">&#x2502;       &#x2514;&#x2500;&#x2500; llm.ts                <span class="dir-comment"># LLMModel, ChatMessage types</span></div>
+      <div class="dir-line">&#x2502;</div>
+      <div class="dir-line">&#x251C;&#x2500;&#x2500; dist/                     <span class="dir-comment"># Production build output (served by Python)</span></div>
+      <div class="dir-line">&#x251C;&#x2500;&#x2500; package.json              <span class="dir-comment"># npm dependencies</span></div>
+      <div class="dir-line">&#x251C;&#x2500;&#x2500; vite.config.ts            <span class="dir-comment"># Build config + dev proxy to backend</span></div>
+      <div class="dir-line">&#x2514;&#x2500;&#x2500; index.html                <span class="dir-comment"># HTML entry point for Vite</span></div>
+    </div>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F9E0;</div>
+      <div class="box-text"><strong>Mental model:</strong> <code>pages/</code> = what the user sees. <code>hooks/</code> = the logic and data. <code>services/api.ts</code> = the bridge to the backend. Pages are thin; hooks are thick.</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(1)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 3: Tech Stack -->
+  <section class="lesson" id="lesson-2">
+    <div class="lesson-badge">Lesson 3 &bull; 2 min</div>
+    <h1 class="lesson-title">Tech Stack</h1>
+    <p class="lesson-subtitle">Every library used, why it is there, and how the pieces fit together.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Layer</th><th>Library</th><th>Version</th><th>Why it is used</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Framework</td><td><strong>React</strong></td><td>19.2.0</td><td>Component-based UI. All pages and components are React function components.</td></tr>
+          <tr><td>Language</td><td><strong>TypeScript</strong></td><td>5.9.3</td><td>Type safety for API responses, props, and hook return values &#x2014; catches errors at compile time.</td></tr>
+          <tr><td>Build / Dev</td><td><strong>Vite</strong></td><td>latest</td><td>Fast dev server with HMR. Builds the static <code>dist/</code> folder for production.</td></tr>
+          <tr><td>Routing</td><td><strong>React Router DOM</strong></td><td>7.11.0</td><td>Client-side SPA routing. Routes defined in <code>App.tsx</code>.</td></tr>
+          <tr><td>Styling</td><td><strong>Tailwind CSS</strong></td><td>3.4.19</td><td>Utility-first CSS &#x2014; no separate CSS files for most components.</td></tr>
+          <tr><td>Components</td><td><strong>Radix UI</strong></td><td>various</td><td>Accessible headless primitives (Dialog, DropdownMenu, Select, etc.).</td></tr>
+          <tr><td>Components</td><td><strong>shadcn/ui</strong></td><td>&#x2014;</td><td>Pre-styled wrappers around Radix components. Lives in <code>components/ui/</code>.</td></tr>
+          <tr><td>Icons</td><td><strong>Lucide React</strong></td><td>&#x2014;</td><td>Icon set used throughout the UI.</td></tr>
+          <tr><td>Forms</td><td><strong>React Hook Form</strong></td><td>7.71.1</td><td>Manages form state and submission without re-rendering on every keystroke.</td></tr>
+          <tr><td>Validation</td><td><strong>Zod</strong></td><td>3.25.76</td><td>Schema validation for form inputs, integrated with React Hook Form.</td></tr>
+          <tr><td>State</td><td><strong>Custom hooks only</strong></td><td>&#x2014;</td><td>No Redux or Zustand. Each feature owns its state in a dedicated hook.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>How they connect</h3>
+    <div class="flow-diagram">
+      <div><span class="flow-node">index.html</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">Vite entry point, loads main.tsx</span></div>
+      <div><span class="flow-node">main.tsx</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">ReactDOM.createRoot, mounts &lt;App /&gt;</span></div>
+      <div><span class="flow-node">App.tsx</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">React Router routes, Navbar + Footer layout</span></div>
+      <div><span class="flow-node">pages/*.tsx</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">Route components, use custom hooks for data</span></div>
+      <div><span class="flow-node">hooks/*.ts</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">useState + useEffect + apiClient calls</span></div>
+      <div><span class="flow-node">services/api.ts</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">fetch() to FastAPI backend at port 8099</span></div>
+    </div>
+
+    <div class="ok-box">
+      <div class="box-icon">&#x2705;</div>
+      <div class="box-text"><strong>No global state library.</strong> State is co-located with the feature. If two pages need the same data they each call their own hook instance &#x2014; or the hook could be lifted into a context (but that has not been needed yet).</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(2)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 4: Local Dev Setup -->
+  <section class="lesson" id="lesson-3">
+    <div class="lesson-badge">Lesson 4 &bull; 3 min</div>
+    <h1 class="lesson-title">Local Development Setup</h1>
+    <p class="lesson-subtitle">Get the frontend running on your machine in four commands.</p>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F4CB;</div>
+      <div class="box-text"><strong>Prerequisites:</strong> Node.js 18+ and npm installed. Python backend set up (<code>pip install -e .</code> from the repo root).</div>
+    </div>
+
+    <h3>Step-by-step</h3>
+    <ol class="step-list">
+      <li>
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <strong>Install npm dependencies</strong>
+          <span>Run this once (or after pulling dependency changes).</span>
+        </div>
+      </li>
+    </ol>
+
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre>cd fluidmcp/frontend
+npm install</pre></div>
+    </div>
+
+    <ol class="step-list" style="counter-reset:steps 1">
+      <li>
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <strong>Build the frontend</strong>
+          <span>Compiles TypeScript and bundles everything into <code>dist/</code>.</span>
+        </div>
+      </li>
+    </ol>
+
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre>npm run build</pre></div>
+    </div>
+
+    <ol class="step-list" style="counter-reset:steps 2">
+      <li>
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <strong>Start the backend (serves the frontend too)</strong>
+          <span>The Python backend mounts <code>dist/</code> and serves it at the root URL.</span>
+        </div>
+      </li>
+    </ol>
+
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre>cd ../..
+fmcp serve --allow-insecure --allow-all-origins --port 8099</pre></div>
+    </div>
+
+    <ol class="step-list" style="counter-reset:steps 3">
+      <li>
+        <div class="step-num">4</div>
+        <div class="step-content">
+          <strong>Open in browser</strong>
+          <span>Use the URL for your environment.</span>
+        </div>
+      </li>
+    </ol>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F4CC;</div>
+      <div class="box-text"><strong>Most development is on GitHub Codespaces, not localhost.</strong> Use the URL that matches your environment &#x2014; the frontend is at <code>/ui</code>, not the root.</div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Environment</th><th>Frontend UI</th><th>API Docs (Swagger)</th></tr></thead>
+        <tbody>
+          <tr><td>GitHub Codespace</td><td><code>https://&lt;name&gt;-8099.app.github.dev/ui</code></td><td><code>.../docs</code></td></tr>
+          <tr><td>Localhost</td><td><code>http://localhost:8099/ui</code></td><td><code>http://localhost:8099/docs</code></td></tr>
+          <tr><td>Railway (prod)</td><td><code>https://&lt;your-app&gt;.railway.app/ui</code></td><td><code>.../docs</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Environment variable</h3>
+    <p>One optional Vite env var controls where the frontend points for API calls. You usually only need this when running the Vite dev server (<code>npm run dev</code>) separately from the backend:</p>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">env (fluidmcp/frontend/.env.local)</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="var">VITE_API_BASE_URL</span>=https://&lt;codespace-name&gt;-8099.app.github.dev</pre></div>
+    </div>
+    <p>If not set, the frontend falls back to <code>window.location.origin</code> &#x2014; correct when frontend and backend share the same origin (the normal production setup).</p>
+
+    <div class="warn-box">
+      <div class="box-icon">&#x26A0;&#xFE0F;</div>
+      <div class="box-text"><strong>No hot-reload when using the built dist.</strong> After changing frontend code run <code>npm run build</code> and refresh. For active development use <code>npm run dev</code> (Vite on port 5173) which hot-reloads instantly and proxies API calls to the backend via <code>vite.config.ts</code>.</div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(3)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 5: Frontend <-> Backend -->
+  <section class="lesson" id="lesson-4">
+    <div class="lesson-badge">Lesson 5 &bull; 3 min</div>
+    <h1 class="lesson-title">Frontend &#x2194; Backend Communication</h1>
+    <p class="lesson-subtitle">All HTTP calls go through one singleton: <code>services/api.ts</code>. Here is how it works.</p>
+
+    <h3>The ApiClient singleton</h3>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript — services/api.ts (simplified)</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">class</span> <span class="fn">ApiClient</span> {
+  <span class="kw">private</span> baseUrl: <span class="var">string</span>;
+
+  <span class="fn">constructor</span>() {
+    <span class="cm">// Use VITE_API_BASE_URL env var, or fall back to same origin</span>
+    <span class="kw">this</span>.baseUrl = import.meta.env.<span class="var">VITE_API_BASE_URL</span> || window.location.origin;
+  }
+
+  <span class="kw">private async</span> <span class="fn">request</span>&lt;T&gt;(endpoint: <span class="var">string</span>, options?: <span class="var">RequestInit</span>): <span class="kw">Promise</span>&lt;T&gt; {
+    <span class="kw">const</span> response = <span class="kw">await</span> <span class="fn">fetch</span>(`${<span class="kw">this</span>.baseUrl}${endpoint}`, {
+      ...options,
+      headers: { <span class="str">'Content-Type'</span>: <span class="str">'application/json'</span>, ...options?.headers }
+    });
+    <span class="kw">if</span> (!response.ok) <span class="kw">throw new</span> <span class="fn">ApiHttpError</span>(<span class="kw">await</span> response.<span class="fn">text</span>(), response.status);
+    <span class="kw">return</span> response.<span class="fn">json</span>();
+  }
+
+  <span class="cm">// Typed public methods (30+ total)</span>
+  <span class="fn">listServers</span>()                          { <span class="kw">return</span> <span class="kw">this</span>.<span class="fn">request</span>(<span class="str">'/api/servers'</span>); }
+  <span class="fn">startServer</span>(id: <span class="var">string</span>)               { <span class="kw">return</span> <span class="kw">this</span>.<span class="fn">request</span>(`/api/servers/${id}/start`, { method: <span class="str">'POST'</span> }); }
+  <span class="fn">runTool</span>(serverId, toolName, params)    { <span class="kw">return</span> <span class="kw">this</span>.<span class="fn">request</span>(`/${serverId}/mcp/tools/call`, { method: <span class="str">'POST'</span>, body: <span class="fn">JSON.stringify</span>(params) }); }
+  <span class="fn">chatCompletion</span>(payload)                { <span class="kw">return</span> <span class="kw">this</span>.<span class="fn">request</span>(<span class="str">'/api/llm/v1/chat/completions'</span>, { method: <span class="str">'POST'</span>, body: <span class="fn">JSON.stringify</span>(payload) }); }
+}
+
+<span class="cm">// Exported as a singleton &#x2014; never instantiate again</span>
+<span class="kw">export default new</span> <span class="fn">ApiClient</span>();</pre></div>
+    </div>
+
+    <h3>The call chain: page &#x2192; hook &#x2192; api</h3>
+    <div class="flow-diagram">
+      <div><span class="flow-node">Dashboard.tsx</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">const { servers, startServer } = useServers()</span></div>
+      <div style="margin-left:40px"><span class="flow-node">useServers.ts</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">apiClient.listServers() / apiClient.startServer(id)</span></div>
+      <div style="margin-left:80px"><span class="flow-node">api.ts</span> <span class="flow-arrow">&#x2192;</span> <span class="flow-label">fetch('/api/servers') &#x2192; FastAPI backend</span></div>
+      <div style="margin-left:80px"><span class="flow-arrow">&#x2190;</span> <span class="flow-label">JSON response &#x2192; typed result &#x2192; useState &#x2192; re-render</span></div>
+    </div>
+
+    <h3>Error handling pattern</h3>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="cm">// ApiHttpError carries the HTTP status code</span>
+<span class="kw">export class</span> <span class="fn">ApiHttpError</span> <span class="kw">extends</span> Error {
+  <span class="fn">constructor</span>(<span class="kw">public</span> message: <span class="var">string</span>, <span class="kw">public</span> status: <span class="var">number</span>) {
+    <span class="kw">super</span>(message);
+  }
+}
+
+<span class="cm">// In a hook &#x2014; catch and surface to UI state</span>
+<span class="kw">try</span> {
+  <span class="kw">const</span> data = <span class="kw">await</span> apiClient.<span class="fn">listServers</span>();
+  <span class="fn">setServers</span>(data.servers);
+} <span class="kw">catch</span> (err) {
+  <span class="kw">if</span> (err <span class="kw">instanceof</span> <span class="fn">ApiHttpError</span>) {
+    <span class="fn">setError</span>(`HTTP ${err.status}: ${err.message}`);
+  }
+}</pre></div>
+    </div>
+
+    <h3>Request cancellation</h3>
+    <p>Hooks use <code>AbortController</code> to cancel in-flight requests when a component unmounts or a new request supersedes the old one:</p>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">typescript</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre><span class="kw">const</span> abortRef = <span class="fn">useRef</span>&lt;AbortController | <span class="kw">null</span>&gt;(<span class="kw">null</span>);
+
+<span class="kw">const</span> <span class="fn">fetchData</span> = <span class="kw">async</span> () =&gt; {
+  abortRef.current?.<span class="fn">abort</span>();              <span class="cm">// cancel previous</span>
+  abortRef.current = <span class="kw">new</span> <span class="fn">AbortController</span>();
+  <span class="kw">await</span> apiClient.<span class="fn">someMethod</span>({ signal: abortRef.current.signal });
+};
+
+<span class="fn">useEffect</span>(() =&gt; {
+  <span class="fn">fetchData</span>();
+  <span class="kw">return</span> () =&gt; abortRef.current?.<span class="fn">abort</span>(); <span class="cm">// cleanup on unmount</span>
+}, []);</pre></div>
+    </div>
+
+    <button class="complete-btn" onclick="complete(4)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 6: Build & Deploy -->
+  <section class="lesson" id="lesson-5">
+    <div class="lesson-badge">Lesson 6 &bull; 2 min</div>
+    <h1 class="lesson-title">Build &amp; Deploy</h1>
+    <p class="lesson-subtitle">FluidMCP is deployed on Railway. The frontend ships inside the same container as the backend &#x2014; no separate frontend deployment.</p>
+
+    <h3>Railway (primary deployment)</h3>
+    <p>Railway auto-detects the <code>Dockerfile</code> in the repo root, builds the full app, and deploys it. You never run <code>npm run build</code> manually for Railway &#x2014; the Dockerfile handles it.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Environment variable</th><th>How to set it</th></tr></thead>
+        <tbody>
+          <tr><td><code>MONGODB_URI</code></td><td>Auto-provided by the Railway MongoDB service</td></tr>
+          <tr><td><code>FMCP_BEARER_TOKEN</code></td><td><strong>Must set manually.</strong> Railway containers are ephemeral &#x2014; without this a new token is generated on every restart, breaking auth. Generate: <code>openssl rand -hex 32</code></td></tr>
+          <tr><td><code>PORT</code></td><td>Auto-assigned by Railway</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="info-box">
+      <div class="box-icon">&#x1F4D6;</div>
+      <div class="box-text"><strong>Go deeper on deployment:</strong> see <code>docs/RAILWAY_DEPLOYMENT.md</code> for the full step-by-step setup, API management after deploy, MongoDB connection behaviour, and troubleshooting. The backend docs also cover health checks and persistence modes.</div>
+    </div>
+
+    <h3>Docker (alternative / self-hosted)</h3>
+    <p>The same <code>Dockerfile</code> can be used outside Railway for self-hosted deployments:</p>
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+      <div class="code-body"><pre>docker build -t fluidmcp:latest .
+docker run -d -p 8099:8099 \
+  -e MONGODB_URI=<span class="str">"mongodb://host.docker.internal:27017"</span> \
+  -e FMCP_BEARER_TOKEN=<span class="str">"your-token-here"</span> \
+  fluidmcp:latest
+<span class="cm"># UI at http://localhost:8099/ui</span></pre></div>
+    </div>
+
+    <h3>How the backend serves the frontend</h3>
+    <p><code>fluidmcp/cli/api/frontend.py</code> mounts the <code>dist/</code> folder as a Starlette <code>StaticFiles</code> mount under <code>/ui</code> and adds a catch-all for <code>/ui/*</code> that returns <code>index.html</code> &#x2014; enabling React Router&#x2019;s client-side routing to work correctly.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Request path</th><th>Served by</th></tr></thead>
+        <tbody>
+          <tr><td><code>/ui</code> and <code>/ui/*</code></td><td>React SPA (<code>dist/index.html</code> + Vite assets)</td></tr>
+          <tr><td><code>/api/*</code></td><td>FastAPI route handlers</td></tr>
+          <tr><td><code>/docs</code></td><td>Swagger UI (FastAPI built-in)</td></tr>
+          <tr><td><code>/health</code></td><td>FastAPI health endpoint</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <button class="complete-btn" onclick="complete(5)">Mark Complete &#x2192;</button>
+  </section>
+
+  <!-- LESSON 7: Next Steps -->
+  <section class="lesson" id="lesson-6">
+    <div class="lesson-badge">Lesson 7 &bull; 1 min</div>
+    <h1 class="lesson-title">Next Steps</h1>
+    <p class="lesson-subtitle">You now understand the frontend structure and setup. Here is what to explore next.</p>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">&#x1F4D6;</div>
+        <div class="card-title">React Architecture</div>
+        <div class="card-text">See how the 4 main pages (Dashboard, Manage, LLM Models, Docs) are built and how hooks wire them together.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F6E0;</div>
+        <div class="card-title">Tool Execution Flow</div>
+        <div class="card-text">Trace the full path of a tool call: ToolRunner.tsx &#x2192; useToolRunner &#x2192; api.ts &#x2192; FastAPI &#x2192; MCP subprocess.</div>
+      </div>
+      <div class="card">
+        <div class="card-icon">&#x1F511;</div>
+        <div class="card-title">Env Variables (UI)</div>
+        <div class="card-text">Understand how the environment variable editor in ServerDetails works: useServerEnv &#x2192; PATCH /api/servers/:id/env.</div>
+      </div>
+    </div>
+
+    <h3>Adding a new page (quick reference)</h3>
+    <ol>
+      <li>Create <code>src/pages/MyPage.tsx</code></li>
+      <li>Add <code>&lt;Route path="/my-page" element=&#x7B;&lt;MyPage /&gt;&#x7D; /&gt;</code> in <code>src/App.tsx</code></li>
+      <li>Add nav link in <code>src/components/Navbar.tsx</code></li>
+      <li>Create <code>src/hooks/useMyFeature.ts</code> if the page needs API data</li>
+      <li>Run <code>npm run build</code> and restart the backend</li>
+    </ol>
+
+    <div class="ok-box">
+      <div class="box-icon">&#x1F389;</div>
+      <div class="box-text"><strong>You are set up!</strong> You know the stack, the folder layout, how to run it (frontend is at <code>/ui</code>), and how frontend and backend communicate. For deployment details, read <code>docs/RAILWAY_DEPLOYMENT.md</code>. That is everything you need to start contributing.</div>
+    </div>
+
+    <button class="complete-btn done" onclick="complete(6)">&#x2713; Tutorial Complete</button>
+  </section>
+
+</main>
+
+<script>
+const TOTAL = 7;
+const KEY = 'fmcp-frontend-setup-progress';
+let done = JSON.parse(localStorage.getItem(KEY) || '[]');
+let current = 0;
+
+function goTo(n) {
+  document.querySelectorAll('.lesson').forEach(l => l.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(l => l.classList.remove('active'));
+  document.getElementById('lesson-' + n).classList.add('active');
+  document.querySelector('[data-lesson="' + n + '"]').classList.add('active');
+  current = n;
+  window.scrollTo(0, 0);
+}
+
+function complete(n) {
+  if (!done.includes(n)) { done.push(n); localStorage.setItem(KEY, JSON.stringify(done)); }
+  document.querySelectorAll('.nav-item')[n].classList.add('done');
+  const btn = document.getElementById('lesson-' + n).querySelector('.complete-btn');
+  btn.classList.add('done');
+  btn.textContent = '\u2713 Done';
+  updateProgress();
+  if (n < TOTAL - 1) setTimeout(() => goTo(n + 1), 300);
+}
+
+function updateProgress() {
+  const pct = Math.round((done.length / TOTAL) * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-text').textContent = done.length + ' / ' + TOTAL;
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('pre').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+// Restore progress on load
+done.forEach(n => {
+  document.querySelectorAll('.nav-item')[n]?.classList.add('done');
+  const btn = document.getElementById('lesson-' + n)?.querySelector('.complete-btn');
+  if (btn) { btn.classList.add('done'); btn.textContent = '\u2713 Done'; }
+});
+updateProgress();
+</script>
+</body>
+</html>

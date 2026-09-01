@@ -247,7 +247,7 @@ class AddServerFromGitHubRequest(BaseModel):
         ),
         min_length=1,
         max_length=100,
-        pattern="^[a-z0-9-]+$",
+        pattern="^[a-z0-9_-]+$",
     )
     server_name: Optional[str] = Field(
         None,

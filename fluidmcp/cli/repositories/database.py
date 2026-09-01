@@ -181,8 +181,10 @@ class DatabaseManager(PersistenceBackend):
                 logger.warning("⚠️  Only use FMCP_MONGODB_ALLOW_INVALID_CERTS=true for development!")
             
             # Get connection pool settings from environment with safe parsing
-            default_max_pool_size = 50
-            default_min_pool_size = 10
+            # max_pool_size=6: matches Atlas M0 free-tier practical limit per application.
+            # Increase via FMCP_MONGODB_MAX_POOL_SIZE if using a paid Atlas tier or self-hosted MongoDB.
+            default_max_pool_size = 6
+            default_min_pool_size = 1
             
             raw_max_pool_size = os.getenv("FMCP_MONGODB_MAX_POOL_SIZE", str(default_max_pool_size))
             try:
@@ -209,9 +211,9 @@ class DatabaseManager(PersistenceBackend):
             if max_pool_size <= 0:
                 logger.warning(
                     f"Invalid FMCP_MONGODB_MAX_POOL_SIZE={max_pool_size!r}; "
-                    "using default max pool size of 50."
+                    f"using default max pool size of {default_max_pool_size}."
                 )
-                max_pool_size = 50
+                max_pool_size = default_max_pool_size
             if min_pool_size <= 0:
                 logger.warning(
                     f"Invalid FMCP_MONGODB_MIN_POOL_SIZE={min_pool_size!r}; "
@@ -822,14 +824,26 @@ class DatabaseManager(PersistenceBackend):
             if self._retry_task is None or self._retry_task.done():
                 self._retry_task = asyncio.create_task(self._retry_failed_logs())
 
-    async def _retry_failed_logs(self):
-        """Periodic retry of buffered log entries."""
-        await asyncio.sleep(30)  # Wait 30 seconds before retry
+    async def _retry_failed_logs(self, attempt: int = 1) -> None:
+        """Periodic retry of buffered log entries.
+
+        Capped at 10 attempts with exponential backoff to prevent unbounded
+        task chaining when MongoDB is persistently unavailable.
+        """
+        MAX_RETRY_ATTEMPTS = 10
+        if attempt > MAX_RETRY_ATTEMPTS:
+            logger.warning(f"Log retry gave up after {MAX_RETRY_ATTEMPTS} attempts — dropping buffered logs")
+            self._log_buffer.get_all()  # clear the buffer
+            return
+
+        # Exponential backoff: 30s, 60s, 120s … capped at 300s
+        delay = min(30 * (2 ** (attempt - 1)), 300)
+        await asyncio.sleep(delay)
 
         if self._log_buffer.size() == 0:
             return
 
-        logger.info(f"Retrying {self._log_buffer.size()} buffered log entries...")
+        logger.info(f"Retrying {self._log_buffer.size()} buffered log entries (attempt {attempt}/{MAX_RETRY_ATTEMPTS})...")
 
         entries = self._log_buffer.get_all()
         retry_failed = []
@@ -849,9 +863,9 @@ class DatabaseManager(PersistenceBackend):
         success_count = len(entries) - len(retry_failed)
         logger.info(f"Retry complete: {success_count}/{len(entries)} succeeded")
 
-        # Schedule another retry if there are still failures
+        # Schedule next attempt only if still failing — bounded by MAX_RETRY_ATTEMPTS
         if len(retry_failed) > 0:
-            self._retry_task = asyncio.create_task(self._retry_failed_logs())
+            self._retry_task = asyncio.create_task(self._retry_failed_logs(attempt + 1))
 
     def get_log_stats(self) -> Dict[str, Any]:
         """Get logging statistics including buffer status."""

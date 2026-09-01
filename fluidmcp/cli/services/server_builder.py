@@ -26,22 +26,22 @@ class ServerBuilder:
         Examples:
             "My Server"   -> "my-server"
             "API v2.0"    -> "api-v2-0"
-            "file_system" -> "file-system"
+            "file_system" -> "file_system"
 
         Args:
             text: Text to slugify
 
         Returns:
-            Lowercase hyphenated slug
+            Lowercase slug (hyphens and underscores preserved)
         """
         text = text.lower()
-        # Replace spaces and underscores with hyphens
-        text = re.sub(r'[\s_]+', '-', text)
-        # Remove non-alphanumeric characters (except hyphens)
-        text = re.sub(r'[^a-z0-9-]', '', text)
+        # Replace whitespace with hyphens (underscores preserved)
+        text = re.sub(r'\s+', '-', text)
+        # Remove non-alphanumeric characters (except hyphens and underscores)
+        text = re.sub(r'[^a-z0-9_-]', '', text)
         # Collapse consecutive hyphens
         text = re.sub(r'-+', '-', text)
-        return text.strip('-')
+        return text.strip('-_')
 
     @staticmethod
     def generate_server_id(base_id: str, server_name: str, is_multi_server: bool) -> str:

@@ -30,11 +30,11 @@ class TestServerBuilderSlugify:
     def test_spaces_become_hyphens(self):
         assert ServerBuilder.slugify("My Server") == "my-server"
 
-    def test_underscores_become_hyphens(self):
-        assert ServerBuilder.slugify("file_system") == "file-system"
+    def test_underscores_preserved(self):
+        assert ServerBuilder.slugify("file_system") == "file_system"
 
     def test_mixed_spaces_and_underscores(self):
-        assert ServerBuilder.slugify("My_File Server") == "my-file-server"
+        assert ServerBuilder.slugify("My_File Server") == "my_file-server"
 
     def test_removes_special_chars(self):
         # dots are removed; no hyphen is inserted in their place
