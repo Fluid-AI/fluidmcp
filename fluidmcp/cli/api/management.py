@@ -89,6 +89,69 @@ RATE_LIMIT_COMPLETIONS = (60, 60)          # 60 req/min - permissive for product
 RATE_LIMIT_MODELS_GET = (120, 60)          # 120 req/min - very permissive for metadata reads
 
 
+#: Sentinel written in place of a real environment-variable value in any API
+#: response. Chosen to be recognisable on the way back in: a client that reads a
+#: config and PUTs it back unchanged (the frontend does exactly this) must not
+#: overwrite the stored secret with the mask.
+ENV_MASK = "***REDACTED***"
+
+
+def mask_env_values(env: Any) -> Dict[str, str]:
+    """Replace environment-variable values with a mask, preserving the keys.
+
+    Secrets must not travel in API responses. Key names are kept because callers
+    legitimately need to know which variables are configured; the values are not
+    theirs to read back. Empty values stay empty so "configured but blank" is
+    still distinguishable from "configured with a secret".
+    """
+    if not isinstance(env, dict):
+        return {}
+    return {
+        key: (ENV_MASK if (value is not None and str(value) != "") else "")
+        for key, value in env.items()
+    }
+
+
+def mask_config_env(config: Any) -> Any:
+    """Return a shallow copy of a server config with env values masked."""
+    if not isinstance(config, dict):
+        return config
+    masked = dict(config)
+    if isinstance(masked.get("env"), dict):
+        masked["env"] = mask_env_values(masked["env"])
+    # Nested shape used by list_servers()
+    if isinstance(masked.get("config"), dict) and isinstance(masked["config"].get("env"), dict):
+        nested = dict(masked["config"])
+        nested["env"] = mask_env_values(nested["env"])
+        masked["config"] = nested
+    return masked
+
+
+def unmask_env_values(
+    incoming: Any, stored: Optional[Dict[str, Any]]
+) -> Dict[str, str]:
+    """Restore masked values from the stored config before persisting an update.
+
+    A client that GETs a config and PUTs it back sends the mask, not the secret.
+    Writing that through would destroy the credential, so any value equal to
+    ENV_MASK is replaced with whatever is already stored under that key. A value
+    the caller actually changed is written as given.
+    """
+    if not isinstance(incoming, dict):
+        return {}
+    previous = (stored or {}).get("env") if isinstance(stored, dict) else {}
+    previous = previous if isinstance(previous, dict) else {}
+    resolved: Dict[str, str] = {}
+    for key, value in incoming.items():
+        if value == ENV_MASK:
+            if key in previous:
+                resolved[key] = previous[key]
+            # Key masked but nothing stored — drop it rather than persist a mask.
+        else:
+            resolved[key] = value
+    return resolved
+
+
 def _extract_result_text(result: Dict[str, Any]) -> str:
     """Extract readable text from an MCP tool result's content blocks.
 
@@ -1124,7 +1187,7 @@ async def list_servers(request: Request, enabled_only: bool = True, include_dele
     servers = await manager.list_servers(enabled_only=enabled_only, include_deleted=include_deleted)
 
     return {
-        "servers": servers,
+        "servers": [mask_config_env(server) for server in servers],
         "count": len(servers)
     }
 
@@ -1225,7 +1288,9 @@ async def get_server(request: Request, id: str, token: str = Depends(get_token))
     return {
         "id": id,
         "name": config.get("name"),
-        "config": config,
+        # Env values are masked: a bearer token grants operational access, not
+        # the right to read every MCP's database password back out.
+        "config": mask_config_env(config),
         "status": status,
         "resources": resources,
         "concurrency": concurrency,
@@ -1292,6 +1357,18 @@ async def update_server(
     # Update config (preserve id)
     config["id"] = id
 
+    # A client that read this config back saw masked env values (see
+    # mask_config_env). Restore the stored secrets for any key still carrying the
+    # mask, so a round-trip PUT cannot silently wipe credentials.
+    if isinstance(config.get("env"), dict):
+        config["env"] = unmask_env_values(config["env"], existing)
+    if isinstance(config.get("mcp_config"), dict) and isinstance(
+        config["mcp_config"].get("env"), dict
+    ):
+        config["mcp_config"]["env"] = unmask_env_values(
+            config["mcp_config"]["env"], existing
+        )
+
     # Save updated config (both database and in-memory)
     try:
         success = await manager.db.save_server_config(config)
@@ -1336,7 +1413,7 @@ async def update_server(
     logger.info(f"Updated server configuration: {config['name']} (id: {id})")
     return {
         "message": f"Server '{id}' updated successfully",
-        "config": config
+        "config": mask_config_env(config)
     }
 
 

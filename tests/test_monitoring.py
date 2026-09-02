@@ -942,3 +942,102 @@ class TestSecretRedaction:
 
         assert redact_secrets(None) == "None"
         assert redact_secrets(12345) == "12345"
+
+
+# ==================== Credential handling ====================
+
+class TestCredentialSafety:
+    """Secrets must not leave the gateway, and must survive a config round-trip.
+
+    All three of these were real defects found running the customer's own MCP
+    servers, so each has a test that fails if the behaviour regresses.
+    """
+
+    def test_env_values_are_masked_but_keys_kept(self):
+        from fluidmcp.cli.api.management import ENV_MASK, mask_env_values
+
+        masked = mask_env_values({"DB_PASSWORD": "realsecret", "BLANK": ""})
+        assert masked["DB_PASSWORD"] == ENV_MASK
+        assert "realsecret" not in str(masked)
+        # Keys stay visible: callers need to know what is configured.
+        assert set(masked) == {"DB_PASSWORD", "BLANK"}
+        # Blank stays blank, so "set but empty" is still distinguishable.
+        assert masked["BLANK"] == ""
+
+    def test_masked_round_trip_preserves_the_secret(self):
+        """The frontend GETs a config and PUTs it straight back.
+
+        Without this, that round-trip would overwrite every credential with the
+        mask string and silently break every server.
+        """
+        from fluidmcp.cli.api.management import mask_env_values, unmask_env_values
+
+        stored = {"env": {"DB_PASSWORD": "realsecret", "DB_HOST": "db.internal"}}
+        returned = mask_env_values(stored["env"])
+        restored = unmask_env_values(returned, stored)
+        assert restored == stored["env"]
+
+    def test_genuinely_changed_value_is_written_through(self):
+        from fluidmcp.cli.api.management import unmask_env_values
+
+        stored = {"env": {"DB_PASSWORD": "old"}}
+        assert unmask_env_values({"DB_PASSWORD": "new"}, stored) == {"DB_PASSWORD": "new"}
+
+    def test_masked_key_with_nothing_stored_is_dropped(self):
+        """Never persist the mask itself as if it were a value."""
+        from fluidmcp.cli.api.management import ENV_MASK, unmask_env_values
+
+        assert unmask_env_values({"NEW_KEY": ENV_MASK}, {"env": {}}) == {}
+
+    def test_config_env_wins_over_gateway_environment(self, monkeypatch):
+        """Per-server config must beat the gateway's own environment.
+
+        The original merge used `if key not in env`, so a variable set on the
+        gateway silently overrode per-server config — two MCPs could not use
+        different databases. Verified by inspecting the merge source, since the
+        merge itself sits inside a long spawn routine.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        from fluidmcp.cli.services import server_manager as sm
+
+        source = textwrap.dedent(inspect.getsource(sm.ServerManager._spawn_mcp_process))
+        tree = ast.parse(source)
+
+        # Look for the actual `key not in env` comparison, not the string —
+        # a comment mentioning the old bug must not trip this.
+        offenders = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Compare)
+            and any(isinstance(op, ast.NotIn) for op in node.ops)
+            and isinstance(node.left, ast.Name)
+            and node.left.id == "key"
+            and any(
+                isinstance(cmp, ast.Name) and cmp.id == "env"
+                for cmp in node.comparators
+            )
+        ]
+        assert not offenders, (
+            f"`key not in env` guard present at line(s) {offenders}: per-server "
+            f"env is skipped when the gateway defines the same key, so config "
+            f"does not take precedence"
+        )
+        # And the unconditional assignment must be there.
+        assert "env[key] = value" in source
+
+    def test_gateway_secrets_are_stripped_from_subprocesses(self):
+        """An MCP server must not inherit the gateway's own credentials."""
+        from fluidmcp.cli.services.server_manager import _GATEWAY_ONLY_ENV
+
+        for key in ("FMCP_BEARER_TOKEN", "MONGODB_URI", "GITHUB_TOKEN"):
+            assert key in _GATEWAY_ONLY_ENV, f"{key} must not reach MCP subprocesses"
+
+    def test_redaction_covers_connection_strings(self):
+        """Error text reaches webhooks and the customer's monitoring store."""
+        from fluidmcp.cli.utils.error_utils import redact_secrets
+
+        text = "could not connect to postgres://app:hunter2@db:5432/prod"
+        assert "hunter2" not in redact_secrets(text)

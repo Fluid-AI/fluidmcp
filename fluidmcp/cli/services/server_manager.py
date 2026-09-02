@@ -48,6 +48,22 @@ def _parse_mcp_response(resp) -> dict:
     return resp.json()
 
 
+#: Gateway-only environment variables, stripped from every MCP subprocess.
+#: An MCP server is third-party code running under our process; it must not be
+#: able to read the gateway's own credentials out of its environment.
+_GATEWAY_ONLY_ENV = frozenset({
+    "FMCP_BEARER_TOKEN",
+    "MONGODB_URI",
+    "FMCP_MONGODB_URI",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+    "MCP_TOKEN",
+    "FMCP_GITHUB_TOKEN",
+    "GITHUB_TOKEN",
+    "SENTRY_DSN",
+})
+
+
 def classify_exit_code(exit_code: int) -> Dict[str, str]:
     """Return a human-readable classification for a process exit code."""
     table = {
@@ -1049,11 +1065,41 @@ class ServerManager:
 
             cmd_list = [command] + cleaned_args
 
-            # Merge environment variables (shell env takes precedence)
+            # ── Build the subprocess environment ──────────────────────────
+            # Precedence: the server's own configuration WINS over the gateway
+            # process environment.
+            #
+            # This used to be reversed (`if key not in env`), which meant a
+            # variable present in the gateway's environment silently overrode
+            # the per-server value — accepted by the API, stored in the DB,
+            # returned by GET /api/servers/{id}, then discarded at spawn. Two
+            # MCP servers could not use different values for the same variable,
+            # which defeats the point of a multi-server orchestrator.
+            #
+            # The gateway environment is still inherited as a base, so variables
+            # a server does not define (PATH, HOME, proxy settings, credentials
+            # supplied only at deploy time) continue to reach it.
             env = dict(os.environ)
+
+            # FluidMCP's own secrets must not leak into MCP subprocesses. An MCP
+            # server is third-party code; it has no business reading the
+            # gateway's bearer token or its database URI, and inheriting them
+            # would let any MCP impersonate an operator.
+            for secret_key in _GATEWAY_ONLY_ENV:
+                env.pop(secret_key, None)
+
             for key, value in env_vars.items():
-                if key not in env and value and not self._is_placeholder(value):
-                    env[key] = value
+                if value is None or value == "":
+                    continue
+                if self._is_placeholder(value):
+                    # Placeholders are never injected; a real value inherited
+                    # from the environment is better than a literal "<your-key>".
+                    logger.warning(
+                        f"[{id}] Ignoring placeholder value for '{key}' — "
+                        f"set a real value via PUT /api/servers/{id}/instance/env"
+                    )
+                    continue
+                env[key] = value
 
             # Determine working directory
             working_dir = Path(config.get("working_dir") or install_path).resolve()

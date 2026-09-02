@@ -2,7 +2,7 @@
 
 Exercises the real FastAPI app with a real ServerManager over the in-memory
 backend, so the endpoint contracts documented in
-docs/MONITORING_INTEGRATION_GUIDE.md are verified against actual responses
+docs/MCP_MONITORING.md are verified against actual responses
 rather than against the doc.
 """
 
