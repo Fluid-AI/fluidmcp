@@ -239,12 +239,13 @@ curl -X POST https://your-app.railway.app/api/servers \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "server_id": "filesystem",
-    "config": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-      "env": {}
-    }
+    "id": "filesystem",
+    "name": "Filesystem Server",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    "env": {},
+    "working_dir": "/tmp",
+    "install_path": "/tmp"
   }'
 
 # Start server
@@ -255,6 +256,48 @@ curl -X POST https://your-app.railway.app/api/servers/filesystem/start \
 curl -X GET https://your-app.railway.app/api/servers \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
+
+## MCP Fleet Monitoring
+
+FluidMCP detects, auto-recovers from, and reports MCP server failures, and
+exposes that to external monitoring systems.
+
+Three failure classes are distinguished, because they need different responses:
+
+| Class | How it is detected | Restart fixes it? |
+|---|---|---|
+| **Process death** (OOM, segfault) | PID gone | Usually — automatic |
+| **Zombie** (alive but HTTP hung) | ping timeout | Usually — automatic |
+| **Dependency failure** (SQL connection broken, expired credential) | per-tool error rates + optional active probe | **No — needs a human** |
+
+The third class is the one a process watchdog structurally cannot see: the PID
+is alive and HTTP answers while every tool call fails.
+
+Key endpoints:
+
+```bash
+# Fleet rollup — the primary polling target
+curl -H "Authorization: Bearer $TOKEN" $BASE/api/monitoring/health
+
+# Incremental event feed (cursor on seq, scoped by boot_id)
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/monitoring/events?since=0"
+
+# Why is this server failing — paste-into-a-ticket summary + remediation
+curl -H "Authorization: Bearer $TOKEN" $BASE/api/monitoring/servers/<id>/diagnosis
+
+# Gateway's own health, boot identity, config validity
+curl -H "Authorization: Bearer $TOKEN" $BASE/api/monitoring/gateway
+```
+
+Every classified failure carries `failure_owner` (`customer` | `fluidmcp` |
+`external` | `unknown`), which is what makes alert routing possible.
+
+Nothing extra is required in production: no new mandatory environment
+variables, and MongoDB collections and TTL indexes are created automatically.
+
+See **[docs/MCP_MONITORING.md](docs/MCP_MONITORING.md)** for the complete
+reference — API contracts, event types, alert rules, dashboard layout,
+configuration, and an acceptance checklist.
 
 ### Health Endpoint
 
