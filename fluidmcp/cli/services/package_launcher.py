@@ -20,6 +20,15 @@ from .metrics import MetricsCollector, RequestTimer
 from .sse_handle import SseSubprocessHandle
 _SSE_MAX_LINES = 500
 
+# Each keep-alive timeout is _SSE_READ_TIMEOUT seconds (see sse_stream). A silent
+# subprocess that never closes its pipe and never responds would otherwise let a
+# single SSE request hold the server's I/O lock forever, starving every other
+# request to that server. Cap consecutive timeouts so the stream — and the lock —
+# gets released after roughly _SSE_MAX_CONSECUTIVE_TIMEOUTS * _SSE_READ_TIMEOUT
+# seconds of total silence.
+_SSE_READ_TIMEOUT = 30.0
+_SSE_MAX_CONSECUTIVE_TIMEOUTS = int(os.getenv("FMCP_SSE_MAX_CONSECUTIVE_TIMEOUTS", "20"))
+
 security = HTTPBearer(auto_error=False)
 
 # Per-process stderr buffers: key -> (lock, deque of last 200 lines)
@@ -994,22 +1003,40 @@ def create_dynamic_router(server_manager):
                         return
 
                     lines_read = 0
+                    consecutive_timeouts = 0
                     while lines_read < _SSE_MAX_LINES:
                         # readline_with_timeout (via _read_response_locked) bounds the
-                        # blocking read to 30s and stays cancellation-safe, so a client
-                        # disconnect mid-read can't leave an abandoned reader racing the
-                        # next request for this server's stdout.
-                        response_line = await _read_response_locked(process, 30.0)
+                        # blocking read to _SSE_READ_TIMEOUT and stays cancellation-safe,
+                        # so a client disconnect mid-read can't leave an abandoned reader
+                        # racing the next request for this server's stdout.
+                        response_line = await _read_response_locked(process, _SSE_READ_TIMEOUT)
                         if not response_line:
                             # Distinguish real EOF (process exited) from a timeout
                             if process.poll() is not None:
                                 logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
                                 break
-                            # Timeout with process still alive — send SSE keep-alive and continue
+
+                            # Timeout with process still alive. Cap consecutive timeouts so a
+                            # subprocess that goes silent forever (without dying or answering)
+                            # can't pin this SSE request — and the shared server I/O lock — open
+                            # indefinitely; every other request to this server would be starved.
+                            consecutive_timeouts += 1
+                            if consecutive_timeouts >= _SSE_MAX_CONSECUTIVE_TIMEOUTS:
+                                idle_seconds = consecutive_timeouts * _SSE_READ_TIMEOUT
+                                logger.warning(
+                                    f"[{server_name}] SSE stream idle for {idle_seconds:.0f}s "
+                                    f"({consecutive_timeouts} consecutive timeouts), closing to release I/O lock"
+                                )
+                                completion_status = "timeout"
+                                yield f"data: {json.dumps({'error': 'MCP server did not respond within the SSE idle timeout'})}\n\n"
+                                break
+
+                            # Send SSE keep-alive and continue waiting
                             logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
                             yield ": keep-alive\n\n"
                             continue
 
+                        consecutive_timeouts = 0
                         lines_read += 1
                         logger.debug(f"Received from MCP: {response_line.strip()}")
                         yield f"data: {response_line.strip()}\n\n"
