@@ -42,6 +42,8 @@ class ServerManager:
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
 
+        # Per-server I/O locks — serializes stdin write + stdout read for stdio transport
+        self._io_locks: Dict[str, asyncio.Lock] = {}
         # Keep strong references to watchdog tasks so GC doesn't collect them
         self._watchdog_tasks: Dict[str, asyncio.Task] = {}
 
@@ -212,6 +214,11 @@ class ServerManager:
             self.processes[id] = process
             logger.info(f"Server '{name}' started (PID: {process.pid})")
 
+            # Create an I/O lock for stdio-transport servers.
+            # SseSubprocessHandle communicates over HTTP, not stdio, so no lock needed.
+            if not isinstance(process, SseSubprocessHandle):
+                self._io_locks[id] = asyncio.Lock()
+
             # Clear stale PID cache entry (if any) since server is now running
             self._stale_pid_updates.pop(id, None)
 
@@ -331,6 +338,8 @@ class ServerManager:
                 await self._cleanup_server(id, process.returncode, intentional=True)
                 return True
 
+            # Remove I/O lock before killing the process.
+            self._io_locks.pop(id, None)
             # Cancel watchdog BEFORE signalling the process — this prevents the
             # watchdog from racing with our intentional stop and triggering
             # double-cleanup or a spurious auto-restart.
@@ -1191,6 +1200,8 @@ class ServerManager:
         if id in self.start_times:
             del self.start_times[id]
 
+        # Remove I/O lock for servers that died on their own (crash/self-exit).
+        self._io_locks.pop(id, None)
         # Close stderr log file handle
         self._close_stderr_log(id)
 
@@ -1244,6 +1255,21 @@ class ServerManager:
         if server_id not in self.start_times:
             return None
         return time.monotonic() - self.start_times[server_id]
+
+    def get_io_lock(self, server_id: str) -> Optional[asyncio.Lock]:
+        """
+        Return the I/O lock for a running stdio-transport server, or None.
+
+        Returns None for SSE-transport servers (which communicate over HTTP)
+        and for servers that are not currently running.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            asyncio.Lock for serializing stdio access, or None.
+        """
+        return self._io_locks.get(server_id)
 
     @staticmethod
     def _is_placeholder(value: str) -> bool:

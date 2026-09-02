@@ -1,185 +1,290 @@
 """
-Load Testing for FluidMCP LLM Inference.
+Load Testing for FluidMCP `fmcp serve` Mode.
 
-This script uses Locust to simulate concurrent users making LLM inference requests.
+Targets the management API, MCP proxy, health, and metrics endpoints
+exposed by `fmcp serve --allow-insecure`.
+
+MCP servers are dynamic — running servers are discovered at startup via
+GET /api/servers and load is distributed across all running instances.
 
 Installation:
-    pip install locust
+    pip install locust loguru
 
 Usage:
-    # Start FluidMCP
-    fluidmcp run config.json --file --start-server
+    # Start FluidMCP in serve mode first:
+    fmcp serve --allow-insecure
 
-    # Run load test (web UI)
-    locust -f examples/load_test_locust.py --host=http://localhost:8099
+    # Run load test (web UI — open http://localhost:8089)
+    locust -f examples/load_test_locust.py \\
+           --host=https://fantastic-system-pj47wr6j7wq5hrgpg-8099.app.github.dev
 
-    # Run load test (headless)
-    locust -f examples/load_test_locust.py --host=http://localhost:8099 \
-           --users 10 --spawn-rate 2 --run-time 60s --headless
+    # Run headless — all user classes
+    locust -f examples/load_test_locust.py \\
+           --host=https://fantastic-system-pj47wr6j7wq5hrgpg-8099.app.github.dev \\
+           --users 20 --spawn-rate 4 --run-time 120s --headless --only-summary
 
-Configuration:
-    - MODEL_ID: Model to test (default: uses first available)
-    - AUTH_TOKEN: Bearer token if secure mode enabled
+    # Run headless — single class
+    locust -f examples/load_test_locust.py \\
+           --host=https://fantastic-system-pj47wr6j7wq5hrgpg-8099.app.github.dev \\
+           --users 10 --spawn-rate 2 --run-time 60s --headless \\
+           -u ManagementAPIUser
+
+Environment Variables:
+    AUTH_TOKEN  Bearer token — only needed with --secure mode (omit for --allow-insecure)
 """
 
 import os
+import random
 from locust import HttpUser, task, between, events  # type: ignore
 from loguru import logger
 
 
-class LLMInferenceUser(HttpUser):
-    """
-    Simulates a user making LLM inference requests.
+def _auth_headers():
+    """Return Authorization header dict if AUTH_TOKEN is set, else empty dict."""
+    token = os.getenv("AUTH_TOKEN")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
 
-    This user will:
-    - List available models on start
-    - Make chat completion requests
-    - Make text completion requests
-    - Check metrics periodically
+
+class HealthUser(HttpUser):
+    """
+    Lightweight baseline traffic against the health and root endpoints.
+    These are always available in serve mode with no auth required.
     """
 
-    # Wait 1-3 seconds between requests
     wait_time = between(1, 3)
 
     def on_start(self):
-        """Called when a simulated user starts."""
-        self.model_id = os.getenv("MODEL_ID")
-        self.auth_token = os.getenv("AUTH_TOKEN")
-
-        # Set auth header if token provided
-        if self.auth_token:
-            self.client.headers = {"Authorization": f"Bearer {self.auth_token}"}
-
-        # Use default model if not specified via environment
-        # Note: Model discovery endpoint /api/replicate/models has been deprecated
-        # in favor of unified API. Users should specify MODEL_ID environment variable.
-        if not self.model_id:
-            logger.warning("MODEL_ID not set, using default model id 'default'")
-            self.model_id = "default"
-
-        logger.info(f"User started, targeting model: {self.model_id}")
+        self.client.headers.update(_auth_headers())
 
     @task(3)
-    def chat_completion(self):
-        """Make a chat completion request (weighted 3x)."""
-        response = self.client.post(
-            "/api/llm/v1/chat/completions",
-            json={
-                "model": self.model_id,
-                "messages": [
-                    {"role": "user", "content": "What is 2+2?"}
-                ],
-                "max_tokens": 50,
-                "temperature": 0.7
-            },
-            name="/api/llm/v1/chat/completions"
-        )
-
-        if response.status_code == 200:
-            logger.debug(f"Chat completion success: {response.elapsed.total_seconds():.2f}s")
-        else:
-            logger.warning(f"Chat completion failed: {response.status_code}")
-
-    @task(2)
-    def text_completion(self):
-        """Make a text completion request (weighted 2x)."""
-        response = self.client.post(
-            "/api/llm/v1/completions",
-            json={
-                "model": self.model_id,
-                "prompt": "The capital of France is",
-                "max_tokens": 20,
-                "temperature": 0.5
-            },
-            name="/api/llm/v1/completions"
-        )
-
-        if response.status_code == 200:
-            logger.debug(f"Text completion success: {response.elapsed.total_seconds():.2f}s")
-        else:
-            logger.warning(f"Text completion failed: {response.status_code}")
+    def health_check(self):
+        """Poll /health — primary liveness indicator."""
+        with self.client.get("/health", name="/health", catch_response=True) as resp:
+            if resp.status_code == 200:
+                resp.success()
+            elif resp.status_code == 503:
+                resp.failure(f"Server degraded: {resp.text[:200]}")
+            else:
+                resp.failure(f"Unexpected status {resp.status_code}")
 
     @task(1)
-    def check_metrics(self):
-        """Check metrics endpoint (weighted 1x)."""
-        response = self.client.get(
-            "/api/metrics/json",
-            name="/api/metrics/json"
-        )
-
-        if response.status_code == 200:
-            data = response.json()
-            logger.debug(f"Metrics: {len(data.get('models', {}))} models tracked")
-        else:
-            logger.warning(f"Metrics check failed: {response.status_code}")
-
-    @task(1)
-    def check_model_info(self):
-        """Check model info endpoint (weighted 1x)."""
-        response = self.client.get(
-            f"/api/llm/v1/models?model={self.model_id}",
-            name="/api/llm/v1/models"
-        )
-
-        if response.status_code == 200:
-            logger.debug(f"Model info retrieved")
-        else:
-            logger.warning(f"Model info failed: {response.status_code}")
+    def root(self):
+        """GET / — API info endpoint."""
+        self.client.get("/", name="/")
 
 
-class StressTestUser(HttpUser):
+class ManagementAPIUser(HttpUser):
     """
-    Stress test user with rapid requests.
+    Simulates a client managing MCP servers through the REST API.
 
-    Use this to test rate limiting and error handling under high load.
+    Performs read-only operations: list servers, poll status, discover tools,
+    and fetch logs. No destructive mutations are performed.
     """
 
-    # Minimal wait time
-    wait_time = between(0.1, 0.5)
+    wait_time = between(1, 4)
 
     def on_start(self):
-        """Called when user starts."""
-        self.model_id = os.getenv("MODEL_ID", "default")
-        auth_token = os.getenv("AUTH_TOKEN")
+        self.client.headers.update(_auth_headers())
+        self.server_id = None
 
-        if auth_token:
-            self.client.headers = {"Authorization": f"Bearer {auth_token}"}
+        # Prefer a running server; fall back to any server if none are running
+        resp = self.client.get("/api/servers", name="/api/servers [discovery]")
+        if resp.status_code == 200:
+            servers = resp.json().get("servers", [])
+            if isinstance(servers, list) and servers:
+                running = [s for s in servers if isinstance(s, dict) and s.get("status", {}).get("state") == "running"]
+                source = running if running else servers
+                first = source[0]
+                self.server_id = first.get("id")
+                logger.info(f"ManagementAPIUser: using server_id={self.server_id} (running={bool(running)})")
+            else:
+                logger.warning("ManagementAPIUser: no servers found — server-specific tasks will be skipped")
+        else:
+            logger.warning(f"ManagementAPIUser: failed to list servers ({resp.status_code})")
 
-    @task
-    def rapid_requests(self):
-        """Make rapid small requests."""
-        self.client.post(
-            "/api/llm/v1/chat/completions",
-            json={
-                "model": self.model_id,
-                "messages": [{"role": "user", "content": "Hi"}],
-                "max_tokens": 5
-            },
-            name="/api/llm/v1/chat/completions [stress]"
+    @task(3)
+    def list_servers(self):
+        """List all configured servers."""
+        self.client.get("/api/servers", name="/api/servers")
+
+    @task(2)
+    def server_status(self):
+        """Poll the runtime status of a specific server."""
+        if not self.server_id:
+            return
+        self.client.get(
+            f"/api/servers/{self.server_id}/status",
+            name="/api/servers/{id}/status",
+        )
+
+    @task(2)
+    def server_tools(self):
+        """Discover tools exposed by a specific server."""
+        if not self.server_id:
+            return
+        self.client.get(
+            f"/api/servers/{self.server_id}/tools",
+            name="/api/servers/{id}/tools",
+        )
+
+    @task(1)
+    def server_logs(self):
+        """Fetch recent logs from a specific server."""
+        if not self.server_id:
+            return
+        self.client.get(
+            f"/api/servers/{self.server_id}/logs",
+            name="/api/servers/{id}/logs",
         )
 
 
-# Event handlers for custom statistics
+class MCPProxyUser(HttpUser):
+    """
+    Simulates an MCP client sending JSON-RPC requests through the proxy.
+
+    Running servers are discovered dynamically via GET /api/servers on startup.
+    Load is distributed randomly across all running servers. No hardcoded server
+    names — always uses live discovery.
+
+    Task distribution: 70% tools/call, 30% tools/list.
+    """
+
+    wait_time = between(1, 3)
+
+    def on_start(self):
+        self.client.headers.update(_auth_headers())
+        self.servers = []
+        self.server_tools = {}  # {server_id: [tool_name, ...]}
+
+        # Discover running servers once — never repeated per request
+        resp = self.client.get("/api/servers", name="/api/servers [discovery]")
+        if resp.status_code == 200:
+            all_servers = resp.json().get("servers", [])
+            self.servers = [
+                s.get("id")
+                for s in all_servers
+                if isinstance(s, dict) and s.get("status", {}).get("state") == "running"
+            ]
+            self.servers = [s for s in self.servers if s]
+            logger.info(f"MCPProxyUser: {len(self.servers)} running servers: {self.servers}")
+        else:
+            logger.warning(f"MCPProxyUser: server discovery failed ({resp.status_code}) — all proxy tasks will be skipped")
+            return
+
+        # Fetch tools for each running server once at startup
+        for server_id in self.servers:
+            tresp = self.client.get(
+                f"/api/servers/{server_id}/tools",
+                name="/api/servers/{id}/tools [discovery]",
+            )
+            if tresp.status_code == 200:
+                tools = tresp.json().get("tools", [])
+                names = [t["name"] for t in tools if t.get("name")]
+                if names:
+                    self.server_tools[server_id] = names
+                    logger.info(f"  {server_id}: {names}")
+            else:
+                logger.warning(f"  {server_id}: tool discovery failed ({tresp.status_code})")
+
+    def _pick_tool(self, server_id: str) -> str:
+        """Pick a random real tool for this server; fall back to heuristic if discovery failed."""
+        tools = self.server_tools.get(server_id, [])
+        if tools:
+            return random.choice(tools)
+        # Fallback heuristic if tool discovery failed
+        if "council" in server_id.lower():
+            return "send_response"
+        return "tools/list"
+
+    @task(7)
+    def tools_call(self):
+        """Send tools/call JSON-RPC using a real discovered tool name (70% of requests)."""
+        if not self.servers:
+            return
+        server = random.choice(self.servers)
+        tool = self._pick_tool(server)
+        with self.client.post(
+            f"/{server}/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": {}},
+            },
+            name="/{server}/mcp [tools/call]",
+            catch_response=True,
+        ) as resp:
+            if resp.status_code == 200:
+                body = resp.json()
+                if "error" in body:
+                    # JSON-RPC error (e.g. missing required args) — proxy worked fine
+                    logger.debug(f"JSON-RPC error {server}/{tool}: {body['error'].get('message')}")
+                resp.success()
+            else:
+                resp.failure(f"HTTP {resp.status_code}")
+
+    @task(3)
+    def tools_list(self):
+        """Send tools/list JSON-RPC (30% of requests)."""
+        if not self.servers:
+            return
+        server = random.choice(self.servers)
+        self.client.post(
+            f"/{server}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+            name="/{server}/mcp [tools/list]",
+        )
+
+
+class MetricsUser(HttpUser):
+    """
+    Simulates a monitoring agent scraping metrics periodically.
+    Low frequency — high wait time between requests.
+    """
+
+    wait_time = between(5, 10)
+
+    def on_start(self):
+        self.client.headers.update(_auth_headers())
+
+    @task
+    def scrape_metrics(self):
+        """Scrape JSON metrics — silently skips if endpoint is not available."""
+        with self.client.get("/metrics/json", name="/metrics/json", catch_response=True) as resp:
+            if resp.status_code == 200:
+                resp.success()
+            elif resp.status_code == 404:
+                resp.success()  # endpoint not present in this deployment — skip silently
+            elif resp.status_code == 401:
+                resp.failure("Metrics requires auth — set AUTH_TOKEN or use --allow-insecure")
+            else:
+                resp.failure(f"Unexpected status {resp.status_code}")
+
+
+# ---------------------------------------------------------------------------
+# Event hooks
+# ---------------------------------------------------------------------------
+
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):
-    """Called when load test starts."""
     logger.info("=" * 60)
-    logger.info("FluidMCP Load Test Starting")
-    logger.info(f"Target: {environment.host}")
-    logger.info(f"Model: {os.getenv('MODEL_ID', 'auto-detected')}")
+    logger.info("FluidMCP Serve Mode Load Test Starting")
+    logger.info(f"  Target    : {environment.host}")
+    logger.info(f"  Auth      : {'yes (AUTH_TOKEN set)' if os.getenv('AUTH_TOKEN') else 'no (insecure mode)'}")
+    logger.info("  Discovery : running servers fetched per-user in on_start")
     logger.info("=" * 60)
 
 
 @events.test_stop.add_listener
 def on_test_stop(environment, **kwargs):
-    """Called when load test stops."""
     logger.info("=" * 60)
-    logger.info("FluidMCP Load Test Complete")
+    logger.info("FluidMCP Serve Mode Load Test Complete")
     logger.info("=" * 60)
 
 
 @events.request.add_listener
 def on_request(request_type, name, response_time, response_length, exception, **kwargs):
-    """Called for each request (optional: custom logging)."""
     if exception:
-        logger.warning(f"Request failed: {name} - {exception}")
+        logger.warning(f"Request failed: {request_type} {name} — {exception}")

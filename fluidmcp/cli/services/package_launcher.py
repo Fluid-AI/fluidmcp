@@ -18,6 +18,16 @@ import uvicorn
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
 from .sse_handle import SseSubprocessHandle
+_SSE_MAX_LINES = 500
+
+# Each keep-alive timeout is _SSE_READ_TIMEOUT seconds (see sse_stream). A silent
+# subprocess that never closes its pipe and never responds would otherwise let a
+# single SSE request hold the server's I/O lock forever, starving every other
+# request to that server. Cap consecutive timeouts so the stream — and the lock —
+# gets released after roughly _SSE_MAX_CONSECUTIVE_TIMEOUTS * _SSE_READ_TIMEOUT
+# seconds of total silence.
+_SSE_READ_TIMEOUT = 30.0
+_SSE_MAX_CONSECUTIVE_TIMEOUTS = int(os.getenv("FMCP_SSE_MAX_CONSECUTIVE_TIMEOUTS", "20"))
 
 security = HTTPBearer(auto_error=False)
 
@@ -112,6 +122,31 @@ def readline_with_timeout(process: subprocess.Popen, timeout: float = 30.0) -> s
         return ""
     except (OSError, ValueError):
         return ""
+
+
+async def _read_response_locked(process: subprocess.Popen, timeout: float) -> str:
+    """Read one stdout line while holding a server's I/O lock, cancellation-safe.
+
+    ``asyncio.to_thread()`` cannot interrupt the blocking select()/readline()
+    running in its worker thread. If the awaiting coroutine is cancelled (e.g.
+    an HTTP client disconnect) while this call is in flight, the worker thread
+    keeps running until it returns on its own. Without shielding it, the
+    caller's ``async with io_lock`` block would unwind and release the lock
+    immediately, letting a new request start reading the same stdout pipe
+    while the abandoned reader is still consuming it — reintroducing response
+    corruption between requests. Shielding the read and waiting for it to
+    finish (bounded by `timeout` via readline_with_timeout) before re-raising
+    keeps the lock held until the pipe is actually free again.
+    """
+    read_task = asyncio.ensure_future(
+        asyncio.to_thread(readline_with_timeout, process, timeout)
+    )
+    try:
+        return await asyncio.shield(read_task)
+    except asyncio.CancelledError:
+        await read_task
+        raise
+
 
 def find_metadata_file(base_dir: Path) -> Path:
     """
@@ -827,19 +862,24 @@ def create_dynamic_router(server_manager):
             # ── stdio transport continues below ─────────────────────────────
 
             try:
-                # Send request to MCP server
-                msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                io_lock = server_manager.get_io_lock(server_name)
+                if io_lock is None:
+                    raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
 
-                # Read response with timeout — readline_with_timeout uses select() so the
-                # thread returns after 30s instead of blocking forever (no stuck threads).
-                response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+                async with io_lock:
+                    try:
+                        await asyncio.to_thread(process.stdin.write, json.dumps(request) + "\n")
+                        await asyncio.to_thread(process.stdin.flush)
+                    except (BrokenPipeError, OSError) as e:
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+
+                    # readline_with_timeout uses select() so the thread returns after
+                    # 30s instead of blocking forever (no stuck threads).
+                    response_line = await _read_response_locked(process, 30.0)
+
                 if not response_line:
                     raise HTTPException(504, f"Server '{server_name}' timed out responding")
+
                 response_data = json.loads(response_line)
 
                 # Update last_used_at for idle cleanup
@@ -928,54 +968,91 @@ def create_dynamic_router(server_manager):
                     return  # done for SSE — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
-                msg = json.dumps(request)
-                try:
-                    process.stdin.write(msg + "\n")
-                    process.stdin.flush()
-                except (BrokenPipeError, OSError) as e:
-                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                    #
-                    # IMPORTANT: This intentionally differs from the error_type used in
-                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                    # Here we use "broken_pipe" so operators can:
-                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                    #     overall rate of I/O-related failures across the service, and
-                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                    #     why individual streaming sessions terminated (client disconnects,
-                    #     broken pipes, etc.).
-                    #
-                    # In other words, both labels refer to the same underlying condition but are
-                    # scoped for different troubleshooting workflows: global error rates versus
-                    # per-stream termination reasons.
-                    completion_status = "broken_pipe"
-                    # Record in global error metric for monitoring
-                    collector.record_error("io_error")
-                    yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                # Acquire the per-server I/O lock to serialize stdin write +
+                # multi-line stdout read with any concurrent requests.
+                io_lock = server_manager.get_io_lock(server_name)
+                if io_lock is None:
+                    completion_status = "error"
+                    yield f"data: {json.dumps({'error': f'Server {server_name!r} has no I/O lock'})}\n\n"
                     return
 
-                while True:
-                    response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
-                    if not response_line:
-                        # Distinguish real EOF (process exited) from a timeout
-                        if process.poll() is not None:
-                            logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
-                            break
-                        # Timeout with process still alive — send SSE keep-alive and continue
-                        logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
-                        yield ": keep-alive\n\n"
-                        continue
-
-                    logger.debug(f"Received from MCP: {response_line.strip()}")
-                    yield f"data: {response_line.strip()}\n\n"
-
-                    # Check if response is final
+                msg = json.dumps(request)
+                async with io_lock:
                     try:
-                        response_data = json.loads(response_line)
-                        if "result" in response_data:
-                            break
-                    except json.JSONDecodeError:
-                        # Non-JSON lines are expected in the stream; ignore them but continue reading
-                        logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
+                        await asyncio.to_thread(process.stdin.write, msg + "\n")
+                        await asyncio.to_thread(process.stdin.flush)
+                    except (BrokenPipeError, OSError) as e:
+                        # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                        #
+                        # IMPORTANT: This intentionally differs from the error_type used in
+                        # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                        # Here we use "broken_pipe" so operators can:
+                        #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                        #     overall rate of I/O-related failures across the service, and
+                        #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                        #     why individual streaming sessions terminated (client disconnects,
+                        #     broken pipes, etc.).
+                        #
+                        # In other words, both labels refer to the same underlying condition but are
+                        # scoped for different troubleshooting workflows: global error rates versus
+                        # per-stream termination reasons.
+                        completion_status = "broken_pipe"
+                        # Record in global error metric for monitoring
+                        collector.record_error("io_error")
+                        yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                        return
+
+                    lines_read = 0
+                    consecutive_timeouts = 0
+                    while lines_read < _SSE_MAX_LINES:
+                        # readline_with_timeout (via _read_response_locked) bounds the
+                        # blocking read to _SSE_READ_TIMEOUT and stays cancellation-safe,
+                        # so a client disconnect mid-read can't leave an abandoned reader
+                        # racing the next request for this server's stdout.
+                        response_line = await _read_response_locked(process, _SSE_READ_TIMEOUT)
+                        if not response_line:
+                            # Distinguish real EOF (process exited) from a timeout
+                            if process.poll() is not None:
+                                logger.info(f"[{server_name}] SSE subprocess exited, closing stream")
+                                break
+
+                            # Timeout with process still alive. Cap consecutive timeouts so a
+                            # subprocess that goes silent forever (without dying or answering)
+                            # can't pin this SSE request — and the shared server I/O lock — open
+                            # indefinitely; every other request to this server would be starved.
+                            consecutive_timeouts += 1
+                            if consecutive_timeouts >= _SSE_MAX_CONSECUTIVE_TIMEOUTS:
+                                idle_seconds = consecutive_timeouts * _SSE_READ_TIMEOUT
+                                logger.warning(
+                                    f"[{server_name}] SSE stream idle for {idle_seconds:.0f}s "
+                                    f"({consecutive_timeouts} consecutive timeouts), closing to release I/O lock"
+                                )
+                                completion_status = "timeout"
+                                yield f"data: {json.dumps({'error': 'MCP server did not respond within the SSE idle timeout'})}\n\n"
+                                break
+
+                            # Send SSE keep-alive and continue waiting
+                            logger.debug(f"[{server_name}] SSE readline timed out, sending keep-alive")
+                            yield ": keep-alive\n\n"
+                            continue
+
+                        consecutive_timeouts = 0
+                        lines_read += 1
+                        logger.debug(f"Received from MCP: {response_line.strip()}")
+                        yield f"data: {response_line.strip()}\n\n"
+
+                        # Check if response is final
+                        try:
+                            response_data = json.loads(response_line)
+                            if "result" in response_data:
+                                break
+                        except json.JSONDecodeError:
+                            # Non-JSON lines are expected in the stream; ignore them but continue reading
+                            logger.debug(f"Ignoring non-JSON MCP response line: {response_line.strip()}")
+                    else:
+                        logger.warning(
+                            f"[{server_name}] SSE stream hit {_SSE_MAX_LINES}-line safety limit"
+                        )
 
             except Exception as e:
                 completion_status = "error"
@@ -1018,27 +1095,27 @@ def create_dynamic_router(server_manager):
         # ── stdio transport continues below ──────────────────────────────────
 
         try:
-            request_payload = {
-                "id": 1,
-                "jsonrpc": "2.0",
-                "method": "tools/list"
-            }
+            request_payload = {"id": 1, "jsonrpc": "2.0", "method": "tools/list"}
 
-            msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            io_lock = server_manager.get_io_lock(server_name)
+            if io_lock is None:
+                raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
 
-            # Non-blocking I/O — readline_with_timeout uses select() so the thread
-            # returns after 30s instead of blocking forever (no stuck threads).
-            response_line = await asyncio.to_thread(readline_with_timeout, process, 30.0)
+            async with io_lock:
+                try:
+                    await asyncio.to_thread(process.stdin.write, json.dumps(request_payload) + "\n")
+                    await asyncio.to_thread(process.stdin.flush)
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+
+                # readline_with_timeout uses select() so the thread returns after
+                # 30s instead of blocking forever (no stuck threads).
+                response_line = await _read_response_locked(process, 30.0)
+
             if not response_line:
                 raise HTTPException(504, f"Server '{server_name}' timed out responding")
-            response_data = json.loads(response_line)
 
-            return JSONResponse(content=response_data)
+            return JSONResponse(content=json.loads(response_line))
 
         except HTTPException:
             raise
@@ -1097,16 +1174,21 @@ def create_dynamic_router(server_manager):
                 "params": request_body
             }
 
-            msg = json.dumps(request_payload)
-            try:
-                process.stdin.write(msg + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
-                raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+            io_lock = server_manager.get_io_lock(server_name)
+            if io_lock is None:
+                raise HTTPException(503, f"Server '{server_name}' has no I/O lock")
 
-            # Tool execution with timeout — readline_with_timeout uses select() so the
-            # thread returns after 60s instead of blocking forever (no stuck threads).
-            response_line = await asyncio.to_thread(readline_with_timeout, process, 60.0)
+            async with io_lock:
+                try:
+                    await asyncio.to_thread(process.stdin.write, json.dumps(request_payload) + "\n")
+                    await asyncio.to_thread(process.stdin.flush)
+                except (BrokenPipeError, OSError) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+
+                # Tool execution with timeout — readline_with_timeout uses select() so the
+                # thread returns after 60s instead of blocking forever (no stuck threads).
+                response_line = await _read_response_locked(process, 60.0)
+
             if not response_line:
                 # Log timeout failure
                 await server_manager.db.save_log_entry({
