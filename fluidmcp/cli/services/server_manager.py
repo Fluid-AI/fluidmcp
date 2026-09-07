@@ -10,6 +10,7 @@ import subprocess
 import json
 import time
 import atexit
+import httpx
 from collections import deque
 from urllib.parse import urlparse
 from typing import Dict, Any, Optional, List, IO, Deque
@@ -83,6 +84,11 @@ class ServerManager:
 
         # Operation locks to prevent concurrent operations on same server
         self._operation_locks: Dict[str, asyncio.Lock] = {}
+
+        # Concurrency semaphores: server_id -> (configured_limit, asyncio.Semaphore)
+        # Stored as a tuple so we can detect when the configured limit changes and
+        # recreate the semaphore with the new value instead of keeping a stale one.
+        self._concurrency_semaphores: Dict[str, tuple] = {}
 
         # Event loop for async operations
         self._loop = None
@@ -437,6 +443,44 @@ class ServerManager:
         async with lock:
             return await self._stop_server_unlocked(id, force)
 
+    def get_concurrency_semaphore(self, server_id: str) -> Optional[asyncio.Semaphore]:
+        """Return the semaphore for server_id, or None if no limit is configured.
+
+        The cache stores (configured_limit, semaphore) tuples so that a config
+        change (e.g. raising or lowering max_concurrent_requests) automatically
+        produces a fresh semaphore rather than continuing to enforce the stale
+        value for the lifetime of the process.
+        """
+        config = self.configs.get(server_id, {})
+        limit = int(config.get("max_concurrent_requests") or 0)
+        if limit <= 0:
+            # Remove any stale semaphore if the limit was removed from config.
+            self._concurrency_semaphores.pop(server_id, None)
+            return None
+        cached = self._concurrency_semaphores.get(server_id)
+        if cached is None or cached[0] != limit:
+            # No cached semaphore, or the cached one was built for a different
+            # limit.  Recreate it.  Any coroutines already holding the old
+            # semaphore will release it normally; new requests use the fresh one.
+            sem = asyncio.Semaphore(limit)
+            self._concurrency_semaphores[server_id] = (limit, sem)
+            return sem
+        return cached[1]
+
+    def get_concurrency_info(self, server_id: str) -> Dict[str, Any]:
+        """Return concurrency limit and current active count for a server."""
+        config = self.configs.get(server_id, {})
+        limit = int(config.get("max_concurrent_requests") or 0)
+        cached = self._concurrency_semaphores.get(server_id)
+        sem = cached[1] if cached else None
+        active = (limit - sem._value) if sem and limit > 0 else None
+        return {
+            "server_id": server_id,
+            "max_concurrent_requests": limit if limit > 0 else None,
+            "active_requests": active,
+            "available_slots": sem._value if sem and limit > 0 else None,
+        }
+
     def _get_operation_lock(self, server_id: str) -> asyncio.Lock:
         """
         Get or create an operation lock for a server.
@@ -558,6 +602,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "failed",
+                    "transport": None,
+                    "url": None,
                     "pid": None,
                     "uptime": None,
                     "restart_count": 0,
@@ -585,6 +631,8 @@ class ServerManager:
                         return {
                             "id": id,
                             "state": "failed",
+                            "transport": None,
+                            "url": None,
                             "pid": None,
                             "uptime": None,
                             "restart_count": instance.get("restart_count", 0),
@@ -618,6 +666,8 @@ class ServerManager:
                     return {
                         "id": id,
                         "state": "failed",
+                        "transport": None,
+                        "url": None,
                         "pid": None,
                         "uptime": None,
                         "restart_count": instance.get("restart_count", 0),
@@ -629,6 +679,8 @@ class ServerManager:
             return {
                 "id": id,
                 "state": state,
+                "transport": None,
+                "url": None,
                 "pid": pid,
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
@@ -640,6 +692,8 @@ class ServerManager:
         return {
             "id": id,
             "state": "not_found",
+            "transport": None,
+            "url": None,
             "pid": None,
             "uptime": None,
             "restart_count": 0,
@@ -769,6 +823,59 @@ class ServerManager:
             env_vars = config.get("env", {})
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
+
+            # Load env_file if specified, merging before inline env (inline takes precedence)
+            env_file_path = config.pop("env_file", None)
+            if env_file_path:
+                env_file_resolved = (
+                    Path(env_file_path).resolve()
+                    if Path(env_file_path).is_absolute()
+                    else (Path(working_dir) / env_file_path).resolve()
+                )
+                # Security: env_file must be under install_path or working_dir
+                install_resolved = Path(install_path).resolve()
+                working_resolved = Path(working_dir).resolve()
+                under_install = (
+                    env_file_resolved == install_resolved
+                    or install_resolved in env_file_resolved.parents
+                )
+                under_working = (
+                    env_file_resolved == working_resolved
+                    or working_resolved in env_file_resolved.parents
+                )
+                if not (under_install or under_working):
+                    logger.warning(
+                        f"env_file '{env_file_resolved}' is outside install_path/working_dir — skipping"
+                    )
+                elif not env_file_resolved.exists():
+                    logger.warning(f"env_file '{env_file_resolved}' not found — skipping")
+                else:
+                    file_env: Dict[str, str] = {}
+                    for line in env_file_resolved.read_text().splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" not in line:
+                            continue
+                        k, _, v = line.partition("=")
+                        k = k.strip()
+                        v = v.strip()
+                        if (v.startswith('"') and v.endswith('"')) or (
+                            v.startswith("'") and v.endswith("'")
+                        ):
+                            v = v[1:-1]
+                        file_env[k] = v
+                    # Inline env overlays on top of file env
+                    env_vars = {**file_env, **env_vars}
+
+            # Promote TRANSPORT_TYPE from env_file to config transport (if not already set)
+            # Supports transport declaration via inline env (apply_transport during config
+            # resolution, before env_file is loaded) or via env_file (here, once it's loaded).
+            if not config.get("transport"):
+                _env_transport = env_vars.get("TRANSPORT_TYPE", "")
+                if _env_transport in ("sse", "http"):
+                    config["transport"] = _env_transport
+
             working_dir_path = Path(working_dir)
 
             # 🔹 Auto-reclone if directory missing (Railway ephemeral container fix)
@@ -923,12 +1030,19 @@ class ServerManager:
             else:
                 preexec_fn = None
 
+            # Network-transport servers communicate over HTTP, not stdout.
+            # Redirect stdout to DEVNULL to prevent pipe buffer deadlock:
+            # if nobody reads the pipe, the 64KB kernel buffer fills and the
+            # subprocess blocks on the next write, freezing the event loop.
+            is_network_transport = config.get("transport") in ("sse", "http")
+            stdout_target = subprocess.DEVNULL if is_network_transport else subprocess.PIPE
+
             # Spawn subprocess
             process = subprocess.Popen(
                 cmd_list,
                 cwd=str(working_dir),
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=stdout_target,
                 stderr=stderr_fh,
                 env=env,
                 text=True,
@@ -1096,7 +1210,6 @@ class ServerManager:
         Returns:
             NetworkSubprocessHandle on success, None on failure.
         """
-        import httpx
 
         url = f"http://127.0.0.1:{port}"
         name = self.configs.get(id, {}).get("name", id)
@@ -1167,8 +1280,6 @@ class ServerManager:
         Returns:
             NetworkSubprocessHandle on success, None on failure.
         """
-        import httpx
-
         base_url = f"http://127.0.0.1:{port}"
         name = self.configs.get(id, {}).get("name", id)
         mcp_url = f"{base_url}/mcp"
@@ -1313,9 +1424,7 @@ class ServerManager:
         Args:
             server_id:  Server identifier.
             base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
-            session_id: Mcp-Session-Id from the HTTP handshake (HTTP transport only).
         """
-        import httpx
 
         if session_id is not None:
             url = f"{base_url.rstrip('/')}/mcp"
@@ -1379,6 +1488,16 @@ class ServerManager:
         # so stale TCP connections don't linger after the subprocess exits.
         process = self.processes.get(id)
         if isinstance(process, NetworkSubprocessHandle):
+            # Kill the subprocess if still alive — poll() returns None while running.
+            # This is the single authoritative kill point so all paths (health monitor,
+            # trigger_restart, stop_server) clean up the OS process.
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    logger.info(f"[cleanup] Killed subprocess PID={process.pid} for server '{id}'")
+                    process.wait(timeout=5)
+            except Exception as e:
+                logger.debug(f"[cleanup] Kill/wait for '{id}' PID={getattr(process, 'pid', '?')}: {e}")
             try:
                 parsed = urlparse(process.base_url)
                 if parsed.port:
@@ -1873,6 +1992,119 @@ class MCPHealthMonitor:
 
         logger.info("MCP health monitor loop exited")
 
+    async def _check_http_ping(self, server_id: str, process: "NetworkSubprocessHandle") -> bool:
+        """POST tools/list to the subprocess HTTP port. Returns True if server is a zombie.
+
+        A zombie is a process that is alive by PID but no longer serving HTTP requests.
+        Uses a 10s timeout so a slow-but-alive server is not mis-classified.
+        Returns False (not a zombie) on any ambiguous error (connect refused = process
+        likely restarting, not zombie).
+        """
+        ping_payload = {"jsonrpc": "2.0", "id": 0, "method": "tools/list", "params": {}}
+        url = f"{process.base_url.rstrip('/')}/mcp"
+        timeout = float(os.getenv("FMCP_HTTP_PING_TIMEOUT", "10"))
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    url,
+                    json=ping_payload,
+                    headers={"Accept": "application/json, text/event-stream"},
+                )
+            # Any HTTP response (including error codes) means the server is alive
+            return False
+        except httpx.ConnectError:
+            # Port not accepting connections — process may be mid-restart, not a zombie
+            return False
+        except httpx.TimeoutException:
+            logger.warning(
+                f"[{server_id}] HTTP ping timed out after {timeout}s — PID alive but "
+                f"server unresponsive, treating as zombie"
+            )
+            return True
+        except Exception as e:
+            logger.debug(f"[{server_id}] HTTP ping error (ignored): {e}")
+            return False
+
+    async def trigger_restart(self, server_id: str) -> None:
+        """Force-restart a server immediately (no backoff delay).
+
+        Called by the gateway when it receives a 504 from the subprocess — the
+        caller already waited for the full request timeout, so we skip the usual
+        exponential backoff and restart right away.
+        """
+        if server_id in self._restarts_in_progress:
+            logger.debug(f"[{server_id}] trigger_restart: restart already in progress, skipping")
+            return
+
+        process = self._sm.processes.get(server_id)
+        if process is None:
+            logger.debug(f"[{server_id}] trigger_restart: server not found, skipping")
+            return
+
+        config = await self._sm.db.get_server_config(server_id)
+        if not config:
+            logger.debug(f"[{server_id}] trigger_restart: no config found, skipping")
+            return
+
+        max_restarts = config.get("max_restarts", 3)
+        if self._restart_counts.get(server_id, 0) >= max_restarts:
+            logger.warning(f"[{server_id}] trigger_restart: max restarts ({max_restarts}) reached, not restarting")
+            return
+
+        old_pid = getattr(process, "pid", "?")
+        logger.error(
+            f"[RESTART] '{server_id}' — 504 gateway timeout detected. "
+            f"Killing old process (PID={old_pid}) and restarting immediately (no backoff). "
+            f"Restart attempt {self._restart_counts.get(server_id, 0) + 1}/{config.get('max_restarts', 3)}"
+        )
+        self._restarts_in_progress.add(server_id)
+        count = self._restart_counts.get(server_id, 0)
+        try:
+            op_lock = self._sm._get_operation_lock(server_id)
+            async with op_lock:
+                current = self._sm.processes.get(server_id)
+                if current is not None and current is not process:
+                    logger.info(f"[{server_id}] trigger_restart: process replaced concurrently, skipping")
+                    return
+                # Kill the subprocess before cleanup
+                # NetworkSubprocessHandle stores the real Popen as _process (private attr)
+                exit_code = -1
+                raw_proc = getattr(process, "_process", None)
+                if raw_proc is None:
+                    raw_proc = getattr(process, "process", None)
+                if raw_proc is not None:
+                    try:
+                        raw_proc.kill()
+                        logger.error(f"[RESTART] '{server_id}' — killed PID={old_pid}")
+                        exit_code = raw_proc.wait()
+                    except Exception as kill_err:
+                        logger.warning(f"[RESTART] '{server_id}' — kill failed: {kill_err}")
+                await self._sm._cleanup_server(server_id, exit_code)
+                logger.error(f"[RESTART] '{server_id}' — cleanup done, launching new process...")
+                restart_timeout = float(os.getenv("FMCP_RESTART_TIMEOUT_S", "60"))
+                try:
+                    success = await asyncio.wait_for(
+                        self._sm._start_server_unlocked(server_id, config),
+                        timeout=restart_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"[RESTART] '{server_id}' — launch timed out after {restart_timeout}s")
+                    success = False
+            self._restart_counts[server_id] = count + 1
+            await self._check_stability(server_id)
+            new_proc = self._sm.processes.get(server_id)
+            new_pid = getattr(new_proc, "pid", "none") if new_proc else "none"
+            if success:
+                logger.error(f"[RESTART] '{server_id}' — RESTARTED SUCCESSFULLY. New PID={new_pid}")
+            else:
+                logger.error(f"[RESTART] '{server_id}' — RESTART FAILED. Server may be down.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[{server_id}] trigger_restart error: {e}")
+        finally:
+            self._restarts_in_progress.discard(server_id)
+
     async def _check_server(self, server_id: str, process) -> None:
         """Check a single server's health and restart if needed."""
         is_alive = True
@@ -1892,6 +2124,13 @@ class MCPHealthMonitor:
             if process.poll() is not None:
                 is_alive = False
                 logger.warning(f"MCP server '{server_id}' process exited (code={process.returncode})")
+
+        if is_alive:
+            # HTTP ping for network-transport servers: PID alive but HTTP unresponsive = zombie
+            if isinstance(process, NetworkSubprocessHandle) and process.transport == "http":
+                zombie = await self._check_http_ping(server_id, process)
+                if zombie:
+                    is_alive = False
 
         if is_alive:
             # Process alive — reset restart count on sustained health
@@ -2025,6 +2264,7 @@ class MCPHealthMonitor:
                 return  # skip this cycle; next cycle will have a real reading
             rss = proc.memory_info().rss
             cpu = proc.cpu_percent(interval=None)
+            open_fds = proc.num_fds() if hasattr(proc, "num_fds") else None
             # Update ring buffer for memory trend
             if server_id not in self._memory_history:
                 self._memory_history[server_id] = deque(maxlen=3)
@@ -2032,9 +2272,19 @@ class MCPHealthMonitor:
             snapshot = {
                 "memory_rss_bytes": rss,
                 "cpu_percent": cpu,
+                "open_fds": open_fds,
                 "active_requests": self._get_active_requests(server_id),
             }
             self._last_resource_snapshot[server_id] = snapshot
+            # Emit per-server Prometheus gauges
+            collector = MetricsCollector(server_id)
+            collector.set_server_memory_rss(rss)
+            collector.set_server_cpu_percent(cpu)
+            if open_fds is not None:
+                collector.set_server_open_fds(open_fds)
+            uptime = self._sm.get_uptime(server_id)
+            if uptime is not None:
+                collector.set_uptime(uptime)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -2047,8 +2297,7 @@ class MCPHealthMonitor:
             gauge = registry.get_metric("fluidmcp_active_requests")
             if gauge is None:
                 return 0
-            key = gauge._get_label_key({"server_id": server_id})
-            return int(gauge.samples.get(key, 0))
+            return int(gauge.get_count({"server_id": server_id}))
         except Exception:
             return 0
 

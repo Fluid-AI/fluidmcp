@@ -41,6 +41,17 @@ scrape_configs:
           container:
             source: docker_tag
 
+      # ── Drop everything that isn't FluidMCP ────────────────────────────────
+      # This host's /var/lib/docker/containers tree holds every container's
+      # logs, not just ours. Without this, any other container running on the
+      # same host would have its log lines shipped to Loki too. Only lines
+      # tagged "fluidmcp" (see docker-compose.observability.yml logging.options)
+      # survive past this point.
+      - match:
+          selector: '{container!="fluidmcp"}'
+          action: drop
+          drop_counter_reason: non_fluidmcp_container
+
       # ── FluidMCP-specific enrichment ──────────────────────────────────────
       # FluidMCP emits structured JSON log lines (LOG_FORMAT=json).
       # Parse them and promote level, trace_id, span_id.
