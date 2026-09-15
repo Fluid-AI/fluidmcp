@@ -1,6 +1,13 @@
 """Data models for FluidMCP."""
 
 from .server_status import ServerState, ServerStatus, RestartPolicy
+from .events import (
+    DEFAULT_SEVERITY,
+    SEVERITY_ORDER,
+    EventType,
+    MonitoringEvent,
+    Severity,
+)
 from .models import ServerConfigDocument, ServerInstanceDocument, ServerLogDocument
 from .api import (
     MCPConfigRequest,
@@ -19,6 +26,12 @@ __all__ = [
     "ServerState",
     "ServerStatus",
     "RestartPolicy",
+    # Monitoring events
+    "EventType",
+    "Severity",
+    "MonitoringEvent",
+    "DEFAULT_SEVERITY",
+    "SEVERITY_ORDER",
     # MongoDB document schemas
     "ServerConfigDocument",
     "ServerInstanceDocument",

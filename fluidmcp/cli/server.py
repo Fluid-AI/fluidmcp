@@ -5,7 +5,7 @@ This module provides a persistent API server that can run independently
 and manage MCP servers dynamically via HTTP API.
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, status, Depends
+from fastapi import FastAPI, Request, HTTPException, status, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 import argparse
@@ -16,6 +16,7 @@ import re
 import signal
 import secrets
 import sys
+import time
 import uuid
 from pathlib import Path
 from uvicorn import Config, Server
@@ -304,6 +305,11 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.include_router(inspector_router, prefix="/api", tags=["inspector"])
     logger.info("Inspector API mounted at /api")
 
+    # Include Monitoring API (fleet health, event feed, webhooks, diagnosis)
+    from .api.monitoring import router as monitoring_router
+    app.include_router(monitoring_router, prefix="/api", tags=["monitoring"])
+    logger.info("Monitoring API mounted at /api/monitoring")
+
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
     app.include_router(mcp_router, prefix=os.environ.get("MCP_ROOT_PATH", ""), tags=["mcp"])
@@ -331,6 +337,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         from datetime import datetime
         from .services.replicate_client import _replicate_clients
         from .services.llm_provider_registry import _llm_models_config
+        from .services import gateway_info
 
         # Check database
         db_status = "disconnected"
@@ -360,9 +367,24 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
             else:
                 overall_status = "degraded"  # No database but models loaded (lost persistence)
 
+        # Gateway configuration validity. Reported here — on the UNAUTHENTICATED
+        # endpoint — deliberately: if the bearer token is the thing that is
+        # missing, a monitoring system cannot authenticate to find out why every
+        # /api call is returning 500.
+        config_status = gateway_info.validate_gateway_config(
+            db_connected=(db_status == "connected")
+        )
+        if config_status["errors"]:
+            overall_status = "degraded"
+
         return {
             "status": overall_status,
             "timestamp": datetime.utcnow().isoformat() + "Z",
+            # Boot identity: a changed boot_id across polls is unambiguous proof
+            # the gateway restarted, which distinguishes a deploy from a crash
+            # from a network blip.
+            **gateway_info.identity(),
+            "config": config_status,
             "database": {
                 "status": db_status,
                 "type": db_type,
@@ -376,6 +398,43 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
                 }
             },
             "version": getattr(app, "version", "2.0.0")
+        }
+
+    @app.get("/health/ready")
+    async def readiness_check(response: Response):
+        """Readiness probe — 503 until dependencies are actually usable.
+
+        Distinct from /health (liveness), which answers 200 whenever the process
+        is serving, including when it is misconfigured. Conflating the two makes
+        a broken-but-running container indistinguishable from a dead one.
+        """
+        from .services import gateway_info
+
+        db_connected = False
+        if hasattr(db_manager, "client") and db_manager.client:
+            try:
+                await db_manager.client.admin.command("ping")
+                db_connected = True
+            except Exception:
+                db_connected = False
+
+        config_status = gateway_info.validate_gateway_config(db_connected=db_connected)
+        require_persistence = os.getenv("FMCP_REQUIRE_PERSISTENCE", "").lower() == "true"
+
+        checks = {
+            "config_valid": config_status["valid"],
+            "database": db_connected or not require_persistence,
+        }
+        ready = all(checks.values())
+
+        if not ready:
+            response.status_code = 503
+
+        return {
+            "ready": ready,
+            "checks": checks,
+            "config_errors": config_status["errors"],
+            **gateway_info.identity(),
         }
 
 
@@ -690,7 +749,87 @@ async def main(args):
         health_check_interval = 30
     health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
     server_manager._health_monitor = health_monitor
+
+    # ── Monitoring subsystem ─────────────────────────────────────────────
+    # Wired up BEFORE the health monitor starts: once the monitor is running it
+    # can emit at any time, and an event emitted before the bus has a database
+    # is buffered in memory only.
+    from .services import gateway_info
+    from .services.event_bus import get_event_bus
+    from .services.webhook_dispatcher import get_webhook_dispatcher
+    from .models.events import EventType as _ET
+
+    # Validate the gateway's own config first, so the boot record persisted
+    # below carries the reason a misconfigured container is unhealthy.
+    gateway_config = gateway_info.validate_gateway_config(
+        db_connected=getattr(persistence, "client", None) is not None
+    )
+
+    event_bus = get_event_bus()
+    event_bus.set_db(persistence)
+    event_bus.start()
+
+    webhook_dispatcher = get_webhook_dispatcher()
+    webhook_dispatcher.set_db(persistence)
+    event_bus.set_webhook_sink(webhook_dispatcher.submit)
+    try:
+        await webhook_dispatcher.start()
+    except Exception as e:
+        logger.warning(f"Webhook dispatcher failed to start: {e}")
+
+    # Boot record: written as early as possible so a crash-looping gateway
+    # leaves a trail explaining the outage once the DB is reachable again.
+    await gateway_info.record_boot(persistence)
+
+    if gateway_config["errors"]:
+        # Emitted even though the gateway keeps serving — this is the redeploy
+        # failure mode where /api returns opaque 500s with nothing explaining why.
+        event_bus.emit(
+            _ET.GATEWAY_CONFIG_INVALID,
+            errors=gateway_config["errors"],
+            warnings=gateway_config["warnings"],
+            failure_owner="fluidmcp",
+            summary=(
+                "FluidMCP started with an invalid configuration: "
+                + "; ".join(f"{e['key']} {e['problem']}" for e in gateway_config["errors"])
+            ),
+        )
+        for entry in gateway_config["errors"]:
+            logger.error(
+                f"[config] {entry['key']}: {entry['problem']} — {entry['impact']}"
+            )
+
+    event_bus.emit(
+        _ET.GATEWAY_STARTED,
+        boot_count=gateway_info.boot_count(),
+        config_valid=gateway_config["valid"],
+        health_check_interval=health_check_interval,
+    )
+
+    # Monitoring is live — now let the health monitor start emitting.
     health_monitor.start()
+
+    # Event-loop lag monitor: the highest-signal gateway metric. A blocked loop
+    # stops the gateway answering everything, including its own health checks,
+    # and is invisible in CPU and memory figures.
+    async def _monitor_event_loop_lag():
+        interval = 5.0
+        while True:
+            started = time.monotonic()
+            await asyncio.sleep(interval)
+            lag_ms = max(0.0, (time.monotonic() - started - interval) * 1000)
+            gateway_info.set_event_loop_lag(lag_ms)
+            try:
+                warn_ms = float(os.getenv("FMCP_EVENT_LOOP_LAG_WARN_MS", "250"))
+            except (ValueError, TypeError):
+                warn_ms = 250.0
+            if lag_ms > warn_ms:
+                logger.warning(
+                    f"[gateway] Event loop lag {lag_ms:.0f}ms exceeds {warn_ms:.0f}ms — "
+                    f"the gateway is blocked and may stop responding"
+                )
+
+    lag_task = asyncio.create_task(_monitor_event_loop_lag())
 
     # 4. Create FastAPI app (without MCP servers)
     app = await create_app(
@@ -763,11 +902,37 @@ async def main(args):
     logger.info("Initiating graceful shutdown...")
 
     try:
+        # Emit the stopping event before tearing anything down, so it still has
+        # a working bus and dispatcher to travel through.
+        event_bus.emit(_ET.GATEWAY_STOPPING, uptime_seconds=gateway_info.uptime_seconds())
+    except Exception as e:
+        logger.debug(f"Could not emit gateway.stopping: {e}")
+
+    try:
         # Stop health monitor
         logger.info("Stopping MCP health monitor...")
         await health_monitor.stop()
     except Exception as e:
         logger.error(f"Error stopping health monitor: {e}")
+
+    try:
+        logger.info("Stopping event-loop lag monitor...")
+        lag_task.cancel()
+    except Exception as e:
+        logger.debug(f"Error stopping lag monitor: {e}")
+
+    try:
+        logger.info("Stopping webhook dispatcher...")
+        await webhook_dispatcher.stop()
+    except Exception as e:
+        logger.error(f"Error stopping webhook dispatcher: {e}")
+
+    try:
+        # Drains queued events to the database before exiting.
+        logger.info("Stopping event bus...")
+        await event_bus.stop()
+    except Exception as e:
+        logger.error(f"Error stopping event bus: {e}")
 
     try:
         # Stop idle cleanup task
@@ -845,6 +1010,16 @@ def run():
         "--allow-all-origins",
         action="store_true",
         help="Allow all CORS origins (SECURITY RISK - development only)"
+    )
+    parser.add_argument(
+        "--in-memory",
+        action="store_true",
+        dest="in_memory",
+        help=(
+            "Use the in-memory persistence backend instead of MongoDB. "
+            "State, crash history and monitoring events are lost on restart — "
+            "for local development and testing only."
+        )
     )
     parser.add_argument(
         "--require-persistence",

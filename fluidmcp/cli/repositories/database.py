@@ -371,6 +371,43 @@ class DatabaseManager(PersistenceBackend):
             )
             logger.info(f"Created TTL index on fluidmcp_crash_events (expires after {ttl_days} days)")
 
+            # ── Monitoring collections ────────────────────────────────────
+            # seq is the consumer cursor: unique per (boot_id, seq) because seq
+            # restarts from 1 on every gateway boot.
+            await self.db.fluidmcp_events.create_index(
+                [("boot_id", 1), ("seq", 1)], unique=True
+            )
+            await self.db.fluidmcp_events.create_index([("server_id", 1), ("timestamp", -1)])
+            await self.db.fluidmcp_events.create_index([("severity", 1), ("timestamp", -1)])
+            try:
+                event_ttl_days = int(os.getenv("FMCP_EVENT_RETENTION_DAYS", "30"))
+            except ValueError:
+                event_ttl_days = 30
+            await self.db.fluidmcp_events.create_index(
+                "timestamp", expireAfterSeconds=event_ttl_days * 86400
+            )
+            logger.info(
+                f"Created indexes on fluidmcp_events (TTL {event_ttl_days} days)"
+            )
+
+            await self.db.fluidmcp_gateway_boots.create_index([("gateway_id", 1), ("started_at", -1)])
+            await self.db.fluidmcp_gateway_boots.create_index("boot_id", unique=True)
+            await self.db.fluidmcp_gateway_boots.create_index(
+                "started_at", expireAfterSeconds=90 * 86400
+            )
+            logger.info("Created indexes on fluidmcp_gateway_boots")
+
+            await self.db.fluidmcp_state_transitions.create_index(
+                [("server_id", 1), ("timestamp", -1)]
+            )
+            await self.db.fluidmcp_state_transitions.create_index(
+                "timestamp", expireAfterSeconds=90 * 86400
+            )
+            logger.info("Created indexes on fluidmcp_state_transitions")
+
+            await self.db.fluidmcp_webhooks.create_index("id", unique=True)
+            logger.info("Created unique index on fluidmcp_webhooks.id")
+
             # Create capped collection for logs (100MB max, auto-removes oldest)
             try:
                 # Check if collection exists
@@ -1233,6 +1270,237 @@ class DatabaseManager(PersistenceBackend):
         except Exception as e:
             logger.error(f"Error counting crash events for '{server_id}': {e}")
             return 0
+
+    # ==================== Monitoring Events ====================
+
+    async def save_event(self, event: Dict[str, Any]) -> bool:
+        """Persist a monitoring event to MongoDB."""
+        try:
+            doc = dict(event)
+            # Store timestamps as datetimes so the TTL index works.
+            ts = doc.get("timestamp")
+            if isinstance(ts, str):
+                from datetime import datetime as _dt
+                try:
+                    doc["timestamp"] = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    doc["timestamp"] = datetime.utcnow()
+            elif ts is None:
+                doc["timestamp"] = datetime.utcnow()
+            await self.db.fluidmcp_events.insert_one(doc)
+            return True
+        except Exception as e:
+            # Duplicate (boot_id, seq) means this event was already stored — benign.
+            if "duplicate key" in str(e).lower():
+                return True
+            logger.debug(f"Error saving monitoring event: {e}")
+            return False
+
+    async def list_events_since(
+        self,
+        since: Optional[int] = None,
+        limit: int = 100,
+        severity: Optional[str] = None,
+        server_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        boot_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List monitoring events with seq > since, oldest first."""
+        try:
+            from ..models.events import SEVERITY_ORDER, Severity
+
+            query: Dict[str, Any] = {}
+            if since is not None:
+                query["seq"] = {"$gt": since}
+            if boot_id:
+                query["boot_id"] = boot_id
+            if server_id:
+                query["server_id"] = server_id
+            if event_type:
+                query["type"] = event_type
+            if severity:
+                try:
+                    min_rank = SEVERITY_ORDER[Severity(severity)]
+                    allowed = [
+                        s.value for s, rank in SEVERITY_ORDER.items() if rank >= min_rank
+                    ]
+                    query["severity"] = {"$in": allowed}
+                except (ValueError, KeyError):
+                    pass
+
+            cursor = self.db.fluidmcp_events.find(query).sort("seq", 1).limit(limit)
+            events = await cursor.to_list(length=limit)
+            for event in events:
+                event.pop("_id", None)
+                ts = event.get("timestamp")
+                if hasattr(ts, "isoformat"):
+                    event["timestamp"] = ts.isoformat() + "Z" if ts.tzinfo is None \
+                        else ts.isoformat()
+            return events
+        except Exception as e:
+            logger.error(f"Error listing monitoring events: {e}")
+            return []
+
+    async def count_events_since(
+        self,
+        since_ts: float,
+        severity: Optional[str] = None,
+        server_id: Optional[str] = None,
+    ) -> int:
+        """Count events since a UTC POSIX timestamp."""
+        try:
+            from datetime import timezone as _tz
+            query: Dict[str, Any] = {
+                "timestamp": {"$gt": datetime.fromtimestamp(since_ts, tz=_tz.utc)}
+            }
+            if severity:
+                query["severity"] = severity
+            if server_id:
+                query["server_id"] = server_id
+            return await self.db.fluidmcp_events.count_documents(query)
+        except Exception as e:
+            logger.error(f"Error counting monitoring events: {e}")
+            return 0
+
+    # ==================== Gateway Boot Records ====================
+
+    async def save_boot_record(self, record: Dict[str, Any]) -> int:
+        """Persist a boot record and return the cumulative boot count."""
+        try:
+            doc = dict(record)
+            doc["started_at"] = doc.get("started_at") or datetime.utcnow()
+            await self.db.fluidmcp_gateway_boots.insert_one(doc)
+            return await self.db.fluidmcp_gateway_boots.count_documents(
+                {"gateway_id": record.get("gateway_id")}
+            )
+        except Exception as e:
+            if "duplicate key" in str(e).lower():
+                # Same boot_id already recorded — return the existing count.
+                try:
+                    return await self.db.fluidmcp_gateway_boots.count_documents(
+                        {"gateway_id": record.get("gateway_id")}
+                    )
+                except Exception:
+                    return 0
+            logger.warning(f"Error saving gateway boot record: {e}")
+            return 0
+
+    async def list_boot_records(
+        self, gateway_id: Optional[str] = None, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """List recent gateway boot records, most recent first."""
+        try:
+            query = {"gateway_id": gateway_id} if gateway_id else {}
+            cursor = self.db.fluidmcp_gateway_boots.find(query).sort(
+                "started_at", -1
+            ).limit(limit)
+            records = await cursor.to_list(length=limit)
+            for record in records:
+                record.pop("_id", None)
+                if hasattr(record.get("started_at"), "isoformat"):
+                    record["started_at"] = record["started_at"].isoformat()
+            return records
+        except Exception as e:
+            logger.error(f"Error listing gateway boot records: {e}")
+            return []
+
+    # ==================== State Transitions ====================
+
+    async def save_state_transition(self, transition: Dict[str, Any]) -> bool:
+        """Record a server state change for uptime accounting."""
+        try:
+            doc = dict(transition)
+            doc["timestamp"] = doc.get("timestamp") or datetime.utcnow()
+            await self.db.fluidmcp_state_transitions.insert_one(doc)
+            return True
+        except Exception as e:
+            logger.debug(f"Error saving state transition: {e}")
+            return False
+
+    async def list_state_transitions(
+        self,
+        server_id: Optional[str] = None,
+        since_ts: Optional[float] = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """List state transitions, oldest first, for uptime computation."""
+        try:
+            from datetime import timezone as _tz
+            query: Dict[str, Any] = {}
+            if server_id:
+                query["server_id"] = server_id
+            if since_ts is not None:
+                query["timestamp"] = {"$gte": datetime.fromtimestamp(since_ts, tz=_tz.utc)}
+            cursor = self.db.fluidmcp_state_transitions.find(query).sort(
+                "timestamp", 1
+            ).limit(limit)
+            rows = await cursor.to_list(length=limit)
+            for row in rows:
+                row.pop("_id", None)
+            return rows
+        except Exception as e:
+            logger.error(f"Error listing state transitions: {e}")
+            return []
+
+    # ==================== Webhook Receivers ====================
+
+    async def save_webhook(self, webhook: Dict[str, Any]) -> bool:
+        """Create or replace a webhook receiver."""
+        try:
+            webhook_id = webhook.get("id")
+            if not webhook_id:
+                return False
+            await self.db.fluidmcp_webhooks.replace_one(
+                {"id": webhook_id}, dict(webhook), upsert=True
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error saving webhook: {e}")
+            return False
+
+    async def list_webhooks(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """List webhook receivers."""
+        try:
+            query = {"enabled": True} if enabled_only else {}
+            cursor = self.db.fluidmcp_webhooks.find(query)
+            hooks = await cursor.to_list(length=200)
+            for hook in hooks:
+                hook.pop("_id", None)
+            return hooks
+        except Exception as e:
+            logger.error(f"Error listing webhooks: {e}")
+            return []
+
+    async def get_webhook(self, webhook_id: str) -> Optional[Dict[str, Any]]:
+        """Get one webhook receiver by id."""
+        try:
+            hook = await self.db.fluidmcp_webhooks.find_one({"id": webhook_id})
+            if hook:
+                hook.pop("_id", None)
+            return hook
+        except Exception as e:
+            logger.error(f"Error getting webhook '{webhook_id}': {e}")
+            return None
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        """Delete a webhook receiver."""
+        try:
+            result = await self.db.fluidmcp_webhooks.delete_one({"id": webhook_id})
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Error deleting webhook '{webhook_id}': {e}")
+            return False
+
+    async def set_webhook_enabled(self, webhook_id: str, enabled: bool) -> bool:
+        """Enable or disable a webhook receiver."""
+        try:
+            result = await self.db.fluidmcp_webhooks.update_one(
+                {"id": webhook_id}, {"$set": {"enabled": enabled}}
+            )
+            return result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Error updating webhook '{webhook_id}': {e}")
+            return False
 
     # ==================== Connection Management ====================
 

@@ -73,7 +73,7 @@ class TestGetServerCrashes:
 
         # Save a crash event directly into the backend
         import asyncio
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",
@@ -97,11 +97,10 @@ class TestGetServerCrashes:
         self._register_server(server_manager, "srv1")
 
         import asyncio
-        loop = asyncio.get_event_loop()
 
         # Two recent crashes (within last hour)
         for _ in range(2):
-            loop.run_until_complete(backend.save_crash_event({
+            asyncio.run(backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",
                 "exit_code": 1,
@@ -118,9 +117,9 @@ class TestGetServerCrashes:
         self._register_server(server_manager, "srv1")
 
         import asyncio
-        loop = asyncio.get_event_loop()
+
         for _ in range(5):
-            loop.run_until_complete(backend.save_crash_event({
+            asyncio.run(backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",
                 "exit_code": 1,
@@ -138,7 +137,7 @@ class TestGetServerCrashes:
         self._register_server(server_manager, "srv1")
 
         import asyncio
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",

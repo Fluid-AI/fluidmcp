@@ -293,6 +293,118 @@ class PersistenceBackend(ABC):
         """
         return 0
 
+    # ==================== Monitoring Events ====================
+    # Default no-op implementations: a backend that does not persist monitoring
+    # data still satisfies the interface. The event bus keeps an in-memory ring
+    # buffer regardless, so monitoring degrades to "recent events only" rather
+    # than breaking.
+
+    async def save_event(self, event: Dict[str, Any]) -> bool:
+        """Persist a monitoring event.
+
+        Args:
+            event: Event dict in wire format (see models.events.MonitoringEvent).
+
+        Returns:
+            True if handled (including intentional no-op).
+        """
+        return True
+
+    async def list_events_since(
+        self,
+        since: Optional[int] = None,
+        limit: int = 100,
+        severity: Optional[str] = None,
+        server_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        boot_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List monitoring events with seq > since, oldest first.
+
+        Args:
+            since: Exclusive lower bound on seq. None means from the beginning.
+            limit: Maximum events to return.
+            severity: Minimum severity ("info"|"warning"|"critical").
+            server_id: Filter to one server.
+            event_type: Filter to one event type.
+            boot_id: Restrict to events from one gateway boot. Required for
+                correct seq semantics, since seq resets on restart.
+
+        Returns:
+            List of event dicts ordered by seq ascending.
+        """
+        return []
+
+    async def count_events_since(
+        self,
+        since_ts: float,
+        severity: Optional[str] = None,
+        server_id: Optional[str] = None,
+    ) -> int:
+        """Count events since a UTC POSIX timestamp."""
+        return 0
+
+    # ==================== Gateway Boot Records ====================
+
+    async def save_boot_record(self, record: Dict[str, Any]) -> int:
+        """Persist a gateway boot record and return the cumulative boot count.
+
+        Called before any fail-fast exit so a crash-looping gateway leaves a
+        trail explaining the outage once the database is reachable again.
+
+        Returns:
+            Total boots recorded for this gateway_id, or 0 if not persisted.
+        """
+        return 0
+
+    async def list_boot_records(
+        self, gateway_id: Optional[str] = None, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """List recent gateway boot records, most recent first."""
+        return []
+
+    # ==================== State Transitions (uptime/SLA) ====================
+
+    async def save_state_transition(self, transition: Dict[str, Any]) -> bool:
+        """Record a server state change for uptime accounting.
+
+        Args:
+            transition: server_id, from_state, to_state, timestamp, reason,
+                failure_category.
+        """
+        return True
+
+    async def list_state_transitions(
+        self,
+        server_id: Optional[str] = None,
+        since_ts: Optional[float] = None,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """List state transitions, oldest first, for uptime computation."""
+        return []
+
+    # ==================== Webhook Receivers ====================
+
+    async def save_webhook(self, webhook: Dict[str, Any]) -> bool:
+        """Create or replace a webhook receiver."""
+        return False
+
+    async def list_webhooks(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """List webhook receivers, including secrets (for signing)."""
+        return []
+
+    async def get_webhook(self, webhook_id: str) -> Optional[Dict[str, Any]]:
+        """Get one webhook receiver by id."""
+        return None
+
+    async def delete_webhook(self, webhook_id: str) -> bool:
+        """Delete a webhook receiver."""
+        return False
+
+    async def set_webhook_enabled(self, webhook_id: str, enabled: bool) -> bool:
+        """Enable or disable a webhook receiver."""
+        return False
+
     def supports_rollback(self) -> bool:
         """
         Check if this backend supports model rollback/versioning.

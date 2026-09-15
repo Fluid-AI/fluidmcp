@@ -129,7 +129,7 @@ class TestDebugAggregatorRunning:
 
         import asyncio
         from fluidmcp.cli.repositories import InMemoryBackend
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             server_manager.db.save_instance_state({
                 "server_id": "srv", "state": "running", "pid": 1234
             })
@@ -195,7 +195,7 @@ class TestDebugAggregatorCrashes:
     def test_crashes_annotated_with_exit_classification(self, client, server_manager, backend):
         import asyncio
         _register(server_manager, "srv")
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             backend.save_crash_event({
                 "server_id": "srv",
                 "exit_code": 137,
@@ -212,7 +212,7 @@ class TestDebugAggregatorCrashes:
     def test_crashes_per_hour_computed(self, client, server_manager, backend):
         import asyncio
         _register(server_manager, "srv")
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             backend.save_crash_event({
                 "server_id": "srv",
                 "exit_code": 1,
