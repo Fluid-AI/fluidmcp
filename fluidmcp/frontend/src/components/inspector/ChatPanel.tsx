@@ -413,7 +413,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
                 color: "rgba(165,180,252,0.9)", fontFamily: "monospace", flexShrink: 0,
               }}>
-                Groq · llama-3.1-8b
+                Groq · gpt-oss-20b
               </span>
               <button
                 onClick={() => { setSystemPromptDraft(systemPrompt); setSystemPromptOpen(true); }}

@@ -6,7 +6,7 @@ from loguru import logger
 
 
 PROVIDER_DEFAULTS = {
-    "groq":      {"label": "Groq",      "base_url": "https://api.groq.com/openai/v1",                             "model": "llama-3.1-8b-instant"},
+    "groq":      {"label": "Groq",      "base_url": "https://api.groq.com/openai/v1",                             "model": "openai/gpt-oss-20b"},
     "openai":    {"label": "OpenAI",    "base_url": "https://api.openai.com/v1",                                  "model": "gpt-4o-mini"},
     "gemini":    {"label": "Gemini",    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",   "model": "gemini-2.0-flash"},
     "anthropic": {"label": "Anthropic", "base_url": None,                                                         "model": "claude-haiku-4-5-20251001"},
