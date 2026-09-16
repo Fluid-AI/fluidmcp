@@ -162,7 +162,7 @@ export default function MCPInspector() {
       const raw = localStorage.getItem("fmcp_llm_settings")
       if (raw) return JSON.parse(raw)
     } catch { /* ignore */ }
-    return { provider: "groq", model: "llama-3.1-8b-instant", apiKeys: {} }
+    return { provider: "groq", model: "openai/gpt-oss-20b", apiKeys: {} }
   }
   const [llmSettings] = useState<{
     provider: LLMProvider; model: string; apiKeys: Record<string, string>
