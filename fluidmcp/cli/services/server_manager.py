@@ -685,7 +685,8 @@ class ServerManager:
                 "uptime": None,
                 "restart_count": instance.get("restart_count", 0),
                 "stability": instance.get("stability", "stable"),
-                "exit_code": instance.get("exit_code")
+                "exit_code": instance.get("exit_code"),
+                "last_error": instance.get("last_error")
             }
 
         # Server not found
@@ -774,7 +775,8 @@ class ServerManager:
                     "pid": status.get("pid"),
                     "uptime": status.get("uptime"),
                     "restart_count": status.get("restart_count", 0),
-                    "exit_code": status.get("exit_code")
+                    "exit_code": status.get("exit_code"),
+                    "last_error": status.get("last_error")
                 }
             }
 
@@ -1473,7 +1475,13 @@ class ServerManager:
             # Tool discovery failure must never abort server startup
             logger.warning(f"Tool discovery failed for '{server_id}': {e}")
 
-    async def _cleanup_server(self, id: str, exit_code: int, intentional: bool = False) -> None:
+    async def _cleanup_server(
+        self,
+        id: str,
+        exit_code: int,
+        intentional: bool = False,
+        last_error: Optional[str] = None,
+    ) -> None:
         """
         Clean up after server stops.
 
@@ -1481,6 +1489,9 @@ class ServerManager:
             id: Server identifier
             exit_code: Process exit code
             intentional: True if this was a deliberate stop (not a crash)
+            last_error: Diagnosed, user-facing reason for the failure, if known
+                (e.g. unfilled env vars). Persisted so it survives to the next
+                status/list call instead of being lost with the crashed process.
         """
         uptime = self.get_uptime(id)
 
@@ -1529,13 +1540,16 @@ class ServerManager:
             state = "failed"
 
         # Update database
-        await self.db.save_instance_state({
+        instance_update = {
             "server_id": id,
             "state": state,
             "pid": None,
             "stop_time": datetime.utcnow(),
             "exit_code": exit_code
-        })
+        }
+        if last_error:
+            instance_update["last_error"] = last_error
+        await self.db.save_instance_state(instance_update)
 
         # Persist crash event for non-intentional failures
         if state == "failed":
@@ -1594,16 +1608,30 @@ class ServerManager:
         if not isinstance(value, str):
             return False
 
+        lowered = value.lower()
         placeholder_indicators = [
             '<' in value and '>' in value,
-            'xxxx' in value.lower(),
-            'placeholder' in value.lower(),
+            'xxxx' in lowered,
+            'placeholder' in lowered,
             value.startswith('<') and value.endswith('>'),
-            'your-' in value.lower(),
-            'my-' in value.lower(),
+            'your-' in lowered,
+            'your_' in lowered,
+            'my-' in lowered,
+            'my_' in lowered,
+            lowered.endswith('_here') or lowered.endswith('-here'),
         ]
 
         return any(placeholder_indicators)
+
+    def _get_unfilled_env_keys(self, config: Dict[str, Any]) -> List[str]:
+        """
+        Return the config env keys whose value is empty or an unfilled
+        placeholder (e.g. "your_api_key_here"), regardless of whether the
+        server's metadata declares them "required" — most cloned metadata.json
+        files never do.
+        """
+        env_vars = config.get("env", {}) or {}
+        return [key for key, value in env_vars.items() if not value or self._is_placeholder(value)]
 
     # ==================== Stderr File Logging ====================
 
@@ -1871,6 +1899,23 @@ class ServerManager:
             # Check if restart policy allows auto-restart
             if restart_policy not in ["on-failure", "always"]:
                 logger.debug(f"Server '{server_id}' restart policy '{restart_policy}' does not allow auto-restart")
+                return
+
+            # Retrying can't succeed if the server never had its env configured —
+            # fail fast instead of burning restart attempts on an identical crash.
+            unfilled_env = self._get_unfilled_env_keys(config)
+            if unfilled_env:
+                logger.warning(
+                    f"Server '{server_id}' has unfilled env var(s) {unfilled_env}; "
+                    f"skipping auto-restart since it can't succeed without configuration"
+                )
+                await self.db.save_instance_state({
+                    "server_id": server_id,
+                    "last_error": (
+                        "Server exited immediately; environment variable(s) not "
+                        f"configured: {', '.join(unfilled_env)}"
+                    ),
+                })
                 return
 
             current_restart_count = instance.get("restart_count", 0)
@@ -2193,6 +2238,23 @@ class MCPHealthMonitor:
             logger.info(f"MCP server '{server_id}' exited cleanly (code=0), not restarting")
             should_restart = False
 
+        # Retrying can't succeed if the server never had its env configured —
+        # fail fast instead of burning max_restarts on an identical crash.
+        last_error = None
+        if should_restart:
+            unfilled_env = self._sm._get_unfilled_env_keys(config)
+            if unfilled_env:
+                last_error = (
+                    "Server exited immediately; environment variable(s) not "
+                    f"configured: {', '.join(unfilled_env)}"
+                )
+                logger.warning(
+                    f"MCP server '{server_id}' crashed with unfilled env var(s) "
+                    f"{unfilled_env}; skipping auto-restart since it can't succeed "
+                    f"without configuration"
+                )
+                should_restart = False
+
         if should_restart and self._restart_counts.get(server_id, 0) >= max_restarts:
             logger.warning(f"MCP server '{server_id}' reached max restarts ({max_restarts})")
             should_restart = False
@@ -2202,7 +2264,7 @@ class MCPHealthMonitor:
             op_lock = self._sm._get_operation_lock(server_id)
             async with op_lock:
                 if self._sm.processes.get(server_id) is process:
-                    await self._sm._cleanup_server(server_id, exit_code)
+                    await self._sm._cleanup_server(server_id, exit_code, last_error=last_error)
             return
 
         count = self._restart_counts.get(server_id, 0)
