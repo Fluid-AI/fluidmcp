@@ -783,10 +783,12 @@ async def add_server(
     manager.configs[id] = config
 
     logger.info(f"Added server configuration: {name} (id: {id})")
+    unfilled_env = manager._get_unfilled_env_keys(config)
     return {
         "message": f"Server '{name}' configured successfully",
         "id": id,
-        "name": name
+        "name": name,
+        "unfilled_env": unfilled_env
     }
 
 
@@ -1056,6 +1058,7 @@ async def add_server_from_github(
                 "id": sid,
                 "name": display_name,
                 "status": "validated" if test_before_save else "added",
+                "unfilled_env": manager._get_unfilled_env_keys(server_config),
             })
             logger.info(f"Added GitHub server: {display_name} (id: {sid})")
 
@@ -1437,9 +1440,11 @@ async def start_server(
     pid = process.pid if process else None
 
     logger.info(f"Started server '{id}' via API")
+    unfilled_env = manager._get_unfilled_env_keys(config)
     return {
         "message": f"Server '{id}' started successfully",
-        "pid": pid
+        "pid": pid,
+        "unfilled_env": unfilled_env
     }
 
 
