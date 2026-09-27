@@ -1,11 +1,14 @@
+import os
 import uuid
 import asyncio
 import time
+import json
 import ipaddress
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, AsyncGenerator
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -29,8 +32,9 @@ class AuthConfig(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    url: str
-    transport: str = "http"   # "http" | "sse" | "stdio"
+    url: Optional[str] = None        # required for http / sse
+    command: Optional[str] = None    # required for stdio
+    transport: str = "http"          # "http" | "sse" | "stdio"
     auth: Optional[AuthConfig] = None
     headers: Optional[Dict[str, str]] = None
     env_vars: Optional[Dict[str, str]] = None
@@ -39,6 +43,13 @@ class ConnectRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     chat_history: Optional[list] = Field(default_factory=list)
+    provider: Optional[str] = "groq"       # "groq" | "openai" | "anthropic" | "gemini"
+    model: Optional[str] = None            # None → use provider default
+    api_key: Optional[str] = None          # None → fall back to env var
+    system_prompt: Optional[str] = None
+
+class ReadResourceRequest(BaseModel):
+    uri: str
 
 # ─── URL Validation ────────────────────────────────────────────────────────────
 
@@ -102,15 +113,24 @@ async def connect_server(body: ConnectRequest):
     The session is stored in memory and expires after SESSION_TTL seconds of
     inactivity. Nothing is persisted to MongoDB.
     """
-    if not body.url:
-        raise HTTPException(400, "url is required")
+    target = body.command if body.transport == "stdio" else body.url
 
-    _validate_mcp_url(body.url)
+    if body.transport == "stdio":
+        _val = os.getenv("FMCP_INSPECTOR_ALLOW_STDIO", "").strip().lower()
+        if _val not in ("1", "true", "yes"):
+            raise HTTPException(403, "stdio transport is disabled on this deployment")
+        if not body.command:
+            raise HTTPException(400, "command is required for stdio transport")
+    else:
+        if not body.url:
+            raise HTTPException(400, "url is required")
+        _validate_mcp_url(body.url)
 
     auth_dict = body.auth.model_dump() if body.auth else {}
 
     session = InspectorSession(
-        url=body.url,
+        url=body.url or "stdio://local",
+        command=body.command,
         transport=body.transport,
         auth=auth_dict,
         headers=body.headers,
@@ -123,7 +143,7 @@ async def connect_server(body: ConnectRequest):
         server_info = await session.initialize()
     except Exception as e:
         await session.close()
-        logger.warning(f"Inspector: failed to connect to {body.url} — {e}")
+        logger.warning(f"Inspector: failed to connect to {target!r} — {e}")
         raise HTTPException(502, f"Failed to connect to MCP server: {str(e)}")
 
     # Fetch tools immediately so frontend gets everything in one response
@@ -131,13 +151,13 @@ async def connect_server(body: ConnectRequest):
         tools = await session.list_tools()
     except Exception as e:
         await session.close()
-        logger.warning(f"Inspector: connected but failed to list tools for {body.url} — {e}")
+        logger.warning(f"Inspector: connected but failed to list tools for {target!r} — {e}")
         raise HTTPException(502, f"Connected but failed to fetch tools: {str(e)}")
 
     session_id = str(uuid.uuid4())
     sessions[session_id] = session
 
-    logger.info(f"Inspector: new session {session_id} for {body.url} ({body.transport}), {len(tools)} tools")
+    logger.info(f"Inspector: new session {session_id} for {target!r} ({body.transport}), {len(tools)} tools")
 
     return {
         "session_id": session_id,
@@ -228,6 +248,243 @@ async def get_logs(session_id: str):
     session.last_used = time.time()
     return {"logs": session.logs}
 
+@router.get("/inspector/{session_id}/resources")
+async def list_resources(session_id: str):
+    """
+    List all resources available on the connected MCP server.
+    Also used to discover widget resources (ui:// URIs).
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    resources, templates = [], []
+    try:
+        resources = await session.list_resources()
+    except Exception as e:
+        if "Method not found" not in str(e):
+            logger.warning(f"Inspector: list_resources failed for session {session_id} — {e}")
+    try:
+        templates = await session.list_resource_templates()
+    except Exception as e:
+        if "Method not found" not in str(e):
+            logger.warning(f"Inspector: list_resource_templates failed for session {session_id} — {e}")
+    combined = resources + templates
+    return {"resources": combined, "count": len(combined)}
+
+
+@router.post("/inspector/{session_id}/resources/read")
+async def read_resource(session_id: str, body: ReadResourceRequest):
+    """
+    Read a resource by URI from the connected MCP server.
+    Used to fetch widget HTML for ui:// resource URIs.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    try:
+        content = await session.read_resource(body.uri)
+        if isinstance(content, dict) and "contents" in content:
+            return content
+        if isinstance(content, list):
+            return {"contents": content}
+        return {"contents": [content]}
+    except Exception as e:
+        logger.error(f"Inspector: read_resource failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to read resource: {str(e)}")
+
+
+class GetPromptRequest(BaseModel):
+    name: str
+    arguments: Optional[dict] = Field(default_factory=dict)
+
+
+@router.get("/inspector/{session_id}/prompts")
+async def list_prompts(session_id: str):
+    """List all prompts available on the connected MCP server."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    try:
+        prompts = await session.list_prompts()
+        return {"prompts": prompts, "count": len(prompts)}
+    except Exception as e:
+        if "Method not found" in str(e):
+            return {"prompts": [], "count": 0}
+        logger.error(f"Inspector: list_prompts failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to fetch prompts: {str(e)}")
+
+
+@router.post("/inspector/{session_id}/prompts/get")
+async def get_prompt(session_id: str, body: GetPromptRequest):
+    """Get a prompt by name with optional arguments."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+    try:
+        result = await session.get_prompt(body.name, body.arguments or {})
+        return result
+    except Exception as e:
+        logger.error(f"Inspector: get_prompt failed for session {session_id} — {e}")
+        raise HTTPException(500, f"Failed to get prompt: {str(e)}")
+
+
+@router.get("/inspector/{session_id}/export")
+async def export_server(session_id: str):
+    """
+    Export server config, tools, resources, and prompts as a JSON snapshot.
+    Auth tokens are stripped — only the auth type is included.
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    tools, resources, prompts = [], [], []
+    try:
+        tools = await session.list_tools()
+    except Exception:
+        pass
+    try:
+        resources = await session.list_resources()
+    except Exception:
+        pass
+    try:
+        prompts = await session.list_prompts()
+    except Exception:
+        pass
+
+    # Strip auth tokens — only expose the type so the recipient knows what auth is needed
+    safe_auth = {"type": session.auth.get("type", "none")} if session.auth else {"type": "none"}
+
+    # Redact credentials from URL: remove userinfo (user:pass@host) and any
+    # query parameter whose name contains a sensitive substring.
+    # Normalized by lowercasing and stripping hyphens/underscores so that
+    # variants like authToken, x-api-key, refresh_token, clientSecret all match.
+    _SENSITIVE_SUBSTRINGS = ("token", "key", "secret", "password", "pass",
+                             "auth", "credential", "access", "client")
+    def _param_is_sensitive(name: str) -> bool:
+        normalized = name.lower().replace("-", "").replace("_", "")
+        return any(sub in normalized for sub in _SENSITIVE_SUBSTRINGS)
+
+    def _safe_url(raw: str) -> str:
+        try:
+            from urllib.parse import urlencode, parse_qsl, urlunparse, urlparse
+            p = urlparse(raw)
+            # Drop userinfo (user:password@host)
+            netloc = p.hostname or ""
+            if p.port:
+                netloc = f"{netloc}:{p.port}"
+            # Redact any query param whose name looks like a credential
+            clean_qs = urlencode([
+                (k, "***") if _param_is_sensitive(k) else (k, v)
+                for k, v in parse_qsl(p.query, keep_blank_values=True)
+            ])
+            return urlunparse((p.scheme, netloc, p.path, p.params, clean_qs, ""))
+        except Exception:
+            return ""
+
+    return {
+        "exportedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "serverInfo": getattr(session, "server_info", {}),
+        "url": _safe_url(session.url),
+        "transport": session.transport,
+        "auth": safe_auth,
+        "tools": tools,
+        "resources": resources,
+        "prompts": prompts,
+    }
+
+
+@router.post("/inspector/{session_id}/chat/stream")
+async def chat_stream(session_id: str, body: ChatRequest):
+    """
+    Streaming chat endpoint — returns SSE events as the LLM generates tokens.
+
+    Event types:
+      {"type": "thinking"}                          — LLM is deciding which tool to use
+      {"type": "token", "content": "..."}           — streamed response token
+      {"type": "tool_call", "tool_name": "...", "params": {...}}  — tool selected
+      {"type": "clarification", "message": "..."}   — LLM couldn't pick a tool
+      {"type": "error", "message": "..."}           — unrecoverable error
+      {"type": "done"}                              — stream complete
+    """
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired")
+
+    session.last_used = time.time()
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        def sse(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        try:
+            from ..services.inspector_agent import stream_tool_selection
+
+            tools = await session.list_tools()
+
+            if not tools:
+                yield sse({"type": "clarification", "message": "No tools available on this server."})
+                yield sse({"type": "done"})
+                return
+
+            yield sse({"type": "thinking"})
+
+            tool_name = None
+            tool_params = {}
+            clarification = None
+
+            async for event in stream_tool_selection(
+                message=body.message,
+                tools=tools,
+                chat_history=body.chat_history or [],
+                provider=body.provider or "groq",
+                model=body.model,
+                api_key=body.api_key,
+                system_prompt=body.system_prompt,
+            ):
+                event_type = event.get("type")
+
+                if event_type == "token":
+                    yield sse(event)
+
+                elif event_type == "tool_call":
+                    tool_name = event.get("tool_name")
+                    tool_params = event.get("params", {})
+                    available_names = {t["name"] for t in tools}
+                    if tool_name and tool_name in available_names:
+                        yield sse(event)
+                    else:
+                        clarification = "Could not determine which tool to run."
+
+                elif event_type == "clarification":
+                    clarification = event.get("message", "Could not determine which tool to run.")
+
+            if clarification:
+                yield sse({"type": "clarification", "message": clarification})
+            elif tool_name:
+                session.add_log("chat", f"User: {body.message} → tool selected: {tool_name}")
+
+            yield sse({"type": "done"})
+
+        except Exception as e:
+            logger.error(f"Inspector chat stream error: {e}")
+            yield sse({"type": "error", "message": "Unable to determine which tool to run."})
+            yield sse({"type": "done"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/inspector/{session_id}/chat")
 async def chat_with_tools(session_id: str, body: ChatRequest):
     """
@@ -242,7 +499,6 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
     session.last_used = time.time()
 
     try:
-        # Lazy import — avoids server startup failure when GROQ_API_KEY is absent
         from ..services.inspector_agent import choose_tool_with_llm
 
         tools = await session.list_tools()
@@ -253,8 +509,15 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
                 "message": "No tools available on this server."
             }
 
-        # Call the Groq agent
-        agent_result = await choose_tool_with_llm(body.message, tools)
+        agent_result = await choose_tool_with_llm(
+            body.message,
+            tools,
+            chat_history=body.chat_history or [],
+            provider=body.provider or "groq",
+            model=body.model,
+            api_key=body.api_key,
+            system_prompt=body.system_prompt,
+        )
 
         # Validate the response has the expected fields
         tool_name = agent_result.get("tool_name")
@@ -277,8 +540,45 @@ async def chat_with_tools(session_id: str, body: ChatRequest):
 
     except Exception as e:
         logger.error(f"Inspector chat error: {e}")
+        err_str = str(e)
+
+        # Try to extract just the human-readable message from provider error dicts
+        # e.g. "Error code: 401 - {'error': {'message': 'Incorrect API key...', ...}}"
+        user_message = err_str
+        try:
+            import re, ast
+            match = re.search(r"\{.*\}", err_str, re.DOTALL)
+            if match:
+                parsed = ast.literal_eval(match.group())
+                if isinstance(parsed, dict):
+                    inner = parsed.get("error", parsed)
+                    if isinstance(inner, dict) and "message" in inner:
+                        user_message = inner["message"]
+        except Exception:
+            pass
+
+        # Redact API key values echoed back in provider error messages
+        # e.g. "Incorrect API key provided: sk-abc123" or "provided: aaaaaaaaa"
+        import re as _re
+        user_message = _re.sub(r"(provided|key):\s*\S+", r"\1: [REDACTED]", user_message, flags=_re.IGNORECASE)
+
+        is_auth = any(kw in err_str.lower() for kw in (
+            "api key", "apikey", "invalid_api_key", "unauthorized",
+            "authentication", "403", "401", "permission", "incorrect api key",
+            "no api key provided", "insufficient_quota", "quota",
+        ))
+
+        if is_auth:
+            is_quota = any(kw in err_str.lower() for kw in ("quota", "insufficient_quota", "429"))
+            prefix = "Quota exceeded" if is_quota else "Authentication failed"
+            return {
+                "clarification_needed": True,
+                "message": f"{prefix}: {user_message}",
+                "error_type": "auth",
+            }
 
         return {
             "clarification_needed": True,
-            "message": "Unable to determine which tool to run."
+            "message": f"LLM error: {user_message}",
+            "error_type": "llm",
         }

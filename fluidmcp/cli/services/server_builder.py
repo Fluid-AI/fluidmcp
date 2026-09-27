@@ -92,10 +92,10 @@ class ServerBuilder:
         directly with ServerManager._spawn_mcp_process() and
         DatabaseManager.save_server_config().
 
-        Supports both stdio (default) and SSE transport. If the server block
-        in metadata.json contains a ``transport`` field set to ``"sse"``, the
-        produced config will include ``transport`` and ``url`` fields and
-        ServerManager will skip the stdio handshake in favour of HTTP.
+        Supports stdio (default), SSE, and streamable-http transport. Transport
+        is declared via ``env.TRANSPORT_TYPE`` in the metadata.json server block
+        (``"sse"`` or ``"http"``). When set, the produced config will include a
+        ``transport`` field and ServerManager will skip the stdio handshake.
 
         Args:
             base_id: User-provided base identifier
@@ -123,18 +123,13 @@ class ServerBuilder:
         effective_install_path = install_path if install_path is not None else clone_path
 
         # ── Detect transport type from metadata.json server block ────────────
-        # Repos declare SSE transport by adding "transport": "sse" (and
-        # optionally "url": "http://127.0.0.1:<port>") to their mcpServers block.
-        # Example metadata.json entry:
-        #   "game-hub": {
-        #     "command": "uv",
-        #     "args": ["--directory", "game-hub-mcp/game-hub", "run", "server.py"],
-        #     "env": {},
-        #     "transport": "sse",
-        #     "url": "http://127.0.0.1:8000"
-        #   }
-        transport = server_config.get("transport", "stdio")
-        sse_url = server_config.get("url", "http://127.0.0.1:8000")
+        # Repos declare SSE (or streamable-http) transport via the env block:
+        #   "env": { "TRANSPORT_TYPE": "http" }   → streamable-http
+        #   "env": { "TRANSPORT_TYPE": "sse" }    → SSE
+        #   "env": {}  (or key absent)             → stdio (default)
+        # No "url" field is needed — FluidMCP allocates a port at runtime and
+        # injects MCP_PORT into the subprocess environment.
+        transport = server_config.get("env", {}).get("TRANSPORT_TYPE", "") or "stdio"
 
         config = {
             "id": server_id,
@@ -163,14 +158,14 @@ class ServerBuilder:
             "created_at": datetime.now(timezone.utc),
         }
 
-        # ── SSE-specific fields ───────────────────────────────────────────────
-        # Only written when transport is explicitly "sse" so that existing stdio
-        # configs are completely unaffected.
-        if transport == "sse":
-            config["transport"] = "sse"
-            config["url"] = sse_url
+        # ── HTTP transport field ──────────────────────────────────────────────
+        # Written when TRANSPORT_TYPE is "sse" or "http" so that ServerManager
+        # knows to use HTTP instead of stdio. No "url" is stored here — the
+        # port is allocated at runtime and injected via MCP_PORT.
+        if transport in ("sse", "http"):
+            config["transport"] = transport
             logger.info(
-                f"Server '{server_id}' configured with SSE transport at {sse_url}"
+                f"Server '{server_id}' configured with {transport} transport (port allocated at runtime)"
             )
 
         return config

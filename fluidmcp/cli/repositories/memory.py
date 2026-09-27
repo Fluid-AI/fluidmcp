@@ -10,6 +10,7 @@ from collections import deque, defaultdict
 from datetime import datetime
 from loguru import logger
 from .base import PersistenceBackend, DuplicateKeyError
+from ..utils.env_utils import is_placeholder
 
 
 class InMemoryBackend(PersistenceBackend):
@@ -66,9 +67,11 @@ class InMemoryBackend(PersistenceBackend):
             return dict(config)
         return None
 
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """List configs from memory."""
         configs = list(self._servers.values())
+        if not include_deleted:
+            configs = [c for c in configs if "deleted_at" not in c]
         if enabled_only:
             configs = [c for c in configs if c.get("enabled", True)]
         # Return copies to avoid mutations
@@ -109,6 +112,45 @@ class InMemoryBackend(PersistenceBackend):
             # Return a copy to avoid mutations
             return dict(state)
         return None
+
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """Delete instance state for a server from memory."""
+        self._instances.pop(server_id, None)
+        return True
+
+    async def get_instance_env(self, server_id: str) -> Optional[Dict[str, str]]:
+        """
+        Get environment variables from server instance.
+
+        Filters out placeholder values (e.g. ${VAR}, <your-token>, changeme)
+        and whitespace-only strings so callers receive only real configured values.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Dict of real environment variables, or None if the instance does
+            not exist or has no env block (or all values were placeholders).
+        """
+        try:
+            instance = await self.get_instance_state(server_id)
+            if instance:
+                env = instance.get("env")
+                if env:
+                    filtered_env = {
+                        k: v for k, v in env.items()
+                        if v
+                        and isinstance(v, str)
+                        and v.strip()
+                        and not v.strip().startswith("${")
+                        and not is_placeholder(v)
+                    }
+                    return filtered_env if filtered_env else None
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving instance env: {e}")
+            return None
 
     async def save_log_entry(self, log_entry: Dict[str, Any]) -> None:
         """Save log to memory (capped at 1000 lines per server)."""
@@ -154,6 +196,30 @@ class InMemoryBackend(PersistenceBackend):
         """List recent crash events from in-memory storage."""
         events = list(self._crash_events.get(server_id, []))
         return events[:limit]
+
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """Count crash events since a UTC POSIX timestamp."""
+        count = 0
+        for event in self._crash_events.get(server_id, []):
+            ts = event.get("timestamp")
+            if ts is None:
+                continue
+            from datetime import datetime as _dt, timezone as _tz
+            if isinstance(ts, _dt):
+                # Treat naive datetimes as UTC (they come from datetime.utcnow())
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+                event_ts = ts.timestamp()
+            elif isinstance(ts, str):
+                parsed = _dt.fromisoformat(ts)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=_tz.utc)
+                event_ts = parsed.timestamp()
+            else:
+                event_ts = float(ts)
+            if event_ts > since_ts:
+                count += 1
+        return count
 
     # ==================== LLM Model Persistence ====================
 

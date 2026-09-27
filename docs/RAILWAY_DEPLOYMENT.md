@@ -16,6 +16,14 @@ FluidMCP on Railway uses:
 - **Bearer Token Auth** - Secure API access
 - **Dynamic Server Management** - Add/remove MCP servers via REST API
 
+## Deployment Branch
+
+Railway's deploy source is `dev-deploy-fix`, branched from `development`.
+
+Previously Railway tracked `InMemoryBackend_bugfix`, which had drifted 76 commits behind `development` while carrying only 4 non-merge commits of its own. All 4 were already superseded on `development` by later, more complete fixes (the MCP initialize-deadlock fix, `get_instance_env` on `InMemoryBackend`, and structured request-timing observability), plus one commit was debug-only logging that was never meant to ship. Since there was nothing left to forward-port, `dev-deploy-fix` was cut directly from `development` rather than merging `InMemoryBackend_bugfix` forward.
+
+Keep `dev-deploy-fix` pointed at `development`'s tip (fast-forward merge) so Railway always deploys what's on `development`.
+
 ## Quick Start Deployment
 
 ### Step 1: Add MongoDB Service

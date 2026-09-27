@@ -94,7 +94,7 @@ class ApiClient {
         const error: ApiError = await response.json().catch(() => ({
           detail: `HTTP ${response.status}: ${response.statusText}`,
         }));
-        throw new Error(error.detail);
+        throw new ApiHttpError(error.detail, response.status);
       }
 
       return response.json();
@@ -282,7 +282,14 @@ class ApiClient {
   }
 
   // Inspector Tools APIs
-  async connectInspectorServer(payload: { url: string; transport: string }): Promise<any> {
+  async connectInspectorServer(payload: {
+    url?: string;
+    command?: string;
+    transport: string;
+    auth?: { type: string; token?: string };
+    headers?: Record<string, string>;
+    timeout?: number;
+  }): Promise<any> {
     return this.request(`/api/inspector/connect`, {
       method: "POST",
       body: JSON.stringify(payload),
@@ -328,6 +335,82 @@ class ApiClient {
     });
   }
 
+  async *chatWithInspectorStream(
+    sessionId: string,
+    data: any,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{ type: string; content?: string; tool_name?: string; params?: Record<string, unknown>; message?: string }> {
+    const baseUrl = this.baseUrl || "";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+
+    const response = await fetch(`${baseUrl}/api/inspector/${sessionId}/chat/stream`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(data),
+      signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream request failed: ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              yield event;
+              if (event.type === "done") return;
+            } catch {
+              // malformed SSE line — skip
+            }
+          }
+        }
+      }
+    } finally {
+      reader.cancel();
+    }
+  }
+
+  async exportInspectorServer(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/export`);
+  }
+
+  async listInspectorResources(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources`);
+  }
+
+  async readInspectorResource(sessionId: string, uri: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/resources/read`, {
+      method: "POST",
+      body: JSON.stringify({ uri }),
+    });
+  }
+
+  async listInspectorPrompts(sessionId: string): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/prompts`);
+  }
+
+  async getInspectorPrompt(sessionId: string, name: string, args: Record<string, string>): Promise<any> {
+    return this.request(`/api/inspector/${sessionId}/prompts/get`, {
+      method: "POST",
+      body: JSON.stringify({ name, arguments: args }),
+    });
+  }
+
   /**
    * Clone a GitHub repository and register its MCP server(s).
    *
@@ -348,6 +431,7 @@ class ApiClient {
         headers: {
           'Content-Type': 'application/json',
           'X-GitHub-Token': githubToken,
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         },
         body: JSON.stringify(payload),
         signal: timeoutController.signal,

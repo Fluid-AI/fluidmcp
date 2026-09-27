@@ -68,12 +68,13 @@ class PersistenceBackend(ABC):
         pass
 
     @abstractmethod
-    async def list_server_configs(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+    async def list_server_configs(self, enabled_only: bool = False, include_deleted: bool = False) -> List[Dict[str, Any]]:
         """
         List all server configurations.
 
         Args:
             enabled_only: If True, only return enabled servers
+            include_deleted: If True, include soft-deleted servers
 
         Returns:
             List of server configuration dicts
@@ -117,6 +118,41 @@ class PersistenceBackend(ABC):
 
         Returns:
             Instance state dict or None if not found
+        """
+        pass
+
+    @abstractmethod
+    # TODO(auth): add user_id param to scope cleanup per-user once multi-user auth lands
+    async def reset_instance_state(self, server_id: str) -> bool:
+        """
+        Delete the instance state for a server.
+
+        Called when a server is soft-deleted so a subsequent re-clone starts
+        with a clean instance record (no stale PID, exit codes, etc.).
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            True if the state was removed (or did not exist)
+        """
+        pass
+
+    @abstractmethod
+    async def get_instance_env(self, server_id: str) -> Optional[Dict[str, str]]:
+        """
+        Get filtered environment variables from a server instance.
+
+        Placeholder values (e.g. ${VAR}, <your-token>, changeme) and
+        whitespace-only strings are excluded so callers always receive
+        only real, user-configured values.
+
+        Args:
+            server_id: Server identifier
+
+        Returns:
+            Dict of real environment variables, or None if the instance
+            does not exist or has no env block.
         """
         pass
 
@@ -243,6 +279,19 @@ class PersistenceBackend(ABC):
             List of crash event dicts, most recent first
         """
         return []
+
+    async def count_crash_events_since(self, server_id: str, since_ts: float) -> int:
+        """
+        Count crash events for a server since a UTC timestamp.
+
+        Args:
+            server_id: Server identifier
+            since_ts: UTC POSIX timestamp — count events with timestamp > this value
+
+        Returns:
+            Number of crash events since the given timestamp
+        """
+        return 0
 
     def supports_rollback(self) -> bool:
         """

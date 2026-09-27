@@ -56,8 +56,10 @@ Manual testing can also be done using sample configurations in the `examples/` d
   - `validate_mcp_metadata()` - Validate metadata structure
 - `run_servers.py` - Unified server launcher for all run modes
 - `package_installer.py` - Downloads and installs MCP packages from registry
-- `package_launcher.py` - Launches MCP servers via FastAPI proxy
-  - Detects GitHub repos and sets appropriate working directory
+- `package_launcher.py` - Launches MCP servers and provides unified routing
+  - `launch_mcp_using_fastapi_proxy()` - Starts MCP subprocess and returns `(name, None, process)`
+  - `create_dynamic_router(server_manager)` - **Single source of truth for routing** (used by run, github, and serve)
+  - `initialize_mcp_server()` - MCP handshake initialization
 - `env_manager.py` - Manages environment variables for packages
 - `s3_utils.py` - S3 upload/download for master mode configuration
 - `network_utils.py` - Port management utilities
@@ -66,6 +68,20 @@ Manual testing can also be done using sample configurations in the `examples/` d
   - `LLMProcess` - Process lifecycle with secure logging and environment filtering
   - `LLMHealthMonitor` - Health checks with automatic restart on failure
   - `launch_llm_models()` / `stop_all_llm_models()` - Multi-model orchestration with error recovery
+
+### Router Architecture
+
+All three commands use the **same unified dynamic router**:
+
+| Command | Router | Parity |
+|---------|--------|--------|
+| `fluidmcp serve` | `create_dynamic_router(server_manager)` | Reference implementation |
+| `fluidmcp run` | `create_dynamic_router(server_manager)` | Full parity with serve |
+| `fluidmcp github` | `create_dynamic_router(server_manager)` | Full parity with serve |
+
+**How it works:** `launch_mcp_using_fastapi_proxy()` starts the MCP subprocess and returns the process handle. The caller registers it in `server_manager.processes[server_name]`, then mounts a single `create_dynamic_router(server_manager)` that dispatches requests to the correct process via the `{server_name}` path parameter at runtime.
+
+**Legacy code:** Static per-server routers (`create_mcp_router`, `create_fastapi_jsonrpc_proxy`, `start_fastapi_in_thread`) have been moved to `deprecated/router/legacy_router.py`. Do not use them in new code.
 
 ### Key Data Structures
 

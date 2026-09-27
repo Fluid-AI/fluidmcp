@@ -10,9 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 import argparse
 import asyncio
+import json
 import os
+import re
 import signal
 import secrets
+import sys
+import uuid
 from pathlib import Path
 from uvicorn import Config, Server
 
@@ -24,6 +28,74 @@ from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
+
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.asyncio import AsyncioIntegration
+
+# Initialize Sentry for production error tracking (opt-in via SENTRY_DSN env var)
+def init_sentry() -> None:
+    """
+    Initialize Sentry for production error tracking.
+    This function is intended to be called explicitly during server startup
+    (e.g., from main()/run()/create_app()) rather than at module import time,
+    to avoid import-time side effects.
+    """
+    sentry_dsn = os.getenv("SENTRY_DSN")
+    if not sentry_dsn:
+        logger.info("ℹ️ Sentry not configured (set SENTRY_DSN to enable error tracking)")
+        return
+    
+    try:
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            environment=os.getenv("ENVIRONMENT", "production"),
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            integrations=[
+                FastApiIntegration(),
+                AsyncioIntegration(),
+            ],
+            # Filter out health check and metrics noise from error tracking
+            before_send=lambda event, hint: (
+                None
+                if any(
+                    path in event.get("request", {}).get("url", "")
+                    for path in ["/health", "/metrics"]
+                )
+                else event
+            ),
+        )
+        logger.info(
+            f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})"
+        )
+    except Exception as e:
+        logger.error(f"❌ Sentry initialization failed: {e}")
+
+
+# ── Structured JSON logging ──────────────────────────────────────────────────
+# Replace the default loguru stderr sink with a JSON one so every log line is
+# machine-parseable by Datadog / Grafana Loki / CloudWatch.
+# Each record includes trace_id and server_id when bound via logger.bind().
+def _json_sink(message):
+    record = message.record
+    entry = {
+        "ts": record["time"].isoformat(),
+        "level": record["level"].name,
+        "logger": record["name"],
+        "msg": record["message"],
+        "trace_id": record["extra"].get("trace_id", ""),
+        "server_id": record["extra"].get("server_id", ""),
+    }
+    if record["exception"]:
+        import traceback
+        entry["exc"] = "".join(traceback.format_exception(*record["exception"]))
+    print(json.dumps(entry), file=sys.stderr, flush=True)
+
+def _configure_json_logging() -> None:
+    """Switch loguru to the JSON sink. Called once at server startup, not at import time."""
+    logger.remove()
+    logger.add(_json_sink, level="DEBUG", colorize=False, format="{message}")
 
 def save_token_to_file(token: str) -> Path:
     """
@@ -118,6 +190,21 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Trace ID middleware ──────────────────────────────────────────────────
+    # Reads X-Trace-ID from the request header (set by the caller) or generates
+    # a new UUID. Stored in request.state.trace_id and echoed back in the
+    # X-Trace-ID response header so callers can correlate logs.
+    @app.middleware("http")
+    async def trace_id_middleware(request: Request, call_next):
+        raw = request.headers.get("X-Trace-ID", "")
+        # Sanitize: allow only alphanumeric, hyphens, and underscores; truncate to 64 chars.
+        sanitized = re.sub(r"[^a-zA-Z0-9\-_]", "", raw)[:64]
+        trace_id = sanitized if sanitized else str(uuid.uuid4())
+        request.state.trace_id = trace_id
+        response = await call_next(request)
+        response.headers["X-Trace-ID"] = trace_id
+        return response
 
     # Add request size limiting middleware for security (prevent DoS via large payloads)
     # Max 10MB request body size (configurable via MAX_REQUEST_SIZE_MB env var)
@@ -219,7 +306,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
     # Include Dynamic MCP Router
     mcp_router = create_dynamic_router(server_manager)
-    app.include_router(mcp_router, tags=["mcp"])
+    app.include_router(mcp_router, prefix=os.environ.get("MCP_ROOT_PATH", ""), tags=["mcp"])
     logger.info("Dynamic MCP router mounted")
 
     # Serve frontend from backend (single-port deployment)
@@ -549,6 +636,7 @@ async def main(args):
     Args:
         args: Parsed command line arguments
     """
+    _configure_json_logging()
     logger.info("Starting FluidMCP backend server (standalone mode)")
 
     # Parse CORS origins from CLI or environment
@@ -583,6 +671,9 @@ async def main(args):
             require_persistence=require_persistence
         )
 
+    # Initialize Sentry (after persistence is set up)
+    init_sentry()
+
     # 2. Create ServerManager
     logger.info("Creating ServerManager...")
     server_manager = ServerManager(persistence)
@@ -598,6 +689,7 @@ async def main(args):
         logger.warning("Invalid FMCP_HEALTH_CHECK_INTERVAL value, using default 30s")
         health_check_interval = 30
     health_monitor = MCPHealthMonitor(server_manager, check_interval=health_check_interval)
+    server_manager._health_monitor = health_monitor
     health_monitor.start()
 
     # 4. Create FastAPI app (without MCP servers)
@@ -649,7 +741,9 @@ async def main(args):
         host=args.host,
         port=args.port,
         loop="asyncio",
-        log_level="info"
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
         # Note: Uvicorn doesn't provide a direct body size limit parameter
         # For production, configure limits at reverse proxy level (Nginx, Cloudflare, etc.)
     )

@@ -11,12 +11,18 @@ Metrics exposed:
 """
 
 import math
+import re
 import time
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
 from threading import Lock
 
 from loguru import logger
+
+
+def _escape_label_value(value: str) -> str:
+    """Escape a Prometheus label value per the text exposition spec."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 class Metric:
@@ -63,12 +69,18 @@ class Metric:
         with self._lock:
             for key, value in sorted(self.samples.items()):
                 if self.labels:
-                    label_str = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
+                    label_str = ",".join(f'{label}="{_escape_label_value(val)}"' for label, val in zip(self.labels, key))
                     lines.append(f"{self.name}{{{label_str}}} {value}")
                 else:
                     lines.append(f"{self.name} {value}")
 
         return "\n".join(lines)
+
+    def get_count(self, label_values: Optional[Dict[str, str]] = None) -> float:
+        """Return the current value for the given label combination (0.0 if unseen)."""
+        key = self._get_label_key(label_values or {})
+        with self._lock:
+            return self.samples.get(key, 0.0)
 
     def clear_samples(self):
         """
@@ -224,7 +236,7 @@ class Histogram(Metric):
             for key, hist in sorted(self.histograms.items()):
                 base_labels = ""
                 if self.labels:
-                    base_labels = ",".join(f'{label}="{val}"' for label, val in zip(self.labels, key))
+                    base_labels = ",".join(f'{label}="{_escape_label_value(val)}"' for label, val in zip(self.labels, key))
 
                 # Emit bucket counts
                 cumulative = 0
@@ -373,6 +385,31 @@ class MetricsRegistry:
             "fluidmcp_open_file_descriptors",
             "Number of open file descriptors (Unix-like systems only)",
             labels=[]
+        ))
+
+        self.register(Counter(
+            "fluidmcp_requests_rejected_total",
+            "Total number of requests rejected due to concurrency limit",
+            labels=["server_id", "reason"]
+        ))
+
+        # Per-MCP-server resource gauges (updated every health check cycle)
+        self.register(Gauge(
+            "fluidmcp_server_memory_rss_bytes",
+            "Resident set size of the MCP server process in bytes",
+            labels=["server_id"]
+        ))
+
+        self.register(Gauge(
+            "fluidmcp_server_cpu_percent",
+            "CPU utilization of the MCP server process (percent, may exceed 100 on multi-core)",
+            labels=["server_id"]
+        ))
+
+        self.register(Gauge(
+            "fluidmcp_server_open_fds",
+            "Number of open file descriptors for the MCP server process",
+            labels=["server_id"]
         ))
 
     def register(self, metric: Metric):
@@ -633,6 +670,30 @@ class MetricsCollector:
         tool_duration = self.registry.get_metric("fluidmcp_tool_execution_seconds")
         if tool_duration:
             tool_duration.observe(duration, {"server_id": self.server_id, "tool_name": tool_name})
+
+    def set_server_memory_rss(self, rss_bytes: float):
+        """Set per-MCP-server RSS memory gauge."""
+        gauge = self.registry.get_metric("fluidmcp_server_memory_rss_bytes")
+        if gauge:
+            gauge.set(rss_bytes, {"server_id": self.server_id})
+
+    def set_server_cpu_percent(self, cpu: float):
+        """Set per-MCP-server CPU percent gauge."""
+        gauge = self.registry.get_metric("fluidmcp_server_cpu_percent")
+        if gauge:
+            gauge.set(cpu, {"server_id": self.server_id})
+
+    def set_server_open_fds(self, fds: int):
+        """Set per-MCP-server open file descriptor gauge."""
+        gauge = self.registry.get_metric("fluidmcp_server_open_fds")
+        if gauge:
+            gauge.set(fds, {"server_id": self.server_id})
+
+    def record_rejected_request(self, reason: str):
+        """Increment the concurrency-rejection counter."""
+        rejected = self.registry.get_metric("fluidmcp_requests_rejected_total")
+        if rejected:
+            rejected.inc({"server_id": self.server_id, "reason": reason})
 
     def record_streaming_request(self, completion_status: str):
         """Record a streaming request."""

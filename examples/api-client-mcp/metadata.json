@@ -1,0 +1,19 @@
+{
+  "name": "API Client",
+  "version": "1.0.0",
+  "description": "Postman-like HTTP client for making and visualizing API requests with rich HTML output",
+  "author": "FluidMCP",
+  "mcpServers": {
+    "api-client": {
+      "command": "python",
+      "args": ["/workspaces/fluidmcp/examples/api-client-mcp/server.py"],
+      "env": {}
+    }
+  },
+  "tools": [
+    {
+      "name": "make_http_request",
+      "description": "Make HTTP requests with full control over method, headers, query params, and body. Returns rich HTML visualization with syntax-highlighted JSON."
+    }
+  ]
+}

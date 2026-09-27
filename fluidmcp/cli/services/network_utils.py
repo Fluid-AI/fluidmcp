@@ -66,7 +66,7 @@ def kill_process_on_port(port):
     logger.debug(f"No process found on port {port}")
     return False
 
-def find_free_port(start=8100, end=9000, taken_ports=None):
+def find_free_port(start=8500, end=8599, taken_ports=None):
     """Find an available port in the given range that is not already taken.
     args :
         start (int): The starting port number (inclusive).

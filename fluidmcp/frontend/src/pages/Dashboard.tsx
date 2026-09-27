@@ -12,7 +12,7 @@ import { Footer } from "@/components/Footer";
 import { Skeleton } from "@/components/ui/skeleton";
 import AOS from 'aos';
 import 'aos/dist/aos.css';
-//dummy comment to change file1
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { servers, activeServers, loading, error, refetch, startServer } = useServers();
@@ -124,7 +124,10 @@ export default function Dashboard() {
                 <Skeleton className="h-8 w-64 mb-2" />
                 <Skeleton className="h-4 w-48" />
               </div>
-              <Skeleton className="h-10 w-24" />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <Skeleton className="h-10 w-28" />
+                <Skeleton className="h-10 w-24" />
+              </div>
             </div>
           </header>
           
@@ -183,17 +186,30 @@ export default function Dashboard() {
                 {servers.length} {servers.length === 1 ? 'server' : 'servers'} configured, {activeServers.length} running
               </p>
             </div>
-            <button 
-              onClick={refetch}
-              style={{ background: 'transparent', color: '#d1d5db', border: '1px solid rgba(63, 63, 70, 0.6)', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', transition: 'all 0.2s', margin: 0, cursor: 'pointer' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(39, 39, 42, 0.8)'; e.currentTarget.style.borderColor = 'rgba(82, 82, 91, 0.8)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(63, 63, 70, 0.6)'; }}
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Refresh
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button
+                onClick={() => navigate('/servers/manage', { state: { openAddServer: true } })}
+                style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', transition: 'all 0.2s', margin: 0, cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#1d4ed8'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = '#2563eb'; }}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Add Server
+              </button>
+              <button
+                onClick={refetch}
+                style={{ background: 'transparent', color: '#d1d5db', border: '1px solid rgba(63, 63, 70, 0.6)', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', transition: 'all 0.2s', margin: 0, cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(39, 39, 42, 0.8)'; e.currentTarget.style.borderColor = 'rgba(82, 82, 91, 0.8)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(63, 63, 70, 0.6)'; }}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+              </button>
+            </div>
           </div>
         </header>
       </div>
@@ -227,8 +243,23 @@ export default function Dashboard() {
               <div className="empty-state-icon">📦</div>
               <h3 className="empty-state-title">No servers found</h3>
               <p className="empty-state-description">
-                Try adjusting your search, sort, or filter options.
+                {servers.length === 0
+                  ? 'No servers configured yet.'
+                  : 'Try adjusting your search, sort, or filter options.'}
               </p>
+              {servers.length === 0 && (
+                <button
+                  onClick={() => navigate('/servers/manage', { state: { openAddServer: true } })}
+                  style={{ marginTop: '1rem', background: '#2563eb', color: '#fff', border: 'none', padding: '0.5rem 1.25rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: '500', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#1d4ed8'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#2563eb'; }}
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add Server
+                </button>
+              )}
             </div>
           ) : (
             <>

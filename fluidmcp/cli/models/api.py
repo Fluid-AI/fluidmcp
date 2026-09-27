@@ -32,7 +32,7 @@ class AddServerRequest(BaseModel):
     enabled: bool = Field(default=True, description="Whether server is enabled")
     mcp_config: MCPConfigRequest = Field(..., description="MCP server configuration")
     restart_policy: str = Field(
-        default="never",
+        default="on-failure",
         description="Restart policy: never, on-failure, or always",
         pattern="^(never|on-failure|always)$"
     )
@@ -160,7 +160,7 @@ class ServerListResponse(BaseModel):
                             "args": ["-y", "@modelcontextprotocol/server-filesystem"],
                             "env": {}
                         },
-                        "restart_policy": "never",
+                        "restart_policy": "on-failure",
                         "restart_window_sec": 300,
                         "max_restarts": 3,
                         "tools": [],
@@ -271,7 +271,7 @@ class AddServerFromGitHubRequest(BaseModel):
         description="Whether created server(s) should be enabled",
     )
     restart_policy: str = Field(
-        default="never",
+        default="on-failure",
         description="Restart policy: never, on-failure, or always",
         pattern="^(never|on-failure|always)$",
     )
