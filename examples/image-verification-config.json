@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "image-verification": {
+      "command": "python",
+      "args": ["image-verification-mcp/server.py"],
+      "env": {}
+    }
+  }
+}
