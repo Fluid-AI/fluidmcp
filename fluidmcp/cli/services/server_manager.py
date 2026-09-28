@@ -30,6 +30,7 @@ from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
+from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 
 
 def _parse_mcp_response(resp) -> dict:
@@ -1143,46 +1144,33 @@ class ServerManager:
             }
 
             logger.debug(f"Discovering tools for server '{server_id}'...")
+            # Routed by JSON-RPC ID through the process's single stdout reader, so this
+            # can run while HTTP requests are in flight on the same subprocess.
             try:
-                process.stdin.write(json.dumps(tools_request) + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as e:
+                response = await get_stdio_router(process, server_id).request(tools_request, timeout=5.0)
+            except StdioRequestTimeout:
+                logger.warning(f"Tool discovery timeout for server '{server_id}'")
+                return
+            except (BrokenPipeError, OSError, StdioProcessClosed) as e:
                 logger.warning(f"Failed to send tools/list request: {e}")
                 return
 
-            # Read response with timeout
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=5.0
-                )
+            if "result" in response and "tools" in response["result"]:
+                tools = response["result"]["tools"]
 
-                response_line = response_line.strip()
-                logger.debug(f"Tools discovery response: {response_line}")
-
-                response = json.loads(response_line)
-
-                if "result" in response and "tools" in response["result"]:
-                    tools = response["result"]["tools"]
-
-                    # Update server config with discovered tools
-                    config = await self.db.get_server_config(server_id)
-                    if config:
-                        config["tools"] = tools
-                        try:
-                            await self.db.save_server_config(config)
-                            logger.info(f"Discovered and cached {len(tools)} tools for server '{server_id}'")
-                        except Exception as e:
-                            logger.warning(f"Failed to save tools for '{server_id}': {e}")
-                    else:
-                        logger.warning(f"Could not find config for '{server_id}' to cache tools")
+                # Update server config with discovered tools
+                config = await self.db.get_server_config(server_id)
+                if config:
+                    config["tools"] = tools
+                    try:
+                        await self.db.save_server_config(config)
+                        logger.info(f"Discovered and cached {len(tools)} tools for server '{server_id}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to save tools for '{server_id}': {e}")
                 else:
-                    logger.warning(f"No tools found in response for server '{server_id}'")
-
-            except asyncio.TimeoutError:
-                logger.warning(f"Tool discovery timeout for server '{server_id}'")
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse tools response for '{server_id}': {e}")
+                    logger.warning(f"Could not find config for '{server_id}' to cache tools")
+            else:
+                logger.warning(f"No tools found in response for server '{server_id}'")
 
         except Exception as e:
             logger.warning(f"Tool discovery failed for '{server_id}': {e}")
