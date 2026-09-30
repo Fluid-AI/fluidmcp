@@ -110,65 +110,6 @@ def clear_stderr_buffer(key: str) -> None:
     _stderr_buffers.pop(key, None)
 
 
-def readline_with_timeout(process: subprocess.Popen, timeout: float = _MCP_READ_TIMEOUT) -> str:
-    """Read one line from process stdout with a timeout.
-
-    NOTE: Do not use this on MCP stdio servers managed by the gateway. Their
-    stdout is owned by a StdioJsonRpcRouter (see stdio_jsonrpc.py), which reads
-    every line on a dedicated thread and routes responses by JSON-RPC ID; a
-    second reader would steal messages from it. Kept for backward compatibility.
-
-    Uses select() on Unix so the calling thread is not blocked indefinitely if the
-    subprocess hangs. On Windows (where select() doesn't support pipes), falls back
-    to a dedicated reader thread with a join timeout. Returns "" on timeout or EOF.
-
-    Why select() and not asyncio.wait_for(): wait_for cancels the coroutine but
-    leaves the OS thread blocked on readline(). ThreadPoolExecutor can only reclaim
-    a slot when the thread *returns*, so the slot stays consumed forever. select()
-    puts the timeout inside the thread itself — if nothing arrives in time, the
-    thread returns "" immediately and frees its slot.
-
-    The default timeout is overridable process-wide via the MCP_READ_TIMEOUT
-    environment variable (see _MCP_READ_TIMEOUT); callers may also pass an
-    explicit per-call timeout (e.g. shorter timeouts during initialization).
-    """
-    if os.name == "nt":
-        # Windows: select() doesn't work on pipes — use a thread with join timeout.
-        # Note: on timeout the reader thread stays alive (daemon, cleaned up at exit).
-        # Production runs on Linux where the select() path is used instead.
-        result: list = []
-
-        def _read() -> None:
-            try:
-                result.append(process.stdout.readline())
-            except (OSError, ValueError):
-                result.append("")
-
-        t = threading.Thread(target=_read, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
-        if result:
-            return result[0]
-        logger.warning("readline timed out after {}s (process pid={})", timeout, process.pid)
-        return ""
-
-    # Unix: select() confirms data is available, then readline() reads it.
-    # Theoretical risk: readline() could block on a partial line without \n.
-    # In practice this is safe because MCP JSON-RPC messages are always
-    # newline-terminated, and the subprocess is opened with bufsize=1
-    # (line-buffered). Using os.read() directly would bypass TextIOWrapper's
-    # internal buffer and risk data loss, so we stay with readline().
-    import select
-    try:
-        ready, _, _ = select.select([process.stdout], [], [], timeout)
-        if ready:
-            return process.stdout.readline()
-        logger.warning("readline timed out after {}s (process pid={})", timeout, process.pid)
-        return ""
-    except (OSError, ValueError):
-        return ""
-
-
 def find_metadata_file(base_dir: Path) -> Path:
     """
     Find metadata.json in repo.
@@ -1036,9 +977,13 @@ def create_dynamic_router(server_manager):
                     # Client notification: forward it; there is no response to stream.
                     try:
                         rpc.notify(request)
+                        # Not a completed request/response stream — label it separately so
+                        # notification forwards don't inflate completion_status="success".
+                        completion_status = "notification"
                     except (BrokenPipeError, OSError, StdioProcessClosed) as e:
                         completion_status = "broken_pipe"
                         collector.record_error("io_error")
+                        logger.error(f"[mcp.sse.process_died] {sse_ctx} — broken pipe on notification: {e}")
                         yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
                     return
 
@@ -1051,14 +996,9 @@ def create_dynamic_router(server_manager):
                     loop.call_soon_threadsafe(events.put_nowait, ("notification", notification))
 
                 try:
-                    rpc_task = asyncio.ensure_future(
-                        rpc.request(request, timeout=None, on_notification=_on_progress)
-                    )
-                    rpc_task.add_done_callback(lambda _t: events.put_nowait(("done", None)))
-                    # Let the task run far enough to surface an immediate write failure.
-                    await asyncio.sleep(0)
-                    if rpc_task.done() and rpc_task.exception() is not None:
-                        raise rpc_task.exception()
+                    # start() registers the waiter and writes to stdin synchronously, so
+                    # any write failure is raised here rather than inside the wait task.
+                    pending = rpc.start(request, on_notification=_on_progress)
                 except (BrokenPipeError, OSError, StdioProcessClosed) as e:
                     # Set streaming-specific completion_status label (tracks how the SSE stream ended).
                     #
@@ -1084,6 +1024,8 @@ def create_dynamic_router(server_manager):
                 # LOGGED: [mcp.sse.start] — stdin write succeeded; reading loop begins.
                 logger.info(f"[mcp.sse.start] {sse_ctx}")
 
+                rpc_task = asyncio.ensure_future(pending.wait(timeout=None))
+                rpc_task.add_done_callback(lambda _t: events.put_nowait(("done", None)))
                 try:
                     while True:
                         try:

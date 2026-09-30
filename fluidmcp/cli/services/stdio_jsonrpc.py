@@ -54,6 +54,57 @@ def _preview(value: Any, max_len: int = 80) -> str:
     return text[:max_len]
 
 
+class PendingRequest:
+    """A request that is registered with a router and already written to stdin.
+
+    Returned by StdioJsonRpcRouter.start(). Both wait() and wait_sync() remove
+    the waiter when they return, raise or are cancelled, so a response arriving
+    afterwards is dropped by the reader instead of reaching another request.
+    """
+
+    def __init__(self, router: "StdioJsonRpcRouter", original_id: Any, internal_id: int,
+                 future: concurrent.futures.Future):
+        self._router = router
+        self.original_id = original_id
+        self.internal_id = internal_id
+        self._future = future
+
+    async def wait(self, timeout: Optional[float]) -> Dict[str, Any]:
+        """Await the response carrying this request's ID (None waits indefinitely)."""
+        try:
+            response = await asyncio.wait_for(asyncio.wrap_future(self._future), timeout)
+        except asyncio.TimeoutError:
+            raise self._timed_out(timeout) from None
+        finally:
+            self.cancel()
+        return self._restore_id(response)
+
+    def wait_sync(self, timeout: Optional[float]) -> Dict[str, Any]:
+        """Blocking variant of wait() for code running outside the event loop."""
+        try:
+            response = self._future.result(timeout)
+        except concurrent.futures.TimeoutError:
+            raise self._timed_out(timeout) from None
+        finally:
+            self.cancel()
+        return self._restore_id(response)
+
+    def cancel(self) -> None:
+        """Stop waiting; a response that arrives later is dropped."""
+        self._router._forget(self.internal_id)
+
+    def _timed_out(self, timeout: Optional[float]) -> "StdioRequestTimeout":
+        self._router._on_timeout(self.internal_id, self.original_id, timeout)
+        return StdioRequestTimeout(
+            f"No response for request id={_preview(self.original_id)} within {timeout}s"
+        )
+
+    def _restore_id(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        restored = dict(response)
+        restored["id"] = self.original_id
+        return restored
+
+
 class StdioJsonRpcRouter:
     """Single stdout reader + pending-request registry for one MCP subprocess."""
 
@@ -62,7 +113,7 @@ class StdioJsonRpcRouter:
         self._name = name or f"pid={getattr(process, 'pid', '?')}"
         self._log = logger.bind(server_id=self._name)
 
-        # Guards _pending, _progress, _closed. Never held while doing I/O.
+        # Guards _pending, _progress, _closed and _stats. Never held while doing I/O.
         self._state_lock = threading.Lock()
         # Serializes stdin writes from every caller (event loop and worker threads)
         # so two JSON-RPC lines can never interleave on the pipe.
@@ -75,7 +126,7 @@ class StdioJsonRpcRouter:
         self._closed = False
         self._close_reason = ""
 
-        self.stats = {
+        self._stats = {
             "responses_matched": 0,
             "orphan_responses": 0,
             "notifications": 0,
@@ -94,6 +145,61 @@ class StdioJsonRpcRouter:
     def closed(self) -> bool:
         return self._closed
 
+    @property
+    def stats(self) -> Dict[str, int]:
+        """Consistent snapshot of the correlation counters (for logs/diagnostics)."""
+        with self._state_lock:
+            return dict(self._stats)
+
+    def start(
+        self,
+        message: Dict[str, Any],
+        on_notification: Optional[NotificationCallback] = None,
+    ) -> PendingRequest:
+        """Register a JSON-RPC request and write it to stdin.
+
+        The caller's ``id`` is replaced on the wire by a gateway-unique ID and
+        restored on the response, so concurrent clients may reuse the same IDs
+        without colliding. The waiter is registered BEFORE the write because
+        the response can arrive before write() returns.
+
+        Args:
+            message: JSON-RPC request (must contain "id" and "method").
+            on_notification: Optional callback (invoked on the reader thread)
+                     for progress notifications tied to this request's
+                     params._meta.progressToken.
+
+        Raises (synchronously, before anything is awaited):
+            StdioProcessClosed: stdout already closed.
+            BrokenPipeError / OSError: writing to stdin failed.
+        """
+        if "id" not in message:
+            raise ValueError("JSON-RPC request must have an 'id'; use notify() for notifications")
+        original_id = message["id"]
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        outgoing = dict(message)
+
+        with self._state_lock:
+            if self._closed:
+                raise StdioProcessClosed(self._close_reason or "stdout closed")
+            internal_id = next(self._ids)
+            self._pending[internal_id] = future
+            outgoing["id"] = internal_id
+            if on_notification is not None:
+                self._register_progress(outgoing, internal_id, on_notification)
+
+        self._log.debug(
+            "[stdio.request_registered] server={} request_id={} client_id={} method={}",
+            self._name, internal_id, _preview(original_id), _preview(message.get("method"), 60),
+        )
+        try:
+            self._write(outgoing)
+        except BaseException:
+            self._forget(internal_id)
+            raise
+        self._log.debug("[stdio.request_sent] server={} request_id={}", self._name, internal_id)
+        return PendingRequest(self, original_id, internal_id, future)
+
     async def request(
         self,
         message: Dict[str, Any],
@@ -102,51 +208,17 @@ class StdioJsonRpcRouter:
     ) -> Dict[str, Any]:
         """Send a JSON-RPC request and await the response carrying its ID.
 
-        The caller's ``id`` is replaced on the wire by a gateway-unique ID and
-        restored on the returned response, so concurrent clients may reuse the
-        same IDs without colliding.
-
-        Args:
-            message: JSON-RPC request (must contain "id" and "method").
-            timeout: Seconds to wait for the response; None waits until the
-                     response arrives or the process closes.
-            on_notification: Optional callback (invoked on the reader thread)
-                     for progress notifications tied to this request's
-                     params._meta.progressToken.
-
         Raises:
             StdioRequestTimeout: timed out; the waiter is removed and a late
                                  response will be dropped.
             StdioProcessClosed:  stdout closed before a response arrived.
             BrokenPipeError / OSError: writing to stdin failed.
         """
-        original_id, internal_id, future = self._send(message, on_notification)
-        try:
-            try:
-                response = await asyncio.wait_for(asyncio.wrap_future(future), timeout)
-            except asyncio.TimeoutError:
-                self._on_timeout(internal_id, original_id, timeout)
-                raise StdioRequestTimeout(
-                    f"No response for request id={_preview(original_id)} within {timeout}s"
-                ) from None
-        finally:
-            self._forget(internal_id)
-        return self._restore_id(response, original_id)
+        return await self.start(message, on_notification).wait(timeout)
 
     def request_sync(self, message: Dict[str, Any], timeout: Optional[float]) -> Dict[str, Any]:
         """Blocking variant of request() for code running outside the event loop."""
-        original_id, internal_id, future = self._send(message, None)
-        try:
-            try:
-                response = future.result(timeout)
-            except concurrent.futures.TimeoutError:
-                self._on_timeout(internal_id, original_id, timeout)
-                raise StdioRequestTimeout(
-                    f"No response for request id={_preview(original_id)} within {timeout}s"
-                ) from None
-        finally:
-            self._forget(internal_id)
-        return self._restore_id(response, original_id)
+        return self.start(message).wait_sync(timeout)
 
     def notify(self, message: Dict[str, Any]) -> None:
         """Write a JSON-RPC notification (no ID, no response expected)."""
@@ -154,7 +226,7 @@ class StdioJsonRpcRouter:
             raise StdioProcessClosed(self._close_reason or "stdout closed")
         self._write(message)
 
-    # ── Sending / registry ──────────────────────────────────────────────────
+    # ── Registry ────────────────────────────────────────────────────────────
 
     def _send(
         self, message: Dict[str, Any], on_notification: Optional[NotificationCallback]
@@ -219,11 +291,9 @@ class StdioJsonRpcRouter:
         except Exception:
             pass
 
-    @staticmethod
-    def _restore_id(response: Dict[str, Any], original_id: Any) -> Dict[str, Any]:
-        restored = dict(response)
-        restored["id"] = original_id
-        return restored
+    def _bump(self, key: str) -> None:
+        with self._state_lock:
+            self._stats[key] += 1
 
     def _write(self, message: Dict[str, Any]) -> None:
         data = json.dumps(message) + "\n"
@@ -287,7 +357,7 @@ class StdioJsonRpcRouter:
             message = json.loads(text)
         except json.JSONDecodeError:
             # Some servers print logs/tracebacks to stdout. Skip; never deliver.
-            self.stats["non_json_lines"] += 1
+            self._bump("non_json_lines")
             self._log.debug("[stdio.non_json] server={} len={} preview={}", self._name, len(text), text[:200])
             return
 
@@ -324,7 +394,7 @@ class StdioJsonRpcRouter:
                 future = None
 
         if future is None:
-            self.stats["orphan_responses"] += 1
+            self._bump("orphan_responses")
             self._log.warning(
                 "[stdio.orphan_response] server={} response_id={} pending=false action=dropped_late_response",
                 self._name, _preview(response_id),
@@ -339,21 +409,21 @@ class StdioJsonRpcRouter:
             except concurrent.futures.InvalidStateError:
                 pass
         if delivered:
-            self.stats["responses_matched"] += 1
+            self._bump("responses_matched")
             self._log.debug(
                 "[stdio.response_matched] server={} request_id={} response_id={} matched=true",
                 self._name, response_id, response_id,
             )
         else:
             # Waiter was cancelled/timed out in the same instant — still never rerouted.
-            self.stats["orphan_responses"] += 1
+            self._bump("orphan_responses")
             self._log.warning(
                 "[stdio.orphan_response] server={} response_id={} pending=cancelled action=dropped_late_response",
                 self._name, _preview(response_id),
             )
 
     def _handle_notification(self, message: Dict[str, Any]) -> None:
-        self.stats["notifications"] += 1
+        self._bump("notifications")
         params = message.get("params")
         token = params.get("progressToken") if isinstance(params, dict) else None
         entry = None
@@ -380,7 +450,7 @@ class StdioJsonRpcRouter:
         ``ping`` and rejects everything else with "method not found". These are
         never treated as responses to gateway requests.
         """
-        self.stats["server_requests"] += 1
+        self._bump("server_requests")
         method = message.get("method")
         self._log.info(
             "[stdio.server_request] server={} method={} id={}",

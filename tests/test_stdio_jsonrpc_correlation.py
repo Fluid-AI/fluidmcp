@@ -418,3 +418,82 @@ class TestGatewayCorrelation:
         assert events[0]["params"]["progressToken"] == "t1"
         assert events[-1]["id"] == "S" and events[-1]["result"]["tag"] == "S"
         assert rx["id"] == "X" and rx["result"]["tag"] == "X"
+
+
+# ── SSE error-path and metrics regressions ──────────────────────────────────
+
+def _metric_has(metric_name, **labels):
+    from fluidmcp.cli.services.metrics import get_registry
+    rendered = get_registry().get_metric(metric_name).render()
+    needle = [f'{k}="{v}"' for k, v in labels.items()]
+    return any(all(n in line for n in needle) and not line.rstrip().endswith(" 0") and not line.rstrip().endswith(" 0.0")
+               for line in rendered.splitlines() if not line.startswith("#"))
+
+
+@pytest.fixture
+def named_gateway(spawn, monkeypatch):
+    """Gateway with a unique server name so global metric counters are isolated."""
+    monkeypatch.delenv("FMCP_SECURE_MODE", raising=False)
+
+    def _make():
+        import uuid
+        name = f"fake-{uuid.uuid4().hex[:8]}"
+        proc = spawn()
+        app = FastAPI()
+        app.include_router(create_dynamic_router(_StubServerManager({name: proc})))
+        client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+        return client, get_stdio_router(proc, name), name
+
+    return _make
+
+
+class TestSseErrorPaths:
+
+    async def test_sse_stdin_write_failure_reports_broken_pipe(self, named_gateway, monkeypatch):
+        """A BrokenPipeError on the stdin write must hit the process_died path and io_error metric."""
+        client, rtr, name = named_gateway()
+
+        def broken_write(_message):
+            raise BrokenPipeError("pipe closed")
+
+        monkeypatch.setattr(rtr, "_write", broken_write)
+        async with client:
+            resp = await client.post(f"/{name}/sse", json=req("A"))
+        events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
+        assert events == [{"error": "Process pipe broken: pipe closed"}]
+        assert rtr._pending == {}  # waiter removed after the failed write
+        assert _metric_has("fluidmcp_errors_total", server_id=name, error_type="io_error")
+        assert _metric_has("fluidmcp_streaming_requests_total", server_id=name, completion_status="broken_pipe")
+
+    async def test_sse_notification_not_counted_as_success(self, named_gateway):
+        client, _rtr, name = named_gateway()
+        async with client:
+            resp = await client.post(f"/{name}/sse", json={"jsonrpc": "2.0", "method": "notifications/cancelled",
+                                                           "params": {"requestId": "x"}})
+        assert resp.status_code == 200
+        assert _metric_has("fluidmcp_streaming_requests_total", server_id=name, completion_status="notification")
+        assert not _metric_has("fluidmcp_streaming_requests_total", server_id=name, completion_status="success")
+
+
+class TestRouterApi:
+
+    def test_start_raises_write_error_synchronously(self, router, monkeypatch):
+        def broken_write(_message):
+            raise BrokenPipeError("pipe closed")
+
+        monkeypatch.setattr(router, "_write", broken_write)
+        with pytest.raises(BrokenPipeError):
+            router.start(req("A"))
+        assert router._pending == {}
+
+    async def test_pending_cancel_drops_late_response(self, router):
+        pending = router.start(req("A", hold=True))
+        pending.cancel()
+        router.notify({"jsonrpc": "2.0", "method": "test/flush", "params": {"order": ["A"]}})
+        await wait_for_stat(router, "orphan_responses", 1)
+        assert (await router.request(req("B"), timeout=5))["result"]["tag"] == "B"
+
+    def test_stats_is_a_snapshot(self, router):
+        snapshot = router.stats
+        snapshot["responses_matched"] = 999
+        assert router.stats["responses_matched"] == 0
