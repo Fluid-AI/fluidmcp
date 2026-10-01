@@ -19,6 +19,7 @@ from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
 from .network_handle import NetworkSubprocessHandle
 from .sse_handle import SseSubprocessHandle
+from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 
 security = HTTPBearer(auto_error=False)
 
@@ -107,60 +108,6 @@ def get_stderr_tail(key: str, lines: int = 50) -> str:
 def clear_stderr_buffer(key: str) -> None:
     """Remove the stderr buffer for a server key to free memory after it stops."""
     _stderr_buffers.pop(key, None)
-
-
-def readline_with_timeout(process: subprocess.Popen, timeout: float = _MCP_READ_TIMEOUT) -> str:
-    """Read one line from process stdout with a timeout.
-
-    Uses select() on Unix so the calling thread is not blocked indefinitely if the
-    subprocess hangs. On Windows (where select() doesn't support pipes), falls back
-    to a dedicated reader thread with a join timeout. Returns "" on timeout or EOF.
-
-    Why select() and not asyncio.wait_for(): wait_for cancels the coroutine but
-    leaves the OS thread blocked on readline(). ThreadPoolExecutor can only reclaim
-    a slot when the thread *returns*, so the slot stays consumed forever. select()
-    puts the timeout inside the thread itself — if nothing arrives in time, the
-    thread returns "" immediately and frees its slot.
-
-    The default timeout is overridable process-wide via the MCP_READ_TIMEOUT
-    environment variable (see _MCP_READ_TIMEOUT); callers may also pass an
-    explicit per-call timeout (e.g. shorter timeouts during initialization).
-    """
-    if os.name == "nt":
-        # Windows: select() doesn't work on pipes — use a thread with join timeout.
-        # Note: on timeout the reader thread stays alive (daemon, cleaned up at exit).
-        # Production runs on Linux where the select() path is used instead.
-        result: list = []
-
-        def _read() -> None:
-            try:
-                result.append(process.stdout.readline())
-            except (OSError, ValueError):
-                result.append("")
-
-        t = threading.Thread(target=_read, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
-        if result:
-            return result[0]
-        logger.warning("readline timed out after {}s (process pid={})", timeout, process.pid)
-        return ""
-
-    # Unix: select() confirms data is available, then readline() reads it.
-    # Theoretical risk: readline() could block on a partial line without \n.
-    # In practice this is safe because MCP JSON-RPC messages are always
-    # newline-terminated, and the subprocess is opened with bufsize=1
-    # (line-buffered). Using os.read() directly would bypass TextIOWrapper's
-    # internal buffer and risk data loss, so we stay with readline().
-    import select
-    try:
-        ready, _, _ = select.select([process.stdout], [], [], timeout)
-        if ready:
-            return process.stdout.readline()
-        logger.warning("readline timed out after {}s (process pid={})", timeout, process.pid)
-        return ""
-    except (OSError, ValueError):
-        return ""
 
 
 def find_metadata_file(base_dir: Path) -> Path:
@@ -501,74 +448,47 @@ def initialize_mcp_server(process: subprocess.Popen, timeout: int = 30, stderr_k
             }
         }
 
-        logger.debug(f"Sending initialize request: {json.dumps(init_request)}")
+        # From here on the StdioJsonRpcRouter is the only reader of this process's
+        # stdout. It skips non-JSON log lines and matches the response by ID.
+        router = get_stdio_router(process, stderr_key)
+        logger.debug("Sending initialize request")
         try:
-            process.stdin.write(json.dumps(init_request) + "\n")
-            process.stdin.flush()
-            logger.debug("Initialize request sent successfully")
+            response = router.request_sync(init_request, timeout=timeout)
         except (BrokenPipeError, OSError) as e:
             logger.error(f"Failed to write initialize request (process likely died): {e}")
             return False
+        except StdioRequestTimeout:
+            logger.error(f"MCP initialization timeout after {timeout} seconds")
+            non_json = router.stats["non_json_lines"]
+            if non_json:
+                logger.error(f"Received {non_json} non-JSON stdout line(s) and no initialize response")
+            else:
+                logger.error("No initialize response received from MCP server")
+            stderr_output = get_stderr_tail(stderr_key, 50)
+            if stderr_output:
+                logger.error(f"Process stderr: {stderr_output}")
+            return False
+        except StdioProcessClosed as e:
+            stderr_output = get_stderr_tail(stderr_key, 50) or "No stderr available"
+            logger.error(f"Process died during initialization ({e}). stderr: {stderr_output}")
+            return False
 
-        # Wait for response
-        start_time = time.time()
-        lines_received = []
-        non_json_lines = []
+        if "result" not in response:
+            logger.error(f"MCP initialize returned an error: {str(response.get('error'))[:300]}")
+            return False
 
-        while time.time() - start_time < timeout:
-            if process.poll() is not None:
-                stderr_output = get_stderr_tail(stderr_key, 50) or "No stderr available"
-                logger.error(f"Process died during initialization (exit code: {process.returncode}). stderr: {stderr_output}")
-                return False
+        try:
+            router.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+            logger.error(f"Failed to send initialized notification: {e}")
+            return False
 
-            # Cap per-read timeout to remaining time so the overall deadline is respected
-            remaining = max(timeout - (time.time() - start_time), 0.5)
-            read_timeout = min(remaining, 30.0)
-            response_line = readline_with_timeout(process, timeout=read_timeout).strip()
-            if response_line:
-                lines_received.append(response_line)
-                logger.debug(f"Received line: {response_line[:200]}")
-                try:
-                    response = json.loads(response_line)
-                    # Check if this is the initialize response
-                    if response.get("id") == 0 and "result" in response:
-                        # Send initialized notification
-                        notif = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-                        logger.debug(f"Sending initialized notification: {json.dumps(notif)}")
-                        try:
-                            process.stdin.write(json.dumps(notif) + "\n")
-                            process.stdin.flush()
-                        except (BrokenPipeError, OSError) as e:
-                            logger.error(f"Failed to send initialized notification: {e}")
-                            return False
-
-                        if non_json_lines:
-                            logger.info(f"MCP server initialized successfully (skipped {len(non_json_lines)} non-JSON log lines)")
-                        else:
-                            logger.info("MCP server initialized successfully")
-                        return True
-                except json.JSONDecodeError:
-                    # Not JSON - likely a log message from the server
-                    # Some servers output logs to stdout instead of stderr
-                    non_json_lines.append(response_line[:200])
-                    if len(non_json_lines) <= 5:
-                        logger.debug(f"Skipping non-JSON line: {response_line[:200]}")
-                    continue
-
-            time.sleep(0.1)
-
-        logger.error(f"MCP initialization timeout after {timeout} seconds")
-        if lines_received:
-            logger.error(f"Received {len(lines_received)} lines. First few: {lines_received[:3]}")
+        non_json = router.stats["non_json_lines"]
+        if non_json:
+            logger.info(f"MCP server initialized successfully (skipped {non_json} non-JSON log lines)")
         else:
-            logger.error("No output received from MCP server during initialization")
-
-        # Use drained buffer for stderr context (never blocks)
-        stderr_output = get_stderr_tail(stderr_key, 50)
-        if stderr_output:
-            logger.error(f"Process stderr: {stderr_output}")
-
-        return False
+            logger.info("MCP server initialized successfully")
+        return True
     except Exception:
         logger.exception("Initialization error")
         return False
@@ -588,12 +508,13 @@ def create_dynamic_router(server_manager):
         APIRouter with dynamic dispatch endpoints
     """
     router = APIRouter()
-    _io_locks: Dict[str, asyncio.Lock] = {}
-
-    def _get_io_lock(name: str) -> asyncio.Lock:
-        if name not in _io_locks:
-            _io_locks[name] = asyncio.Lock()
-        return _io_locks[name]
+    # Note: stdio I/O safety is provided by the per-process StdioJsonRpcRouter
+    # (stdio_jsonrpc.py), which replaces the previous per-server asyncio I/O lock.
+    # That lock serialized write+read so a reader got "the next line", but it only
+    # covered this router (not management/tool discovery) and could not stop a
+    # timed-out request's late response from being read by the next request.
+    # The router keeps its guarantee — atomic, non-interleaved stdin writes — via
+    # its own write lock shared by every caller, and adds ID-based response routing.
 
     async def auto_start_stopped_server(server_name: str) -> None:
         """
@@ -662,9 +583,11 @@ def create_dynamic_router(server_manager):
           [mcp.process_died]   ERROR — BrokenPipeError on stdin write.
                                        Root cause: subprocess crashed during this request.
                                        stderr tail is attached to the log line.
-          [mcp.bad_response]   ERROR — stdout line is not valid JSON.
+          [stdio.non_json]     DEBUG — stdout line is not valid JSON; skipped by the
+                                       stdio router (never returned as a response).
                                        Root cause: tool wrote plain text/traceback to stdout.
-                                       Check stderr drainer logs for the real error.
+          [stdio.orphan_response] WARN — response whose ID has no waiter (e.g. arrived after
+                                       [mcp.timeout]); dropped, never given to another request.
           [mcp.error_response] WARN  — JSON-RPC error in response body.
                                        Tool is alive but the operation failed. Error code guide:
                                          -32603 Internal error → DB down, API 5xx, unhandled exception
@@ -803,39 +726,49 @@ def create_dynamic_router(server_manager):
                         _log.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=sse_http")
                         return JSONResponse(content=response)
 
-                # ── stdio transport: write to stdin, read from stdout ────────────
+                # ── stdio transport: write to stdin, response routed by JSON-RPC ID ──
+                # The per-process StdioJsonRpcRouter owns stdout (one reader thread) and
+                # serializes stdin writes. Requests are NOT serialized: each gets a
+                # gateway-unique ID and receives only the response carrying that ID, so
+                # out-of-order responses and late responses after a timeout can never be
+                # handed to the wrong caller.
                 try:
-                    msg = json.dumps(request)
-                    async with _get_io_lock(server_name):
+                    rpc = get_stdio_router(process, server_name)
+
+                    if "id" not in request:
+                        # Client notification (e.g. notifications/cancelled): nothing to wait
+                        # for. Waiting here would previously steal another request's response.
                         try:
-                            process.stdin.write(msg + "\n")
-                            process.stdin.flush()
-                        except (BrokenPipeError, OSError) as e:
-                            # CAUGHT: [mcp.process_died] — stdin write failed mid-request.
-                            # Root cause: subprocess crashed between the process.poll() check above
-                            # and this write. Attaches stderr tail for crash diagnosis.
-                            elapsed_ms = int((time.monotonic() - t0) * 1000)
-                            stderr_tail = get_stderr_tail(server_name, 20)
-                            _log.error(
-                                f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — broken pipe: {e}"
-                                + (f"\nstderr:\n{stderr_tail}" if stderr_tail else "")
-                            )
+                            rpc.notify(request)
+                        except (BrokenPipeError, OSError, StdioProcessClosed) as e:
                             raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                        return Response(status_code=202)
 
-                        # readline_with_timeout uses select() internally so this thread returns
-                        # after _MCP_READ_TIMEOUT seconds instead of blocking forever (no stuck
-                        # asyncio worker threads / ThreadPoolExecutor exhaustion on a hung server).
-                        response_line = await asyncio.to_thread(readline_with_timeout, process, _MCP_READ_TIMEOUT)
+                    try:
+                        response_data = await rpc.request(request, timeout=_MCP_READ_TIMEOUT)
+                    except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+                        # CAUGHT: [mcp.process_died] — stdin write failed or stdout closed
+                        # mid-request. Root cause: subprocess crashed during this request.
+                        # Attaches stderr tail for crash diagnosis.
                         elapsed_ms = int((time.monotonic() - t0) * 1000)
-
-                        if not response_line:
-                            # CAUGHT: [mcp.timeout] — subprocess alive but produced no output in time.
-                            # Root cause: tool is blocking on a slow operation. Common causes:
-                            #   • DB connection with no query timeout (hangs indefinitely on refusal)
-                            #   • HTTP call to an API with no timeout set
-                            #   • Tool waiting on a lock or resource held by another process
-                            _log.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within {_MCP_READ_TIMEOUT}s")
-                            raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
+                        stderr_tail = get_stderr_tail(server_name, 20)
+                        _log.error(
+                            f"[mcp.process_died] {ctx} elapsed={elapsed_ms}ms — {type(e).__name__}: {e}"
+                            + (f"\nstderr:\n{stderr_tail}" if stderr_tail else "")
+                        )
+                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                    except StdioRequestTimeout:
+                        # CAUGHT: [mcp.timeout] — subprocess alive but produced no response
+                        # with this request's ID in time. The waiter is removed, so a late
+                        # response is dropped rather than returned to the next request.
+                        # Common causes:
+                        #   • DB connection with no query timeout (hangs indefinitely on refusal)
+                        #   • HTTP call to an API with no timeout set
+                        #   • Tool waiting on a lock or resource held by another process
+                        elapsed_ms = int((time.monotonic() - t0) * 1000)
+                        _log.warning(f"[mcp.timeout] {ctx} elapsed={elapsed_ms}ms — server did not respond within {_MCP_READ_TIMEOUT}s")
+                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
 
                     # LOGGED: [mcp.slow] — response arrived but took longer than threshold.
                     # Not an error but a leading indicator that the downstream is degraded.
@@ -843,16 +776,6 @@ def create_dynamic_router(server_manager):
                     _slow_ms = int(os.getenv("FMCP_SLOW_REQUEST_MS", "5000"))
                     if elapsed_ms > _slow_ms:
                         _log.warning(f"[mcp.slow] {ctx} elapsed={elapsed_ms}ms — response was slow")
-
-                    try:
-                        response_data = json.loads(response_line)
-                    except json.JSONDecodeError as e:
-                        # CAUGHT: [mcp.bad_response] — stdout line is not valid JSON.
-                        # Root cause: tool printed a plain-text error, Python traceback,
-                        # or startup message to stdout instead of stderr.
-                        # Next step: look at stderr drainer logs for the real error text.
-                        _log.error(f"[mcp.bad_response] {ctx} elapsed={elapsed_ms}ms — invalid JSON: {e} raw={response_line[:300]}")
-                        raise HTTPException(502, "MCP server returned invalid JSON")
 
                     if "error" in response_data:
                         # CAUGHT: [mcp.error_response] — tool ran but returned a JSON-RPC error.
@@ -1049,90 +972,118 @@ def create_dynamic_router(server_manager):
                 t0_sse = time.monotonic()
                 chunk_count = 0
 
-                msg = json.dumps(request)
-                async with _get_io_lock(server_name):
+                rpc = get_stdio_router(process, server_name)
+                if "id" not in request:
+                    # Client notification: forward it; there is no response to stream.
                     try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        # Set streaming-specific completion_status label (tracks how the SSE stream ended).
-                        #
-                        # IMPORTANT: This intentionally differs from the error_type used in
-                        # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
-                        # Here we use "broken_pipe" so operators can:
-                        #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
-                        #     overall rate of I/O-related failures across the service, and
-                        #   - Use streaming metrics with completion_status="broken_pipe" to understand
-                        #     why individual streaming sessions terminated (client disconnects,
-                        #     broken pipes, etc.).
-                        #
-                        # In other words, both labels refer to the same underlying condition but are
-                        # scoped for different troubleshooting workflows: global error rates versus
-                        # per-stream termination reasons.
-                        elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                        rpc.notify(request)
+                        # Not a completed request/response stream — label it separately so
+                        # notification forwards don't inflate completion_status="success".
+                        completion_status = "notification"
+                    except (BrokenPipeError, OSError, StdioProcessClosed) as e:
                         completion_status = "broken_pipe"
                         collector.record_error("io_error")
-                        logger.error(f"[mcp.sse.process_died] {sse_ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
+                        logger.error(f"[mcp.sse.process_died] {sse_ctx} — broken pipe on notification: {e}")
                         yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
-                        return
+                    return
+
+                # Progress notifications for this request (matched by its progressToken)
+                # and the final response (matched by JSON-RPC ID) arrive on this queue.
+                loop = asyncio.get_running_loop()
+                events: asyncio.Queue = asyncio.Queue()
+
+                def _on_progress(notification: Dict[str, Any]) -> None:
+                    loop.call_soon_threadsafe(events.put_nowait, ("notification", notification))
+
+                try:
+                    # start() registers the waiter and writes to stdin synchronously, so
+                    # any write failure is raised here rather than inside the wait task.
+                    pending = rpc.start(request, on_notification=_on_progress)
+                except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+                    # Set streaming-specific completion_status label (tracks how the SSE stream ended).
+                    #
+                    # IMPORTANT: This intentionally differs from the error_type used in
+                    # fluidmcp_errors_total, where BrokenPipeError is grouped under "io_error".
+                    # Here we use "broken_pipe" so operators can:
+                    #   - Use fluidmcp_errors_total{error_type="io_error", ...} to monitor the
+                    #     overall rate of I/O-related failures across the service, and
+                    #   - Use streaming metrics with completion_status="broken_pipe" to understand
+                    #     why individual streaming sessions terminated (client disconnects,
+                    #     broken pipes, etc.).
+                    #
+                    # In other words, both labels refer to the same underlying condition but are
+                    # scoped for different troubleshooting workflows: global error rates versus
+                    # per-stream termination reasons.
+                    elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                    completion_status = "broken_pipe"
+                    collector.record_error("io_error")
+                    logger.error(f"[mcp.sse.process_died] {sse_ctx} elapsed={elapsed_ms}ms — broken pipe: {e}")
+                    yield f"data: {json.dumps({'error': f'Process pipe broken: {str(e)}'})}\n\n"
+                    return
 
                 # LOGGED: [mcp.sse.start] — stdin write succeeded; reading loop begins.
                 logger.info(f"[mcp.sse.start] {sse_ctx}")
 
-                while True:
-                    # readline_with_timeout uses select() internally so this thread returns
-                    # after _MCP_READ_TIMEOUT seconds instead of blocking forever, keeping the
-                    # ThreadPoolExecutor pool healthy for other servers even if this one hangs.
-                    response_line = await asyncio.to_thread(readline_with_timeout, process, _MCP_READ_TIMEOUT)
-                    if not response_line:
-                        elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
-                        if process.poll() is not None:
+                rpc_task = asyncio.ensure_future(pending.wait(timeout=None))
+                rpc_task.add_done_callback(lambda _t: events.put_nowait(("done", None)))
+                try:
+                    while True:
+                        try:
+                            kind, payload = await asyncio.wait_for(events.get(), _MCP_READ_TIMEOUT)
+                        except asyncio.TimeoutError:
+                            # Process is alive but produced nothing within the timeout — send a
+                            # keep-alive SSE comment to prevent the client from closing the
+                            # connection rather than aborting the stream outright.
+                            # LOGGED: [mcp.sse.keepalive] DEBUG — expected for slow-running tools.
+                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            logger.debug(f"[mcp.sse.keepalive] {sse_ctx} elapsed={elapsed_ms}ms")
+                            yield ": keep-alive\n\n"
+                            continue
+
+                        if kind == "notification":
+                            chunk_count += 1
+                            # LOGGED: [mcp.sse.chunk] DEBUG — progress notification for this request.
+                            logger.debug(f"[mcp.sse.chunk] {sse_ctx} chunk={chunk_count} method={_sanitize_log_field(payload.get('method', ''))}")
+                            yield f"data: {json.dumps(payload)}\n\n"
+                            continue
+
+                        # kind == "done": the response for this request's ID (or a failure).
+                        try:
+                            response_data = rpc_task.result()
+                        except StdioProcessClosed as e:
                             # CAUGHT: [mcp.sse.process_exited] — subprocess exited mid-stream.
-                            # readline returned "" because the pipe closed (EOF), not a timeout.
                             # process.returncode tells you how it died; stderr tail shows why.
+                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                            completion_status = "error"
                             stderr_tail = get_stderr_tail(server_name, 20)
                             logger.error(
-                                f"[mcp.sse.process_exited] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count} returncode={process.returncode}"
+                                f"[mcp.sse.process_exited] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count} returncode={process.poll()}"
                                 + (f"\nstderr:\n{stderr_tail}" if stderr_tail else "")
                             )
+                            yield f"data: {json.dumps({'error': f'Process exited: {str(e)}'})}\n\n"
                             break
-                        # Process is alive but produced nothing within the timeout — send a
-                        # keep-alive SSE comment to prevent the client from closing the connection
-                        # rather than aborting the stream outright.
-                        # LOGGED: [mcp.sse.keepalive] DEBUG — expected for slow-running tools.
-                        logger.debug(f"[mcp.sse.keepalive] {sse_ctx} elapsed={elapsed_ms}ms")
-                        yield ": keep-alive\n\n"
-                        continue
 
-                    chunk_count += 1
-                    # LOGGED: [mcp.sse.chunk] DEBUG — one line from subprocess stdout.
-                    logger.debug(f"[mcp.sse.chunk] {sse_ctx} chunk={chunk_count} data={response_line.strip()[:200]}")
-                    yield f"data: {response_line.strip()}\n\n"
-
-                    try:
-                        response_data = json.loads(response_line)
+                        chunk_count += 1
+                        elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
+                        yield f"data: {json.dumps(response_data)}\n\n"
                         if "error" in response_data:
-                            # CAUGHT: [mcp.sse.error_response] — tool sent an error chunk.
-                            # Stream is still forwarded to the client.
+                            # CAUGHT: [mcp.sse.error_response] — tool returned a JSON-RPC error.
                             # Root cause: same as [mcp.error_response] on the /mcp endpoint.
                             err = response_data["error"]
                             err_code = err.get("code") if isinstance(err, dict) else None
                             err_msg = _sanitize_log_field(err.get("message") if isinstance(err, dict) else str(err))
-                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                             logger.warning(f"[mcp.sse.error_response] {sse_ctx} elapsed={elapsed_ms}ms code={err_code} message={err_msg}")
                             completion_status = "error_response"
-                        if "result" in response_data:
+                        else:
                             # LOGGED: [mcp.sse.ok] — tool completed normally.
-                            # Reset completion_status to "success" even if a prior chunk
-                            # contained an error — the stream ended cleanly with a result.
-                            elapsed_ms = int((time.monotonic() - t0_sse) * 1000)
                             completion_status = "success"
                             logger.info(f"[mcp.sse.ok] {sse_ctx} elapsed={elapsed_ms}ms chunks={chunk_count}")
-                            break
-                    except json.JSONDecodeError:
-                        # LOGGED: [mcp.sse.non_json] DEBUG — non-JSON line silently forwarded.
-                        # Some tools stream plain-text progress messages before the final result.
-                        logger.debug(f"[mcp.sse.non_json] {sse_ctx} chunk={chunk_count} raw={response_line.strip()[:200]}")
+                        break
+                finally:
+                    # Client disconnect / generator close: drop the waiter so a late
+                    # response is discarded instead of reaching another request.
+                    if not rpc_task.done():
+                        rpc_task.cancel()
 
             except Exception as e:
                 # CAUGHT: [mcp.sse.error] — unexpected exception in the generator.
@@ -1198,25 +1149,16 @@ def create_dynamic_router(server_manager):
                     "method": "tools/list"
                 }
 
-                msg = json.dumps(request_payload)
-                async with _get_io_lock(server_name):
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
-
-                    # Wait for the tools/list response from the MCP subprocess.
-                    # readline_with_timeout runs inside the thread and uses select() to
-                    # enforce the timeout at the OS level, ensuring the thread returns and
-                    # its pool slot is freed if this server hangs.
-                    response_line = await asyncio.to_thread(
-                        readline_with_timeout, process, _MCP_READ_TIMEOUT
+                # Response is matched by JSON-RPC ID by the per-process stdio router, so
+                # the fixed id=1 here never collides with concurrent callers.
+                try:
+                    response_data = await get_stdio_router(process, server_name).request(
+                        request_payload, timeout=_MCP_READ_TIMEOUT
                     )
-                    if not response_line:
-                        # select() timed out — no response received within the deadline.
-                        raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
-                response_data = json.loads(response_line)
+                except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                except StdioRequestTimeout:
+                    raise HTTPException(504, f"Server '{server_name}' did not respond within {_MCP_READ_TIMEOUT} seconds")
 
                 return JSONResponse(content=response_data)
 
@@ -1287,33 +1229,23 @@ def create_dynamic_router(server_manager):
                     "params": request_body
                 }
 
-                msg = json.dumps(request_payload)
-                async with _get_io_lock(server_name):
-                    try:
-                        process.stdin.write(msg + "\n")
-                        process.stdin.flush()
-                    except (BrokenPipeError, OSError) as e:
-                        raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
-
-                    # Wait for the tool execution response from the MCP subprocess.
-                    # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
-                    # readline_with_timeout uses select() inside the thread so the thread
-                    # exits on timeout rather than blocking the ThreadPoolExecutor slot forever.
-                    # Without this, a single hanging tool call occupies a thread indefinitely;
-                    # enough concurrent hangs will exhaust the pool and block all other servers.
-                    response_line = await asyncio.to_thread(
-                        readline_with_timeout, process, _MCP_READ_TIMEOUT
+                # Tool calls can be long-running, so _MCP_READ_TIMEOUT is the upper bound.
+                # The response is matched by JSON-RPC ID; on timeout the waiter is removed
+                # and a late response is dropped instead of reaching the next request.
+                try:
+                    response_data = await get_stdio_router(process, server_name).request(
+                        request_payload, timeout=_MCP_READ_TIMEOUT
                     )
-                    if not response_line:
-                        # select() timed out — persist the failure for observability before raising.
-                        await server_manager.db.save_log_entry({
-                            "server_name": server_name,
-                            "stream": "error",
-                            "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
-                        })
-                        raise HTTPException(504, "Tool execution timed out")
-
-                response_data = json.loads(response_line)
+                except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+                    raise HTTPException(503, f"Server '{server_name}' process pipe broken: {str(e)}")
+                except StdioRequestTimeout:
+                    # Persist the failure for observability before raising.
+                    await server_manager.db.save_log_entry({
+                        "server_name": server_name,
+                        "stream": "error",
+                        "content": f"Tool '{request_body.get('name', 'unknown')}' execution timed out after {_MCP_READ_TIMEOUT} seconds"
+                    })
+                    raise HTTPException(504, "Tool execution timed out")
 
                 # Update last_used_at for idle cleanup
                 await server_manager.update_last_used(server_name)

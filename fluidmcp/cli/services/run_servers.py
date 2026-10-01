@@ -25,6 +25,7 @@ from .config_resolver import ServerConfig, INSTALLATION_DIR, apply_transport
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
 from .package_launcher import create_dynamic_router
+from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
 from .llm_launcher import launch_llm_models, stop_all_llm_models, LLMProcess, LLMHealthMonitor
@@ -100,9 +101,6 @@ def register_llm_process(model_id: str, process: LLMProcess) -> None:
     with _llm_registry_lock:
         _llm_processes[model_id] = process
         logger.info(f"Registered LLM process: {model_id}")
-# Thread-safety locks for process stdin/stdout communication
-_process_locks: Dict[str, threading.Lock] = {}
-
 # Thread-safety lock for LLM registry operations
 _llm_registry_lock = threading.Lock()
 
@@ -542,14 +540,13 @@ def _get_server_processes() -> Dict[str, subprocess.Popen]:
     return _server_processes.copy()
 
 
-async def _query_server_tools(server_name: str, process: subprocess.Popen, lock: threading.Lock) -> Tuple[str, list, Optional[str]]:
+async def _query_server_tools(server_name: str, process: subprocess.Popen) -> Tuple[str, list, Optional[str]]:
     """
     Query a single MCP server for its available tools.
 
     Args:
         server_name: Name of the server
         process: Server process handle
-        lock: Thread lock for safe stdin/stdout communication
 
     Returns:
         Tuple of (server_name, tools_list, error_message)
@@ -571,32 +568,15 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
             "params": {}
         }
 
-        # Acquire lock for thread-safe stdin/stdout communication
-        with lock:
-            # Wrap blocking I/O in asyncio.to_thread to avoid blocking event loop
-            await asyncio.to_thread(
-                process.stdin.write,
-                json.dumps(tools_request) + "\n"
-            )
-            await asyncio.to_thread(process.stdin.flush)
-
-            # Add timeout to prevent indefinite hanging
-            try:
-                response_line = await asyncio.wait_for(
-                    asyncio.to_thread(process.stdout.readline),
-                    timeout=5.0  # 5 second timeout
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout waiting for response from server: {server_name}")
-                return (server_name, [], "Timeout waiting for response")
-
-        # Strip whitespace/newlines before checking and parsing
-        response_line_stripped = response_line.strip()
-        if not response_line_stripped:
-            logger.warning(f"Empty response (after stripping) from server: {server_name}")
-            return (server_name, [], "Empty response from server")
-
-        response_data = json.loads(response_line_stripped)
+        # The per-process stdio router serializes stdin writes and matches the
+        # response by JSON-RPC ID, so this is safe alongside gateway traffic.
+        try:
+            response_data = await get_stdio_router(process, server_name).request(tools_request, timeout=5.0)
+        except StdioRequestTimeout:
+            logger.warning(f"Timeout waiting for response from server: {server_name}")
+            return (server_name, [], "Timeout waiting for response")
+        except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+            return (server_name, [], f"Process pipe broken: {e}")
 
         # Check for JSON-RPC error
         if "error" in response_data:
@@ -621,12 +601,6 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen, lock:
             logger.warning(f"Unexpected response format from {server_name}")
             return (server_name, [], "Unexpected response format")
 
-    except json.JSONDecodeError as e:
-        logger.error(
-            f"Invalid JSON response from {server_name}: {e}. "
-            f"Raw response: {response_line_stripped!r}"
-        )
-        return (server_name, [], f"Invalid JSON: {e}")
     except Exception as e:
         logger.error(f"Error querying tools from {server_name}: {e}")
         return (server_name, [], str(e))
@@ -1036,21 +1010,9 @@ def _add_unified_tools_endpoint(app: FastAPI, secure_mode: bool) -> None:
 
         logger.info(f"Discovering tools from {len(server_processes)} MCP server(s)")
 
-        # Clean up stale locks for servers that no longer exist
-        current_server_names = set(server_processes.keys())
-        stale_server_names = set(_process_locks.keys()) - current_server_names
-        for stale_name in stale_server_names:
-            del _process_locks[stale_name]
-            logger.debug(f"Removed stale lock for server: {stale_name}")
-
-        # Ensure all servers have locks
-        for server_name in server_processes:
-            if server_name not in _process_locks:
-                _process_locks[server_name] = threading.Lock()
-
         # Query all servers concurrently using asyncio.gather
         query_tasks = [
-            _query_server_tools(server_name, process, _process_locks[server_name])
+            _query_server_tools(server_name, process)
             for server_name, process in server_processes.items()
         ]
 
