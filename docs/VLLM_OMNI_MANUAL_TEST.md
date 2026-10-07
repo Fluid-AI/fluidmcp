@@ -22,14 +22,14 @@ cd /workspaces/fluidmcp
 fluidmcp run examples/vllm-omni-generation.json --file --start-server
 ```
 
-Server starts on: **http://localhost:8099**
+Server starts on: **http://localhost:8499**
 
 ### Step 2: Generate an Image
 
 Open a new terminal and run:
 
 ```bash
-curl -X POST http://localhost:8099/api/llm/v1/generate/image \
+curl -X POST http://localhost:8499/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
   -d '{
     "model": "flux-image-gen",
@@ -51,7 +51,7 @@ curl -X POST http://localhost:8099/api/llm/v1/generate/image \
 ```bash
 PREDICTION_ID="abc123xyz"  # Use your actual ID from Step 2
 
-curl http://localhost:8099/api/llm/predictions/$PREDICTION_ID
+curl http://localhost:8499/api/llm/predictions/$PREDICTION_ID
 ```
 
 **Status meanings**:
@@ -79,7 +79,7 @@ When status is `"succeeded"`:
 
 ```bash
 # Generate video (takes 2-5 minutes)
-curl -X POST http://localhost:8099/api/llm/v1/generate/video \
+curl -X POST http://localhost:8499/api/llm/v1/generate/video \
   -H "Content-Type: application/json" \
   -d '{
     "model": "veo-video",
@@ -88,7 +88,7 @@ curl -X POST http://localhost:8099/api/llm/v1/generate/video \
   }'
 
 # Get prediction ID from response, then poll:
-curl http://localhost:8099/api/llm/predictions/YOUR_PREDICTION_ID
+curl http://localhost:8499/api/llm/predictions/YOUR_PREDICTION_ID
 ```
 
 Video URL will be in `output` when status is `"succeeded"`.
@@ -110,7 +110,7 @@ This automatically:
 
 ## Swagger UI (Interactive Testing)
 
-1. Open: **http://localhost:8099/docs**
+1. Open: **http://localhost:8499/docs**
 2. Find: `/api/llm/v1/generate/image`
 3. Click: **"Try it out"**
 4. In the request body, set `"model": "flux-image-gen"` and enter your prompt

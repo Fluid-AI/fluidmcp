@@ -67,7 +67,7 @@ Replicate-backed models are exposed through FluidMCP's **unified, OpenAI-compati
 
 ```bash
 # Create a chat completion using the unified LLM endpoint
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-2-70b",
@@ -198,7 +198,7 @@ Find models at: https://replicate.com/explore
 
 Usage:
 ```bash
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-chat",
@@ -232,7 +232,7 @@ curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
 
 Usage:
 ```bash
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "codellama",
@@ -385,7 +385,7 @@ from openai import OpenAI
 
 # Point OpenAI client to FluidMCP gateway
 client = OpenAI(
-    base_url="http://localhost:8099/api/llm/v1",
+    base_url="http://localhost:8499/api/llm/v1",
     api_key="not-needed"  # FluidMCP uses REPLICATE_API_TOKEN from config
 )
 
@@ -403,12 +403,12 @@ print(response.choices[0].message.content)
 
 List all available models (including Replicate):
 ```bash
-curl http://localhost:8099/api/models
+curl http://localhost:8499/api/models
 ```
 
 ### Health Check
 ```bash
-curl http://localhost:8099/health
+curl http://localhost:8499/health
 ```
 
 ## Error Handling
@@ -484,7 +484,7 @@ FluidMCP provides metrics endpoints to monitor cache performance and rate limite
 Get cache performance metrics:
 
 ```bash
-curl http://localhost:8099/api/metrics/cache/stats
+curl http://localhost:8499/api/metrics/cache/stats
 ```
 
 **Response**:
@@ -518,7 +518,7 @@ curl http://localhost:8099/api/metrics/cache/stats
 Force fresh API calls by clearing cache:
 
 ```bash
-curl -X POST http://localhost:8099/api/metrics/cache/clear
+curl -X POST http://localhost:8499/api/metrics/cache/clear
 ```
 
 **Response**:
@@ -536,7 +536,7 @@ Useful for testing or when you need to bypass cached responses.
 Get rate limiter stats for all models:
 
 ```bash
-curl http://localhost:8099/api/metrics/rate-limiters
+curl http://localhost:8499/api/metrics/rate-limiters
 ```
 
 **Response**:
@@ -576,7 +576,7 @@ curl http://localhost:8099/api/metrics/rate-limiters
 Get stats for a specific model:
 
 ```bash
-curl http://localhost:8099/api/metrics/rate-limiters/llama-2-70b
+curl http://localhost:8499/api/metrics/rate-limiters/llama-2-70b
 ```
 
 **Response**:
@@ -603,10 +603,10 @@ curl http://localhost:8099/api/metrics/rate-limiters/llama-2-70b
 3. **Set up alerts**:
    ```bash
    # Alert if cache hit rate drops below 60%
-   curl http://localhost:8099/api/metrics/cache/stats | jq '.hit_rate < 60'
+   curl http://localhost:8499/api/metrics/cache/stats | jq '.hit_rate < 60'
 
    # Alert if any model exceeds 90% utilization
-   curl http://localhost:8099/api/metrics/rate-limiters | jq '.rate_limiters[].utilization_pct > 90'
+   curl http://localhost:8499/api/metrics/rate-limiters | jq '.rate_limiters[].utilization_pct > 90'
    ```
 
 4. **Cost tracking** - Use cache hits to estimate cost savings:
@@ -641,7 +641,7 @@ scrape_configs:
   - job_name: 'fluidmcp'
     scrape_interval: 15s
     static_configs:
-      - targets: ['localhost:8099']
+      - targets: ['localhost:8499']
     metrics_path: '/metrics'  # FluidMCP exposes Prometheus metrics here
 ```
 
@@ -743,7 +743,7 @@ Store tokens in environment variables or secrets management.
 location /api/llm {
     auth_basic "Restricted";
     auth_basic_user_file /etc/nginx/.htpasswd;
-    proxy_pass http://localhost:8099;
+    proxy_pass http://localhost:8499;
 }
 ```
 
@@ -961,7 +961,7 @@ Unlike vLLM which provides instant responses, Replicate uses a prediction-pollin
 1. **Manual cleanup via API** (recommended for scheduled maintenance):
    ```bash
    # Clear all rate limiters (doesn't affect running requests)
-   curl -X POST http://localhost:8099/api/metrics/rate-limiters/clear
+   curl -X POST http://localhost:8499/api/metrics/rate-limiters/clear
    ```
 
 2. **Manual cleanup in code**:
@@ -973,7 +973,7 @@ Unlike vLLM which provides instant responses, Replicate uses a prediction-pollin
 3. **Monitor registry size**:
    ```bash
    # Check number of registered limiters
-   curl http://localhost:8099/api/metrics/rate-limiters | jq '.total_models'
+   curl http://localhost:8499/api/metrics/rate-limiters | jq '.total_models'
    ```
 
 4. **Use stable model IDs** (best practice):
@@ -1051,9 +1051,9 @@ export REPLICATE_API_TOKEN="r8_..."
 # Run the example config
 fluidmcp run examples/replicate-inference.json --file --start-server
 
-# Server runs on http://localhost:8099
+# Server runs on http://localhost:8499
 # Test with:
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-2-70b",

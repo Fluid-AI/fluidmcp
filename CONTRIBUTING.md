@@ -55,10 +55,10 @@ mkdir -p /tmp/test-directory
 # Run with sample config
 fluidmcp run examples/sample-config.json --file --start-server
 
-# Server will start on port 8099 with Swagger UI at http://localhost:8099/docs
+# Server will start on port 8499 with Swagger UI at http://localhost:8499/docs
 
 # In another terminal, test the endpoint
-curl -X POST http://localhost:8099/filesystem/mcp \
+curl -X POST http://localhost:8499/filesystem/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
@@ -100,7 +100,7 @@ fluidmcp/
 - **Installation Directory**: `.fmcp-packages/Author/Package/Version/`
 - **Default Ports**:
   - `8090` - Individual package server (MCP_CLIENT_SERVER_PORT)
-  - `8099` - All packages unified server (MCP_CLIENT_SERVER_ALL_PORT)
+  - `8499` - All packages unified server (MCP_CLIENT_SERVER_ALL_PORT)
 
 ## 🛠️ Development Workflow
 
@@ -212,7 +212,7 @@ export MCP_TOKEN="..."
 
 # Port configuration
 export MCP_CLIENT_SERVER_PORT=8090
-export MCP_CLIENT_SERVER_ALL_PORT=8099
+export MCP_CLIENT_SERVER_ALL_PORT=8499
 ```
 
 ## 🚀 Submitting a Pull Request

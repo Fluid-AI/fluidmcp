@@ -141,7 +141,7 @@ MCP server configurations support three formats:
 
 ### Key Ports
 - `8090` - Individual package server (MCP_CLIENT_SERVER_PORT)
-- `8099` - All packages unified server (MCP_CLIENT_SERVER_ALL_PORT)
+- `8499` - All packages unified server (MCP_CLIENT_SERVER_ALL_PORT)
 
 ## CLI Commands
 
@@ -184,11 +184,11 @@ mkdir -p /tmp/test-directory
 # Run sample config with direct server configurations (no installation required)
 fluidmcp run examples/sample-config.json --file --start-server
 
-# Server runs on http://localhost:8099
-# Swagger UI available at http://localhost:8099/docs
+# Server runs on http://localhost:8499
+# Swagger UI available at http://localhost:8499/docs
 
 # Test an endpoint
-curl -X POST http://localhost:8099/filesystem/mcp \
+curl -X POST http://localhost:8499/filesystem/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
@@ -303,7 +303,7 @@ REPLICATE_API_TOKEN  # Replicate API token for model inference
 
 # Port configuration
 MCP_CLIENT_SERVER_PORT=8090
-MCP_CLIENT_SERVER_ALL_PORT=8099
+MCP_CLIENT_SERVER_ALL_PORT=8499
 
 # Server startup configuration
 MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (default: 5)
@@ -349,7 +349,7 @@ EOF
 fluidmcp run replicate-config.json --file --start-server
 
 # Test the model via the unified OpenAI-compatible chat completions endpoint
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-2-70b",
@@ -630,7 +630,7 @@ fluidmcp run omni-config.json --file --start-server
 
 # 3. Generate an image (OpenAI-compatible format)
 # Note: Add -H "Authorization: Bearer YOUR_TOKEN" if running in secure mode
-curl -X POST http://localhost:8099/api/llm/v1/generate/image \
+curl -X POST http://localhost:8499/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
   -d '{"model": "flux-image", "prompt": "A serene Japanese garden with cherry blossoms"}'
 ```

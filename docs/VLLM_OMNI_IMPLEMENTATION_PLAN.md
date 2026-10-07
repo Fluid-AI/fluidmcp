@@ -181,7 +181,7 @@ vLLM supports vision-language models (VLMs) that accept both text and images:
 
 **API Usage** (OpenAI-compatible):
 ```bash
-curl -X POST http://localhost:8099/api/llm/llava/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/llava/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llava",
@@ -371,7 +371,7 @@ Shell script demonstrating all vLLM Omni capabilities:
 # Example: vLLM Omni - Vision, Image Gen, Video Gen
 
 # 1. Vision: Image understanding (vLLM)
-curl -X POST http://localhost:8099/api/llm/llava/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/llava/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llava",
@@ -385,7 +385,7 @@ curl -X POST http://localhost:8099/api/llm/llava/v1/chat/completions \
   }'
 
 # 2. Image Generation: Text-to-image (Replicate)
-curl -X POST http://localhost:8099/api/llm/v1/generate/image \
+curl -X POST http://localhost:8499/api/llm/v1/generate/image \
   -H "Content-Type: application/json" \
   -d '{
     "model": "flux-image",
@@ -395,7 +395,7 @@ curl -X POST http://localhost:8099/api/llm/v1/generate/image \
 # Returns: {"prediction_id": "abc123", "status": "processing"}
 
 # 3. Video Generation: Text-to-video (Replicate)
-curl -X POST http://localhost:8099/api/llm/v1/generate/video \
+curl -X POST http://localhost:8499/api/llm/v1/generate/video \
   -H "Content-Type: application/json" \
   -d '{
     "model": "hunyuan-video",
@@ -405,7 +405,7 @@ curl -X POST http://localhost:8099/api/llm/v1/generate/video \
 # Returns: {"prediction_id": "xyz789", "status": "starting"}
 
 # 4. Image-to-Video: Animate image (Replicate)
-curl -X POST http://localhost:8099/api/llm/v1/animate \
+curl -X POST http://localhost:8499/api/llm/v1/animate \
   -H "Content-Type: application/json" \
   -d '{
     "model": "stable-video",
@@ -414,7 +414,7 @@ curl -X POST http://localhost:8099/api/llm/v1/animate \
   }'
 
 # 5. Check Status (for async gen)
-curl http://localhost:8099/api/llm/predictions/xyz789
+curl http://localhost:8499/api/llm/predictions/xyz789
 # Returns: {"status": "succeeded", "output": ["https://cdn.url/video.mp4"]}
 ```
 
@@ -671,7 +671,7 @@ For basic support and prototyping, this cost structure is typically acceptable. 
 
 4. **Test vision API**:
    ```bash
-   curl -X POST http://localhost:8099/api/llm/llava/v1/chat/completions \
+   curl -X POST http://localhost:8499/api/llm/llava/v1/chat/completions \
      -H "Content-Type: application/json" \
      -d @examples/vision-request.json
    ```
