@@ -62,10 +62,10 @@ sqlalchemy==2.0.41
 pymysql==1.1.1
 
 # OMC MCP Server - Data Science dependencies
-numpy==1.24.0
-pandas==2.0.0
-scipy==1.11.0
-matplotlib==3.7.0
+numpy==1.26.4
+pandas==2.1.4
+scipy==1.11.4
+matplotlib==3.8.2
 plotly==5.18.0
 pymssql==2.3.1
 psycopg2-binary==2.9.10
