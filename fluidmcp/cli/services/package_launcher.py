@@ -220,6 +220,17 @@ async def _proxy_to_http_server(
     # A JSON-RPC notification (no "id") gets no JSON-RPC response by spec —
     # don't attempt to parse one, or an empty/non-JSON ack body raises here.
     is_notification = "id" not in payload
+    # All downstream clients share the subprocess's upstream session. Preserve
+    # their IDs only in this request's stack; never put a repeated client ID on
+    # the upstream wire. Do not mutate the caller's request or add IDs to notifications.
+    outgoing = payload if is_notification else {**payload, "id": uuid.uuid4().hex}
+
+    def restore_response(message):
+        if (not isinstance(message, dict) or message.get("jsonrpc") != "2.0"
+                or message.get("id") != outgoing["id"]
+                or ("result" in message) == ("error" in message)):
+            raise HTTPException(502, "Upstream MCP response does not match the forwarded request")
+        return {**message, "id": payload["id"]}
 
     # Use the caller-supplied shared pool when available. If not (e.g. tool
     # discovery at startup, or SSE fallback paths), create a short-lived client
@@ -229,7 +240,7 @@ async def _proxy_to_http_server(
         client = httpx.AsyncClient(timeout=timeout)
 
     try:
-        resp = await client.post(mcp_url, json=payload, headers=headers, timeout=timeout)
+        resp = await client.post(mcp_url, json=outgoing, headers=headers, timeout=timeout)
         resp.raise_for_status()
         upstream_session_id = resp.headers.get("mcp-session-id")
 
@@ -240,11 +251,20 @@ async def _proxy_to_http_server(
         # Unwrap the SSE envelope to get the plain JSON-RPC payload.
         content_type = resp.headers.get("content-type", "")
         if "text/event-stream" in content_type:
-            for line in resp.text.splitlines():
-                if line.startswith("data: "):
-                    return json.loads(line[6:]), upstream_session_id
-            raise Exception(f"No data line in SSE response: {resp.text!r}")
-        return resp.json(), upstream_session_id
+            from httpx_sse import EventSource
+
+            for event in EventSource(resp).iter_sse():
+                if not event.data:
+                    continue
+                message = json.loads(event.data)
+                # Progress notifications/server requests are not the response.
+                if isinstance(message, dict) and "method" in message:
+                    continue
+                return restore_response(message), upstream_session_id
+            raise HTTPException(502, "Upstream MCP stream ended without a response")
+        return restore_response(resp.json()), upstream_session_id
+    except HTTPException:
+        raise
     except httpx.HTTPStatusError as e:
         raise HTTPException(
             e.response.status_code,
