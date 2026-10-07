@@ -28,6 +28,7 @@ class NetworkSubprocessHandle:
         base_url:    Base HTTP URL, e.g. "http://127.0.0.1:8000".
         transport:   Transport type: "sse" or "http".
         http_client: Shared httpx.AsyncClient for HTTP transport (None for SSE).
+        sse_client: Initialized MCP SDK session owner for SSE transport.
         pid:         Delegated to the underlying process.
         returncode:  Delegated to the underlying process.
     """
@@ -37,13 +38,14 @@ class NetworkSubprocessHandle:
         self.base_url = base_url
         self.transport = transport
         self.session_id = session_id
+        self.sse_client = None
 
         # HTTP transport gets a single long-lived client shared across all requests to
         # this server. Reusing pooled TCP connections lets 100 concurrent gateway
         # requests reach FastMCP simultaneously instead of one-at-a-time (each new
         # AsyncClient() would pay a fresh TCP handshake, staggering arrival and forcing
-        # FastMCP to process them serially). SSE transport doesn't need this — it uses
-        # a streaming GET, not repeated POSTs.
+        # FastMCP to process them serially). The MCP SDK owns the equivalent
+        # connection pool and event stream for SSE transport.
         if transport == "http":
             import os
             self.http_client = httpx.AsyncClient(
@@ -57,6 +59,9 @@ class NetworkSubprocessHandle:
             logger.debug(f"Created shared httpx client pool for {base_url}")
         else:
             self.http_client = None
+            if transport == "sse":
+                from .sse_client import SseJsonRpcClient
+                self.sse_client = SseJsonRpcClient(base_url)
 
     @property
     def pid(self):
@@ -79,7 +84,10 @@ class NetworkSubprocessHandle:
         return self._process.wait(timeout=timeout)
 
     async def aclose(self):
-        """Close the shared HTTP client pool. Call this when the server stops."""
+        """Close the owned MCP session and HTTP pool when the server stops."""
+        if self.sse_client is not None:
+            await self.sse_client.aclose()
+            self.sse_client = None
         if self.http_client is not None:
             await self.http_client.aclose()
             self.http_client = None
@@ -93,7 +101,7 @@ class NetworkSubprocessHandle:
         schedule the coroutine as a fire-and-forget task; otherwise we run it
         synchronously. Either way the pool gets closed without blocking the caller.
         """
-        if self.http_client is not None:
+        if self.http_client is not None or self.sse_client is not None:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():

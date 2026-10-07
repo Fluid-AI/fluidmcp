@@ -1187,7 +1187,7 @@ class ServerManager:
 
         After the process is spawned we:
           1. Poll until the HTTP server is accepting connections (max 30 s).
-          2. Discover and cache tools via POST /messages/.
+          2. Initialize an MCP SSE session and discover/cache tools through it.
           3. Return a NetworkSubprocessHandle wrapping the real Popen.
 
         Args:
@@ -1243,10 +1243,20 @@ class ServerManager:
                 pass
             return None
 
-        # Discover and cache tools via HTTP
-        await self._discover_and_cache_tools_network(id, url, session_id=None)
-
-        return NetworkSubprocessHandle(process=process, base_url=url, transport="sse", session_id=None)
+        handle = NetworkSubprocessHandle(process=process, base_url=url, transport="sse")
+        try:
+            await asyncio.wait_for(handle.sse_client.start(), timeout=30)
+            await self._discover_and_cache_tools_network(id, url, sse_client=handle.sse_client)
+        except BaseException:
+            try:
+                await handle.aclose()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                self._release_port(port)
+                await asyncio.to_thread(process.wait, timeout=5)
+            raise
+        return handle
 
     async def _handshake_http_subprocess(
         self,
@@ -1401,37 +1411,29 @@ class ServerManager:
         return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
 
     async def _discover_and_cache_tools_network(
-        self, server_id: str, base_url: str, session_id: str = None
+        self, server_id: str, base_url: str, session_id: str = None, sse_client=None
     ) -> None:
         """
         Discover tools from an SSE or HTTP MCP server and cache in database.
 
-        For SSE servers (session_id=None), posts to /messages/ with no special headers.
-        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
+        SSE uses the initialized session; HTTP uses POST /mcp, including for
+        stateless servers that have no session ID.
 
         Args:
             server_id:  Server identifier.
             base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
         """
 
-        if session_id is not None:
-            url = f"{base_url.rstrip('/')}/mcp"
-            headers = {
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-                "Mcp-Session-Id": session_id,
-            }
-        else:
-            url = f"{base_url.rstrip('/')}/messages/"
-            headers = {}
-
         tools_request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=tools_request, headers=headers)
-                resp.raise_for_status()
-                response = _parse_mcp_response(resp) if session_id is not None else resp.json()
+            if sse_client is not None:
+                response = await sse_client.request(tools_request, timeout=10.0)
+            else:
+                from .package_launcher import _proxy_to_http_server
+                response, _ = await _proxy_to_http_server(
+                    base_url, tools_request, timeout=10.0, session_id=session_id,
+                )
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
