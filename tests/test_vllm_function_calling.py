@@ -5,8 +5,14 @@ These tests verify that FluidMCP correctly forwards `tools` and `tool_choice`
 parameters to vLLM and returns the response unchanged (Mode 1: pass-through).
 """
 
+import importlib
 import pytest
 from unittest.mock import AsyncMock, patch, Mock
+
+# On Python 3.10, mock.patch("fluidmcp.cli.services.run_servers.X") resolves
+# `run_servers` via getattr on the package, which returns the re-exported
+# run_servers() function rather than the module. Patch the module object directly.
+run_servers_module = importlib.import_module("fluidmcp.cli.services.run_servers")
 
 
 class TestVLLMFunctionCallingPassThrough:
@@ -50,9 +56,9 @@ class TestVLLMFunctionCallingPassThrough:
         }
 
         # Patch _get_http_client and _llm_endpoints
-        with patch('fluidmcp.cli.services.run_servers._get_http_client') as mock_get_client:
-            with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"test-model": mock_config}):
-                with patch('fluidmcp.cli.services.run_servers._llm_processes', {"test-model": None}):
+        with patch.object(run_servers_module, '_get_http_client') as mock_get_client:
+            with patch.object(run_servers_module, '_llm_endpoints', {"test-model": mock_config}):
+                with patch.object(run_servers_module, '_llm_processes', {"test-model": None}):
                     mock_get_client.return_value = mock_client
 
                     # Import after patching
@@ -125,9 +131,9 @@ class TestVLLMFunctionCallingPassThrough:
             "chat": "/v1/chat/completions"
         }
 
-        with patch('fluidmcp.cli.services.run_servers._get_http_client') as mock_get_client:
-            with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"test-model": mock_config}):
-                with patch('fluidmcp.cli.services.run_servers._llm_processes', {"test-model": None}):
+        with patch.object(run_servers_module, '_get_http_client') as mock_get_client:
+            with patch.object(run_servers_module, '_llm_endpoints', {"test-model": mock_config}):
+                with patch.object(run_servers_module, '_llm_processes', {"test-model": None}):
                     mock_get_client.return_value = mock_client
 
                     from fluidmcp.cli.services.run_servers import _proxy_llm_request
@@ -198,9 +204,9 @@ class TestVLLMFunctionCallingPassThrough:
             "chat": "/v1/chat/completions"
         }
 
-        with patch('fluidmcp.cli.services.run_servers._get_http_client') as mock_get_client:
-            with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"test-model": mock_config}):
-                with patch('fluidmcp.cli.services.run_servers._llm_processes', {"test-model": None}):
+        with patch.object(run_servers_module, '_get_http_client') as mock_get_client:
+            with patch.object(run_servers_module, '_llm_endpoints', {"test-model": mock_config}):
+                with patch.object(run_servers_module, '_llm_processes', {"test-model": None}):
                     mock_get_client.return_value = mock_client
 
                     from fluidmcp.cli.services.run_servers import _proxy_llm_request
@@ -250,9 +256,9 @@ class TestVLLMFunctionCallingPassThrough:
             "chat": "/v1/chat/completions"
         }
 
-        with patch('fluidmcp.cli.services.run_servers._get_http_client') as mock_get_client:
-            with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"test-model": mock_config}):
-                with patch('fluidmcp.cli.services.run_servers._llm_processes', {"test-model": None}):
+        with patch.object(run_servers_module, '_get_http_client') as mock_get_client:
+            with patch.object(run_servers_module, '_llm_endpoints', {"test-model": mock_config}):
+                with patch.object(run_servers_module, '_llm_processes', {"test-model": None}):
                     mock_get_client.return_value = mock_client
 
                     from fluidmcp.cli.services.run_servers import _proxy_llm_request
@@ -288,8 +294,8 @@ class TestVLLMFunctionCallingPassThrough:
         mock_process = Mock()
         mock_process.is_running.return_value = True
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {"test-model": mock_config}):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {"test-model": mock_process}):
+        with patch.object(run_servers_module, '_llm_endpoints', {"test-model": mock_config}):
+            with patch.object(run_servers_module, '_llm_processes', {"test-model": mock_process}):
                 from fluidmcp.cli.services.run_servers import _validate_streaming_request
 
                 # Should not raise exception for valid configuration

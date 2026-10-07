@@ -1,10 +1,16 @@
 """Unit tests for health endpoint in run_servers.py"""
 
+import importlib
 import pytest
 import subprocess
 from unittest.mock import Mock, patch, MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+# On Python 3.10, mock.patch("fluidmcp.cli.services.run_servers.X") resolves
+# `run_servers` via getattr on the package, which returns the re-exported
+# run_servers() function rather than the module. Patch the module object directly.
+run_servers_module = importlib.import_module("fluidmcp.cli.services.run_servers")
 
 
 @pytest.fixture
@@ -37,7 +43,7 @@ class TestHealthEndpoint:
         mock_process = Mock(spec=subprocess.Popen)
         mock_process.poll.return_value = None  # Process is running
 
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.return_value = {
                 "server1": mock_process,
                 "server2": mock_process
@@ -57,7 +63,7 @@ class TestHealthEndpoint:
         mock_process = Mock(spec=subprocess.Popen)
         mock_process.poll.return_value = 1  # Process has exited
 
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.return_value = {
                 "server1": mock_process,
                 "server2": mock_process
@@ -80,7 +86,7 @@ class TestHealthEndpoint:
         stopped_process = Mock(spec=subprocess.Popen)
         stopped_process.poll.return_value = 1
 
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.return_value = {
                 "server1": running_process,
                 "server2": stopped_process
@@ -96,7 +102,7 @@ class TestHealthEndpoint:
 
     def test_health_with_no_servers(self, client):
         """Test health endpoint when no servers are registered"""
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.return_value = {}
 
             response = client.get("/health")
@@ -109,7 +115,7 @@ class TestHealthEndpoint:
 
     def test_health_with_none_processes(self, client):
         """Test health endpoint when _get_server_processes returns None"""
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.return_value = None
 
             response = client.get("/health")
@@ -122,7 +128,7 @@ class TestHealthEndpoint:
 
     def test_health_with_exception(self, client):
         """Test health endpoint when an exception occurs"""
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.side_effect = RuntimeError("Unexpected error")
 
             response = client.get("/health")
@@ -139,7 +145,7 @@ class TestHealthEndpoint:
         mock_process = Mock(spec=subprocess.Popen)
         mock_process.poll.return_value = None
 
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             mock_get.return_value = {"server1": mock_process}
 
             response = client.get("/health")
@@ -163,7 +169,7 @@ class TestHealthEndpoint:
         mock_process = Mock(spec=subprocess.Popen)
         mock_process.poll.return_value = None
 
-        with patch('fluidmcp.cli.services.run_servers._get_server_processes') as mock_get:
+        with patch.object(run_servers_module, '_get_server_processes') as mock_get:
             # Mix of valid process and None
             mock_get.return_value = {
                 "server1": mock_process,

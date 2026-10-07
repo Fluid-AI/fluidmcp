@@ -362,13 +362,19 @@ class TestE2EGitHubServerFlow:
 
             print(f"✅ JSON-RPC prompts/list successful, received {len(prompts)} prompts: {prompt_names}")
 
-            # Test 2: Get the example prompt
+            # Test 2: Get the example prompt via JSON-RPC (the gateway has no
+            # /mcp/prompts/get convenience route; prompts go through /mcp)
             response = requests.post(
-                f"http://127.0.0.1:{test_port}/python-basic/mcp/prompts/get",
+                f"http://127.0.0.1:{test_port}/python-basic/mcp",
                 json={
-                    "name": "example-prompt",
-                    "arguments": {
-                        "arg1": "test-value"
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "prompts/get",
+                    "params": {
+                        "name": "example-prompt",
+                        "arguments": {
+                            "arg1": "test-value"
+                        }
                     }
                 },
                 timeout=10

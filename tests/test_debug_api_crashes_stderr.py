@@ -66,7 +66,7 @@ class TestGetServerCrashes:
         assert data["server"] == "srv1"
         assert data["crashes"] == []
         assert data["restart_count"] == 0
-        assert data["crashes_per_hour"] == 0
+        assert data["crashes_last_hour"] == 0
 
     def test_crashes_returned_with_exit_classification(self, client, server_manager, backend):
         self._register_server(server_manager, "srv1")
@@ -112,7 +112,7 @@ class TestGetServerCrashes:
 
         resp = client.get("/api/servers/srv1/crashes")
         assert resp.status_code == 200
-        assert resp.json()["crashes_per_hour"] == 2
+        assert resp.json()["crashes_last_hour"] == 2
 
     def test_limit_query_param_respected(self, client, server_manager, backend):
         self._register_server(server_manager, "srv1")

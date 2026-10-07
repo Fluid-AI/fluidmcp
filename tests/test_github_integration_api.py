@@ -273,10 +273,14 @@ class TestAddServerFromGitHubMultiServer:
 
 
 class TestAddServerFromGitHubDuplicateId:
-    def test_duplicate_in_memory_returns_409(self):
+    def test_stale_in_memory_entry_does_not_block_add(self):
+        # The DB is the source of truth for duplicates (#443): an in-memory entry
+        # without a DB record (e.g. left by a failed attempt) must not cause a
+        # false 409; it is evicted and replaced by the new config.
         db = _make_db_manager()
         manager = _make_server_manager(db)
-        manager.configs["fs"] = {"id": "fs"}  # Pre-existing entry
+        stale = {"id": "fs"}
+        manager.configs["fs"] = stale
         app = _make_app(db_manager=db, server_manager=manager)
 
         with _github_service_patch(SINGLE_SERVER_METADATA):
@@ -287,7 +291,10 @@ class TestAddServerFromGitHubDuplicateId:
                     headers={"X-GitHub-Token": "ghp_testtoken"},
                 )
 
-        assert resp.status_code == 409
+        assert resp.status_code == 200
+        assert manager.configs["fs"] is not stale
+        assert manager.configs["fs"]["id"] == "fs"
+        db.save_server_config.assert_awaited()
 
     def test_duplicate_in_database_returns_409(self):
         db = _make_db_manager()

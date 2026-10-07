@@ -1,10 +1,14 @@
 """Unit tests for run_servers.py"""
 
+import importlib
 import json
 import os
+import subprocess
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import AsyncMock, Mock, patch, MagicMock
+
+from fastapi.testclient import TestClient
 
 from fluidmcp.cli.services.config_resolver import ServerConfig
 from fluidmcp.cli.services.run_servers import (
@@ -15,6 +19,11 @@ from fluidmcp.cli.services.run_servers import (
     _serve_async,
 )
 
+# On Python 3.10, mock.patch("fluidmcp.cli.services.run_servers.X") resolves
+# `run_servers` via getattr on the package, which returns the re-exported
+# run_servers() function rather than the module. Patch the module object directly.
+run_servers_module = importlib.import_module("fluidmcp.cli.services.run_servers")
+
 
 class TestRunServers:
     """Tests for run_servers function"""
@@ -23,7 +32,7 @@ class TestRunServers:
         config = ServerConfig(servers={})
 
         with patch.dict(os.environ, {}, clear=False):
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
+            with patch.object(run_servers_module, 'uvicorn'):
                 run_servers(config, secure_mode=True, token="test-token", start_server=False)
 
             assert os.environ.get("FMCP_BEARER_TOKEN") == "test-token"
@@ -32,8 +41,8 @@ class TestRunServers:
     def test_calls_install_when_needed(self):
         config = ServerConfig(servers={}, needs_install=True)
 
-        with patch('fluidmcp.cli.services.run_servers._install_packages_from_config') as mock_install:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
+        with patch.object(run_servers_module, '_install_packages_from_config') as mock_install:
+            with patch.object(run_servers_module, 'uvicorn'):
                 run_servers(config, start_server=False)
 
             mock_install.assert_called_once_with(config)
@@ -41,11 +50,39 @@ class TestRunServers:
     def test_skips_install_when_not_needed(self):
         config = ServerConfig(servers={}, needs_install=False)
 
-        with patch('fluidmcp.cli.services.run_servers._install_packages_from_config') as mock_install:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
+        with patch.object(run_servers_module, '_install_packages_from_config') as mock_install:
+            with patch.object(run_servers_module, 'uvicorn'):
                 run_servers(config, start_server=False)
 
             mock_install.assert_not_called()
+
+    @staticmethod
+    def _run_with_startup(config, spawned_process):
+        """Run run_servers() and fire the app's startup/shutdown events.
+
+        MCP servers are launched via ServerManager._spawn_mcp_process inside a
+        FastAPI startup event, so the app is captured from _start_server and
+        driven through TestClient to execute that event.
+        """
+        captured = {}
+
+        def fake_start_server(app, port, force_reload):
+            captured["app"] = app
+
+        with patch.object(run_servers_module, '_start_server', side_effect=fake_start_server), \
+             patch.object(run_servers_module.ServerManager, '_spawn_mcp_process',
+                          new_callable=AsyncMock, return_value=spawned_process) as mock_spawn, \
+             patch.dict(run_servers_module._server_processes, clear=True):
+            run_servers(config, start_server=True)
+            app = captured["app"]
+            with TestClient(app):
+                pass
+            registered = dict(run_servers_module._server_processes)
+        server_manager = app.state.server_manager
+        managed = dict(server_manager.processes)
+        # Prevent ServerManager's atexit hook from acting on the mock process.
+        server_manager.processes.clear()
+        return app, mock_spawn, managed, registered
 
     def test_launches_servers_and_adds_routers(self, tmp_path):
         # Setup mock package
@@ -59,41 +96,44 @@ class TestRunServers:
             servers={"test-server": {"install_path": str(pkg_dir)}}
         )
 
-        mock_router = Mock()
-        mock_process = Mock()
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
-            mock_launch.return_value = ("test-pkg", mock_router, mock_process)
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                with patch('fluidmcp.cli.services.run_servers.FastAPI') as mock_fastapi:
-                    mock_app = Mock()
-                    mock_fastapi.return_value = mock_app
-                    run_servers(config, start_server=False)
+        mock_process = Mock(spec=subprocess.Popen)
+        mock_process.poll.return_value = None
+        mock_process.pid = 999999999  # nonexistent PID; keeps the health monitor inert
 
-                    mock_launch.assert_called_once()
-                    # Check that our test router was added (will also include management router)
-                    assert any(call[0][0] == mock_router for call in mock_app.include_router.call_args_list)
+        app, mock_spawn, managed, registered = self._run_with_startup(config, mock_process)
+
+        mock_spawn.assert_awaited_once()
+        server_id, spawn_cfg = mock_spawn.await_args.args
+        assert server_id == "test-server"
+        assert spawn_cfg["install_path"] == str(pkg_dir)
+        assert spawn_cfg["working_dir"] == str(pkg_dir)
+        # The launched process is routable through the unified dynamic router
+        assert managed == {"test-server": mock_process}
+        assert registered == {"test-server": mock_process}
+        route_paths = {route.path for route in app.routes}
+        assert "/{server_name}/mcp" in route_paths
 
     def test_skips_server_without_install_path(self):
         config = ServerConfig(
             servers={"test-server": {"command": "echo"}}  # No install_path
         )
 
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+        _, mock_spawn, managed, registered = self._run_with_startup(config, Mock())
 
-            mock_launch.assert_not_called()
+        mock_spawn.assert_not_awaited()
+        assert managed == {}
+        assert registered == {}
 
     def test_skips_server_with_nonexistent_path(self, tmp_path):
         config = ServerConfig(
             servers={"test-server": {"install_path": "/nonexistent/path"}}
         )
 
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+        _, mock_spawn, managed, registered = self._run_with_startup(config, Mock())
 
-            mock_launch.assert_not_called()
+        mock_spawn.assert_not_awaited()
+        assert managed == {}
+        assert registered == {}
 
 
 class TestInstallPackagesFromConfig:
@@ -110,10 +150,10 @@ class TestInstallPackagesFromConfig:
             metadata_path=tmp_path / "config.json"
         )
 
-        with patch('fluidmcp.cli.services.run_servers.install_package') as mock_install:
-            with patch('fluidmcp.cli.services.run_servers.parse_package_string') as mock_parse:
+        with patch.object(run_servers_module, 'install_package') as mock_install:
+            with patch.object(run_servers_module, 'parse_package_string') as mock_parse:
                 mock_parse.return_value = {"author": "Author", "package_name": "Pkg", "version": "1.0.0"}
-                with patch('fluidmcp.cli.services.run_servers.INSTALLATION_DIR', tmp_path):
+                with patch.object(run_servers_module, 'INSTALLATION_DIR', tmp_path):
                     # Create expected directory
                     pkg_dir = tmp_path / "Author" / "Pkg" / "1.0.0"
                     pkg_dir.mkdir(parents=True)
@@ -128,7 +168,7 @@ class TestInstallPackagesFromConfig:
             servers={"test": {"command": "echo"}}  # No fmcp_package
         )
 
-        with patch('fluidmcp.cli.services.run_servers.install_package') as mock_install:
+        with patch.object(run_servers_module, 'install_package') as mock_install:
             _install_packages_from_config(config)
             mock_install.assert_not_called()
 
@@ -158,7 +198,7 @@ class TestUpdateEnvFromCommonEnv:
 
         pkg = {"package_name": "test-pkg"}
 
-        with patch('fluidmcp.cli.services.run_servers.INSTALLATION_DIR', tmp_path):
+        with patch.object(run_servers_module, 'INSTALLATION_DIR', tmp_path):
             _update_env_from_common_env(pkg_dir, pkg)
 
         # Verify metadata was updated
@@ -179,7 +219,7 @@ class TestUpdateEnvFromCommonEnv:
 
         pkg = {"package_name": "test-pkg"}
 
-        with patch('fluidmcp.cli.services.run_servers.INSTALLATION_DIR', tmp_path):
+        with patch.object(run_servers_module, 'INSTALLATION_DIR', tmp_path):
             _update_env_from_common_env(pkg_dir, pkg)
 
         env_file = tmp_path / ".env"
@@ -192,8 +232,8 @@ class TestStartServer:
     def test_starts_server_on_free_port(self):
         mock_app = Mock()
 
-        with patch('fluidmcp.cli.services.run_servers.is_port_in_use', return_value=False):
-            with patch('fluidmcp.cli.services.run_servers.asyncio.run') as mock_asyncio_run:
+        with patch.object(run_servers_module, 'is_port_in_use', return_value=False):
+            with patch.object(run_servers_module.asyncio, 'run') as mock_asyncio_run:
                 _start_server(mock_app, 8099, force_reload=False)
 
                 mock_asyncio_run.assert_called_once()
@@ -209,9 +249,9 @@ class TestStartServer:
             # Subsequent calls in retry loop: port is free
             return call_count[0] == 1
 
-        with patch('fluidmcp.cli.services.run_servers.is_port_in_use', side_effect=is_port_in_use_side_effect):
-            with patch('fluidmcp.cli.services.run_servers.kill_process_on_port') as mock_kill:
-                with patch('fluidmcp.cli.services.run_servers.asyncio.run'):
+        with patch.object(run_servers_module, 'is_port_in_use', side_effect=is_port_in_use_side_effect):
+            with patch.object(run_servers_module, 'kill_process_on_port') as mock_kill:
+                with patch.object(run_servers_module.asyncio, 'run'):
                     _start_server(mock_app, 8099, force_reload=True)
 
                     mock_kill.assert_called_once_with(8099)
@@ -219,8 +259,8 @@ class TestStartServer:
     def test_aborts_when_port_busy_and_no_force_reload(self):
         mock_app = Mock()
 
-        with patch('fluidmcp.cli.services.run_servers.is_port_in_use', return_value=True):
-            with patch('fluidmcp.cli.services.run_servers.asyncio.run') as mock_asyncio_run:
+        with patch.object(run_servers_module, 'is_port_in_use', return_value=True):
+            with patch.object(run_servers_module.asyncio, 'run') as mock_asyncio_run:
                 _start_server(mock_app, 8099, force_reload=False)
 
                 # Should not start server when force_reload is False and port is busy
@@ -230,10 +270,10 @@ class TestStartServer:
         mock_app = Mock()
 
         # Port stays in use even after killing process
-        with patch('fluidmcp.cli.services.run_servers.is_port_in_use', return_value=True):
-            with patch('fluidmcp.cli.services.run_servers.kill_process_on_port'):
-                with patch('fluidmcp.cli.services.run_servers.time.sleep') as mock_sleep:
-                    with patch('fluidmcp.cli.services.run_servers.asyncio.run') as mock_asyncio_run:
+        with patch.object(run_servers_module, 'is_port_in_use', return_value=True):
+            with patch.object(run_servers_module, 'kill_process_on_port'):
+                with patch.object(run_servers_module.time, 'sleep') as mock_sleep:
+                    with patch.object(run_servers_module.asyncio, 'run') as mock_asyncio_run:
                         with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "0.1"}):
                             _start_server(mock_app, 8099, force_reload=True)
 
@@ -251,9 +291,9 @@ class TestStartServer:
             call_count[0] += 1
             return call_count[0] == 1
 
-        with patch('fluidmcp.services.run_servers.is_port_in_use', side_effect=is_port_in_use_side_effect):
-            with patch('fluidmcp.services.run_servers.kill_process_on_port'):
-                with patch('fluidmcp.services.run_servers.asyncio.run'):
+        with patch.object(run_servers_module, 'is_port_in_use', side_effect=is_port_in_use_side_effect):
+            with patch.object(run_servers_module, 'kill_process_on_port'):
+                with patch.object(run_servers_module.asyncio, 'run'):
                     with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "invalid"}):
                         _start_server(mock_app, 8099, force_reload=True)
                         # Should succeed with default timeout instead of crashing
@@ -267,9 +307,9 @@ class TestStartServer:
             call_count[0] += 1
             return call_count[0] == 1
 
-        with patch('fluidmcp.services.run_servers.is_port_in_use', side_effect=is_port_in_use_side_effect):
-            with patch('fluidmcp.services.run_servers.kill_process_on_port'):
-                with patch('fluidmcp.services.run_servers.asyncio.run'):
+        with patch.object(run_servers_module, 'is_port_in_use', side_effect=is_port_in_use_side_effect):
+            with patch.object(run_servers_module, 'kill_process_on_port'):
+                with patch.object(run_servers_module.asyncio, 'run'):
                     with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "-5"}):
                         _start_server(mock_app, 8099, force_reload=True)
                         # Should succeed with default timeout instead of hanging
@@ -283,9 +323,9 @@ class TestStartServer:
             call_count[0] += 1
             return call_count[0] == 1
 
-        with patch('fluidmcp.services.run_servers.is_port_in_use', side_effect=is_port_in_use_side_effect):
-            with patch('fluidmcp.services.run_servers.kill_process_on_port'):
-                with patch('fluidmcp.services.run_servers.asyncio.run'):
+        with patch.object(run_servers_module, 'is_port_in_use', side_effect=is_port_in_use_side_effect):
+            with patch.object(run_servers_module, 'kill_process_on_port'):
+                with patch.object(run_servers_module.asyncio, 'run'):
                     with patch.dict(os.environ, {"MCP_PORT_RELEASE_TIMEOUT": "0"}):
                         _start_server(mock_app, 8099, force_reload=True)
                         # Should succeed with default timeout instead of immediate abort
@@ -294,8 +334,8 @@ class TestStartServer:
         """Test that KeyboardInterrupt is handled gracefully"""
         mock_app = Mock()
 
-        with patch('fluidmcp.services.run_servers.is_port_in_use', return_value=False):
-            with patch('fluidmcp.services.run_servers.asyncio.run', side_effect=KeyboardInterrupt):
+        with patch.object(run_servers_module, 'is_port_in_use', return_value=False):
+            with patch.object(run_servers_module.asyncio, 'run', side_effect=KeyboardInterrupt):
                 # Should not raise, should log instead
                 _start_server(mock_app, 8099, force_reload=False)
 
@@ -303,8 +343,8 @@ class TestStartServer:
         """Test that generic exceptions are caught and logged"""
         mock_app = Mock()
 
-        with patch('fluidmcp.services.run_servers.is_port_in_use', return_value=False):
-            with patch('fluidmcp.services.run_servers.asyncio.run', side_effect=RuntimeError("Test error")):
+        with patch.object(run_servers_module, 'is_port_in_use', return_value=False):
+            with patch.object(run_servers_module.asyncio, 'run', side_effect=RuntimeError("Test error")):
                 # Should not raise, should log instead
                 _start_server(mock_app, 8099, force_reload=False)
 
@@ -312,9 +352,9 @@ class TestStartServer:
         """Test that _serve_async is called with correct app and port"""
         mock_app = Mock()
 
-        with patch('fluidmcp.services.run_servers.is_port_in_use', return_value=False):
-            with patch('fluidmcp.cli.services.run_servers._serve_async') as mock_serve:
-                with patch('fluidmcp.cli.services.run_servers.asyncio.run') as mock_asyncio_run:
+        with patch.object(run_servers_module, 'is_port_in_use', return_value=False):
+            with patch.object(run_servers_module, '_serve_async') as mock_serve:
+                with patch.object(run_servers_module.asyncio, 'run') as mock_asyncio_run:
                     _start_server(mock_app, 8099, force_reload=False)
 
                     # Verify asyncio.run was called with _serve_async coroutine
@@ -333,8 +373,8 @@ class TestServeAsync:
         import asyncio
         mock_app = Mock()
 
-        with patch('fluidmcp.cli.services.run_servers.uvicorn.Config') as mock_config:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn.Server') as mock_server:
+        with patch.object(run_servers_module.uvicorn, 'Config') as mock_config:
+            with patch.object(run_servers_module.uvicorn, 'Server') as mock_server:
                 mock_server_instance = Mock()
                 mock_server.return_value = mock_server_instance
                 # Make serve() a coroutine that returns immediately
@@ -362,7 +402,7 @@ class TestServeAsync:
         import asyncio
         mock_app = Mock()
 
-        with patch('fluidmcp.cli.services.run_servers.uvicorn.Server') as mock_server:
+        with patch.object(run_servers_module.uvicorn, 'Server') as mock_server:
             mock_server_instance = Mock()
             mock_server.return_value = mock_server_instance
             # Track if serve was called

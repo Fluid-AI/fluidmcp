@@ -704,9 +704,14 @@ class TestEdgeCases:
         port = find_free_port(55000, 55100)
         assert 55000 <= port < 55100
 
-        # Test with start = end - 1 (single port range)
-        port = find_free_port(55200, 55201)
-        assert port == 55200
+        # Test with start = end - 1 (single port range). Use an OS-assigned free
+        # port: a hardcoded port in the ephemeral range can be transiently held
+        # by outgoing connections from other tests.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("", 0))
+            free_port = probe.getsockname()[1]
+        port = find_free_port(free_port, free_port + 1)
+        assert port == free_port
 
     def test_is_port_in_use_with_multiple_sockets(self):
         """Test is_port_in_use when multiple sockets exist but only one binds to port"""
