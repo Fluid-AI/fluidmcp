@@ -138,7 +138,7 @@ def setup_frontend_routes(
     # Known SPA routes that should redirect /route → /ui/route when hit bare
     _SPA_ROUTES = {
         "status", "servers", "documentation", "inspector",
-        "llm",
+        "llm", "oauth-callback",
     }
 
     try:
