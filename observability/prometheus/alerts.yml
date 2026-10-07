@@ -1,0 +1,56 @@
+groups:
+  - name: fluidmcp
+    interval: 30s
+    rules:
+      - alert: FluidMCPDown
+        expr: up{job="fluidmcp"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "FluidMCP is unreachable"
+          description: "Prometheus cannot scrape FluidMCP at {{ $labels.instance }}"
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(fluidmcp_errors_total[5m]))
+            /
+            sum(rate(fluidmcp_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on FluidMCP"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      - alert: ServerDown
+        expr: fluidmcp_server_status == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MCP server {{ $labels.server_id }} is down"
+          description: "Server has been in stopped state for more than 1 minute"
+
+      - alert: HighP95Latency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(fluidmcp_request_duration_seconds_bucket[5m])) by (le, server_id)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency on {{ $labels.server_id }}"
+          description: "P95 request latency is {{ $value | humanizeDuration }}"
+
+      - alert: HighGPUMemory
+        expr: fluidmcp_gpu_memory_utilization_ratio > 0.95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU memory near capacity on {{ $labels.server_id }}"
+          description: "GPU utilisation is {{ printf \"%.1f%%\" (mul $value 100) }}"
