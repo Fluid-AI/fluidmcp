@@ -220,16 +220,33 @@ async def _proxy_to_http_server(
     # A JSON-RPC notification (no "id") gets no JSON-RPC response by spec —
     # don't attempt to parse one, or an empty/non-JSON ack body raises here.
     is_notification = "id" not in payload
-    # All downstream clients share the subprocess's upstream session. Preserve
-    # their IDs only in this request's stack; never put a repeated client ID on
-    # the upstream wire. Do not mutate the caller's request or add IDs to notifications.
+    # Different callers can choose the same ID, but their requests reach one
+    # shared upstream MCP session. Give each upstream request its own UUID:
+    #   caller A: original id=1 -> upstream id=UUID_A -> restore id=1 for A
+    #   caller B: original id=1 -> upstream id=UUID_B -> restore id=1 for B
+    #
+    # Each invocation has its own `payload` and `outgoing` local variables.
+    # They stay associated with that invocation across the await below; there
+    # is no shared dictionary keyed by the original (possibly repeated) ID.
+    # Copy the request so payload['id'] remains the caller-facing ID. A
+    # notification has no response to correlate, so leave it without an ID.
     outgoing = payload if is_notification else {**payload, "id": uuid.uuid4().hex}
 
     def restore_response(message):
+        # This closure sees ONLY this invocation's outgoing UUID and original
+        # ID. It validates the response to this invocation's HTTP POST, rather
+        # than choosing a response from a shared queue of callers' responses.
+        # Check the upstream ID BEFORE replacing it: restoring first would hide
+        # a mismatch and could label another caller's result as our own.
+        # A valid response also contains exactly one of `result` or `error`.
         if (not isinstance(message, dict) or message.get("jsonrpc") != "2.0"
                 or message.get("id") != outgoing["id"]
                 or ("result" in message) == ("error" in message)):
             raise HTTPException(502, "Upstream MCP response does not match the forwarded request")
+        # The response is now validated for this request. Restore its original
+        # ID and return to the same waiting HTTP handler. No routing lookup is
+        # performed using the restored ID, so A and B can both safely receive
+        # id=1 on their respective HTTP responses, even if B finishes first.
         return {**message, "id": payload["id"]}
 
     # Use the caller-supplied shared pool when available. If not (e.g. tool
@@ -240,6 +257,9 @@ async def _proxy_to_http_server(
         client = httpx.AsyncClient(timeout=timeout)
 
     try:
+        # httpx associates the returned response with THIS post() call, even
+        # when concurrent calls share its connection pool. The UUID additionally
+        # prevents collisions in the MCP server's own session-level routing.
         resp = await client.post(mcp_url, json=outgoing, headers=headers, timeout=timeout)
         resp.raise_for_status()
         upstream_session_id = resp.headers.get("mcp-session-id")
@@ -249,6 +269,8 @@ async def _proxy_to_http_server(
 
         # FastMCP returns text/event-stream even for non-streaming responses.
         # Unwrap the SSE envelope to get the plain JSON-RPC payload.
+        # Both response formats below go through the same ID validation and
+        # restoration; parsing the envelope alone does not establish ownership.
         content_type = resp.headers.get("content-type", "")
         if "text/event-stream" in content_type:
             from httpx_sse import EventSource
