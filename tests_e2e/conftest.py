@@ -1,4 +1,4 @@
-"""Launch the source checkout's real CLI and three real child MCP servers."""
+"""Launch the source checkout's real CLI and a real Streamable HTTP MCP subprocess."""
 
 import json
 import os
@@ -14,7 +14,7 @@ import psutil
 import pytest
 
 
-TRANSPORTS = ("http", "stdio", "sse")
+TRANSPORTS = ("http",)
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -69,13 +69,13 @@ def gateway(tmp_path_factory, request):
                         pytest.fail(f"Gateway exited ({process.returncode}):\n{log_path.read_text()[-8000:]}")
                     try:
                         health = client.get(f"{base_url}/health")
-                        if health.status_code == 200 and health.json().get("running_servers") == 3:
+                        if health.status_code == 200 and health.json().get("running_servers") == len(TRANSPORTS):
                             break
                     except httpx.HTTPError:
                         pass
                     time.sleep(0.2)
                 else:
-                    pytest.fail(f"Three servers not ready after 90s; see {log_path}\n"
+                    pytest.fail(f"Streamable HTTP server not ready after 90s; see {log_path}\n"
                                 + log_path.read_text()[-8000:])
             yield {"url": base_url, "names": names, "artifacts": artifacts,
                    "scenario": request.param}

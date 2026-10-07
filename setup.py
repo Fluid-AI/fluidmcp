@@ -33,7 +33,7 @@ setup(
         "fastapi",
         "uvicorn",
         "httpx==0.28.1",  # Required for Replicate client (pinned to match requirements.txt)
-        "mcp==1.26.0",  # Network MCP sessions and SSE framing (includes httpx-sse)
+        "httpx-sse==0.4.0",  # Decode event-stream responses from Streamable HTTP MCP servers
         "motor==3.7.1",  # MongoDB async driver (required for fmcp serve)
         "pymongo==4.11.0"  # MongoDB driver (required for fmcp serve)
     ],

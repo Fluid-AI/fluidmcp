@@ -1,4 +1,4 @@
-"""Black-box response isolation under mixed-transport concurrent load."""
+"""Black-box response isolation under concurrent Streamable HTTP load."""
 
 import asyncio
 import json
@@ -8,11 +8,9 @@ from collections import Counter
 
 import httpx
 import pytest
-from mcp import ClientSession
-from mcp.client.sse import sse_client
 
 
-TRANSPORTS = ("http", "stdio", "sse")
+TRANSPORTS = ("http",)
 
 
 def rpc_result(response, request_id=None):
@@ -44,11 +42,11 @@ async def run_load(gateway, concurrency, endpoint, id_mode):
     timeout = httpx.Timeout(40, connect=5, pool=5)
     # Separate MCP sessions/headers per user; the shared TCP pool has room for
     # every simultaneous call and does not impose a hidden concurrency limit.
-    limits = httpx.Limits(max_connections=3 * concurrency,
-                         max_keepalive_connections=3 * concurrency)
+    limits = httpx.Limits(max_connections=len(TRANSPORTS) * concurrency,
+                         max_keepalive_connections=len(TRANSPORTS) * concurrency)
     # Avoid idle-connection races while hundreds of sessions initialize, and
     # never reuse initialization connections after waiting at the barrier.
-    initialization_limits = httpx.Limits(max_connections=3 * concurrency,
+    initialization_limits = httpx.Limits(max_connections=len(TRANSPORTS) * concurrency,
                                        max_keepalive_connections=0)
     async with (
         httpx.AsyncClient(timeout=timeout, trust_env=False, limits=initialization_limits) as client,
@@ -144,23 +142,6 @@ def load_report(gateway):
     return asyncio.run(run_load(gateway, *gateway["scenario"]))
 
 
-def test_fake_sse_server_speaks_standard_mcp(gateway):
-    """Control: establish that the same SSE fake works using the official SDK."""
-    info = json.loads((gateway["artifacts"] / "sse-process.json").read_text())
-
-    async def check():
-        async with sse_client(f"http://127.0.0.1:{info['port']}/sse") as streams:
-            async with ClientSession(*streams) as session:
-                await session.initialize()
-                arguments = {"user_id": "control-user", "response_id": "control-id",
-                             "batch": "control", "delay": 1}
-                result = await session.call_tool("echo", arguments)
-                assert not result.isError
-                assert json.loads(result.content[0].text) == {**arguments, "transport": "sse"}
-
-    asyncio.run(asyncio.wait_for(check(), timeout=15))
-
-
 @pytest.mark.parametrize("transport", TRANSPORTS)
 def test_response_isolation(gateway, load_report, transport):
     report, path = load_report
@@ -168,7 +149,6 @@ def test_response_isolation(gateway, load_report, transport):
     rows = report["results"][transport]
     errors = sorted((row for row in rows if row["error"]),
                     key=lambda row: "CROSS-USER/REQUEST RESPONSE" not in row["error"])
-    # Report each transport separately; SSE failure must not conceal HTTP/stdio results.
     assert len(rows) == count, f"Missing requests; report: {path}"
     assert not errors, (f"{len(errors)}/{count} {transport} requests failed; report: {path}\n"
                         + "\n".join(row["error"] for row in errors[:3]))

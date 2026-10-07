@@ -146,25 +146,40 @@ def find_metadata_file(base_dir: Path) -> Path:
 
     raise FileNotFoundError(f"metadata.json not found in {base_dir}")
 
-async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.0, client=None) -> Optional[dict]:
-    """Forward through an initialized MCP SSE session, restoring the caller ID."""
-    from .sse_client import SseJsonRpcClient
+async def _proxy_to_sse_server(sse_url: str, payload: dict, timeout: float = 60.0) -> dict:
+    """
+    Forward a JSON-RPC request to an SSE MCP server via POST /messages/.
 
-    owned_client = client is None
-    if owned_client:
-        client = SseJsonRpcClient(sse_url)
+    Args:
+        sse_url:  Base URL of the SSE server (e.g. "http://127.0.0.1:8000").
+        payload:  JSON-RPC 2.0 dict to send.
+        timeout:  HTTP request timeout in seconds.
+
+    Returns:
+        Parsed JSON response dict.
+
+    Raises:
+        HTTPException on any HTTP or connection error.
+    """
+    messages_url = f"{sse_url.rstrip('/')}/messages/"
     try:
-        return await client.request(payload, timeout=timeout)
-    except asyncio.TimeoutError:
-        raise HTTPException(504, f"SSE server at {sse_url} timed out after {timeout}s")
-    except (ConnectionError, httpx.ConnectError):
-        raise HTTPException(503, f"Cannot reach SSE server at {sse_url}")
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(messages_url, json=payload)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            e.response.status_code,
+            f"SSE server returned HTTP {e.response.status_code}"
+        )
+    except httpx.ConnectError:
+        raise HTTPException(
+            503,
+            f"Cannot reach SSE server at {sse_url}. Is it still running?"
+        )
     except Exception as e:
-        logger.error(f"SSE proxy error at {sse_url}: {e}")
+        logger.error(f"SSE proxy error → {messages_url}: {e}")
         raise HTTPException(500, f"SSE proxy error: {str(e)}")
-    finally:
-        if owned_client:
-            await client.aclose()
 
 async def _proxy_to_http_server(
     base_url: str,
@@ -712,7 +727,7 @@ def create_dynamic_router(server_manager):
                                     )
                             raise
                     else:
-                        response = await _proxy_to_sse_server(process.base_url, request, client=process.sse_client)
+                        response = await _proxy_to_sse_server(process.base_url, request)
                     elapsed_ms = int((time.monotonic() - t0) * 1000)
                     _log.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport={process.transport}")
                     response_headers = {"Mcp-Session-Id": upstream_session_id} if upstream_session_id else None
@@ -729,8 +744,6 @@ def create_dynamic_router(server_manager):
                         response = await _proxy_to_sse_server(process.sse_url, request)
                         elapsed_ms = int((time.monotonic() - t0) * 1000)
                         _log.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=sse_http")
-                        if response is None:
-                            return Response(status_code=202)
                         return JSONResponse(content=response)
 
                 # ── stdio transport: write to stdin, response routed by JSON-RPC ID ──
@@ -897,28 +910,74 @@ def create_dynamic_router(server_manager):
                 collector.increment_active_streams()
 
                 # ── Network transport: forward to external HTTP server ───────
-                if isinstance(process, (NetworkSubprocessHandle, SseSubprocessHandle)):
-                    try:
-                        if isinstance(process, NetworkSubprocessHandle) and process.transport == "http":
-                            response, _ = await _proxy_to_http_server(
-                                process.base_url, request, session_id=process.session_id,
-                                client=process.http_client,
-                            )
-                        else:
-                            base_url = process.base_url if isinstance(process, NetworkSubprocessHandle) else process.sse_url
-                            response = await _proxy_to_sse_server(
-                                base_url, request, client=getattr(process, "sse_client", None),
-                            )
-                        if response is not None:
-                            yield f"data: {json.dumps(response)}\n\n"
-                    except Exception as e:
-                        completion_status = "error"
-                        error_type = ("http_proxy_error" if isinstance(process, NetworkSubprocessHandle)
-                                      and process.transport == "http" else "sse_proxy_error")
-                        collector.record_error(error_type)
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
-                    return
+                if isinstance(process, NetworkSubprocessHandle):
+                    if process.transport == "http":
+                        try:
+                            response, _upstream_session_id = await _proxy_to_http_server(process.base_url, request, session_id=process.session_id, client=process.http_client)
+                            if response is not None:
+                                # JSON-RPC notifications have no response to relay.
+                                yield f"data: {json.dumps(response)}\n\n"
+                        except Exception as e:
+                            completion_status = "error"
+                            collector.record_error("http_proxy_error")
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    else:
+                        import httpx
+                        messages_url = f"{process.base_url.rstrip('/')}/messages/"
+                        sse_stream_url = f"{process.base_url.rstrip('/')}/sse"
+                        try:
+                            async with httpx.AsyncClient(
+                                timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+                            ) as client:
+                                await client.post(messages_url, json=request)
+                                async with client.stream("GET", sse_stream_url) as resp:
+                                    async for line in resp.aiter_lines():
+                                        if line.startswith("data: "):
+                                            data = line[6:]
+                                            yield f"data: {data}\n\n"
+                                            try:
+                                                parsed = json.loads(data)
+                                                if "result" in parsed:
+                                                    break
+                                            except json.JSONDecodeError:
+                                                pass
+                        except Exception as e:
+                            completion_status = "error"
+                            collector.record_error("sse_proxy_error")
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    return  # done for network transport — don't fall through to stdin path
 
+                # ── SSE transport: forward to external HTTP server ───────────
+                # SseSubprocessHandle wraps an MCP server that speaks HTTP/SSE natively
+                # (e.g. servers started with supergateway). Forward via httpx instead of stdin.
+                if isinstance(process, SseSubprocessHandle):
+                    import httpx
+                    messages_url = f"{process.sse_url.rstrip('/')}/messages/"
+                    sse_stream_url = f"{process.sse_url.rstrip('/')}/sse"
+                    try:
+                        async with httpx.AsyncClient(
+                            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+                        ) as client:
+                            await client.post(messages_url, json=request)
+                            async with client.stream("GET", sse_stream_url) as resp:
+                                async for line in resp.aiter_lines():
+                                    if line.startswith("data: "):
+                                        data = line[6:]
+                                        yield f"data: {data}\n\n"
+                                        try:
+                                            parsed = json.loads(data)
+                                            if "result" in parsed:
+                                                break
+                                        except json.JSONDecodeError:
+                                            pass
+                    except Exception as e:
+                        # CAUGHT: sse_proxy_error metric — httpx failed to reach the
+                        # external SSE server. Could be a connect timeout (server not
+                        # ready), HTTP 5xx, or network-level failure.
+                        completion_status = "error"
+                        collector.record_error("sse_proxy_error")
+                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    return  # done for SSE transport — don't fall through to stdin path
                 # ── stdio transport continues below ──────────────────────────
 
                 sse_method = _sanitize_log_field(request.get("method", "unknown"))
@@ -1099,7 +1158,7 @@ def create_dynamic_router(server_manager):
                 if process.transport == "http":
                     response, _upstream_session_id = await _proxy_to_http_server(process.base_url, payload, timeout=30.0, session_id=process.session_id, client=process.http_client)
                 else:
-                    response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0, client=process.sse_client)
+                    response = await _proxy_to_sse_server(process.base_url, payload, timeout=30.0)
                 return JSONResponse(content=response)
             # ── stdio transport continues below ──────────────────────────────────
 
@@ -1175,7 +1234,7 @@ def create_dynamic_router(server_manager):
                 if process.transport == "http":
                     response, _upstream_session_id = await _proxy_to_http_server(process.base_url, payload, timeout=60.0, session_id=process.session_id, client=process.http_client)
                 else:
-                    response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0, client=process.sse_client)
+                    response = await _proxy_to_sse_server(process.base_url, payload, timeout=60.0)
                 return JSONResponse(content=response)
             # ── stdio transport continues below ──────────────────────────────────
 

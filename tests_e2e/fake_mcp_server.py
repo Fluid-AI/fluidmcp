@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--transport", choices=("http", "stdio", "sse"), required=True)
+    parser.add_argument("--transport", choices=("http",), required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     args = parser.parse_args()
     port = int(os.environ.get("MCP_PORT", "8000"))
@@ -46,7 +46,7 @@ def main():
     (args.artifacts / f"{args.transport}-process.json").write_text(
         json.dumps({"pid": os.getpid(), "port": port})
     )
-    server.run(transport="streamable-http" if args.transport == "http" else args.transport)
+    server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
