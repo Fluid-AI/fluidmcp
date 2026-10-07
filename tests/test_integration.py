@@ -1,15 +1,24 @@
 """Integration tests for FluidMCP CLI"""
 
+import importlib
 import json
 import os
+import subprocess
 import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from argparse import Namespace
+
+from fastapi.testclient import TestClient
 
 from fluidmcp.cli.services.config_resolver import ServerConfig, resolve_config
 from fluidmcp.cli.services.run_servers import run_servers
 from fluidmcp.cli.cli import run_command, main
+
+# On Python 3.10, mock.patch("fluidmcp.cli.services.run_servers.X") resolves
+# `run_servers` via getattr on the package, which returns the re-exported
+# run_servers() function rather than the module. Patch the module object directly.
+run_servers_module = importlib.import_module("fluidmcp.cli.services.run_servers")
 
 
 class TestRunCommandIntegration:
@@ -151,19 +160,35 @@ class TestEndToEndServerLaunch:
             }
         )
 
-        mock_router = Mock()
-        mock_process = Mock()
-        launched_packages = []
+        mock_process = Mock(spec=subprocess.Popen)
+        mock_process.poll.return_value = None
+        mock_process.pid = 999999999  # nonexistent PID; keeps the health monitor inert
+        captured = {}
 
-        def capture_launch(dest_dir, process_lock=None):
-            launched_packages.append(str(dest_dir))
-            return ("test-pkg", mock_router, mock_process)
+        def fake_start_server(app, port, force_reload):
+            captured["app"] = app
 
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy', side_effect=capture_launch):
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+        # MCP servers are spawned by ServerManager._spawn_mcp_process inside the
+        # app's startup event, so drive the captured app through TestClient.
+        with patch.object(run_servers_module, '_start_server', side_effect=fake_start_server), \
+             patch.object(run_servers_module.ServerManager, '_spawn_mcp_process',
+                          new_callable=AsyncMock, return_value=mock_process) as mock_spawn, \
+             patch.dict(run_servers_module._server_processes, clear=True):
+            run_servers(config, start_server=True)
+            with TestClient(captured["app"]):
+                pass
 
-        assert str(pkg_dir) in launched_packages
+        server_manager = captured["app"].state.server_manager
+        managed = dict(server_manager.processes)
+        server_manager.processes.clear()
+
+        mock_spawn.assert_awaited_once()
+        server_id, spawn_cfg = mock_spawn.await_args.args
+        assert server_id == "test-server"
+        assert spawn_cfg["install_path"] == str(pkg_dir)
+        assert spawn_cfg["command"] == "echo"
+        assert spawn_cfg["args"] == ["test"]
+        assert managed == {"test-server": mock_process}
 
     def test_secure_mode_propagates_through_flow(self, tmp_path):
         """Test that secure mode settings propagate correctly"""
@@ -178,9 +203,8 @@ class TestEndToEndServerLaunch:
         )
 
         with patch.dict(os.environ, {}, clear=False):
-            with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy', return_value=("pkg", Mock(), Mock())):
-                with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                    run_servers(config, secure_mode=True, token="secret123", start_server=False)
+            with patch.object(run_servers_module, 'uvicorn'):
+                run_servers(config, secure_mode=True, token="secret123", start_server=False)
 
             assert os.environ.get("FMCP_BEARER_TOKEN") == "secret123"
             assert os.environ.get("FMCP_SECURE_MODE") == "true"

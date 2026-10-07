@@ -1,9 +1,15 @@
 """Unit tests for vLLM streaming support"""
 
+import importlib
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+
+# On Python 3.10, mock.patch("fluidmcp.cli.services.run_servers.X") resolves
+# `run_servers` via getattr on the package, which returns the re-exported
+# run_servers() function rather than the module. Patch the module object directly.
+run_servers_module = importlib.import_module("fluidmcp.cli.services.run_servers")
 
 
 class TestStreamingValidation:
@@ -15,7 +21,7 @@ class TestStreamingValidation:
 
         app = FastAPI()
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+        with patch.object(run_servers_module, '_llm_endpoints', {
             "vllm": {
                 "base_url": "http://localhost:8001/v1",
                 "chat": "/chat/completions",
@@ -23,14 +29,14 @@ class TestStreamingValidation:
                 "models": "/models"
             }
         }):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+            with patch.object(run_servers_module, '_llm_processes', {}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app)
 
                     # Mock the actual proxy request
-                    with patch('fluidmcp.cli.services.run_servers._proxy_llm_request', new_callable=AsyncMock) as mock_proxy:
+                    with patch.object(run_servers_module, '_proxy_llm_request', new_callable=AsyncMock) as mock_proxy:
                         mock_proxy.return_value = {"id": "test", "choices": []}
 
                         response = client.post(
@@ -51,7 +57,7 @@ class TestStreamingValidation:
 
         app = FastAPI()
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+        with patch.object(run_servers_module, '_llm_endpoints', {
             "vllm": {
                 "base_url": "http://localhost:8001/v1",
                 "chat": "/chat/completions",
@@ -59,14 +65,14 @@ class TestStreamingValidation:
                 "models": "/models"
             }
         }):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+            with patch.object(run_servers_module, '_llm_processes', {}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app)
 
                     # Mock the actual proxy request
-                    with patch('fluidmcp.cli.services.run_servers._proxy_llm_request', new_callable=AsyncMock) as mock_proxy:
+                    with patch.object(run_servers_module, '_proxy_llm_request', new_callable=AsyncMock) as mock_proxy:
                         mock_proxy.return_value = {"id": "test", "choices": []}
 
                         response = client.post(
@@ -88,9 +94,9 @@ class TestStreamingValidation:
         app = FastAPI()
 
         # Model not in registry
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {}):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+        with patch.object(run_servers_module, '_llm_endpoints', {}):
+            with patch.object(run_servers_module, '_llm_processes', {}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app)
@@ -115,9 +121,9 @@ class TestStreamingValidation:
         app = FastAPI()
 
         # Model not in registry
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {}):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+        with patch.object(run_servers_module, '_llm_endpoints', {}):
+            with patch.object(run_servers_module, '_llm_processes', {}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app)
@@ -145,7 +151,7 @@ class TestStreamingValidation:
         mock_process = Mock(spec=LLMProcess)
         mock_process.is_running.return_value = False
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+        with patch.object(run_servers_module, '_llm_endpoints', {
             "vllm": {
                 "base_url": "http://localhost:8001/v1",
                 "chat": "/chat/completions",
@@ -153,8 +159,8 @@ class TestStreamingValidation:
                 "models": "/models"
             }
         }):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {"vllm": mock_process}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+            with patch.object(run_servers_module, '_llm_processes', {"vllm": mock_process}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app)
@@ -178,7 +184,7 @@ class TestStreamingValidation:
 
         app = FastAPI()
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+        with patch.object(run_servers_module, '_llm_endpoints', {
             "vllm": {
                 "base_url": "http://localhost:8001/v1",
                 "chat": "/chat/completions",
@@ -186,8 +192,8 @@ class TestStreamingValidation:
                 "models": "/models"
             }
         }):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+            with patch.object(run_servers_module, '_llm_processes', {}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app, raise_server_exceptions=False)
@@ -215,7 +221,7 @@ class TestStreamingValidation:
         mock_process = Mock()
         mock_process.is_running.return_value = True
 
-        with patch('fluidmcp.cli.services.run_servers._llm_endpoints', {
+        with patch.object(run_servers_module, '_llm_endpoints', {
             "vllm": {
                 "base_url": "http://localhost:8001/v1",
                 "chat": "/chat/completions",
@@ -223,14 +229,14 @@ class TestStreamingValidation:
                 "models": "/models"
             }
         }):
-            with patch('fluidmcp.cli.services.run_servers._llm_processes', {"vllm": mock_process}):
-                with patch('fluidmcp.cli.services.run_servers._llm_registry_lock', MagicMock()):
+            with patch.object(run_servers_module, '_llm_processes', {"vllm": mock_process}):
+                with patch.object(run_servers_module, '_llm_registry_lock', MagicMock()):
                     _add_llm_proxy_routes(app)
 
                     client = TestClient(app)
 
                     # Test stream=true
-                    with patch('fluidmcp.cli.services.run_servers._proxy_llm_request_streaming', new_callable=AsyncMock) as mock_stream:
+                    with patch.object(run_servers_module, '_proxy_llm_request_streaming', new_callable=AsyncMock) as mock_stream:
                         # Mock the async generator
                         async def mock_gen():
                             yield b'data: test\n\n'
@@ -246,7 +252,7 @@ class TestStreamingValidation:
                         mock_stream.assert_called_once()
 
                     # Test stream=false (should use non-streaming)
-                    with patch('fluidmcp.cli.services.run_servers._proxy_llm_request', new_callable=AsyncMock) as mock_non_stream:
+                    with patch.object(run_servers_module, '_proxy_llm_request', new_callable=AsyncMock) as mock_non_stream:
                         mock_non_stream.return_value = {"id": "test"}
 
                         response = client.post(
