@@ -360,6 +360,10 @@ def run_servers(
             if server_manager._health_monitor and server_manager._health_monitor.is_running():
                 await server_manager._health_monitor.stop()
                 logger.info("MCP health monitor stopped")
+            # uvicorn re-raises SIGTERM/SIGINT after graceful shutdown, so the process dies
+            # by signal and ServerManager's atexit handler never runs — terminate the MCP
+            # children here or they outlive the gateway (holding ports / DB connections).
+            server_manager._cleanup_on_exit()
 
     # Mount unified dynamic router (same as serve) — single router for all registered servers
     mcp_router = create_dynamic_router(server_manager)
@@ -1109,7 +1113,14 @@ def _add_health_endpoint(app: FastAPI) -> None:
             JSONResponse with health status, server count, and running server count
         """
         try:
-            processes = _get_server_processes()
+            # Prefer the live ServerManager registry: health-monitor and API restarts
+            # replace handles there, while the module registry keeps the dead originals
+            # (a restarted server would otherwise be reported as down forever).
+            server_manager = getattr(app.state, "server_manager", None)
+            if server_manager is not None:
+                processes = dict(server_manager.processes)
+            else:
+                processes = _get_server_processes()
             if processes is None:
                 processes = {}
 

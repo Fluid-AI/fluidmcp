@@ -17,7 +17,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
-from .network_handle import NetworkSubprocessHandle
+from .network_handle import NetworkSubprocessHandle, parse_sse_jsonrpc_response
 from .sse_handle import SseSubprocessHandle
 
 security = HTTPBearer(auto_error=False)
@@ -291,12 +291,11 @@ async def _proxy_to_http_server(
 
         # FastMCP returns text/event-stream even for non-streaming responses.
         # Unwrap the SSE envelope to get the plain JSON-RPC payload.
+        # The stream may also carry notifications (ctx.info / progress) ahead of
+        # the response, so select the message whose id matches this request.
         content_type = resp.headers.get("content-type", "")
         if "text/event-stream" in content_type:
-            for line in resp.text.splitlines():
-                if line.startswith("data: "):
-                    return json.loads(line[6:]), upstream_session_id
-            raise Exception(f"No data line in SSE response: {resp.text!r}")
+            return parse_sse_jsonrpc_response(resp.text, payload.get("id")), upstream_session_id
         return resp.json(), upstream_session_id
     except httpx.HTTPStatusError as e:
         raise HTTPException(
@@ -677,9 +676,14 @@ def create_dynamic_router(server_manager):
 
         # RequestTimer automatically records error_type="network_error" for HTTPExceptions
         # via RequestTimer.__exit__ → _categorize_error() → name-based matching.
-        params = request.get("params", {})
-        tool_name = _sanitize_log_field(params.get("name", "")) if method == "tools/call" else None
-        _tool_args = params.get("arguments", {}) if method == "tools/call" else {}
+        # "params"/"arguments" may be explicitly null — only used for log context here
+        params = request.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
+        tool_name = _sanitize_log_field(str(params.get("name", ""))) if method == "tools/call" else None
+        _tool_args = (params.get("arguments") or {}) if method == "tools/call" else {}
+        if not isinstance(_tool_args, dict):
+            _tool_args = {}
         # Sanitize argument keys before logging — values are never logged, only key names.
         tool_args_set = sorted(_sanitize_log_field(k) for k, v in _tool_args.items() if not _is_unfilled(v))
         tool_args_empty = sorted(_sanitize_log_field(k) for k, v in _tool_args.items() if _is_unfilled(v))

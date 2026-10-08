@@ -82,8 +82,9 @@ async def test_env_file_promotes_transport_and_injects_mcp_port(tmp_path, server
 
     # transport promotion should also be reflected back onto the config dict
     assert config["transport"] == "http"
-    # env_file key should be consumed (matches original deploy_onprod behavior)
-    assert "env_file" not in config
+    # env_file must stay on the config: restart_server() respawns from this same dict,
+    # and consuming the key dropped every env_file var on manual restart.
+    assert config["env_file"] == ".env"
 
 
 @pytest.mark.asyncio
@@ -113,7 +114,8 @@ async def test_no_env_file_key_is_unaffected(tmp_path, server_manager):
 
 @pytest.mark.asyncio
 async def test_env_file_outside_working_dir_is_rejected(tmp_path, server_manager):
-    """Security: env_file must stay under install_path/working_dir — a path-traversal attempt is skipped, not followed."""
+    """Security: env_file must stay under install_path/working_dir — a path-traversal attempt is
+    rejected and the server is not started (starting it would run without its declared env)."""
     outside_dir = tmp_path / "outside"
     outside_dir.mkdir()
     (outside_dir / "evil.env").write_text("TRANSPORT_TYPE=http\n")
@@ -138,6 +140,6 @@ async def test_env_file_outside_working_dir_is_rejected(tmp_path, server_manager
          patch.object(ServerManager, "_discover_and_cache_tools", new=AsyncMock(return_value=None)):
         result = await server_manager._spawn_mcp_process("probe-server-escape", config)
 
-    assert result is not None
-    assert "MCP_PORT" not in captured_env, "env_file outside install_path/working_dir must be skipped, not loaded"
+    assert result is None, "server must not start when its env_file is outside install_path/working_dir"
+    assert captured_env == {}, "process must not be spawned"
     assert config.get("transport") is None

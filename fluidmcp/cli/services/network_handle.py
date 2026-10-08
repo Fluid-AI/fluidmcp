@@ -5,9 +5,42 @@ Kept in its own module to avoid circular imports between
 package_launcher.py and server_manager.py.
 """
 import asyncio
+import json
 import subprocess
 import httpx
 from loguru import logger
+
+
+_NO_ID = object()
+
+
+def parse_sse_jsonrpc_response(text: str, request_id=_NO_ID) -> dict:
+    """Extract the JSON-RPC response from a streamable-http SSE body.
+
+    A single request's SSE stream may carry server notifications (log messages,
+    progress updates from ctx.info()/ctx.report_progress()) before the actual
+    response, so the first ``data:`` line is not necessarily the answer. Return
+    the message that carries ``result``/``error`` and, when ``request_id`` is
+    given, whose ``id`` matches it.
+    """
+    responses = []
+    for line in text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload:
+            continue
+        message = json.loads(payload)
+        if isinstance(message, dict) and ("result" in message or "error" in message):
+            responses.append(message)
+
+    if request_id is not _NO_ID:
+        for message in responses:
+            if message.get("id") == request_id:
+                return message
+    if responses:
+        return responses[0]
+    raise ValueError(f"No JSON-RPC response in SSE body: {text[:500]!r}")
 
 
 class NetworkSubprocessHandle:
