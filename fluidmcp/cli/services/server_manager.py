@@ -28,7 +28,7 @@ from ..repositories.database import DatabaseManager
 from .package_launcher import initialize_mcp_server
 from .metrics import MetricsCollector
 from .health_checker import HealthChecker
-from .network_handle import NetworkSubprocessHandle
+from .network_handle import NetworkSubprocessHandle, parse_sse_jsonrpc_response
 from .network_utils import find_free_port
 
 
@@ -36,10 +36,7 @@ def _parse_mcp_response(resp) -> dict:
     """Parse an MCP HTTP response that may be plain JSON or SSE-framed."""
     content_type = resp.headers.get("content-type", "")
     if "text/event-stream" in content_type:
-        for line in resp.text.splitlines():
-            if line.startswith("data: "):
-                return json.loads(line[6:])
-        raise Exception(f"No data line found in SSE response: {resp.text!r}")
+        return parse_sse_jsonrpc_response(resp.text)
     return resp.json()
 
 
@@ -816,6 +813,9 @@ class ServerManager:
         """
         # Initialize name early for exception handler
         name = id
+        # Tracked so the cancellation handler can reap a half-started child
+        process: Optional[subprocess.Popen] = None
+        allocated_port: Optional[int] = None
         try:
             # Extract configuration
             command = config.get("command")
@@ -824,8 +824,13 @@ class ServerManager:
             working_dir = config.get("working_dir", ".")
             install_path = config.get("install_path", ".")
 
-            # Load env_file if specified, merging before inline env (inline takes precedence)
-            env_file_path = config.pop("env_file", None)
+            # Load env_file if specified, merging before inline env (inline takes precedence).
+            # Read (not pop) the key: self.configs[id] is this same dict, and restart_server()
+            # respawns from it, so popping would drop the env_file vars on every manual restart.
+            # A declared env_file that cannot be loaded is a hard failure — starting anyway
+            # would run the server without TRANSPORT_TYPE / DB credentials (wrong transport,
+            # wrong environment) with only a warning in the logs.
+            env_file_path = config.get("env_file")
             if env_file_path:
                 env_file_resolved = (
                     Path(env_file_path).resolve()
@@ -844,14 +849,28 @@ class ServerManager:
                     or working_resolved in env_file_resolved.parents
                 )
                 if not (under_install or under_working):
-                    logger.warning(
-                        f"env_file '{env_file_resolved}' is outside install_path/working_dir — skipping"
+                    logger.error(
+                        f"env_file '{env_file_resolved}' for server '{id}' is outside "
+                        f"install_path/working_dir — refusing to start server"
                     )
-                elif not env_file_resolved.exists():
-                    logger.warning(f"env_file '{env_file_resolved}' not found — skipping")
+                    return None
+                elif not env_file_resolved.is_file():
+                    logger.error(
+                        f"env_file '{env_file_resolved}' for server '{id}' not found — refusing to "
+                        f"start server (relative env_file paths resolve against '{working_dir}')"
+                    )
+                    return None
                 else:
+                    try:
+                        env_file_text = env_file_resolved.read_text()
+                    except (OSError, UnicodeDecodeError) as e:
+                        logger.error(
+                            f"env_file '{env_file_resolved}' for server '{id}' could not be read "
+                            f"({type(e).__name__}) — refusing to start server"
+                        )
+                        return None
                     file_env: Dict[str, str] = {}
-                    for line in env_file_resolved.read_text().splitlines():
+                    for line in env_file_text.splitlines():
                         line = line.strip()
                         if not line or line.startswith("#"):
                             continue
@@ -989,7 +1008,6 @@ class ServerManager:
                 working_dir = install_path_resolved
                 
             # ── HTTP transport: allocate a port and inject MCP_PORT ─────────
-            allocated_port: Optional[int] = None
             if config.get("transport") in ("sse", "http"):
                 try:
                     allocated_port = self._allocate_port()
@@ -1082,7 +1100,7 @@ class ServerManager:
                 logger.info(f"[{id}] SSE server connected successfully")
                 return handle  # tool discovery already done inside _handshake_sse_subprocess
             elif config.get("transport") == "http":
-                handle = await self._handshake_http_subprocess(id, allocated_port, process)
+                handle = await self._handshake_http_subprocess(id, allocated_port, process, server_env=env_vars)
                 if not handle:
                     self._release_port(allocated_port)
                     self._close_stderr_log(id)
@@ -1119,12 +1137,31 @@ class ServerManager:
             return process
 
         except asyncio.CancelledError:
+            # Cancelled mid-startup (e.g. _start_server_unlocked's 30s wait_for fired during
+            # the HTTP readiness wait). The child is not registered anywhere yet, so reap it
+            # here or it is orphaned and keeps holding its port.
+            self._reap_unregistered_child(name, process, allocated_port)
             self._close_stderr_log(id)
             raise
         except Exception as e:
+            self._reap_unregistered_child(name, process, allocated_port)
             self._close_stderr_log(id)
             logger.exception(f"Error spawning process for server '{name}': {e}")
             return None
+
+    def _reap_unregistered_child(
+        self, name: str, process: Optional[subprocess.Popen], allocated_port: Optional[int]
+    ) -> None:
+        """Kill a child spawned by an aborted _spawn_mcp_process and free its port."""
+        if process is not None and process.poll() is None:
+            logger.warning(f"Startup of server '{name}' aborted — killing PID {process.pid}")
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except Exception:
+                pass
+        if allocated_port is not None:
+            self._release_port(allocated_port)
 
     async def _discover_and_cache_tools(self, server_id: str, process: subprocess.Popen) -> None:
         """
@@ -1265,6 +1302,7 @@ class ServerManager:
         id: str,
         port: int,
         process: subprocess.Popen,
+        server_env: Optional[Dict[str, str]] = None,
     ) -> Optional["NetworkSubprocessHandle"]:
         """
         Complete startup for a subprocess-owned streamable-http MCP server.
@@ -1276,6 +1314,8 @@ class ServerManager:
             id:      Server identifier.
             port:    The port allocated by _allocate_port() for this server.
             process: The already-spawned subprocess.Popen.
+            server_env: Effective env passed to the server (env_file + inline env).
+                    Falls back to the inline config env when not given.
 
         Returns:
             NetworkSubprocessHandle on success, None on failure.
@@ -1301,11 +1341,12 @@ class ServerManager:
         }
 
         # Check whether the server developer opted into FastMCP's stateless_http mode
-        # by setting FASTMCP_STATELESS_HTTP in the server's env config.
+        # by setting FASTMCP_STATELESS_HTTP in the server's env config or env_file.
         # Stateless mode means no initialize handshake and no session ID — every request
         # is independent, which allows full concurrency. Any value other than "false"
         # (including an empty string) is treated as opting in.
-        server_env = self.configs.get(id, {}).get("env") or {}
+        if server_env is None:
+            server_env = self.configs.get(id, {}).get("env") or {}
         fastmcp_stateless_val = server_env.get("FASTMCP_STATELESS_HTTP")
         stateless = (
             fastmcp_stateless_val is not None
@@ -1408,31 +1449,37 @@ class ServerManager:
                 return None
 
         # Discover and cache tools via POST /mcp
-        await self._discover_and_cache_tools_network(id, base_url, session_id=session_id)
+        await self._discover_and_cache_tools_network(id, base_url, session_id=session_id, transport="http")
 
         return NetworkSubprocessHandle(process=process, base_url=base_url, transport="http", session_id=session_id)
 
     async def _discover_and_cache_tools_network(
-        self, server_id: str, base_url: str, session_id: str = None
+        self, server_id: str, base_url: str, session_id: str = None, transport: str = None
     ) -> None:
         """
         Discover tools from an SSE or HTTP MCP server and cache in database.
 
-        For SSE servers (session_id=None), posts to /messages/ with no special headers.
-        For HTTP servers, posts to /mcp with Accept and Mcp-Session-Id headers.
+        For SSE servers, posts to /messages/ with no special headers.
+        For HTTP servers, posts to /mcp with Accept (and Mcp-Session-Id when stateful).
 
         Args:
             server_id:  Server identifier.
             base_url:   Base URL of the server (e.g. "http://127.0.0.1:8000").
+            session_id: Session from the initialize handshake (None for stateless HTTP / SSE).
+            transport:  "http" or "sse". When omitted, a session_id implies HTTP.
         """
+        # Stateless HTTP servers have no session_id, so the transport cannot be
+        # inferred from it — otherwise discovery is sent to the SSE endpoint.
+        is_http = transport == "http" or (transport is None and session_id is not None)
 
-        if session_id is not None:
+        if is_http:
             url = f"{base_url.rstrip('/')}/mcp"
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
-                "Mcp-Session-Id": session_id,
             }
+            if session_id:
+                headers["Mcp-Session-Id"] = session_id
         else:
             url = f"{base_url.rstrip('/')}/messages/"
             headers = {}
@@ -1443,7 +1490,7 @@ class ServerManager:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(url, json=tools_request, headers=headers)
                 resp.raise_for_status()
-                response = _parse_mcp_response(resp) if session_id is not None else resp.json()
+                response = _parse_mcp_response(resp) if is_http else resp.json()
 
             if "result" in response and "tools" in response["result"]:
                 tools = response["result"]["tools"]
