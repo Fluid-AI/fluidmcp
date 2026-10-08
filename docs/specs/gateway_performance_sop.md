@@ -230,101 +230,243 @@ Reviewers should reject changes that break any of these.
 
 ---
 
-## 6. Roadmap: Vertical Slices, One PR Each
+## 6. Roadmap: Phased by Blast Radius
 
-Every slice follows the same steps:
+The phases are ordered by **blast radius, smallest first**. Phase 1 changes nothing that runs
+in production. Phase 8 restructures modules across the whole codebase. Each phase can be
+implemented, shipped and soaked on its own, and every phase only builds on phases with a
+smaller radius. If one phase regresses, the later phases have not been built on it yet.
 
-1. Write a failing test that reproduces the finding.
-2. Make the minimal fix.
-3. Run the targeted tests, then the full `pytest`.
-4. Run the load harness and compare against the baseline.
+### 6.1 Blast-Radius Rubric
 
-### Phase 0: Safety Net
+Each phase gets a rating from these five factors:
 
-| Slice | Fixes | Design |
+| Factor | Low | High |
 |---|---|---|
-| 0.1 pytest CI | none | • Add `.github/workflows/tests.yml`: Python 3.12 (align the Dockerfile with it), `pip install -e .`, `pytest -m "not slow"` with a Mongo service container.<br>• Mark `tests/test_e2e.py::TestE2ERealMCPServers` as `slow`, because it is network-dependent. |
-| 0.2 Load harness and baseline | none | • Add `tests/manual/load_multi_mcp.py` with about 20 fake servers: fast, slow, stdin-stall, stderr-spam, crash-loop and HTTP.<br>• Drive 500 concurrent calls.<br>• Record event-loop lag, p50/p99 per server class, 503 count, leaked PIDs, threads and ports, and the `/metrics` series count.<br>• Commit the numbers to `tests/manual/BASELINE.md`. |
+| **Runtime reach** | Code that is dead, test-only or on an error path | Code that every MCP request or every subprocess runs through |
+| **Contract change** | Same API, wire format and config | Clients, MCP servers or operators must change something |
+| **Shared state touched** | One function, local state | `ServerManager`, `StdioJsonRpcRouter`, process model, image |
+| **Files / modules** | 1–2 files | Many modules, or code moved between modules |
+| **Rollback** | Revert one commit, no data impact | Needs config, image or client coordination to undo |
 
-### Phase 1: Security
+### 6.2 Phase Overview
 
-| Slice | Fixes | Design |
+| Phase | Theme | Blast radius | Contract change | Findings closed |
+|---|---|---|---|---|
+| **1** | Safety net, dead code, log-only fixes | ▁ None at runtime | None | Tests/CI, P6 dead code, HOT-8, stale docs |
+| **2** | Local bug fixes on error and edge paths | ▂ Very low | None | HOT-7, HOT-9, SEC-3, SEC-4, STATE-3, STATE-5, LOOP-2 (partial) |
+| **3** | Off-hot-path performance (background, fan-out, UI) | ▃ Low | None | BG-1, BG-2, FAN-1…5, PROC-2, STATE-4 |
+| **4** | Hot-path performance, external contract unchanged | ▄ Medium | None (latency only) | HOT-1, HOT-2, HOT-3, HOT-4, HOT-10, HOT-11, LOOP-3 |
+| **5** | Core concurrency primitive and failure semantics | ▅ Medium-high | Error codes on overload | LOOP-1, HOT-5, HOT-6 |
+| **6** | Security hardening that changes behaviour | ▆ High | **Yes**: auth, child env, CORS | SEC-1, SEC-2, SEC-5, SEC-6 |
+| **7** | Process model, lifecycle and container image | ▇ High | **Yes**: image, shutdown, ops config | PROC-1, PROC-3, STATE-1, STATE-2, IMG-1…4 |
+| **8** | MCP protocol semantics and structural refactor | █ Highest | **Yes**: wire behaviour, module layout | MCP-1…8, P6 structure |
+
+> **Security fast-track.** SEC-1 (unauthenticated `GET /api/servers` returning env secrets) is
+> live today. Its radius puts it in Phase 6, but it does not depend on Phases 2–5. If the risk
+> is judged urgent, ship slice 6.1 straight after Phase 1, once the frontend has been
+> confirmed to send the bearer token on those routes. Every other phase keeps its order.
+
+### Rules for Every Slice
+
+- One slice is one PR.
+- Each PR starts with a failing test that reproduces the finding, then the minimal fix.
+- Run the targeted tests, then the full `pytest`.
+- From Phase 3 on, run the load harness and compare against the baseline.
+- A phase is **done** only when its exit gate is met. Do not start the next phase until it is.
+
+---
+
+### Phase 1: Zero Runtime Blast Radius
+
+**Scope:** CI, tests, docs, unreferenced code, and log-only fixes. No production code path
+changes behaviour.
+
+| Slice | Fixes | Change | Radius notes |
+|---|---|---|---|
+| 1.1 pytest CI | none | • Add `.github/workflows/tests.yml`: Python 3.12, `pip install -e .`, `pytest -m "not slow"` with a Mongo service container.<br>• Mark `tests/test_e2e.py::TestE2ERealMCPServers` as `slow`. | CI only. |
+| 1.2 Load harness and baseline | none | • Add `tests/manual/load_multi_mcp.py` with about 20 fake servers (fast, slow, stdin-stall, stderr-spam, crash-loop, HTTP) and 500 concurrent calls.<br>• Measure event-loop lag, p50/p99 per server class, 503s, leaked PIDs/threads/ports and the `/metrics` series count.<br>• Commit the results to `tests/manual/BASELINE.md`. | Not imported by the app. |
+| 1.3 Characterization tests | none | Tests that pin today's behaviour of untested hot-path code before anything changes it: the middleware, `auto_start_stopped_server`, `update_last_used`, `_monitor_loop` and idle cleanup. | Tests only. |
+| 1.4 Dead-module removal | P6 | • Delete `services/restart_manager.py`, `deprecated/router/legacy_router.py`, the unused HTTP checks in `health_checker.py`, `StdioJsonRpcRouter._send`, `ServerManager._loop`, and the duplicate `server.run()` argparse.<br>• Each deletion must be backed by a `grep` over `fluidmcp/ tests/ docs/` showing no references. | Code with no callers. `SseSubprocessHandle` waits for the 8.5 decision. |
+| 1.5 `trace_id` fix | HOT-8 | Bind `trace_id` from a `ContextVar` set by the existing middleware. | Log fields only. |
+| 1.6 Stale docs | P6 | Fix `CONTRIBUTING.md`, the `pr_review.yml` prompt and `CLAUDE.md`, and add a PR template. | Docs only. |
+
+**Rollback:** revert the commit.
+**Exit gate:** CI is green on `development`, `BASELINE.md` is committed, and the characterization tests pass.
+
+---
+
+### Phase 2: Very Low Radius, Local Fixes on Error and Edge Paths
+
+**Scope:** each fix is inside one function and only runs on an error, timeout or edge case.
+Happy-path behaviour is identical.
+
+| Slice | Fixes | Change |
 |---|---|---|
-| 1.1 | SEC-1, 3, 4 | • Router-level `dependencies=[Depends(auth.get_token)]` on the management router, with an explicit public allowlist.<br>• Redact `env` values in the list and get responses.<br>• Delete the duplicate `get_token` functions.<br>• Bound `lines` to `1..5000`. |
-| 1.2 | SEC-2 | • Add `build_child_env(config)`: an allowlist (`PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `NODE_*`, `NPM_CONFIG_*`, `UV_*`, `PYTHON*`, `SSL_CERT_*`, proxy vars), extendable with `FMCP_CHILD_ENV_PASSTHROUGH`. Per-server env takes precedence. Reuse `llm_launcher.filter_safe_env_vars`.<br>• **Behaviour change:** add `FMCP_CHILD_ENV_INHERIT_ALL=1` as an escape hatch and call it out in the release notes. |
-| 1.3 | SEC-5, 6 | • Pass the git token through `GIT_ASKPASS` or an `http.extraHeader` env var, never in the URL.<br>• Add `FMCP_TRUST_PROXY_HEADERS` and only read `X-Forwarded-For` when it is set.<br>• Stop pairing `*` origins with credentials. |
+| 2.1 Error-path correctness | HOT-7, HOT-9 | • Make the `tools/call` timeout DB log fire-and-forget, so the response is always 504.<br>• Initialize `t0_sse`/`sse_ctx` before the `try` in the `/sse` generator.<br>• Acquire the `/sse` semaphore inside the generator. |
+| 2.2 Cheap security fixes | SEC-3, SEC-4 | • Use `secrets.compare_digest` in the duplicate `get_token`s; keep the existing signatures.<br>• Bound `lines` to `1..5000`. |
+| 2.3 State bugs | STATE-3, STATE-5 | • Copy the config before `pop("env_file")`.<br>• Make the memory backend merge instead of overwrite.<br>• Create the capped logs collection before `create_index`.<br>• Add a drainer for the stderr PIPE fallback.<br>• Wrap each row of idle cleanup in its own try.<br>• Pop the temporary config in `_validate_server_with_manager`.<br>• Fix the false CRITICAL rollback log. |
+| 2.4 Bounded blocking waits | LOOP-2 (partial) | • Add timeouts to `raw_proc.wait()` and the `git clone` subprocess.<br>• Wrap the remaining `process.wait` calls on the loop in `to_thread`.<br>• Replace the O(n²) LLM log tail with a `deque` reverse read. |
 
-### Phase 2: Keep the Event Loop Free
+**Rollback:** revert each slice independently. **Exit gate:** all regression tests pass and the
+load-harness numbers have not regressed.
 
-| Slice | Fixes | Design |
+---
+
+### Phase 3: Low Radius, Off-Hot-Path Performance
+
+**Scope:** background loops, startup, fan-out endpoints and the frontend. The MCP request path
+is not touched. API responses keep their shape.
+
+| Slice | Fixes | Change |
 |---|---|---|
-| 2.1 | LOOP-1 | • Add a per-router writer thread fed by a bounded queue.<br>• When the queue is full, raise `StdioBackpressure`, which maps to 503 + `Retry-After`.<br>• Send `notify`, `_on_timeout` and `_safe_write` through the queue.<br>• Remove `_write_lock` and `_send`. |
-| 2.2 | LOOP-3, HOT-8 | • Add `FMCP_LOG_LEVEL` (default `INFO`).<br>• Use loguru `enqueue=True` and stop flushing on every line.<br>• Move per-line drainer logs to TRACE.<br>• Carry `trace_id` in a `ContextVar` set by the middleware. |
-| 2.3 | LOOP-2, BG-2 | • Add dedicated bounded executors.<br>• Wrap every wait, git, file read and LLM stop/start in `to_thread` with a timeout.<br>• Replace the O(n²) log tail with a `deque`-based reverse read. |
-| 2.4 | HOT-2, HOT-3 | • Rewrite the trace and size middleware as pure ASGI. The size limit counts streamed bytes, so chunked bodies are covered, and error responses keep CORS headers.<br>• Make auth `async`.<br>• Load a `Settings` object once at startup. |
+| 3.1 Concurrent health monitor | BG-1 | • One supervised task per server, bounded by `FMCP_HEALTH_CHECK_CONCURRENCY`.<br>• Restarts run as detached tasks.<br>• Pings reuse the handle's client.<br>• Apply the same pattern to `LLMHealthMonitor`. |
+| 3.2 Dedicated executors | BG-2, LOOP-2 | • Add bounded `lifecycle` and `io` executors.<br>• Move init, wait, git and file reads onto them, each with a timeout. |
+| 3.3 Cancel-safe spawn | PROC-2 | • On cancel or timeout, kill the process, release the port and unregister the server.<br>• Set the outer timeout to the inner budget plus a margin. |
+| 3.4 Fan-out endpoints | FAN-1, FAN-2 | • `list_servers`: one `$in` query with a projection (the response shape stays the same).<br>• GET endpoints no longer spawn servers.<br>• Fix the `server_name` index.<br>• Run start-all and stop-all in parallel under a semaphore. |
+| 3.5 Read-only LLM health | FAN-3 | GET LLM endpoints return the cached health state and no longer change the failure counters. |
+| 3.6 Frontend polling | FAN-3, FAN-5 | • Pause polling when `document.hidden`.<br>• Add an in-flight guard and back off from 1 s.<br>• Inspector logs use a `?since=` cursor; the old full-list response stays as a fallback. |
+| 3.7 Run-mode startup | FAN-4 | • Start uvicorn first, then spawn servers concurrently in the background.<br>• `/health` reports `starting` meanwhile.<br>• `_server_processes` becomes a view over `server_manager.processes`. |
+| 3.8 Cheaper `/health` | STATE-4 | Cache the DB ping for a few seconds and add an MCP process summary. The status code semantics stay as they are. |
 
-### Phase 3: Hot Path
+**Rollback:** revert per slice. Two changes are visible:
 
-| Slice | Fixes | Design |
+- a crashed server now comes back within one health interval instead of on the next GET (3.4);
+- `start-all` honours `enabled_only` (3.4).
+
+**Exit gate:** with one server in crash-loop backoff, no other server's health check is delayed
+by more than one interval, and `GET /api/servers` makes one DB round trip.
+
+---
+
+### Phase 4: Medium Radius, Hot-Path Performance with the Contract Unchanged
+
+**Scope:** code that every MCP request runs through. Responses, status codes and config stay the
+same; only latency and resource use change.
+
+| Slice | Fixes | Change |
 |---|---|---|
-| 3.1 | HOT-1 | • Add `ServerManager.touch(server_id)`: in memory, called for **all** transports.<br>• Flush to the DB in the background every `FMCP_LAST_USED_FLUSH_S` (30 s) with `w=1`.<br>• The idle reaper reads the in-memory value. |
-| 3.2 | HOT-4 | Add `ensure_started()`: concurrent first requests share one shielded start future. Explicit start/restart APIs stay fail-fast. |
-| 3.3 | HOT-5 | • Restart only after `FMCP_HTTP_RESTART_THRESHOLD` consecutive connect or protocol errors.<br>• A read timeout returns 504 and a pool timeout returns 503; neither restarts the server.<br>• Make the pool limits configurable. |
-| 3.4 | HOT-6, HOT-7 | • When a waiter is cancelled, send `notifications/cancelled` upstream using the **internal** ID.<br>• Map client cancellations from the client ID to the internal ID.<br>• Acquire the `/sse` semaphore inside the generator. |
-| 3.5 | HOT-9, HOT-11 | • Make DB logging fire-and-forget.<br>• Take metric labels only from an allowlist.<br>• Move `RequestTimer` after the 404 check. |
-| 3.6 | HOT-10 | Use `uvicorn[standard]`, `loop="auto"`, a keep-alive setting, `backlog` and `timeout_graceful_shutdown`, identically in all three modes. |
+| 4.1 In-memory activity tracker | HOT-1 | • Add `ServerManager.touch()`, called for all transports.<br>• Flush to the DB in the background every 30 s with `w=1`.<br>• The idle reaper reads the in-memory value. |
+| 4.2 Start coalescing | HOT-4 | Add `ensure_started()`: concurrent first requests share one shielded start future. Explicit start/restart APIs stay fail-fast. |
+| 4.3 Async logging | LOOP-3 | Add `FMCP_LOG_LEVEL` (default `INFO`), `enqueue=True`, no per-line flush, and TRACE level for drainer lines. |
+| 4.4 Pure-ASGI middleware, async auth, settings | HOT-2, HOT-3 | • Rewrite the size and trace middleware as raw ASGI; the size check counts streamed bytes.<br>• Make auth `async`.<br>• Load a `Settings` object once at startup. |
+| 4.5 Metric-label bounds | HOT-11 | Allowlist `method`, validate `tool_name` against the tools cache, and move `RequestTimer` after the 404 check. |
+| 4.6 Uvicorn runtime | HOT-10 | `uvicorn[standard]`, `loop="auto"`, keep-alive, `backlog` and `timeout_graceful_shutdown`, identical in all three modes. |
 
-### Phase 4: Background Work and Process Ownership
+**Visible changes:**
 
-| Slice | Fixes | Design |
+- `last_used_at` in the DB can lag by up to 30 s;
+- 413 responses are now correct and carry CORS headers;
+- production logs default to `INFO`.
+
+**Rollback:** each slice is behind config or reverts cleanly.
+**Exit gate:** with a DB mock that sleeps 1 s, `/mcp` p99 is unaffected; 50 concurrent cold
+starts produce zero 503s; event-loop lag p99 is under 20 ms with a stderr-spamming server.
+
+---
+
+### Phase 5: Medium-High Radius, Core Concurrency Primitive and Failure Semantics
+
+**Scope:** `StdioJsonRpcRouter` (every stdio request) and what the gateway does on overload and
+timeout. The happy-path API is unchanged, but new error codes appear under stress.
+
+| Slice | Fixes | Change |
 |---|---|---|
-| 4.1 | BG-1 | • Run one supervised task per server, bounded by a health-concurrency semaphore.<br>• Run restarts as detached tasks.<br>• Reuse the handle's client for pings.<br>• Apply the same pattern to the LLM health monitor. |
-| 4.2 | PROC-1, PROC-3 | • Spawn with `start_new_session=True` and stop with `os.killpg` everywhere.<br>• Sum psutil metrics over child processes.<br>• Add tini to the Dockerfile. |
-| 4.3 | PROC-2 | • Make spawning cancel-safe: on cancel, kill the process group, release the port and unregister the server.<br>• Set the outer timeout to the inner budget plus a margin. |
-| 4.4 | STATE-1, STATE-2 | • Move the `on_event` bodies into the lifespan.<br>• Stop servers before the DB disconnects.<br>• Stop servers in parallel with `gather`, under a total budget shorter than the Docker grace period.<br>• Document `stop_grace_period`. |
+| 5.1 Non-blocking stdin writer | LOOP-1 | • Add a per-router writer thread fed by a bounded queue.<br>• When the queue is full, raise `StdioBackpressure`, which maps to **503 + `Retry-After`**.<br>• Route `notify`, `_on_timeout` and `_safe_write` through the queue.<br>• Remove `_write_lock` and the per-reply threads. |
+| 5.2 HTTP restart policy | HOT-5 | • Restart only after N consecutive connect or protocol errors.<br>• A read timeout returns 504 with no restart; a pool timeout returns 503 with no restart.<br>• Make the pool limits configurable. |
+| 5.3 Cancellation forwarding | HOT-6 | • When a waiter is cancelled (for example, the client disconnects), send `notifications/cancelled` upstream with the internal ID.<br>• Map client cancellations from the client ID to the internal ID. |
 
-### Phase 5: Fan-out and Read Endpoints
+**Visible changes:**
 
-| Slice | Fixes | Design |
+- an overloaded stdio server returns 503 instead of hanging;
+- HTTP servers no longer restart on a single slow call;
+- upstream servers now receive cancellations.
+
+**Rollback:** 5.1 should be developed behind `FMCP_STDIO_WRITER_THREAD=1` for one release, then
+the flag removed. **Exit gate:** with one server's stdin stalled, fast-server p99 is within 10 %
+of baseline; 100 start/stop/timeout cycles leak no router threads.
+
+---
+
+### Phase 6: High Radius, Security Hardening That Changes Behaviour
+
+**Scope:** auth on management routes, the environment that MCP children receive, git
+credentials and CORS. These changes **can break existing clients, frontend calls and MCP
+servers** that rely on today's permissive behaviour.
+
+| Slice | Fixes | Change | Coordination needed |
+|---|---|---|---|
+| 6.1 Router-level auth and redaction | SEC-1 | • `dependencies=[Depends(auth.get_token)]` on the management router, with an explicit public allowlist.<br>• Redact env values in list and get responses. | Confirm the frontend sends the token on every management call, and notify API consumers. |
+| 6.2 Least-privilege child env | SEC-2 | • Add `build_child_env()`: an allowlist plus `FMCP_CHILD_ENV_PASSTHROUGH`, with per-server env taking precedence. Reuse `llm_launcher.filter_safe_env_vars`.<br>• `FMCP_CHILD_ENV_INHERIT_ALL=1` is the escape hatch. | Audit deployed server configs for MCP servers that read inherited vars, and add release notes. |
+| 6.3 Git credentials | SEC-5 | Pass the token through `GIT_ASKPASS` or an `http.extraHeader` env var, never in the clone URL. | Re-clone existing repos to scrub old `.git/config` files. |
+| 6.4 Proxy headers and CORS | SEC-6 | • Add `FMCP_TRUST_PROXY_HEADERS`.<br>• Stop pairing `*` origins with credentials in run and github modes. | Railway is behind a proxy, so set the flag there. |
+
+**Rollback:** each slice independently. 6.2 can be rolled back at runtime with the escape-hatch
+env var. **Exit gate:** `GET /api/servers` returns 401 without a token; no secret value appears in
+any response; children do not see `FMCP_BEARER_TOKEN` or `MONGODB_URI`.
+
+---
+
+### Phase 7: High Radius, Process Model, Lifecycle and Container Image
+
+**Scope:** how every subprocess is spawned and killed, shutdown ordering, and the Docker image.
+Operators must redeploy, and some ops config changes.
+
+| Slice | Fixes | Change |
 |---|---|---|
-| 5.1 | FAN-1, FAN-2 | • `list_servers`: a single `$in` query with a projection and pagination.<br>• GET endpoints never spawn servers.<br>• Fix the index for the `server_name` query.<br>• Run start-all and stop-all in parallel under a semaphore, honouring `enabled_only`. |
-| 5.2 | FAN-3, FAN-5 | • GET LLM endpoints return cached health and stay read-only.<br>• Frontend polling: pause when `document.hidden`, add an in-flight guard, back off from 1 s.<br>• Inspector logs: return only new entries via a `?since=` cursor. |
-| 5.3 | FAN-4 | • Run mode: start uvicorn first, then spawn servers concurrently in the background.<br>• `/health` reports `starting` meanwhile.<br>• `_server_processes` becomes a view over `server_manager.processes`. |
+| 7.1 Process-group ownership | PROC-1 | • Spawn with `start_new_session=True` and stop with `os.killpg` (SIGTERM, then SIGKILL) everywhere.<br>• psutil sums metrics over child processes, which changes CPU/memory kill-policy readings. |
+| 7.2 Init process | PROC-3 | Add `tini` as the entrypoint, with the existing `entrypoint.sh` as its child. |
+| 7.3 Lifespan and shutdown order | STATE-1, STATE-2 | • Move the `on_event` bodies into the lifespan.<br>• Stop servers before the DB disconnects.<br>• Stop servers in parallel under a total budget.<br>• Document `stop_grace_period`. |
+| 7.4 Package cache and pre-warm | IMG-1 | • Move `NPM_CONFIG_CACHE`/`UV_CACHE_DIR` to a persistent volume.<br>• Add optional `FMCP_PREWARM=1`.<br>• Recommend pinned package versions. |
+| 7.5 Limits and ports | IMG-2, IMG-3 | • Raise `RLIMIT_NOFILE` at startup.<br>• Cap node memory with `NODE_OPTIONS` instead of `RLIMIT_AS`.<br>• Make the port range configurable. |
+| 7.6 Image hygiene | IMG-4 | Align on Python 3.12, reorder Docker layers, run as a non-root user and use `npm ci`. |
 
-### Phase 6: MCP Protocol Fidelity
+**Visible changes:**
 
-| Slice | Fixes | Design |
+- the kill policy measures real server memory, so thresholds may need retuning;
+- the image changes base Python version and user;
+- a new volume is recommended.
+
+**Rollback:** redeploy the previous image tag. **Exit gate:** after 100 start/stop cycles there are
+no orphan `node` processes; a container stop with 30 servers finishes within the grace period and
+its final state writes succeed.
+
+---
+
+### Phase 8: Highest Radius, MCP Protocol Semantics and Structural Refactor
+
+**Scope:** what MCP clients see on the wire, and the layout of the largest modules. Do this last,
+once Phases 1–7 have pinned behaviour with tests and the harness.
+
+| Slice | Fixes | Change |
 |---|---|---|
-| 6.1 | MCP-1, MCP-3 | • Cache the real upstream `initialize` result per server and return it, with the negotiated protocolVersion.<br>• Map each gateway session to an upstream session.<br>• On an upstream 404, re-handshake once and retry. |
-| 6.2 | MCP-2, MCP-5 | • Stop advertising capabilities the gateway can't serve, or proxy `roots`/`sampling`.<br>• Stream upstream SSE with `client.stream`.<br>• Forward progress on `/mcp` when the client accepts `text/event-stream`. |
-| 6.3 | MCP-4 | • Keep an in-memory tools cache in `ServerManager`, invalidated on `list_changed`.<br>• Fix stateless-HTTP detection.<br>• Keep `tools` on `PUT`. |
-| 6.4 | MCP-7, MCP-8 | • `run_tool` uses the same transport-dispatch helper as `/mcp`.<br>• Return JSON-RPC error envelopes.<br>• Support batches, or return a proper -32600.<br>• Return 202 for notifications.<br>• Add a response-size cap. |
-| 6.5 | MCP-6 | **Product decision needed:** either fix legacy SSE properly (session-aware GET-then-POST) or drop the `sse` transport. |
+| 8.1 Real `initialize` and sessions | MCP-1, MCP-3 | • Return each upstream's cached `initialize` result with the negotiated protocolVersion.<br>• Map gateway sessions to upstream sessions.<br>• On an upstream 404, re-handshake once and retry. |
+| 8.2 Capabilities and streaming | MCP-2, MCP-5 | • Stop advertising capabilities the gateway can't serve, or proxy `roots`/`sampling`.<br>• Stream upstream SSE and forward progress on `/mcp` to clients that accept `text/event-stream`. |
+| 8.3 Tools cache | MCP-4 | • In-memory cache in `ServerManager`, invalidated on `list_changed`.<br>• Fix stateless-HTTP detection.<br>• Keep `tools` on `PUT`. |
+| 8.4 Unified dispatch and JSON-RPC errors | MCP-7, MCP-8 | • `run_tool` uses the same transport-dispatch helper as `/mcp`.<br>• Return JSON-RPC error envelopes.<br>• Support batches or return -32600.<br>• Return 202 for notifications.<br>• Add a response-size cap. |
+| 8.5 Legacy SSE | MCP-6 | **Product decision needed:** fix it properly (session-aware GET-then-POST) or drop the `sse` transport and `SseSubprocessHandle`. |
+| 8.6 Module split | P6 | • Split `management.py` into `api/servers.py`, `api/llm.py`, `api/inference.py` and `api/diagnostics.py`.<br>• Split `create_dynamic_router` into per-transport dispatchers.<br>• Break the `run_servers` ↔ `management` cycle.<br>• Consolidate validators, sanitizers and the httpx client factory.<br>• *Pure moves only, no behaviour change.* |
 
-### Phase 7: Container and State Hygiene
+**Visible changes:** MCP clients see real server capabilities; error bodies change from
+`{"detail"}` to JSON-RPC; import paths change for anything importing `api.management` internals.
 
-| Slice | Fixes | Design |
-|---|---|---|
-| 7.1 | IMG-1 | • Move `NPM_CONFIG_CACHE`/`UV_CACHE_DIR` to a persistent volume.<br>• Add optional `FMCP_PREWARM=1`, which runs `npm cache add` for configured packages at boot.<br>• Recommend pinned package versions in docs. |
-| 7.2 | IMG-2, 3, 4 | • Raise `RLIMIT_NOFILE` at startup.<br>• Cap node memory with `NODE_OPTIONS` instead of `RLIMIT_AS`.<br>• Make the port range configurable.<br>• Align the Python version, reorder Docker layers, run as a non-root user and use `npm ci`. |
-| 7.3 | STATE-3, 4, 5 | • Copy configs instead of mutating them.<br>• Make the memory backend merge instead of overwrite.<br>• Cap the logs collection.<br>• Rotate stderr logs while servers run.<br>• Prune locks when a server is deleted.<br>• Keep a single `get_stderr_tail`.<br>• `/health` uses a cached DB status plus an MCP process summary.<br>• Wrap each row of idle cleanup in its own try. |
+**Rollback:** revert per slice. 8.1 and 8.4 should ship behind `FMCP_PROTOCOL_V2=1` for one release.
 
-### Phase 8: Cleanup
+**Exit gate:** an MCP conformance smoke test (official SDK client, run against stdio and HTTP
+fixtures) passes, and every earlier exit gate still holds.
 
-| Slice | Fixes | Design |
-|---|---|---|
-| 8.1 | P6 dead code | • Delete the listed modules and branches once `grep` across `fluidmcp/ tests/ docs/` shows no references.<br>• Update `CLAUDE.md`, `CONTRIBUTING.md` and the `pr_review.yml` prompt. |
-| 8.2 | P6 structure | • Split `management.py` into `api/servers.py`, `api/llm.py`, `api/inference.py` and `api/diagnostics.py`.<br>• Split `create_dynamic_router` into per-transport dispatchers.<br>• Break the `run_servers` ↔ `management` import cycle.<br>• Consolidate validators, sanitizers and the httpx client factory.<br>• *Pure moves only, no behaviour change.* |
+---
 
-### Task Ordering and Dependencies
+### 6.3 Dependency Graph
 
 ```
-0.1 → 0.2 → 1.x (security, can ship immediately after 0.1)
-            → 2.1 → 2.2 → 2.3 → 2.4
-            → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6
-            → 4.2 → 4.3 → 4.1 → 4.4
-            → 5.x, 6.x, 7.x (independent of each other)
-            → 8.1 → 8.2 (last, once behaviour is pinned by tests)
+Phase 1 ─▶ Phase 2 ─▶ Phase 3 ─▶ Phase 4 ─▶ Phase 5 ─▶ Phase 6 ─▶ Phase 7 ─▶ Phase 8
+   │                                                      ▲
+   └──────────── security fast-track (6.1 only) ──────────┘
+
+Within a phase, slices are independent unless noted:
+  3.2 before 3.3   ·   4.4 before 4.3 (settings object)   ·   5.1 before 5.3
+  7.1 before 7.2   ·   8.1 before 8.2   ·   8.5 decided before 8.6
 ```
 
 ---
@@ -332,7 +474,7 @@ Every slice follows the same steps:
 ## 7. Acceptance Criteria
 
 The criteria below define "the only bottleneck is the infrastructure". They are measured with
-the load harness from slice 0.2:
+the load harness from slice 1.2:
 
 - [ ] With one server's stdin stalled and another spamming stderr:
   - event-loop lag p99 stays **under 20 ms**;
