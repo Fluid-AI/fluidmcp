@@ -20,6 +20,7 @@ from .services import (
 from .services.package_installer import package_exists
 from .services.package_list import get_latest_version_dir
 from .services.config_resolver import INSTALLATION_DIR
+from .services.proxy_mcp import is_proxy_config, validate_proxy_config
 
 
 def configure_logger(verbose: bool = False) -> None:
@@ -266,6 +267,10 @@ def validate_command(args) -> None:
     # 2. Validate command availability
     logger.debug("Validating command availability")
     for server_name, server_cfg in config.servers.items():
+        if is_proxy_config(server_cfg):
+            errors.extend(f"{e} (server: {server_name})" for e in validate_proxy_config(server_cfg))
+            continue
+
         command = server_cfg.get("command")
 
         if not command:

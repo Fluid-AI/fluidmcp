@@ -15,6 +15,8 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 
+from .proxy_mcp import is_proxy_config, validate_proxy_config
+
 
 # Compiled regex patterns for performance
 PACKAGE_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+@[a-zA-Z0-9._-]+$')
@@ -201,6 +203,9 @@ def validate_server_config(config: Dict[str, Any]) -> List[str]:
     # Check if config is a dictionary
     if not isinstance(config, dict):
         return ["Server configuration must be a dictionary"]
+
+    if is_proxy_config(config):
+        return validate_proxy_config(config)
 
     # Check required field: command
     if 'command' not in config:

@@ -18,6 +18,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from ..utils.env_utils import is_placeholder
 from .metrics import MetricsCollector, RequestTimer
 from .network_handle import NetworkSubprocessHandle
+from .proxy_mcp import ProxyHandle
 from .sse_handle import SseSubprocessHandle
 from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 
@@ -704,6 +705,16 @@ def create_dynamic_router(server_manager):
                 await sem.acquire()
 
             try:
+                # ── Proxy MCP: answered in-process, the tool call goes to the upstream endpoint ──
+                if isinstance(process, ProxyHandle):
+                    response = await process.handle(request)
+                    elapsed_ms = int((time.monotonic() - t0) * 1000)
+                    _log.info(f"[mcp.ok] {ctx} elapsed={elapsed_ms}ms transport=proxy")
+                    await server_manager.update_last_used(server_name)
+                    if response is None:
+                        return Response(status_code=202)
+                    return JSONResponse(content=response)
+
                 # ── Network transport: forward via HTTP ──────────────────────────
                 if isinstance(process, NetworkSubprocessHandle):
                     upstream_session_id = None
@@ -908,6 +919,12 @@ def create_dynamic_router(server_manager):
             completion_status = "success"
             try:
                 collector.increment_active_streams()
+
+                if isinstance(process, ProxyHandle):
+                    response = await process.handle(request)
+                    if response is not None:
+                        yield f"data: {json.dumps(response)}\n\n"
+                    return
 
                 # ── Network transport: forward to external HTTP server ───────
                 if isinstance(process, NetworkSubprocessHandle):
@@ -1152,6 +1169,9 @@ def create_dynamic_router(server_manager):
             await sem.acquire()
 
         try:
+            if isinstance(process, ProxyHandle):
+                return JSONResponse(content=await process.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+
             # ── Network transport ────────────────────────────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
                 payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
@@ -1226,6 +1246,13 @@ def create_dynamic_router(server_manager):
             await sem.acquire()
 
         try:
+            if isinstance(process, ProxyHandle):
+                if "name" not in request_body:
+                    raise HTTPException(400, "Tool name is required")
+                response = await process.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": request_body})
+                await server_manager.update_last_used(server_name)
+                return JSONResponse(content=response)
+
             # ── Network transport ────────────────────────────────────────────────
             if isinstance(process, NetworkSubprocessHandle):
                 if "name" not in request_body:

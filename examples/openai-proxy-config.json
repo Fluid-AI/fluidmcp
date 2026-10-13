@@ -1,0 +1,48 @@
+{
+  "mcpServers": {
+    "openai-chat": {
+      "type": "proxy",
+      "endpoint": "https://api.openai.com/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "Authorization": "Bearer ${OPENAI_API_KEY}"
+      },
+      "timeout": 50,
+      "response_path": "choices.0.message.content",
+      "tool": {
+        "name": "chat_completion",
+        "description": "Send a chat completion request to OpenAI and return the assistant's reply. 'messages' is a list of objects like [{\"role\": \"system\", \"content\": \"...\"}, {\"role\": \"user\", \"content\": \"...\"}]; role is one of system, user or assistant.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "description": "OpenAI model ID, for example gpt-4o-mini"
+            },
+            "messages": {
+              "type": "array",
+              "description": "Conversation so far, oldest first",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role": {"type": "string", "enum": ["system", "user", "assistant"]},
+                  "content": {"type": "string"}
+                },
+                "required": ["role", "content"]
+              }
+            },
+            "temperature": {
+              "type": "number",
+              "description": "Sampling temperature between 0 and 2"
+            },
+            "max_tokens": {
+              "type": "integer",
+              "description": "Maximum number of tokens to generate"
+            }
+          },
+          "required": ["model", "messages"]
+        }
+      }
+    }
+  }
+}

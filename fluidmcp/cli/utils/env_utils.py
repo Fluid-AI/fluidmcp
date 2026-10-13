@@ -4,6 +4,7 @@ Utility functions for environment variable handling.
 Shared utilities used across database, API, and service layers.
 """
 import re
+from typing import Any
 
 
 def has_env_var_syntax(value: str) -> bool:
@@ -136,3 +137,48 @@ def is_placeholder(value: str) -> bool:
             return True
 
     return False
+
+
+# Shown in place of env values in API responses. Clients that edit a config
+# send it back unchanged for values they did not touch.
+ENV_VALUE_MASK = "****"
+
+
+def mask_env_values(env: Any) -> Any:
+    """
+    Replace every non-empty env value with ENV_VALUE_MASK.
+
+    Keys are kept so clients can see which variables a server uses. Handles
+    both the simple ({"KEY": "value"}) and structured
+    ({"KEY": {"value": "...", "description": "..."}}) formats.
+    """
+    if not isinstance(env, dict):
+        return env
+
+    masked = {}
+    for key, value in env.items():
+        if isinstance(value, dict):
+            masked[key] = {**value, "value": ENV_VALUE_MASK} if value.get("value") else value
+        else:
+            masked[key] = ENV_VALUE_MASK if value else value
+    return masked
+
+
+def restore_masked_env_values(env: Any, stored_env: Any) -> Any:
+    """
+    Put back stored values wherever a client returned ENV_VALUE_MASK.
+
+    A masked value for a key that has no stored value is kept as sent.
+    """
+    if not isinstance(env, dict) or not isinstance(stored_env, dict):
+        return env
+
+    def is_masked(value: Any) -> bool:
+        if isinstance(value, dict):
+            return value.get("value") == ENV_VALUE_MASK
+        return value == ENV_VALUE_MASK
+
+    return {
+        key: stored_env[key] if is_masked(value) and key in stored_env else value
+        for key, value in env.items()
+    }
