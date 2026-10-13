@@ -37,6 +37,7 @@ from .validators import (
 
 # Import rate limiter utilities
 from ..utils.rate_limiter import check_rate_limit, get_rate_limiter_stats, clear_rate_limiter
+from ..services.proxy_mcp import is_proxy_config, validate_proxy_config
 
 # COPILOT COMMENT 2 FIX: Simplified DuplicateKeyError import pattern
 # Import custom DuplicateKeyError from base module (eliminates pymongo dependency)
@@ -596,6 +597,12 @@ def validate_server_config(config: Dict[str, Any]) -> None:
         HTTPException: If validation fails
     """
     import re
+
+    if is_proxy_config(config):
+        errors = validate_proxy_config(config)
+        if errors:
+            raise HTTPException(400, "Invalid proxy configuration: " + "; ".join(errors))
+        return
 
     # Validate required fields
     if "command" not in config:

@@ -30,6 +30,7 @@ from .metrics import MetricsCollector
 from .health_checker import HealthChecker
 from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
+from .proxy_mcp import ProxyHandle, is_proxy_config
 from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 
 
@@ -590,8 +591,8 @@ class ServerManager:
                 return {
                     "id": id,
                     "state": "running",
-                    "transport": process.transport if isinstance(process, NetworkSubprocessHandle) else "stdio",
-                    "url": process.base_url if isinstance(process, NetworkSubprocessHandle) else None,
+                    "transport": process.transport if isinstance(process, (NetworkSubprocessHandle, ProxyHandle)) else "stdio",
+                    "url": self._runtime_url(process),
                     "pid": process.pid,
                     "uptime": uptime,
                     "restart_count": instance.get("restart_count", 0) if instance else 0,
@@ -739,12 +740,16 @@ class ServerManager:
 
             # Separate MCP config fields from metadata fields
             transport = config.get("transport", "stdio")
-            if transport in ("sse", "http"):
-                running_process = self.processes.get(id)
-                runtime_url = running_process.base_url if isinstance(running_process, NetworkSubprocessHandle) else None
+            if is_proxy_config(config):
+                mcp_config = {
+                    "transport": "proxy",
+                    "endpoint": config.get("endpoint"),
+                    "method": config.get("method", "POST"),
+                }
+            elif transport in ("sse", "http"):
                 mcp_config = {
                     "transport": transport,
-                    "url": runtime_url,
+                    "url": self._runtime_url(self.processes.get(id)),
                     "command": config.get("command"),
                     "args": config.get("args", []),
                 }
@@ -815,6 +820,9 @@ class ServerManager:
         Returns:
             Popen process or None if failed
         """
+        if is_proxy_config(config):
+            return await self._start_proxy(id, config)
+
         # Initialize name early for exception handler
         name = id
         try:
@@ -1126,6 +1134,43 @@ class ServerManager:
             self._close_stderr_log(id)
             logger.exception(f"Error spawning process for server '{name}': {e}")
             return None
+
+    @staticmethod
+    def _runtime_url(process: Any) -> Optional[str]:
+        """URL a running server is reached at: its HTTP port, or a proxy's upstream endpoint."""
+        if isinstance(process, NetworkSubprocessHandle):
+            return process.base_url
+        if isinstance(process, ProxyHandle):
+            return process.endpoint
+        return None
+
+    async def _start_proxy(self, id: str, config: Dict[str, Any]) -> Optional[ProxyHandle]:
+        """
+        Create the handle for a proxy MCP server and cache its tool.
+
+        ${VAR} references in headers resolve the same way a subprocess env does:
+        the shell environment wins over the server's env and instance env.
+        """
+        variables = {**config.get("env", {}), **(await self.db.get_instance_env(id) or {})}
+        variables = {k: v for k, v in variables.items() if isinstance(v, str) and v and not self._is_placeholder(v)}
+        variables.update(os.environ)
+
+        try:
+            handle = ProxyHandle(id, config, variables)
+        except ValueError as e:
+            logger.error(f"Invalid proxy config for server '{config.get('name', id)}' (id: {id}): {e}")
+            return None
+
+        stored = await self.db.get_server_config(id)
+        if stored:
+            stored["tools"] = [handle.tool]
+            try:
+                await self.db.save_server_config(stored)
+            except Exception as e:
+                logger.warning(f"Failed to save tools for '{id}': {e}")
+
+        logger.info(f"[{id}] Proxy MCP ready: {handle.method} {handle.endpoint}")
+        return handle
 
     async def _discover_and_cache_tools(self, server_id: str, process: subprocess.Popen) -> None:
         """
@@ -1496,6 +1541,9 @@ class ServerManager:
                 await process.aclose()
             except Exception:
                 pass
+
+        if isinstance(process, ProxyHandle):
+            await process.aclose()
 
         # Remove from registry
         if id in self.processes:

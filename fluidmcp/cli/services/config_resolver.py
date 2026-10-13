@@ -23,6 +23,7 @@ from .network_utils import find_free_port
 from .package_list import get_latest_version_dir
 from .package_installer import parse_package_string, replace_package_metadata_from_package_name
 from .s3_utils import s3_download_file, s3_upload_file, load_json_file, write_json_file, validate_metadata_config
+from .proxy_mcp import is_proxy_config
 
 
 # Environment variables
@@ -231,6 +232,8 @@ def resolve_from_file(file_path: str) -> ServerConfig:
                 servers[server_name]["working_dir"] = str(file_path.parent)
                 apply_transport(servers[server_name])
                 logger.debug(f"Set working dir for '{server_name}' to: {file_path.parent}")
+            elif is_proxy_config(server_cfg):
+                logger.debug(f"'{server_name}' is a proxy to: {server_cfg.get('endpoint')}")
             else:
                 # Unknown format
                 logger.warning(f"Unknown format for server '{server_name}'")
