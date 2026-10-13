@@ -258,7 +258,7 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
           placeholder="API_KEY=your-key&#10;DEBUG=true"
         />
         <p className="mt-1 text-xs text-zinc-400">
-          One per line in KEY=value format
+          One per line in KEY=value format. Saved values show as ****; leave them to keep the current value.
         </p>
       </div>
 

@@ -61,7 +61,7 @@ from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 from ..services.network_handle import NetworkSubprocessHandle
 
-from ..utils.env_utils import is_placeholder, has_env_var_syntax
+from ..utils.env_utils import is_placeholder, has_env_var_syntax, mask_env_values, restore_masked_env_values
 # All stdin writes / stdout reads for stdio servers go through the per-process
 # StdioJsonRpcRouter: one stdout reader, responses matched by JSON-RPC ID.
 from ..services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
@@ -104,6 +104,13 @@ def truncate_error(error_msg: str) -> str:
     if len(error_msg) > MAX_ERROR_MESSAGE_LENGTH:
         return error_msg[:MAX_ERROR_MESSAGE_LENGTH] + "... (truncated)"
     return error_msg
+
+
+def _config_for_response(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of a server config with env values masked, safe to return from the API."""
+    if "env" not in config:
+        return config
+    return {**config, "env": mask_env_values(config["env"])}
 
 
 def sanitize_audit_changes(changes: Dict[str, Any]) -> Dict[str, Any]:
@@ -1214,7 +1221,7 @@ async def get_server(request: Request, id: str, token: str = Depends(get_token))
     return {
         "id": id,
         "name": config.get("name"),
-        "config": config,
+        "config": _config_for_response(config),
         "status": status,
         "resources": resources,
         "concurrency": concurrency,
@@ -1275,6 +1282,10 @@ async def update_server(
     if "name" not in config:
         raise HTTPException(400, "Server name is required")
 
+    # Clients edit the masked config from GET responses; keep stored values they didn't change
+    if "env" in config:
+        config["env"] = restore_masked_env_values(config["env"], existing.get("env", {}))
+
     # Validate configuration for security
     validate_server_config(config)
 
@@ -1325,7 +1336,7 @@ async def update_server(
     logger.info(f"Updated server configuration: {config['name']} (id: {id})")
     return {
         "message": f"Server '{id}' updated successfully",
-        "config": config
+        "config": _config_for_response(config)
     }
 
 

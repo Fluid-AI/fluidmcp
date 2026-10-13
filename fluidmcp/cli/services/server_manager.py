@@ -31,6 +31,7 @@ from .health_checker import HealthChecker
 from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
 from .proxy_mcp import ProxyHandle, is_proxy_config
+from ..utils.env_utils import mask_env_values
 from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 
 
@@ -758,7 +759,7 @@ class ServerManager:
                     "transport": "stdio",
                     "command": config.get("command"),
                     "args": config.get("args", []),
-                    "env": config.get("env", {})
+                    "env": mask_env_values(config.get("env", {}))
                 }
 
             # Build response with nested structure
