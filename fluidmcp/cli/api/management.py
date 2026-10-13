@@ -106,11 +106,16 @@ def truncate_error(error_msg: str) -> str:
     return error_msg
 
 
+# Config fields whose values may hold secrets: server env vars and proxy headers.
+SECRET_CONFIG_FIELDS = ("env", "headers")
+
+
 def _config_for_response(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Copy of a server config with env values masked, safe to return from the API."""
-    if "env" not in config:
-        return config
-    return {**config, "env": mask_env_values(config["env"])}
+    """Copy of a server config with env and header values masked, safe to return from the API."""
+    return {
+        key: mask_env_values(value) if key in SECRET_CONFIG_FIELDS else value
+        for key, value in config.items()
+    }
 
 
 def sanitize_audit_changes(changes: Dict[str, Any]) -> Dict[str, Any]:
@@ -1283,8 +1288,9 @@ async def update_server(
         raise HTTPException(400, "Server name is required")
 
     # Clients edit the masked config from GET responses; keep stored values they didn't change
-    if "env" in config:
-        config["env"] = restore_masked_env_values(config["env"], existing.get("env", {}))
+    for field in SECRET_CONFIG_FIELDS:
+        if field in config:
+            config[field] = restore_masked_env_values(config[field], existing.get(field, {}))
 
     # Validate configuration for security
     validate_server_config(config)

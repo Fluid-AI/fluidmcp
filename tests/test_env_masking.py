@@ -107,6 +107,28 @@ class TestManagementApiMasking:
         assert SECRET not in resp.text
         assert manager.configs["weather"]["env"] == {"WEATHER_API_KEY": SECRET, "REGION": "us"}
 
+    def test_proxy_headers_masked_and_restored(self, setup):
+        client, manager = setup
+        proxy = {
+            "id": "proxy",
+            "name": "Proxy",
+            "type": "proxy",
+            "endpoint": "https://api.example.com/v1/chat",
+            "headers": {"Authorization": f"Bearer {SECRET}"},
+            "tool": {"name": "chat", "inputSchema": {"type": "object"}},
+        }
+        assert client.post("/api/servers", json=proxy).status_code == 200
+
+        resp = client.get("/api/servers/proxy")
+        assert SECRET not in resp.text
+        assert resp.json()["config"]["headers"] == {"Authorization": "****"}
+
+        update = {k: v for k, v in proxy.items() if k != "id"}
+        resp = client.put("/api/servers/proxy", json={**update, "headers": {"Authorization": "****"}})
+        assert resp.status_code == 200
+        assert SECRET not in resp.text
+        assert manager.configs["proxy"]["headers"] == {"Authorization": f"Bearer {SECRET}"}
+
     def test_update_with_new_value_replaces_secret(self, setup):
         client, manager = setup
         client.put("/api/servers/weather", json={

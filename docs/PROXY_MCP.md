@@ -46,7 +46,7 @@ The full OpenAI example is in [examples/openai-proxy-config.json](../examples/op
 2. The server's instance env (`PUT /api/servers/{id}/instance/env`).
 3. The server's `env` block.
 
-If a variable is missing, the server fails to start and the log names the variable. Header values are never logged, and `GET /api/servers` does not return them.
+If a variable is missing, the server fails to start and the log names the variable. Header values are never logged. `GET /api/servers` leaves headers out, and `GET /api/servers/{id}` shows each value as `****`.
 
 ## Running it
 
