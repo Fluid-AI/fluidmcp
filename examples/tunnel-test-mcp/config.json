@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tunnel_test": {
+      "command": "python",
+      "args": ["server.py"],
+      "env": {
+        "TUNNEL_TEST_LOG": "/tmp/tunnel-test-mcp.log"
+      }
+    }
+  }
+}
