@@ -14,7 +14,7 @@ import hashlib
 import hmac
 import json
 import uuid
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
@@ -49,6 +49,7 @@ class FakeTunnelServer:
         self._channel: Optional[SecureChannel] = None
         self._lock = asyncio.Lock()
         self._pending: Dict[str, asyncio.Future] = {}
+        self.received: List[Dict[str, Any]] = []  # every response/error, in arrival order (for tests)
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> str:
         self._server = await serve(
@@ -105,7 +106,9 @@ class FakeTunnelServer:
                 if data["type"] == "hello":
                     self.hello = data
                     self.connected.set()
-                elif data["id"] in self._pending:
+                    continue
+                self.received.append(data)
+                if data["id"] in self._pending:
                     self._pending[data["id"]].set_result(data)
         except ProtocolError:
             await ws.close(1008)

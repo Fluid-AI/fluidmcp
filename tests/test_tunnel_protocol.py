@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import struct
 from pathlib import Path
 
@@ -228,6 +229,57 @@ class TestHandshake:
         with pytest.raises(ValueError):
             ClientHandshake(keys[0], [raw_public(keys[1])], "bad id")
 
+    def test_substituted_client_ephemeral_key_rejected(self, keys):
+        # A man in the middle swaps eph_pub_C; the server signs what it received, so the client's transcript differs.
+        client_key, server_key = keys
+        client = ClientHandshake(client_key, [raw_public(server_key)], CONNECTOR)
+        server = ServerHandshake(server_key, [raw_public(client_key)], CONNECTOR)
+        client_hello = bytearray(client.start())
+        client_hello[10:42] = protocol._x25519_public(protocol.X25519PrivateKey.generate())
+        assert_error("bad_signature", client.receive_server_hello, server.receive_client_hello(bytes(client_hello)))
+
+    def test_server_hello_replayed_to_new_client_rejected(self, keys):
+        client_key, server_key = keys
+        first = ClientHandshake(client_key, [raw_public(server_key)], CONNECTOR)
+        server_hello = ServerHandshake(server_key, [raw_public(client_key)], CONNECTOR).receive_client_hello(first.start())
+        second = ClientHandshake(client_key, [raw_public(server_key)], CONNECTOR)
+        second.start()
+        assert_error("bad_signature", second.receive_server_hello, server_hello)
+
+    def test_stale_server_hello_rejected(self, keys):
+        client_key, server_key = keys
+        client = ClientHandshake(client_key, [raw_public(server_key)], CONNECTOR, make_env(Clock()))
+        # The server's first clock read checks the client's timestamp; the second stamps SERVER_HELLO 61 s in the past.
+        walls = iter([WALL, WALL - 61])
+        server_env = Env(rng=os.urandom, wall=lambda: next(walls), mono=lambda: 1000.0)
+        server = ServerHandshake(server_key, [raw_public(client_key)], CONNECTOR, server_env)
+        assert_error("clock_skew", client.receive_server_hello, server.receive_client_hello(client.start()))
+
+    def test_stolen_token_and_public_key_without_private_key_rejected(self, keys):
+        # The attacker announces the site's registered public key but can only sign with a key of its own.
+        client_key, server_key = keys
+        attacker_key = generate_identity_key()
+        client_hello = bytearray(ClientHandshake(attacker_key, [raw_public(server_key)], CONNECTOR).start())
+        client_hello[74:106] = raw_public(client_key)
+        server = ServerHandshake(server_key, [raw_public(client_key)], CONNECTOR)
+        server_hello = server.receive_client_hello(bytes(client_hello))
+        finish_prefix = bytes([protocol.MSG_CLIENT_FINISH, protocol.VERSION])
+        th_c = protocol._transcript(bytes(client_hello), server_hello, finish_prefix)
+        forged = finish_prefix + attacker_key.sign(protocol._lp(protocol.CTX_SIG_CLIENT) + th_c)
+        assert_error("bad_signature", server.receive_client_finish, forged)
+
+    def test_handshake_messages_accepted_only_once(self, keys):
+        client_key, server_key = keys
+        client = ClientHandshake(client_key, [raw_public(server_key)], CONNECTOR)
+        server = ServerHandshake(server_key, [raw_public(client_key)], CONNECTOR)
+        client_hello = client.start()
+        server_hello = server.receive_client_hello(client_hello)
+        assert_error("bad_state", server.receive_client_hello, client_hello)
+        client_finish, _ = client.receive_server_hello(server_hello)
+        assert_error("bad_state", client.receive_server_hello, server_hello)
+        server.receive_client_finish(client_finish)
+        assert_error("bad_state", server.receive_client_finish, client_finish)
+
 
 class TestRecords:
     def test_replay_rejected(self, keys):
@@ -257,6 +309,46 @@ class TestRecords:
         client_channel, server_channel = connect(*keys)
         assert_error("bad_length", server_channel.decrypt, b"short")
         assert_error("channel_closed", server_channel.decrypt, client_channel.encrypt(b"late"))
+
+    def test_record_from_other_session_rejected(self, keys):
+        client_a, _ = connect(*keys)
+        _, server_b = connect(*keys)
+        assert_error("bad_tag", server_b.decrypt, client_a.encrypt(b"session a"))
+
+    def test_reordered_or_dropped_record_rejected(self, keys):
+        client_channel, server_channel = connect(*keys)
+        client_channel.encrypt(b"first, never delivered")
+        assert_error("bad_sequence", server_channel.decrypt, client_channel.encrypt(b"second"))
+
+    def test_tampered_header_rejected(self, keys):
+        client_channel, server_channel = connect(*keys)
+        frame = bytearray(client_channel.encrypt(b"payload"))
+        frame[3] ^= 1  # key_no
+        assert_error("bad_key_no", server_channel.decrypt, bytes(frame))
+
+    def test_tampered_aad_direction_rejected(self, keys):
+        # Same header, but sealed as if sent in the server's direction: the tag covers the direction byte.
+        client_channel, server_channel = connect(*keys)
+        client_channel._own_dir = protocol.DIR_S2C
+        assert_error("bad_tag", server_channel.decrypt, client_channel.encrypt(b"payload"))
+
+    def test_nonce_never_reused_across_rekey(self, keys):
+        client_channel, server_channel = connect(*keys)
+        seen = set()
+
+        def send(data):
+            frame = client_channel.encrypt(data)
+            key_no, seq = struct.unpack(">IQ", frame[:protocol.HEADER_LEN])
+            assert (key_no, seq) not in seen
+            seen.add((key_no, seq))
+            return frame
+
+        for _ in range(3):
+            server_channel.decrypt(send(b"x"))
+        control = server_channel.decrypt(client_channel.start_rekey())
+        client_channel.decrypt(control.reply)
+        server_channel.decrypt(send(b"y"))
+        assert {seq for _, seq in seen} == {0, 1, 2, 4}  # seq 3 was the REKEY record; seq is not reset
 
     def test_oversized_plaintext_keeps_channel_open(self, keys):
         client_channel, server_channel = connect(*keys)
@@ -346,3 +438,11 @@ class TestKeyHelpers:
             load_private_key_file(path)
         path.chmod(0o600)
         load_private_key_file(path)
+
+    def test_no_key_material_in_tunnel_source(self):
+        # Keys are generated at runtime (fmcp tunnel keygen) or come from configuration, never from source.
+        source_dir = Path(__file__).parent.parent / "fluidmcp" / "cli" / "tunnel"
+        for path in source_dir.glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            assert not re.search(r"[A-Za-z0-9+/]{43}=", text), path.name
+            assert not re.search(r"\b[0-9a-f]{64}\b", text), path.name
