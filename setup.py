@@ -18,7 +18,7 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Fluid-AI/fluidmcp",
-    packages=['fluidmcp', 'fluidmcp.services', 'fluidmcp.models', 'fluidmcp.utils', 'fluidmcp.api', 'fluidmcp.repositories'],
+    packages=['fluidmcp', 'fluidmcp.services', 'fluidmcp.models', 'fluidmcp.utils', 'fluidmcp.api', 'fluidmcp.repositories', 'fluidmcp.tunnel'],
     package_dir={'fluidmcp': 'fluidmcp/cli'},
     include_package_data=True,
     package_data={
@@ -35,7 +35,9 @@ setup(
         "httpx==0.28.1",  # Required for Replicate client (pinned to match requirements.txt)
         "httpx-sse==0.4.0",  # Decode event-stream responses from Streamable HTTP MCP servers
         "motor==3.7.1",  # MongoDB async driver (required for fmcp serve)
-        "pymongo==4.11.0"  # MongoDB driver (required for fmcp serve)
+        "pymongo==4.11.0",  # MongoDB driver (required for fmcp serve)
+        "websockets>=15.0.1",  # Tunnel client
+        "cryptography>=42.0",  # Tunnel key exchange, signatures, encryption
     ],
     entry_points={
         'console_scripts': [
