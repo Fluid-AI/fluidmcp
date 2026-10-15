@@ -129,7 +129,7 @@ class ApiClient {
     return this.request<ServerStatus>(`/api/servers/${serverId}/status`, options);
   }
 
-  async startServer(serverId: string): Promise<{ message: string; pid: number }> {
+  async startServer(serverId: string): Promise<{ message: string; pid: number; unfilled_env?: string[] }> {
     return this.request(`/api/servers/${serverId}/start`, { method: 'POST' });
   }
 
@@ -261,7 +261,7 @@ class ApiClient {
   }
 
   // Server Configuration Management (CRUD)
-  async addServer(config: any): Promise<{ message: string; id: string; name: string }> {
+  async addServer(config: any): Promise<{ message: string; id: string; name: string; unfilled_env?: string[] }> {
     return this.request('/api/servers', {
       method: 'POST',
       body: JSON.stringify(config),

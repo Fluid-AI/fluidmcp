@@ -328,6 +328,14 @@ export default function ManageServers() {
                           <span className={`px-2 py-1 text-xs font-medium rounded-full ${statusColor}`}>
                             {server.status?.state || 'unknown'}
                           </span>
+                          {!isRunning && (server.status?.unfilled_env?.length ?? 0) > 0 && (
+                            <span
+                              className="ml-2 px-2 py-1 text-xs font-medium rounded-full bg-yellow-900/40 text-yellow-400 border border-yellow-500/30"
+                              title={`Unfilled env var(s): ${server.status!.unfilled_env!.join(', ')}`}
+                            >
+                              Needs config
+                            </span>
+                          )}
                           {!server.enabled && (
                             <span className="ml-2 text-xs text-yellow-400 italic">(Disabled)</span>
                           )}
