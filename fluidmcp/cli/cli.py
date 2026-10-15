@@ -721,6 +721,12 @@ def main():
     # If secure mode is enabled
     if secure_mode:
         logger.debug("Secure mode requested")
+        # Precedence: --token > FMCP_BEARER_TOKEN env var > generate a new one.
+        # The env var keeps the token stable across restarts/redeploys (e.g. Railway).
+        if not token:
+            token = (os.environ.get("FMCP_BEARER_TOKEN") or "").strip() or None
+            if token:
+                logger.debug("Using bearer token from FMCP_BEARER_TOKEN")
         # generate a token if not provided
         if not token:
             # Generate a secure random token
@@ -799,21 +805,6 @@ def main():
         # Run standalone API server
         from .server import main as server_main
         import asyncio
-
-        # Generate token if secure mode enabled but no token provided
-        if secure_mode and not token:
-            token = secrets.token_urlsafe(32)
-            # SECURITY FIX: Do not log the actual token (violates security policy at line 701)
-            logger.info("Generated bearer token (token value printed to console only)")
-
-            # Print token to console (NOT in logs for security)
-            print("\n" + "="*70)
-            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-            print("="*70)
-            print(f"\n{token}\n")
-            print("="*70)
-            print("This token is required for API authentication.")
-            print("="*70 + "\n")
 
         try:
             asyncio.run(server_main(args))

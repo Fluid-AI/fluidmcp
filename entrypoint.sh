@@ -160,7 +160,9 @@ echo "Security: Bearer token authentication enabled"
 echo ""
 
 # Start fmcp serve in background
-# Note: FMCP_BEARER_TOKEN is read from environment (more secure than CLI arg)
+# Note: FMCP_BEARER_TOKEN is read from the environment by `fmcp serve --secure`
+# (precedence: --token > FMCP_BEARER_TOKEN > auto-generate), so the token stays
+# stable across redeploys. Passing it as a CLI arg would expose it in `ps`.
 echo "Starting fmcp serve..."
 
 # Build command — MongoDB flags always included (MONGODB_URI verified above)
