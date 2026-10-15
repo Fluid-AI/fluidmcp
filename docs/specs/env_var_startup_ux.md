@@ -127,15 +127,28 @@ PR 1's fail-fast kicks in.
 
 ### PR 3 — Frontend: surface `unfilled_env` in the Add modal and server list
 
-- `AddServerModal.tsx`: after a successful add, if the response has
-  `unfilled_env`, show an inline warning ("2 env vars still need real
-  values: ..., ...") instead of just closing the modal.
-- `ServerListPanel.tsx`: add an amber "needs config" badge (distinct from the
-  red `"failed"` state at `:187-194`) driven by the same field, fetched via
-  `GET /servers/{id}/instance/env` or a lightweight status field — whichever
-  is cheaper to wire up given how `servers` state is already loaded.
+**Correction (2026-10-15):** `AddServerModal.tsx`/`ServerListPanel.tsx` were
+named here on the assumption that they drive the deployed-servers flow, but
+they actually belong to the MCP Inspector's separate ad-hoc connection
+feature (client-tracked test sessions, not `add_server`/`start_server`
+backed). The real UI for the REST-managed servers this spec is about is
+`ManageServers.tsx` (table + status badges), `ServerForm.tsx` (manual-config
+add/edit form), and `CloneFromGithubForm.tsx` (GitHub clone flow + its
+post-clone success view). Implemented against these instead.
 
-Depends on PR 2 for the data; no backend changes of its own.
+- `useServerManagement.createServer` / `useServerDetails.startServer`: show a
+  toast warning when the response has `unfilled_env`.
+- `CloneFromGithubForm`: inline per-server warning in the post-clone success
+  view — the primary real-world path, since this is how servers get added
+  from cloned private repos with unfilled placeholder env values.
+- `ManageServers.tsx`: amber "Needs config" badge (distinct from the red
+  `"failed"` state) for non-running servers with unfilled env vars, driven by
+  `unfilled_env` added to `list_servers()`'s per-server status — avoids an
+  N+1 `GET /servers/{id}/instance/env` call per row.
+
+Depends on PR 2 for the add/start signal; required one small backend addition
+of its own (`unfilled_env` in `list_servers()` / `GET /servers/{id}`) for the
+list-badge case, reusing PR 1's `_get_unfilled_env_keys()` helper.
 
 ### PR 4 — Optional explicit `required` flag as a stronger override
 
@@ -157,6 +170,9 @@ absence as "unknown" (no warning), not "required."
 | Crash/restart internals | Fail-fast + diagnosed `last_error` when placeholder env detected | 1 |
 | `POST /api/servers` (`add_server`) | Response includes `unfilled_env: string[]` | 2 |
 | `POST /api/servers/{id}/start` (`start_server`) | Response includes `unfilled_env: string[]` | 2 |
+| `POST /api/servers/from-github` (`add_server_from_github`) | Each entry in `servers[]` includes `unfilled_env: string[]` | 2 |
+| `GET /api/servers` (`list_servers`) | Each server's `status` includes `unfilled_env: string[]` | 3 |
+| `GET /api/servers/{id}` (`get_server`) | `status` includes `unfilled_env: string[]` | 3 |
 | `POST /api/servers` — request body | Accept `env` values as `string \| {value, required?, description?}` | 4 |
 | `GET /api/servers/{id}/instance/env` | `required` reflects the stored flag instead of hardcoded `True` | 4 |
 
