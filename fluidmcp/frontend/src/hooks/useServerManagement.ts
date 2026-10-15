@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import apiClient from '../services/api';
 import { Server } from '../types/server';
-import { showSuccess, showError } from '../services/toast';
+import { showSuccess, showError, showWarning } from '../services/toast';
 
 export function useServerManagement(includeDeleted: boolean = false) {
   const [servers, setServers] = useState<Server[]>([]);
@@ -29,8 +29,13 @@ export function useServerManagement(includeDeleted: boolean = false) {
 
   const createServer = useCallback(async (config: any) => {
     try {
-      await apiClient.addServer(config);
+      const response = await apiClient.addServer(config);
       showSuccess(`Server '${config.name}' created successfully`);
+      if (response.unfilled_env && response.unfilled_env.length > 0) {
+        showWarning(
+          `${response.unfilled_env.length} env var(s) still need real values: ${response.unfilled_env.join(', ')}`
+        );
+      }
       await fetchServers();
       return true;
     } catch (err) {

@@ -1205,6 +1205,8 @@ async def get_server(request: Request, id: str, token: str = Depends(get_token))
     except Exception as e:
         logger.warning(f"Failed to load crash summary for '{id}': {e}")
 
+    status = {**status, "unfilled_env": manager._get_unfilled_env_keys(config)}
+
     return {
         "id": id,
         "name": config.get("name"),

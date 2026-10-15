@@ -776,7 +776,8 @@ class ServerManager:
                     "uptime": status.get("uptime"),
                     "restart_count": status.get("restart_count", 0),
                     "exit_code": status.get("exit_code"),
-                    "last_error": status.get("last_error")
+                    "last_error": status.get("last_error"),
+                    "unfilled_env": self._get_unfilled_env_keys(config)
                 }
             }
 
