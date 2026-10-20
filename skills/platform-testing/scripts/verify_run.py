@@ -3,8 +3,8 @@
 Independently verify a platform-testing run and print its report.
 
 Run it yourself on the RUN_DIR an agent reports — don't rely on output the agent
-pasted. It trusts nothing the agent typed; every claim is checked against
-something the agent did not write:
+pasted. It cross-checks recorded evidence; it is not tamper-proof and does not
+prove that an assertion covers the intended behavior:
 
   1. The server really ran: the uvicorn log in the run dir must show the same
      process id that start_local_server.sh recorded, listening on the recorded
@@ -18,7 +18,7 @@ something the agent did not write:
      PASS is recomputed here from the recorded expected and actual values.
 
 Exit code 0 only when everything holds. Usage:
-    python3 verify_run.py [RUN_DIR]     # default: the current run on PORT (8010)
+    python3 verify_run.py [RUN_DIR]     # default: the current run on PORT (8099)
 """
 import hashlib
 import json
@@ -34,8 +34,8 @@ ACCESS_LINE = re.compile(r'127\.0\.0\.1:(\d+) - "([A-Z]+) (\S+) HTTP/[\d.]+" (\d
 
 
 def default_run_dir():
-    port = os.getenv("PORT", "8010")
-    pointer = os.path.join(os.getenv("TMPDIR", "/tmp"), f"fluidgpt-local-server-{port}", "current_run")
+    port = os.getenv("PORT", "8099")
+    pointer = os.path.join(os.getenv("TMPDIR", "/tmp"), f"fluidmcp-local-server-{port}", "current_run")
     if not os.path.isfile(pointer):
         sys.exit(f"No RUN_DIR given and no current run at {pointer}")
     return open(pointer).read().strip()
@@ -69,7 +69,7 @@ def main():
     # 1. The server process recorded at start is the one that wrote this log.
     if f"Started server process [{run['pid']}]" not in log:
         problems.append(f"server.log has no 'Started server process [{run['pid']}]' — not the recorded server")
-    if f"Uvicorn running on http://127.0.0.1:{run['port']}" not in log:
+    if f"Uvicorn running on http://0.0.0.0:{run['port']}" not in log:
         problems.append(f"server.log does not show uvicorn listening on port {run['port']}")
     if "Application startup complete" not in log:
         problems.append("server.log never reached 'Application startup complete'")
@@ -102,7 +102,7 @@ def main():
     if not checks:
         problems.append("no checks recorded — status codes alone don't show the output was correct")
     for check in checks:
-        check["passed"] = check["expected"].strip() == check["actual"].strip()
+        check["passed"] = check.get("exit_code", 1) == 0 and check["expected"].strip() == check["actual"].strip()
         if not check["passed"]:
             problems.append(f"check failed: {check['label']}")
 

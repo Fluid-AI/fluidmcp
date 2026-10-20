@@ -8,7 +8,7 @@
 # server cannot pass as one that did.
 #
 # Usage: api_call.sh <label> <METHOD> <path?query> [extra curl args...]
-#   api_call.sh convert-a POST "/api/fileOperations/convert/?dest_type=pdf" -F "file=@a/Report.pptx"
+#   api_call.sh health GET /health
 # NO_AUTH=1 sends no Authorization header (for 401 tests).
 # Safe to run several in parallel with `&`.
 set -euo pipefail
@@ -33,7 +33,7 @@ if [ "${NO_AUTH:-}" != "1" ] && [ -f "$TOKEN_FILE" ]; then
 fi
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-meta="$(curl -s -o "$body_file" -w '%{http_code} %{local_port} %{time_total}' \
+meta="$(curl --max-time "${REQUEST_TIMEOUT:-60}" -s -o "$body_file" -w '%{http_code} %{local_port} %{time_total}' \
     -X "$method" "${auth[@]}" "$BASE_URL$path" "$@" || true)"
 read -r status local_port time_total <<< "$meta"
 

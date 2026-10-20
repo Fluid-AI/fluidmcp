@@ -1,6 +1,6 @@
 ---
 name: production-coding-tenets
-description: Apply Fluid AI's production coding principles when implementing or reviewing platform changes, including minimal diffs, product reuse, readability, concurrency, and tenant isolation.
+description: Apply FluidMCP's production coding principles when implementing or reviewing platform changes, including minimal diffs, product reuse, readability, concurrency, and request isolation and authentication.
 ---
 
 # Production Coding Tenets
@@ -15,14 +15,14 @@ description: Apply Fluid AI's production coding principles when implementing or 
 ## Maintainability and Human Readability of the Code
 
 - Write straightforward code with descriptive names and explicit conditions. Avoid clever logic, hidden mutations, unnecessary helpers, and abstractions that obscure simple behavior.
-- Express intent directly: to skip a tenant comparison, guard the existing rejection conditions with a named flag; do not overwrite the decoded tenant to make validation pass.
+- Express intent directly: guard optional validation with a named flag; do not rewrite request identity to make authorization pass.
 - Keep comments short and explain why a choice is necessary.
 
 ## Product Fit and Reuse
 
 - Treat the platform as a shared product for many customers. Represent customer differences through configuration rather than hardcoded customer branches.
 - Inspect existing code, UI, and workflows before adding functionality. Extend established product capabilities where they fit.
-- Example: add HTTP triggering and any required timing options to DataLoaderSync's existing scheduling, management, and Temporal execution paths instead of creating a separate scheduler and management system.
+- Follow the existing CLI (`fluidmcp/cli/cli.py`), gateway (`services/run_servers.py`), and server lifecycle (`services/server_manager.py`) paths before adding another launcher or proxy. Service paths are relative to `fluidmcp/cli/`.
 
 ## Architecture and Scalability
 
@@ -35,14 +35,15 @@ description: Apply Fluid AI's production coding principles when implementing or 
 - Use async APIs where available; offload blocking work and suitable CPU-heavy operations to the existing threadpool. For sustained Python CPU work, use existing process/background workers where thread contention would still cause lag.
 - Bound concurrency, queues, retries, and timeouts. Avoid shared mutable request state and unbounded task creation; consider cancellation and worker capacity.
 
-## Tenant Isolation
+## Request Isolation and Authentication
 
-- The environment variable is `TENANT`. JWT authorization reads `fluidai_app_metadata.tenant` (a string or list), not `tenant_id`, and checks deployment membership in `services/authorization/authorization_provider.py`. Preserve this request-level boundary.
-- MongoDB uses `tenantId`; reuse `Repository` with tenant checking enabled. Verify reads, writes, and aggregations stay scoped; never let caller-supplied tenant values override the authorized deployment scope.
-- MinIO/S3 object paths use tenant names. Preserve tenant prefixes through existing storage flows and validate access; low-level storage helpers do not necessarily enforce isolation themselves.
-- Carry tenant scope into background jobs, caches, and shared state. Never mix tenants or mutate identity claims to bypass authorization.
+- Check `fluidmcp/cli/auth.py` and the affected route dependencies. Secure mode uses `FMCP_SECURE_MODE` and `FMCP_BEARER_TOKEN`; do not assume GPT Engine JWT claims or tenant repositories exist here. Keep tokens and server environment secrets out of logs and responses.
+- Trace both `POST /{server}/mcp` (JSON-RPC) and `POST /{server}/mcp/tools/call` (name/arguments). Distinguish caller JSON-RPC IDs, gateway-generated IDs, upstream IDs, and MCP session IDs. None is an authenticated user identity.
+- Shared transport clients must correlate each response to the correct pending request even when callers reuse IDs. Preserve original IDs in downstream responses; remove pending state on success, errors, timeout, cancellation, and shutdown.
+- Treat stdio, SSE, and Streamable HTTP as distinct transport implementations. A fix or test for one does not establish coverage for another. Preserve notifications without response IDs and handle upstream errors without crossing request boundaries.
+- Keep per-server configuration, processes, sessions, and backend records scoped to the correct server. Inspect the actual backend and authorization path before claiming isolation guarantees.
 
 ## Reviewer Experience and Verification
 
 - Keep the diff focused and easy to trace. Explain the concrete behavior change, why it is needed, and any deployment impact.
-- Run checks appropriate to the risk, covering unchanged defaults and affected behavior. For auth, tenant isolation, and concurrency changes, verify those boundaries explicitly; report what remains untested.
+- Run checks appropriate to the risk, covering unchanged defaults and affected behavior. For auth, request isolation, and concurrency changes, verify those boundaries explicitly; report what remains untested.
