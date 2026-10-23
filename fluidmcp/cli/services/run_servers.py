@@ -36,6 +36,7 @@ from .frontend_utils import setup_frontend_routes
 from .server_manager import ServerManager, MCPHealthMonitor
 from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
+from ..tunnel import tunnel_from_env
 
 # Default ports
 client_server_port = int(os.environ.get("MCP_CLIENT_SERVER_PORT", "8090"))
@@ -334,6 +335,19 @@ def run_servers(
 
             except Exception:
                 logger.exception(f"Error launching server '{server_name}'")
+
+    # Registered after _launch_mcp_servers so servers are spawned before requests can arrive.
+    # Built here because `port` is reassigned for vLLM models further down.
+    tunnel = tunnel_from_env(port, config.servers.keys())
+    app.state.tunnel = tunnel
+    if tunnel:
+        @app.on_event("startup")
+        async def start_tunnel():
+            tunnel.start()
+
+        @app.on_event("shutdown")
+        async def stop_tunnel():
+            await tunnel.stop()
 
     if not servers_to_launch and not config.llm_models:
         logger.warning("No servers or LLM models configured - nothing to launch")
@@ -1087,6 +1101,10 @@ def _add_health_endpoint(app: FastAPI) -> None:
                 "servers": len(processes),
                 "running_servers": running_count,
             }
+            # Informational only: the tunnel state never changes the status code.
+            tunnel = getattr(app.state, "tunnel", None)
+            if tunnel:
+                response_data["tunnel"] = tunnel.status()
 
             return JSONResponse(
                 status_code=status_code,
