@@ -158,7 +158,7 @@ value). Extend `env` values to optionally be
 `{value, required, description}` objects (plain strings still mean
 "unknown/optional", matching today), fix `get_server_instance_env()`
 (`management.py:2167`) to read the real flag instead of hardcoding `True`,
-and add the "Required" toggle to `AddServerModal.tsx` (`:143-174`) and
+and add a "Required Variables" field to `ServerForm.tsx` (the real add/edit form; `AddServerModal.tsx` belongs to the Inspector) and
 `ServerEnvForm.tsx` (`:64` already has the right conditional, it just needs
 real data). Since most cloned `metadata.json` won't set this, treat its
 absence as "unknown" (no warning), not "required."
