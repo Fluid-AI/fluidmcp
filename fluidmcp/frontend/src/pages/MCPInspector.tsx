@@ -10,6 +10,7 @@ import { ResourcesPanel } from '../components/inspector/ResourcesPanel';
 import { PromptsPanel } from '../components/inspector/PromptsPanel';
 import { ManualToolPanel } from '../components/inspector/ManualToolPanel';
 import { ChatPanel } from '../components/inspector/ChatPanel';
+import { getWidgetResourceUri } from '../lib/mcp-apps';
 import { type ChatMessage, type ExecutionRun } from '../components/inspector/chat-types';
 
 // Type for server object
@@ -643,12 +644,7 @@ export default function MCPInspector() {
     )
 
     const toolDef = selectedServer.tools.find((t: any) => t.name === toolName!)
-    const resourceUri: string | undefined =
-      toolDef?._meta?.["ui/resourceUri"] ||
-      toolDef?._meta?.ui?.resourceUri ||
-      result?.result?._meta?.["ui/resourceUri"] ||
-      result?.result?._meta?.ui?.resourceUri ||
-      undefined
+    const resourceUri = getWidgetResourceUri(toolDef, result)
 
     const resultMsg: ChatMessage = {
       id: generateId(),

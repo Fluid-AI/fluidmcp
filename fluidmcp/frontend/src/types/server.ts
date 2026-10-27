@@ -20,6 +20,8 @@ export interface Tool {
     properties: Record<string, any>;
     required?: string[];
   };
+  // MCP Apps: _meta.ui.resourceUri (or legacy "ui/resourceUri") points at a ui:// widget
+  _meta?: Record<string, any>;
 }
 
 export interface ServerConfig {

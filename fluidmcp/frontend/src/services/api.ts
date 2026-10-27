@@ -160,6 +160,14 @@ class ApiClient {
     );
   }
 
+  // MCP Apps: fetch a ui:// widget resource from a managed server
+  async readServerResource(serverId: string, uri: string): Promise<any> {
+    return this.request(`/api/servers/${serverId}/resources/read`, {
+      method: 'POST',
+      body: JSON.stringify({ uri }),
+    });
+  }
+
   // Server Logs API
   async getServerLogs(serverId: string, lines = 100, options?: { signal?: AbortSignal }): Promise<any> {
     return this.request(`/api/servers/${serverId}/logs?lines=${lines}`, options);
