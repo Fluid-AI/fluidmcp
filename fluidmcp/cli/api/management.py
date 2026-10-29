@@ -37,6 +37,7 @@ from .validators import (
 
 # Import rate limiter utilities
 from ..utils.rate_limiter import check_rate_limit, get_rate_limiter_stats, clear_rate_limiter
+from ..services.proxy_mcp import is_proxy_config, validate_proxy_config
 
 # COPILOT COMMENT 2 FIX: Simplified DuplicateKeyError import pattern
 # Import custom DuplicateKeyError from base module (eliminates pymongo dependency)
@@ -60,7 +61,7 @@ from ..services.llm_metrics import get_metrics_collector
 from ..services import omni_adapter
 from ..services.network_handle import NetworkSubprocessHandle
 
-from ..utils.env_utils import is_placeholder, has_env_var_syntax
+from ..utils.env_utils import is_placeholder, has_env_var_syntax, mask_env_values, restore_masked_env_values
 # All stdin writes / stdout reads for stdio servers go through the per-process
 # StdioJsonRpcRouter: one stdout reader, responses matched by JSON-RPC ID.
 from ..services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
@@ -103,6 +104,18 @@ def truncate_error(error_msg: str) -> str:
     if len(error_msg) > MAX_ERROR_MESSAGE_LENGTH:
         return error_msg[:MAX_ERROR_MESSAGE_LENGTH] + "... (truncated)"
     return error_msg
+
+
+# Config fields whose values may hold secrets: server env vars and proxy headers.
+SECRET_CONFIG_FIELDS = ("env", "headers")
+
+
+def _config_for_response(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy of a server config with env and header values masked, safe to return from the API."""
+    return {
+        key: mask_env_values(value) if key in SECRET_CONFIG_FIELDS else value
+        for key, value in config.items()
+    }
 
 
 def sanitize_audit_changes(changes: Dict[str, Any]) -> Dict[str, Any]:
@@ -596,6 +609,12 @@ def validate_server_config(config: Dict[str, Any]) -> None:
         HTTPException: If validation fails
     """
     import re
+
+    if is_proxy_config(config):
+        errors = validate_proxy_config(config)
+        if errors:
+            raise HTTPException(400, "Invalid proxy configuration: " + "; ".join(errors))
+        return
 
     # Validate required fields
     if "command" not in config:
@@ -1207,7 +1226,7 @@ async def get_server(request: Request, id: str, token: str = Depends(get_token))
     return {
         "id": id,
         "name": config.get("name"),
-        "config": config,
+        "config": _config_for_response(config),
         "status": status,
         "resources": resources,
         "concurrency": concurrency,
@@ -1268,6 +1287,11 @@ async def update_server(
     if "name" not in config:
         raise HTTPException(400, "Server name is required")
 
+    # Clients edit the masked config from GET responses; keep stored values they didn't change
+    for field in SECRET_CONFIG_FIELDS:
+        if field in config:
+            config[field] = restore_masked_env_values(config[field], existing.get(field, {}))
+
     # Validate configuration for security
     validate_server_config(config)
 
@@ -1318,7 +1342,7 @@ async def update_server(
     logger.info(f"Updated server configuration: {config['name']} (id: {id})")
     return {
         "message": f"Server '{id}' updated successfully",
-        "config": config
+        "config": _config_for_response(config)
     }
 
 

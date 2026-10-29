@@ -25,6 +25,7 @@ from .config_resolver import ServerConfig, INSTALLATION_DIR, apply_transport
 from .package_installer import install_package, parse_package_string
 from .package_list import get_latest_version_dir
 from .package_launcher import create_dynamic_router
+from .proxy_mcp import ProxyHandle, is_proxy_config
 from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 from .network_utils import is_port_in_use, kill_process_on_port
 from .env_manager import update_env_from_config
@@ -294,16 +295,17 @@ def run_servers(
         for server_name, server_cfg in servers_to_launch.items():
             logger.debug(f"Processing server: {server_name}")
             install_path = server_cfg.get("install_path")
-            if not install_path:
-                logger.warning(f"No installation path for server '{server_name}', skipping")
-                continue
+            if not is_proxy_config(server_cfg):
+                if not install_path:
+                    logger.warning(f"No installation path for server '{server_name}', skipping")
+                    continue
 
-            if not Path(install_path).exists():
-                logger.warning(f"Installation path '{install_path}' does not exist, skipping")
-                continue
+                if not Path(install_path).exists():
+                    logger.warning(f"Installation path '{install_path}' does not exist, skipping")
+                    continue
 
             try:
-                logger.info(f"Launching server '{server_name}' from: {install_path}")
+                logger.info(f"Launching server '{server_name}' from: {install_path or server_cfg.get('endpoint')}")
 
                 spawn_cfg = {
                     **server_cfg,
@@ -571,6 +573,9 @@ async def _query_server_tools(server_name: str, process: subprocess.Popen) -> Tu
         # Check if process is still alive
         if process.poll() is not None:
             return (server_name, [], "Process is not running")
+
+        if isinstance(process, ProxyHandle):
+            return (server_name, [{**process.tool, "server": server_name}], None)
 
         logger.debug(f"Querying tools from server: {server_name}")
 

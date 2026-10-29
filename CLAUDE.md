@@ -92,7 +92,7 @@ All three commands use the **same unified dynamic router**:
 
 ### Key Data Structures
 
-MCP server configurations support three formats:
+MCP server configurations support four formats:
 
 **Format 1: Direct Server Configuration (Recommended for Testing)**
 ```json
@@ -145,6 +145,24 @@ MCP server configurations support three formats:
 - Requires installation from registry
 - Packages install to `.fmcp-packages/Author/Package/Version/`
 - Each package has a `metadata.json` with MCP server configuration
+
+**Format 4: Proxy (HTTP endpoint exposed as an MCP tool)**
+```json
+{
+  "mcpServers": {
+    "openai-chat": {
+      "type": "proxy",
+      "endpoint": "https://api.openai.com/v1/chat/completions",
+      "headers": {"Authorization": "Bearer ${OPENAI_API_KEY}"},
+      "response_path": "choices.0.message.content",
+      "tool": {"name": "chat_completion", "description": "...", "inputSchema": {"type": "object", "properties": {}}}
+    }
+  }
+}
+```
+- No subprocess: `ProxyHandle` (`proxy_mcp.py`) sits in `server_manager.processes` and answers `tools/list` / `tools/call` in-process
+- Tool arguments are sent to `endpoint`; upstream failures return `isError: true` tool results, not HTTP errors
+- See [docs/PROXY_MCP.md](docs/PROXY_MCP.md) and [examples/openai-proxy-config.json](examples/openai-proxy-config.json)
 
 ### Key Ports
 - `8090` - Individual package server (MCP_CLIENT_SERVER_PORT)
