@@ -47,6 +47,11 @@ def record_request(server: str, result: str, seconds: float) -> None:
     registry.get_metric("fluidmcp_tunnel_request_seconds").observe(seconds, {"server": server})
 
 
+def record_duplicate(server: str) -> None:
+    """A repeated request id answered from the original call (not executed again)."""
+    get_registry().get_metric("fluidmcp_tunnel_requests_total").inc({"server": server, "result": "duplicate"})
+
+
 def record_handshake_failure() -> None:
     get_registry().get_metric("fluidmcp_tunnel_handshake_failures_total").inc()
 

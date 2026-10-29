@@ -244,6 +244,219 @@ async def test_bodies_are_not_logged():
     assert not any(secret in line for line in lines)
 
 
+async def send_raw(server, plaintext: bytes):
+    async with server._lock:
+        await server._ws.send(server._channel.encrypt(plaintext))
+
+
+async def wait_for(predicate, timeout=5.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        assert asyncio.get_running_loop().time() < deadline, "condition not met in time"
+        await asyncio.sleep(0.02)
+
+
+def tool_call(tag):
+    params = {"name": "send_otp", "arguments": {"tag": tag}}
+    return {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 429, 500, 503])
+async def test_gateway_error_status_passed_through(status):
+    body = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "nope"}}
+    gateway = Gateway(lambda request: httpx.Response(status, json=body))
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        reply = await server.send_request("srv-a", LIST_TOOLS)
+        assert (reply["type"], reply["status"], reply["body"]) == ("response", status, body)
+        assert len(gateway.requests) == 1
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_gateway_refusing_connections_reports_not_delivered(monkeypatch):
+    monkeypatch.setattr(TunnelClient, "LOCAL_CONNECT_RETRY", 0.3)
+
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    gateway = Gateway(handler)
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        reply = await server.send_request("srv-a", tool_call("refused"))
+        # A refused connection means the gateway never received the request, so a retry is safe.
+        assert (reply["code"], reply["reason"]) == ("not_delivered", "gateway_unreachable")
+        assert len(gateway.requests) >= 1  # retried only because the connection was refused
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_failure_after_request_sent_is_not_retried():
+    def handler(request):
+        raise httpx.ReadError("connection reset after the request was sent", request=request)
+
+    gateway = Gateway(handler)
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        reply = await server.send_request("srv-a", tool_call("reset"))
+        assert reply["code"] == "local_call_failed"
+        assert len(gateway.requests) == 1
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_with_request_in_flight_runs_it_once():
+    release = asyncio.Event()
+
+    async def handler(request):
+        await release.wait()
+        return httpx.Response(200, json={"ok": True})
+
+    gateway = Gateway(handler)
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        pending = asyncio.create_task(server.send_request("srv-a", tool_call("in-flight"), timeout=1))
+        await wait_for(lambda: len(gateway.requests) == 1)
+        await server._ws.close(1012)
+        await wait_for(lambda: not server.connected.is_set())
+        await asyncio.wait_for(server.connected.wait(), 5)  # reconnected
+        release.set()
+        with pytest.raises(asyncio.TimeoutError):
+            await pending  # the reply was lost with the old connection
+        await wait_for(lambda: not client._inflight)  # the call outlived its connection and finished
+        assert len(gateway.requests) == 1
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_stop_with_request_in_flight():
+    async def handler(request):
+        await asyncio.sleep(30)
+        return httpx.Response(200, json={})
+
+    gateway = Gateway(handler)
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        asyncio.create_task(server.send_request("srv-a", tool_call("shutdown"), timeout=5))
+        await wait_for(lambda: len(gateway.requests) == 1)
+        await asyncio.wait_for(client.stop(), 2)
+        assert client.status()["connected"] is False
+        assert not client.is_running()
+        assert client._inflight == {} and client._deliveries == set()
+        assert client._semaphore._value == 20  # slot released
+        assert len(gateway.requests) == 1
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_repeated_request_id_runs_once():
+    gateway = Gateway()
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        message = json.dumps({"type": "request", "id": "same-id", "server": "srv-a", "body": tool_call("dup")}).encode()
+        await send_raw(server, message)
+        await send_raw(server, message)
+        await asyncio.sleep(0.5)
+        assert len(gateway.requests) == 1
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_malformed_messages_are_ignored():
+    gateway = Gateway()
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        for raw in (b"not json", b"[1, 2]", b'{"type": "bogus", "id": "x"}',
+                    b'{"type": "request", "server": "srv-a", "body": {}}',
+                    b'{"type": "request", "id": 5, "server": "srv-a", "body": {}}'):
+            await send_raw(server, raw)
+        reply = await server.send_request("srv-a", "not an object")
+        assert reply["code"] == "bad_request"
+        assert (await server.send_request("srv-a", LIST_TOOLS))["status"] == 200
+        assert len(gateway.requests) == 1
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_oversized_reply_reports_response_too_large():
+    def handler(request):
+        if request.url.path.endswith("srv-a/mcp"):
+            return httpx.Response(200, text="x" * (protocol.MAX_PLAINTEXT + 1))
+        return httpx.Response(200, json={})
+
+    gateway = Gateway(handler)
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        reply = await server.send_request("srv-a", LIST_TOOLS)
+        assert reply["code"] == "response_too_large"
+        assert (await server.send_request("srv-b", LIST_TOOLS))["type"] == "response"  # still connected
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attack", ["oversized_frame", "tampered_record", "text_frame"])
+async def test_bad_frame_closes_connection_without_forwarding(attack):
+    gateway = Gateway()
+    server, client = await start_pair(gateway)
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        ws = server._ws
+        if attack == "oversized_frame":
+            await ws.send(bytes(protocol.MAX_FRAME + 1))
+        elif attack == "tampered_record":
+            async with server._lock:
+                frame = bytearray(server._channel.encrypt(json.dumps(
+                    {"type": "request", "id": "t", "server": "srv-a", "body": LIST_TOOLS}).encode()))
+                frame[20] ^= 1
+                await ws.send(bytes(frame))
+        else:
+            await ws.send("text")
+        await ws.wait_closed()
+        assert ws.close_code == (1009 if attack == "oversized_frame" else 1008)
+        await asyncio.wait_for(server.connected.wait(), 5)  # fresh handshake
+        assert gateway.requests == []
+    finally:
+        await stop_pair(server, client)
+
+
+@pytest.mark.asyncio
+async def test_tokens_and_keys_are_not_logged():
+    lines = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG")
+    client_key = generate_identity_key()
+    gateway = Gateway()
+    server, client = await start_pair(gateway, client_key=client_key)
+    rejected_server, rejected_client = await start_pair(Gateway(), server_token="other-token")
+    try:
+        await asyncio.wait_for(server.connected.wait(), 5)
+        await server.send_request("srv-a", LIST_TOOLS)
+        await asyncio.sleep(0.5)
+    finally:
+        await stop_pair(server, client)
+        await stop_pair(rejected_server, rejected_client)
+        logger.remove(sink)
+    text = "\n".join(lines)
+    for secret in (TOKEN, "gateway-token", private_key_to_b64(client_key)):
+        assert secret not in text
+
+
 class TestTunnelFromEnv:
     @pytest.fixture
     def tunnel_env(self, monkeypatch, tmp_path):
@@ -292,6 +505,33 @@ class TestTunnelFromEnv:
         tunnel_env.setenv("FMCP_TUNNEL_KEY_PATH", str(tmp_path / "missing.key"))
         assert tunnel_from_env(8099) is None
 
+    def test_key_file_readable_by_others_refused(self, tunnel_env, tmp_path):
+        (tmp_path / "identity.key").chmod(0o644)
+        assert tunnel_from_env(8099) is None
+
+    @pytest.mark.parametrize("name,value", [("FMCP_TUNNEL_CONNECTOR_ID", "bad id"),
+                                            ("FMCP_TUNNEL_SERVER_PUBLIC_KEYS", "not-base64"),
+                                            ("FMCP_TUNNEL_MAX_CONCURRENCY", "many"),
+                                            ("FMCP_TUNNEL_REQUEST_TIMEOUT", "soon")])
+    def test_invalid_setting_refused(self, tunnel_env, name, value):
+        tunnel_env.setenv(name, value)
+        assert tunnel_from_env(8099) is None
+
+    def test_gateway_token_only_in_secure_mode(self, tunnel_env):
+        tunnel_env.delenv("FMCP_SECURE_MODE")
+        assert tunnel_from_env(8499)._local_token is None
+
+    def test_invalid_settings_do_not_log_the_token(self, tunnel_env):
+        lines = []
+        sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG")
+        tunnel_env.setenv("FMCP_TUNNEL_URL", f"ws://engine.example.com/?token={TOKEN}x")
+        tunnel_env.setenv("FMCP_TUNNEL_TOKEN", "secret-tunnel-token")
+        try:
+            assert tunnel_from_env(8099) is None
+        finally:
+            logger.remove(sink)
+        assert not any("secret-tunnel-token" in line for line in lines)
+
 
 def test_health_reports_tunnel_without_changing_status():
     from fluidmcp.cli.services.run_servers import _add_health_endpoint
@@ -306,3 +546,12 @@ def test_health_reports_tunnel_without_changing_status():
     response = TestClient(app).get("/health")
     assert response.json()["tunnel"]["connected"] is False
     assert response.json()["status"] == "degraded"
+
+
+def test_health_has_no_tunnel_field_when_disabled():
+    from fluidmcp.cli.services.run_servers import _add_health_endpoint
+
+    app = FastAPI()
+    app.state.tunnel = None
+    _add_health_endpoint(app)
+    assert "tunnel" not in TestClient(app).get("/health").json()
