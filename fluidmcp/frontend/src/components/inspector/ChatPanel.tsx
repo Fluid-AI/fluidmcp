@@ -320,8 +320,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                               // Inspector wraps results as {success, result}; widgets expect a bare CallToolResult
                               callTool: async (name, args) => {
                                 const res = await apiClient.runInspectorTool(sessionId!, name, args);
-                                if (res?.success === false) throw new Error(res.error || 'Tool call failed');
-                                return res?.result ?? res;
+                                if (res?.success === true) return res.result;
+                                throw new Error(res?.error || 'Tool call failed');
                               },
                             }}
                             resourceUri={toolResult!.resourceUri!}

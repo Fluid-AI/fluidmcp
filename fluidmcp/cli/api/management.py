@@ -2455,6 +2455,9 @@ async def read_server_resource(
     auto-start the server — a widget is only rendered after a tool call has
     already brought the server up.
 
+    Not to be confused with GET /servers/{id}/resources, which reports the
+    server process's CPU/memory usage rather than MCP resources.
+
     Returns:
         The MCP ReadResourceResult ({"contents": [...]})
     """
@@ -2477,6 +2480,9 @@ async def read_server_resource(
         raise HTTPException(504, "Resource read timeout (>30s)")
     except (BrokenPipeError, OSError, StdioProcessClosed) as e:
         raise HTTPException(503, f"Server '{id}' process pipe broken: {str(e)}")
+    except Exception as e:
+        logger.exception(f"Resource read failed on '{id}': {e}")
+        raise HTTPException(500, "Resource read failed")
 
     if "error" in response:
         raise HTTPException(500, truncate_error(f"Resource read error: {response['error']}"))

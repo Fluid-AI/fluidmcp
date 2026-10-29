@@ -24,9 +24,7 @@ export const ToolRunner: React.FC = () => {
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [paramsCollapsed, setParamsCollapsed] = useState(false);
   // Arguments of the latest run (widgets receive them via ui/notifications/tool-input)
-  // and a run counter used to remount the widget for each new result
   const [lastArgs, setLastArgs] = useState<Record<string, any>>({});
-  const [runCount, setRunCount] = useState(0);
 
   const {
     execute,
@@ -98,7 +96,6 @@ export const ToolRunner: React.FC = () => {
 
   const handleSubmit = async (values: Record<string, any>) => {
     setLastArgs(values);
-    setRunCount((c) => c + 1);
     await execute(values);
     // Refresh server status so the auto-start banner clears after the server starts
     try {
@@ -403,7 +400,6 @@ export const ToolRunner: React.FC = () => {
               executionTime={executionTime}
               widget={widgetUri && (
                 <WidgetSandbox
-                  key={runCount}
                   host={{
                     readResource: (uri) => apiClient.readServerResource(serverId!, uri),
                     callTool: (name, args) => apiClient.runTool(serverId!, name, args),

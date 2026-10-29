@@ -129,6 +129,10 @@ export function WidgetSandbox({ host, resourceUri, toolInput, toolResult }: Widg
       // ── Widget requests a tool call ────────────────────────────────────────
       if (method === 'tools/call') {
         const { name, arguments: args } = msg.params || {};
+        if (typeof name !== 'string' || !name || (args != null && (typeof args !== 'object' || Array.isArray(args)))) {
+          sendToProxy({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'Invalid tools/call params' } });
+          return;
+        }
         try {
           const result = await hostRef.current.callTool(name, args || {});
           sendToProxy({ jsonrpc: '2.0', id: msg.id, result });

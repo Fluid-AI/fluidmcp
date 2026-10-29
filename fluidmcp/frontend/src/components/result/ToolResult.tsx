@@ -263,14 +263,19 @@ export const ToolResult: React.FC<ToolResultProps> = ({
         </div>
       )}
 
-      {/* Widget stays mounted while hidden so switching tabs doesn't reload it */}
+      {/* Widget stays mounted while hidden so switching tabs doesn't reload it. Hidden by
+          clipping the wrapper to zero height rather than display: none, so the iframe keeps
+          its real size and widgets that measure their layout don't see a 0x0 viewport. */}
       {!error && result !== null && widget && (
-        <div style={{
-          display: viewMode === 'ui' ? 'block' : 'none',
-          border: '1px solid rgba(99, 102, 241, 0.3)',
-          borderRadius: '0.5rem',
-          overflow: 'hidden',
-        }}>
+        <div
+          aria-hidden={viewMode !== 'ui'}
+          style={{
+            border: viewMode === 'ui' ? '1px solid rgba(99, 102, 241, 0.3)' : 'none',
+            borderRadius: '0.5rem',
+            overflow: 'hidden',
+            ...(viewMode === 'ui' ? {} : { height: 0, visibility: 'hidden' as const }),
+          }}
+        >
           <ErrorBoundary>{widget}</ErrorBoundary>
         </div>
       )}

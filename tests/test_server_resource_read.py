@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from fluidmcp.cli.api.management import router
 from fluidmcp.cli.repositories import InMemoryBackend
 from fluidmcp.cli.services.server_manager import ServerManager
-from fluidmcp.cli.services.stdio_jsonrpc import StdioRequestTimeout
+from fluidmcp.cli.services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout
 
 
 @pytest.fixture
@@ -91,3 +91,50 @@ class TestReadServerResource:
         server_manager.processes["srv"] = _running_process()
         resp = client.post("/api/servers/srv/resources/read", json={"uri": ""})
         assert resp.status_code == 422
+
+    def test_503_on_broken_pipe(self, client, server_manager):
+        server_manager.processes["srv"] = _running_process()
+        patcher, _ = _patch_router(side_effect=StdioProcessClosed("closed"))
+
+        with patcher:
+            resp = client.post("/api/servers/srv/resources/read", json={"uri": "ui://x"})
+
+        assert resp.status_code == 503
+
+    def test_500_on_unexpected_error(self, client, server_manager):
+        server_manager.processes["srv"] = _running_process()
+        patcher, _ = _patch_router(side_effect=RuntimeError("boom"))
+
+        with patcher:
+            resp = client.post("/api/servers/srv/resources/read", json={"uri": "ui://x"})
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Resource read failed"
+
+    def test_missing_result_returns_empty_object(self, client, server_manager):
+        server_manager.processes["srv"] = _running_process()
+        patcher, _ = _patch_router({"jsonrpc": "2.0", "id": 3})
+
+        with patcher:
+            resp = client.post("/api/servers/srv/resources/read", json={"uri": "ui://x"})
+
+        assert resp.status_code == 200
+        assert resp.json() == {}
+
+    def test_requires_bearer_token_in_secure_mode(self, client, server_manager, monkeypatch):
+        monkeypatch.setenv("FMCP_SECURE_MODE", "true")
+        monkeypatch.setenv("FMCP_BEARER_TOKEN", "secret")
+        server_manager.processes["srv"] = _running_process()
+        patcher, stdio_router = _patch_router({"jsonrpc": "2.0", "id": 3, "result": {"contents": []}})
+
+        with patcher:
+            missing = client.post("/api/servers/srv/resources/read", json={"uri": "ui://x"})
+            wrong = client.post("/api/servers/srv/resources/read", json={"uri": "ui://x"},
+                                headers={"Authorization": "Bearer nope"})
+            ok = client.post("/api/servers/srv/resources/read", json={"uri": "ui://x"},
+                             headers={"Authorization": "Bearer secret"})
+
+        assert missing.status_code in (401, 403)
+        assert wrong.status_code == 401
+        assert ok.status_code == 200
+        assert stdio_router.request.await_count == 1
