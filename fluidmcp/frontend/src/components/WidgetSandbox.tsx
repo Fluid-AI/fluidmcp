@@ -1,14 +1,25 @@
-import { useEffect, useRef, useState } from 'react';
-import apiClient from '@/services/api';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+
+// Where the widget's MCP requests go — an Inspector session or a managed server.
+export interface WidgetHost {
+  readResource: (uri: string) => Promise<any>;
+  callTool: (name: string, args: Record<string, any>) => Promise<any>;
+}
 
 interface WidgetSandboxProps {
-  sessionId: string;
+  host: WidgetHost;
   resourceUri: string;
   toolInput: Record<string, any>;
   toolResult: any;
 }
 
-export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }: WidgetSandboxProps) {
+export function WidgetSandbox({ host, resourceUri, toolInput, toolResult }: WidgetSandboxProps) {
+  // Callers usually pass an inline object; read it through a ref so a new identity
+  // on every render doesn't re-run the message-listener effect.
+  const hostRef = useRef(host);
+  useLayoutEffect(() => {
+    hostRef.current = host;
+  });
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(400);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -52,7 +63,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
       // ── Proxy is ready: fetch widget HTML and load it ──────────────────────
       if (method === 'ui/notifications/sandbox-proxy-ready') {
         try {
-          const res = await apiClient.readInspectorResource(sessionId, resourceUri);
+          const res = await hostRef.current.readResource(resourceUri);
           // MCP spec: resources/read returns {contents: [{uri, mimeType, text}]}
           const firstContent = res?.contents?.[0];
           const html: string = firstContent?.text || firstContent?.content || res?.text || res?.content || '';
@@ -85,7 +96,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
           id: msg.id,
           result: {
             protocolVersion: '2025-06-18',
-            hostInfo: { name: 'FluidMCP Inspector', version: '1.0.0' },
+            hostInfo: { name: 'FluidMCP', version: '1.0.0' },
             hostCapabilities: {},
           },
         });
@@ -118,8 +129,12 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
       // ── Widget requests a tool call ────────────────────────────────────────
       if (method === 'tools/call') {
         const { name, arguments: args } = msg.params || {};
+        if (typeof name !== 'string' || !name || (args != null && (typeof args !== 'object' || Array.isArray(args)))) {
+          sendToProxy({ jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: 'Invalid tools/call params' } });
+          return;
+        }
         try {
-          const result = await apiClient.runInspectorTool(sessionId, name, args || {});
+          const result = await hostRef.current.callTool(name, args || {});
           sendToProxy({ jsonrpc: '2.0', id: msg.id, result });
         } catch (e: any) {
           sendToProxy({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: e.message } });
@@ -131,7 +146,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
       if (method === 'resources/read') {
         const { uri } = msg.params || {};
         try {
-          const result = await apiClient.readInspectorResource(sessionId, uri);
+          const result = await hostRef.current.readResource(uri);
           sendToProxy({ jsonrpc: '2.0', id: msg.id, result });
         } catch (e: any) {
           sendToProxy({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: e.message } });
@@ -170,7 +185,7 @@ export function WidgetSandbox({ sessionId, resourceUri, toolInput, toolResult }:
       pendingRef.current.clear();
       if (readyTimeoutRef.current) clearTimeout(readyTimeoutRef.current);
     };
-  }, [sessionId, resourceUri, toolInput, toolResult]);
+  }, [resourceUri, toolInput, toolResult]);
 
   // Single stable DOM tree — never changes depth regardless of fullscreen state.
   // This prevents React from remounting the iframe (which would wipe the loaded widget).

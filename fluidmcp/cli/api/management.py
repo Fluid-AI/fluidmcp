@@ -2436,6 +2436,60 @@ async def run_tool(
         raise HTTPException(500, "Tool execution failed")
 
 
+class ReadServerResourceRequest(BaseModel):
+    uri: str = Field(..., min_length=1, max_length=2048)
+
+
+@router.post("/servers/{id}/resources/read")
+async def read_server_resource(
+    request: Request,
+    id: str,
+    body: ReadServerResourceRequest,
+    token: str = Depends(get_token)
+):
+    """
+    Read an MCP resource by URI from a running server.
+
+    Used by the Tool Runner to fetch widget HTML for tools that declare a
+    ui:// resource in their _meta (MCP Apps). Unlike run_tool this does not
+    auto-start the server — a widget is only rendered after a tool call has
+    already brought the server up.
+
+    Not to be confused with GET /servers/{id}/resources, which reports the
+    server process's CPU/memory usage rather than MCP resources.
+
+    Returns:
+        The MCP ReadResourceResult ({"contents": [...]})
+    """
+    manager = get_server_manager(request)
+
+    process = manager.processes.get(id)
+    if process is None or process.poll() is not None:
+        raise HTTPException(400, f"Server '{id}' is not running")
+
+    resource_request = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "resources/read",
+        "params": {"uri": body.uri}
+    }
+
+    try:
+        response = await get_stdio_router(process, id).request(resource_request, timeout=30.0)
+    except StdioRequestTimeout:
+        raise HTTPException(504, "Resource read timeout (>30s)")
+    except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+        raise HTTPException(503, f"Server '{id}' process pipe broken: {str(e)}")
+    except Exception as e:
+        logger.exception(f"Resource read failed on '{id}': {e}")
+        raise HTTPException(500, "Resource read failed")
+
+    if "error" in response:
+        raise HTTPException(500, truncate_error(f"Resource read error: {response['error']}"))
+
+    return response.get("result", {})
+
+
 # ==================== LLM Management ====================
 
 def get_llm_processes():

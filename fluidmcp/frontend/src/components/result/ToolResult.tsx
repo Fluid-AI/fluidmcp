@@ -140,16 +140,25 @@ interface ToolResultProps {
   error?: string;
   loading?: boolean;
   executionTime?: number | null;
+  // Rendered MCP App widget, if the tool declared a ui:// resource
+  widget?: React.ReactNode;
 }
 
 export const ToolResult: React.FC<ToolResultProps> = ({
   result,
   error,
   executionTime,
+  widget,
 }) => {
   const format = result !== null && !error ? detectResultFormat(result) : ResultFormat.PRIMITIVE;
   const [expandAll, setExpandAll] = useState(false);
-  const [viewMode, setViewMode] = useState<'formatted' | 'raw'>('formatted');
+  const [selectedView, setSelectedView] = useState<'ui' | 'formatted' | 'raw'>(widget ? 'ui' : 'formatted');
+  const viewMode = selectedView === 'ui' && !widget ? 'formatted' : selectedView;
+  const viewTabs = [
+    ...(widget ? [{ mode: 'ui' as const, label: 'UI' }] : []),
+    { mode: 'formatted' as const, label: 'Formatted' },
+    { mode: 'raw' as const, label: 'Raw JSON' },
+  ];
 
   const handleCopy = () => {
     try {
@@ -193,38 +202,25 @@ export const ToolResult: React.FC<ToolResultProps> = ({
                 padding: '0.25rem',
                 gap: '0.25rem'
               }}>
-                <button
-                  onClick={() => setViewMode('formatted')}
-                  style={{
-                    padding: '0.375rem 0.75rem',
-                    borderRadius: '0.25rem',
-                    border: 'none',
-                    fontSize: '0.875rem',
-                    fontWeight: '500',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    background: viewMode === 'formatted' ? '#fff' : 'transparent',
-                    color: viewMode === 'formatted' ? '#000' : 'rgba(255, 255, 255, 0.7)'
-                  }}
-                >
-                  Formatted
-                </button>
-                <button
-                  onClick={() => setViewMode('raw')}
-                  style={{
-                    padding: '0.375rem 0.75rem',
-                    borderRadius: '0.25rem',
-                    border: 'none',
-                    fontSize: '0.875rem',
-                    fontWeight: '500',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    background: viewMode === 'raw' ? '#fff' : 'transparent',
-                    color: viewMode === 'raw' ? '#000' : 'rgba(255, 255, 255, 0.7)'
-                  }}
-                >
-                  Raw JSON
-                </button>
+                {viewTabs.map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    onClick={() => setSelectedView(mode)}
+                    style={{
+                      padding: '0.375rem 0.75rem',
+                      borderRadius: '0.25rem',
+                      border: 'none',
+                      fontSize: '0.875rem',
+                      fontWeight: '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      background: viewMode === mode ? '#fff' : 'transparent',
+                      color: viewMode === mode ? '#000' : 'rgba(255, 255, 255, 0.7)'
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               
               <ResultActions
@@ -267,8 +263,25 @@ export const ToolResult: React.FC<ToolResultProps> = ({
         </div>
       )}
 
+      {/* Widget stays mounted while hidden so switching tabs doesn't reload it. Hidden by
+          clipping the wrapper to zero height rather than display: none, so the iframe keeps
+          its real size and widgets that measure their layout don't see a 0x0 viewport. */}
+      {!error && result !== null && widget && (
+        <div
+          aria-hidden={viewMode !== 'ui'}
+          style={{
+            border: viewMode === 'ui' ? '1px solid rgba(99, 102, 241, 0.3)' : 'none',
+            borderRadius: '0.5rem',
+            overflow: 'hidden',
+            ...(viewMode === 'ui' ? {} : { height: 0, visibility: 'hidden' as const }),
+          }}
+        >
+          <ErrorBoundary>{widget}</ErrorBoundary>
+        </div>
+      )}
+
       {/* Result Display */}
-      {!error && result !== null && (
+      {!error && result !== null && viewMode !== 'ui' && (
         <div style={{
           background: 'rgba(0, 0, 0, 0.3)',
           border: '1px solid rgba(63, 63, 70, 0.5)',

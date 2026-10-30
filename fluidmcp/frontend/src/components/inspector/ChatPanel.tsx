@@ -3,6 +3,7 @@ import { type ChatMessage, type ExecutionRun, type DisplayGroup, groupMessages }
 import { JsonResultView } from "@/components/result/JsonResultView";
 import { McpContentView } from "@/components/result/McpContentView";
 import { WidgetSandbox } from "@/components/WidgetSandbox";
+import { apiClient } from "@/services/api";
 
 // ── Animated thinking indicator ──────────────────────────────────────────────
 function ThinkingDots() {
@@ -314,7 +315,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           background: "rgba(99,102,241,0.04)",
                         }}>
                           <WidgetSandbox
-                            sessionId={sessionId!}
+                            host={{
+                              readResource: (uri) => apiClient.readInspectorResource(sessionId!, uri),
+                              // Inspector wraps results as {success, result}; widgets expect a bare CallToolResult
+                              callTool: async (name, args) => {
+                                const res = await apiClient.runInspectorTool(sessionId!, name, args);
+                                if (res?.success === true) return res.result;
+                                throw new Error(res?.error || 'Tool call failed');
+                              },
+                            }}
                             resourceUri={toolResult!.resourceUri!}
                             toolInput={toolCall!.params || {}}
                             toolResult={toolResult!.result}
