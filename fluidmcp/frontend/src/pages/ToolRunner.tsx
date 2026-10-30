@@ -20,6 +20,7 @@ export const ToolRunner: React.FC = () => {
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<Record<string, any> | undefined>(undefined);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [paramsCollapsed, setParamsCollapsed] = useState(false);
 
   const {
     execute,
@@ -154,13 +155,16 @@ export const ToolRunner: React.FC = () => {
     );
   }
 
+  const hasResult = result !== null || !!executionError;
+  const showCollapsed = hasResult && paramsCollapsed;
+
   return (
     <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <Navbar />
 
       <div style={{ paddingTop: '64px', flex: 1 }}>
         <div style={{ 
-          maxWidth: (result !== null || executionError) ? '1600px' : '900px', 
+          maxWidth: hasResult ? '1600px' : '900px', 
           margin: '0 auto', 
           padding: '2rem',
           transition: 'max-width 0.3s ease'
@@ -273,22 +277,82 @@ export const ToolRunner: React.FC = () => {
         </div>
       }>
         <div style={{
-          display: (result !== null || executionError) ? 'grid' : 'block',
-          gridTemplateColumns: (result !== null || executionError) ? '2fr 3fr' : undefined,
-          gap: '2rem',
+          display: hasResult ? 'grid' : 'block',
+          gridTemplateColumns: hasResult ? (showCollapsed ? '3rem minmax(0, 1fr)' : 'minmax(0, 2fr) minmax(0, 3fr)') : undefined,
+          gap: showCollapsed ? '1rem' : '2rem',
           marginBottom: '2rem'
         }}>
         {/* Left Column: Form and History */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', width: '100%' }}>
+          {/* Collapsed rail — the form below stays mounted (hidden) so typed values survive */}
+          {showCollapsed && (
+            <button
+              onClick={() => setParamsCollapsed(false)}
+              title="Show parameters"
+              aria-label="Show parameters"
+              aria-expanded={false}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '0.75rem',
+                padding: '1rem 0',
+                width: '100%',
+                background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
+                border: '1px solid rgba(63, 63, 70, 0.5)',
+                borderRadius: '0.75rem',
+                color: 'rgba(255, 255, 255, 0.7)',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)'; e.currentTarget.style.borderColor = 'rgba(63, 63, 70, 0.5)'; }}
+            >
+              <span style={{ fontSize: '1rem', lineHeight: 1 }}>»</span>
+              <span style={{ writingMode: 'vertical-rl', fontSize: '0.875rem', fontWeight: '600', letterSpacing: '0.05em' }}>
+                Parameters
+              </span>
+            </button>
+          )}
+
           {/* Parameters Form */}
           <div style={{ 
+            display: showCollapsed ? 'none' : 'block',
             background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
             border: '1px solid rgba(63, 63, 70, 0.5)',
             borderRadius: '0.75rem',
             padding: '1.5rem',
             width: '100%'
           }}>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1rem' }}>Parameters</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: '600' }}>Parameters</h2>
+              {hasResult && (
+                <button
+                  onClick={() => setParamsCollapsed(true)}
+                  title="Hide parameters to focus on the result"
+                  aria-label="Hide parameters"
+                  aria-expanded={true}
+                  style={{
+                    background: 'rgba(63, 63, 70, 0.5)',
+                    border: '1px solid rgba(63, 63, 70, 0.7)',
+                    borderRadius: '0.375rem',
+                    color: 'rgba(255, 255, 255, 0.7)',
+                    cursor: 'pointer',
+                    width: '2rem',
+                    height: '2rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1rem',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = '#fff'; e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.3)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255, 255, 255, 0.7)'; e.currentTarget.style.borderColor = 'rgba(63, 63, 70, 0.7)'; }}
+                >
+                  «
+                </button>
+              )}
+            </div>
             {tool.inputSchema ? (
               <JsonSchemaForm
                 schema={tool.inputSchema}
@@ -315,7 +379,7 @@ export const ToolRunner: React.FC = () => {
         </div>
 
         {/* Right Column: Results */}
-        {(result !== null || executionError) && (
+        {hasResult && (
           <div style={{ 
             background: 'linear-gradient(to bottom right, rgba(39, 39, 42, 0.9), rgba(24, 24, 27, 0.9))',
             border: '1px solid rgba(63, 63, 70, 0.5)',
