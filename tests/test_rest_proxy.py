@@ -284,6 +284,18 @@ async def test_response_status_headers_and_raw_body_unchanged():
     assert "connection" not in r.headers or r.headers["connection"] != "close"
 
 
+async def test_upstream_date_and_server_dropped():
+    # Uvicorn adds its own Date and Server; forwarding the upstream's would send them twice.
+    upstream = Upstream(lambda request: streamed(200, [
+        ("Date", "Mon, 02 Nov 2026 00:00:00 GMT"), ("Server", "upstream/1.0"), ("X-Kept", "1"),
+    ], b"ok"))
+    app, _ = make_app(upstream)
+    async with caller(app) as c:
+        r = await c.get("/gupshup-chat/x")
+    assert "date" not in r.headers and "server" not in r.headers
+    assert r.headers["x-kept"] == "1"
+
+
 async def test_upstream_error_status_passes_through():
     upstream = Upstream(lambda request: streamed(401, {"Content-Type": "application/json"}, b'{"message": "invalid apikey"}'))
     app, _ = make_app(upstream)

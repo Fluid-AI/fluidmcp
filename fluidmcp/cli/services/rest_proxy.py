@@ -64,6 +64,9 @@ HOP_BY_HOP_HEADERS = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade",
 })
+# Uvicorn always adds its own Date and Server headers to every response, so the
+# upstream's copies are dropped rather than sent twice.
+GATEWAY_RESPONSE_HEADERS = frozenset({"date", "server"})
 FLUIDMCP_HEADER_PREFIX = b"fluidmcp-"
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -246,7 +249,7 @@ def _filter_request_headers(raw_headers: List[Tuple[bytes, bytes]]) -> List[Tupl
 
 
 def _filter_response_headers(raw_headers: List[Tuple[bytes, bytes]]) -> List[Tuple[bytes, bytes]]:
-    drop = HOP_BY_HOP_HEADERS | _connection_listed(raw_headers)
+    drop = HOP_BY_HOP_HEADERS | GATEWAY_RESPONSE_HEADERS | _connection_listed(raw_headers)
     return [(key, value) for key, value in raw_headers if key.decode("latin-1").lower() not in drop]
 
 
