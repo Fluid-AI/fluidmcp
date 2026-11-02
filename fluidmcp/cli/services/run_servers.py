@@ -33,6 +33,7 @@ from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
 from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
+from .rest_proxy import RestProxyRegistry, install_rest_proxy, close_client as close_rest_proxy_client
 from .server_manager import ServerManager, MCPHealthMonitor
 from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
@@ -280,6 +281,20 @@ def run_servers(
     app.state.db_manager = db_manager
     app.state.server_manager = server_manager
 
+    # REST proxies (restServers): plain HTTP pass-through routes matched ahead of
+    # every other route. The registry is also used by /api/rest-servers.
+    rest_registry = RestProxyRegistry()
+    for rest_name, rest_cfg in config.rest_servers.items():
+        rest_registry.register(rest_name, rest_cfg)
+    app.state.rest_proxy_registry = rest_registry
+    install_rest_proxy(app, rest_registry)
+    if config.rest_servers:
+        logger.info(f"REST proxy routes ready for {len(rest_registry)} server(s): {', '.join(rest_registry.names())}")
+
+    @app.on_event("shutdown")
+    async def shutdown_rest_proxy_client():
+        await close_rest_proxy_client()
+
     # Serve frontend from backend (single-port deployment)
     setup_frontend_routes(app, host="0.0.0.0", port=port)
 
@@ -349,8 +364,8 @@ def run_servers(
         async def stop_tunnel():
             await tunnel.stop()
 
-    if not servers_to_launch and not config.llm_models:
-        logger.warning("No servers or LLM models configured - nothing to launch")
+    if not servers_to_launch and not config.llm_models and not config.rest_servers:
+        logger.warning("No servers, LLM models or REST proxies configured - nothing to launch")
         return
 
     if servers_to_launch:
@@ -507,7 +522,7 @@ def run_servers(
         replicate_will_init = bool(replicate_models)  # Will be initialized on startup
 
         if not vllm_launched and not replicate_will_init:
-            if len(servers_to_launch) == 0:
+            if len(servers_to_launch) == 0 and not config.rest_servers:
                 logger.error("No MCP servers or LLM models successfully configured - aborting")
                 return
             else:
@@ -1078,7 +1093,8 @@ def _add_health_endpoint(app: FastAPI) -> None:
         Health check endpoint.
 
         Returns server health status with appropriate HTTP status codes:
-        - 200 OK: Server is healthy (at least one server running)
+        - 200 OK: Server is healthy (at least one server running, or no MCP
+          servers and at least one REST proxy, which has no process to fail)
         - 503 Service Unavailable: Server is degraded or unhealthy
 
         Returns:
@@ -1091,15 +1107,19 @@ def _add_health_endpoint(app: FastAPI) -> None:
 
             # Count running servers (check if process is not None and still alive)
             running_count = sum(1 for p in processes.values() if p and p.poll() is None)
+            rest_registry = getattr(app.state, "rest_proxy_registry", None)
+            rest_count = len(rest_registry) if rest_registry is not None else 0
 
             # Determine health status
-            status = "healthy" if running_count > 0 else "degraded"
-            status_code = 200 if running_count > 0 else 503
+            healthy = running_count > 0 or (not processes and rest_count > 0)
+            status = "healthy" if healthy else "degraded"
+            status_code = 200 if healthy else 503
 
             response_data = {
                 "status": status,
                 "servers": len(processes),
                 "running_servers": running_count,
+                "rest_servers": rest_count,
             }
             # Informational only: the tunnel state never changes the status code.
             tunnel = getattr(app.state, "tunnel", None)
