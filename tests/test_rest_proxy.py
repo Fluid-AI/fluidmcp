@@ -488,3 +488,29 @@ async def test_shared_client_adds_no_default_headers(monkeypatch):
     finally:
         await rest_proxy.close_client()
     assert rest_proxy._client is None
+
+
+# ── Access-log redaction ────────────────────────────────────────────────────
+
+def _access_record(path):
+    import logging
+    return logging.LogRecord("uvicorn.access", logging.INFO, __file__, 1,
+                             '%s - "%s %s HTTP/%s" %d', ("127.0.0.1:5000", "GET", path, "1.1", 200), None)
+
+
+def test_access_log_query_redacted_only_for_rest_proxies():
+    import logging
+
+    app, _ = make_app(Upstream())
+    access = logging.getLogger("uvicorn.access")
+    assert rest_proxy._access_log_filter in access.filters
+
+    proxied = _access_record("/gupshup-chat/users?phone=%2B91999&apikey=secret")
+    other = _access_record("/api/servers?limit=5")
+    no_query = _access_record("/gupshup-chat/users")
+    for record in (proxied, other, no_query):
+        assert rest_proxy._access_log_filter.filter(record) is True
+
+    assert proxied.getMessage() == '127.0.0.1:5000 - "GET /gupshup-chat/users?REDACTED HTTP/1.1" 200'
+    assert "limit=5" in other.getMessage()
+    assert no_query.getMessage() == '127.0.0.1:5000 - "GET /gupshup-chat/users HTTP/1.1" 200'

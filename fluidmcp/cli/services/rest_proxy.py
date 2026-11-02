@@ -22,9 +22,11 @@ Errors produced by FluidMCP itself (not the upstream) carry an X-FluidMCP-Error
 header so callers can tell the two apart.
 """
 import asyncio
+import logging
 import os
 import re
 import time
+import weakref
 from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Optional, Tuple
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -440,8 +442,37 @@ async def load_rest_servers(persistence, registry: RestProxyRegistry) -> int:
     return loaded
 
 
+class AccessLogQueryFilter(logging.Filter):
+    """
+    Redact the query string in uvicorn access-log lines for REST proxy requests.
+
+    Upstream APIs may carry phone numbers or API keys in the query string, and
+    uvicorn logs it verbatim. Lines for other routes are left unchanged.
+    """
+
+    REDACTED = "REDACTED"
+
+    def __init__(self):
+        super().__init__()
+        self.routes: "weakref.WeakSet[RestProxyRoute]" = weakref.WeakSet()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn: '%s - "%s %s HTTP/%s" %d' % (client, method, path?query, version, status)
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and "?" in args[2]:
+            path = args[2].split("?", 1)[0]
+            if any(route._split(path) is not None for route in list(self.routes)):
+                record.args = args[:2] + (f"{path}?{self.REDACTED}",) + args[3:]
+        return True
+
+
+_access_log_filter = AccessLogQueryFilter()
+logging.getLogger("uvicorn.access").addFilter(_access_log_filter)
+
+
 def install_rest_proxy(app, registry: RestProxyRegistry, client: Optional[httpx.AsyncClient] = None) -> RestProxyRoute:
     """Put the REST proxy route ahead of every other route on the app."""
     route = RestProxyRoute(registry, root_path=os.environ.get("MCP_ROOT_PATH", ""), client=client)
     app.router.routes.insert(0, route)
+    _access_log_filter.routes.add(route)
     return route
