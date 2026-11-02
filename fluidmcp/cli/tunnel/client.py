@@ -34,6 +34,14 @@ class TunnelAuthError(Exception):
     """GPT Engine rejected the token or the handshake; retrying quickly would not help."""
 
 
+class _ConnectWithoutRedirects(connect):
+    """websockets' connect, but a redirect is an error: the tunnel only ever connects to FMCP_TUNNEL_URL's host."""
+
+    def process_redirect(self, exc: Exception) -> Exception:
+        """Never follow a redirect; the 3xx response is raised as InvalidStatus."""
+        return exc
+
+
 class _Connection:
     """An established tunnel: socket, encrypted channel and the lock that keeps records in order."""
 
@@ -70,6 +78,7 @@ class TunnelClient:
         max_concurrency: int = 20,
         request_timeout: float = 45.0,
         version: str = "unknown",
+        host_override: bool = False,
         env: Env = Env(),
         transport: Optional[httpx.AsyncBaseTransport] = None,
     ):
@@ -83,6 +92,7 @@ class TunnelClient:
         self._local_token = local_token
         self._request_timeout = request_timeout
         self._version = version
+        self._host_override = host_override
         self._env = env
         self._transport = transport
         self._semaphore = asyncio.Semaphore(max_concurrency)
@@ -122,6 +132,7 @@ class TunnelClient:
             "connected": self._connection is not None,
             "last_connected_at": datetime.fromtimestamp(last, timezone.utc).isoformat() if last else None,
             "key_no": self._connection.channel.key_no if self._connection else None,
+            "host_override": self._host_override,
         }
 
     async def _run(self) -> None:
@@ -149,7 +160,7 @@ class TunnelClient:
     async def _session(self, http: httpx.AsyncClient) -> None:
         headers = {"Authorization": f"Bearer {self._token}", "X-Connector-Id": self._connector_id}
         try:
-            ws = await connect(
+            ws = await _ConnectWithoutRedirects(
                 self._url,
                 additional_headers=headers,
                 compression=None,
@@ -161,6 +172,8 @@ class TunnelClient:
         except InvalidStatus as e:
             if e.response.status_code in (401, 403):
                 raise TunnelAuthError(f"HTTP {e.response.status_code}") from None
+            if 300 <= e.response.status_code < 400:
+                raise ConnectionError(f"HTTP {e.response.status_code} (redirects are not followed)") from None
             raise
 
         async with ws:

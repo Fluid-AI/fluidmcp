@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from loguru import logger
+from websockets.asyncio.server import serve
 
 from fluidmcp.cli.tunnel import protocol, tunnel_from_env
 from fluidmcp.cli.tunnel.client import TunnelClient
@@ -21,6 +22,14 @@ LIST_TOOLS = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
 
 def raw_public(key) -> bytes:
     return key.public_key().public_bytes_raw()
+
+
+@pytest.fixture
+def log_lines():
+    lines = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG")
+    yield lines
+    logger.remove(sink)
 
 
 class Gateway:
@@ -209,6 +218,38 @@ async def test_unknown_client_key_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_redirect_is_not_followed(log_lines):
+    """A redirect must never take the tunnel to another server."""
+    seen_by_target = []
+
+    def record(connection, request):
+        seen_by_target.append(request.headers.get("Authorization"))
+
+    target = await serve(lambda ws: ws.wait_closed(), "127.0.0.1", 0, process_request=record)
+    target_url = f"ws://127.0.0.1:{target.sockets[0].getsockname()[1]}"
+
+    def redirect(connection, request):
+        response = connection.respond(302, "")
+        response.headers["Location"] = target_url
+        return response
+
+    redirector = await serve(lambda ws: ws.wait_closed(), "127.0.0.1", 0, process_request=redirect)
+    url = f"ws://127.0.0.1:{redirector.sockets[0].getsockname()[1]}"
+    client = TunnelClient(url, TOKEN, CONNECTOR, ["srv-a"], [raw_public(generate_identity_key())],
+                          generate_identity_key(), "http://127.0.0.1:8099")
+    client.start()
+    try:
+        await asyncio.sleep(0.5)
+        assert seen_by_target == []
+        assert client.status()["connected"] is False
+        assert any("HTTP 302 (redirects are not followed)" in line for line in log_lines)
+    finally:
+        await client.stop()
+        target.close()
+        redirector.close()
+
+
+@pytest.mark.asyncio
 async def test_reconnects_after_server_restart():
     client_key = generate_identity_key()
     server, client = await start_pair(Gateway(), client_key=client_key)
@@ -251,7 +292,8 @@ class TestTunnelFromEnv:
         key_file = tmp_path / "identity.key"
         key_file.write_text(private_key_to_b64(key))
         key_file.chmod(0o600)
-        monkeypatch.setenv("FMCP_TUNNEL_URL", "wss://engine.example.com/ws/mcp-tunnel")
+        monkeypatch.setenv("FMCP_TUNNEL_URL", "wss://engine.fluidgpt.ai/ws/mcp-tunnel")
+        monkeypatch.delenv("FMCP_TUNNEL_ALLOW_ANY_HOST", raising=False)
         monkeypatch.setenv("FMCP_TUNNEL_TOKEN", TOKEN)
         monkeypatch.setenv("FMCP_TUNNEL_CONNECTOR_ID", CONNECTOR)
         monkeypatch.setenv("FMCP_TUNNEL_ALLOWED_SERVERS", "srv-a, srv-b")
@@ -290,6 +332,65 @@ class TestTunnelFromEnv:
 
     def test_missing_key_file_refused(self, tunnel_env, tmp_path):
         tunnel_env.setenv("FMCP_TUNNEL_KEY_PATH", str(tmp_path / "missing.key"))
+        assert tunnel_from_env(8099) is None
+
+    @pytest.mark.parametrize("url", [
+        "wss://site-a.fluidgpt.ai/ws/mcp-tunnel",
+        "wss://SITE-A.FluidGPT.ai/ws/mcp-tunnel",
+        "wss://site.region.fluidgpt.ai:8443/ws/mcp-tunnel",
+        "wss://site-a.fluidgpt.ai./ws/mcp-tunnel",
+    ])
+    def test_fluidgpt_subdomain_accepted(self, tunnel_env, url):
+        tunnel_env.setenv("FMCP_TUNNEL_URL", url)
+        client = tunnel_from_env(8099)
+        assert client is not None
+        assert client.status()["host_override"] is False
+
+    @pytest.mark.parametrize("url", [
+        "wss://fluidgpt.ai/ws/mcp-tunnel",
+        "wss://evilfluidgpt.ai/ws/mcp-tunnel",
+        "wss://site-a.fluidgpt.ai.attacker.com/ws/mcp-tunnel",
+        "wss://fluidgpt.ai.cn/ws/mcp-tunnel",
+        "wss://.fluidgpt.ai/ws/mcp-tunnel",
+        "wss://engine.example.com/ws/mcp-tunnel",
+        "wss://example-codespace-8000.app.github.dev/ws/mcp-tunnel",
+    ])
+    def test_other_hosts_refused(self, tunnel_env, log_lines, url):
+        tunnel_env.setenv("FMCP_TUNNEL_URL", url)
+        assert tunnel_from_env(8099) is None
+        assert any("is not under *.fluidgpt.ai" in line for line in log_lines)
+
+    @pytest.mark.parametrize("allow_any", ["false", "true"])
+    def test_credentials_in_url_refused(self, tunnel_env, allow_any):
+        tunnel_env.setenv("FMCP_TUNNEL_URL", "wss://user:secret@site-a.fluidgpt.ai/ws/mcp-tunnel")
+        tunnel_env.setenv("FMCP_TUNNEL_ALLOW_ANY_HOST", allow_any)
+        assert tunnel_from_env(8099) is None
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", " true "])
+    def test_allow_any_host(self, tunnel_env, log_lines, value):
+        tunnel_env.setenv("FMCP_TUNNEL_URL", "wss://example-codespace-8000.app.github.dev/ws/mcp-tunnel")
+        tunnel_env.setenv("FMCP_TUNNEL_ALLOW_ANY_HOST", value)
+        client = tunnel_from_env(8099)
+        assert client is not None
+        assert client.status()["host_override"] is True
+        assert any("is not restricted to *.fluidgpt.ai" in line for line in log_lines)
+
+    def test_allow_any_host_still_requires_wss(self, tunnel_env):
+        tunnel_env.setenv("FMCP_TUNNEL_URL", "ws://engine.example.com/ws/mcp-tunnel")
+        tunnel_env.setenv("FMCP_TUNNEL_ALLOW_ANY_HOST", "true")
+        assert tunnel_from_env(8099) is None
+
+    def test_allow_any_host_not_needed(self, tunnel_env, log_lines):
+        tunnel_env.setenv("FMCP_TUNNEL_ALLOW_ANY_HOST", "true")
+        client = tunnel_from_env(8099)
+        assert client is not None
+        assert client.status()["host_override"] is False
+        assert any("is not needed for this URL" in line for line in log_lines)
+
+    @pytest.mark.parametrize("value", ["false", "", "yes", "1", "on"])
+    def test_allow_any_host_false_or_invalid_keeps_restriction(self, tunnel_env, value):
+        tunnel_env.setenv("FMCP_TUNNEL_URL", "wss://engine.example.com/ws/mcp-tunnel")
+        tunnel_env.setenv("FMCP_TUNNEL_ALLOW_ANY_HOST", value)
         assert tunnel_from_env(8099) is None
 
 

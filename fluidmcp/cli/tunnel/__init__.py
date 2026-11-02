@@ -14,6 +14,26 @@ from loguru import logger
 if TYPE_CHECKING:
     from .client import TunnelClient
 
+# Without FMCP_TUNNEL_ALLOW_ANY_HOST=true, the tunnel only connects to hosts under *.fluidgpt.ai.
+ALLOWED_DOMAIN = "fluidgpt.ai"
+
+
+def _is_allowed_domain(host: str) -> bool:
+    """True for a subdomain of ALLOWED_DOMAIN (site-a.fluidgpt.ai), not the bare domain or a look-alike."""
+    labels = host.rstrip(".").split(".")
+    return len(labels) > 2 and labels[-2:] == ALLOWED_DOMAIN.split(".") and all(labels)
+
+
+def _allow_any_host() -> bool:
+    """Read FMCP_TUNNEL_ALLOW_ANY_HOST: only "true" turns the host restriction off."""
+    value =os.environ.get("FMCP_TUNNEL_ALLOW_ANY_HOST", "").strip().lower()
+    if value in ("", "false"):
+        return False
+    if value == "true":
+        return True
+    logger.warning(f"FMCP_TUNNEL_ALLOW_ANY_HOST={value!r} is not 'true' or 'false'; treating it as false")
+    return False
+
 
 def tunnel_from_env(gateway_port: int, configured_servers: Iterable[str] = ()) -> Optional["TunnelClient"]:
     """
@@ -35,9 +55,17 @@ def tunnel_from_env(gateway_port: int, configured_servers: Iterable[str] = ()) -
         return None
 
     errors = []
+    allow_any_host = _allow_any_host()
     parsed = urlparse(url)
-    if not (parsed.scheme == "wss" or (parsed.scheme == "ws" and parsed.hostname in ("localhost", "127.0.0.1"))):
+    host = parsed.hostname or ""
+    local = parsed.scheme == "ws" and host in ("localhost", "127.0.0.1")
+    if not (parsed.scheme == "wss" or local):
         errors.append("FMCP_TUNNEL_URL must start with wss:// (ws:// is accepted only for localhost testing)")
+    elif parsed.username or parsed.password:
+        errors.append("FMCP_TUNNEL_URL must not contain a user name or password")
+    elif not (local or allow_any_host or _is_allowed_domain(host)):
+        errors.append(f"FMCP_TUNNEL_URL host {host or '(none)'} is not under *.{ALLOWED_DOMAIN} "
+                      f"(set FMCP_TUNNEL_ALLOW_ANY_HOST=true for test setups)")
     token = os.environ.get("FMCP_TUNNEL_TOKEN", "").strip()
     if not token:
         errors.append("FMCP_TUNNEL_TOKEN is required")
@@ -70,6 +98,12 @@ def tunnel_from_env(gateway_port: int, configured_servers: Iterable[str] = ()) -
         logger.error(f"Tunnel disabled: cannot use identity key at {key_path()} ({e})")
         return None
 
+    host_override = allow_any_host and not local and not _is_allowed_domain(host)
+    if host_override:
+        logger.warning(f"FMCP_TUNNEL_ALLOW_ANY_HOST=true: tunnel host {host} is not restricted to *.{ALLOWED_DOMAIN}")
+    elif allow_any_host:
+        logger.info("FMCP_TUNNEL_ALLOW_ANY_HOST=true is not needed for this URL; remove it")
+
     unknown = sorted(set(allowed) - set(configured_servers))
     if unknown:
         logger.warning(f"Tunnel allowlist names servers that are not configured: {', '.join(unknown)}")
@@ -92,4 +126,5 @@ def tunnel_from_env(gateway_port: int, configured_servers: Iterable[str] = ()) -
         max_concurrency=max_concurrency,
         request_timeout=request_timeout,
         version=version,
+        host_override=host_override,
     )
