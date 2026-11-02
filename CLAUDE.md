@@ -68,6 +68,10 @@ Manual testing can also be done using sample configurations in the `examples/` d
   - `LLMProcess` - Process lifecycle with secure logging and environment filtering
   - `LLMHealthMonitor` - Health checks with automatic restart on failure
   - `launch_llm_models()` / `stop_all_llm_models()` - Multi-model orchestration with error recovery
+- `rest_proxy.py` - REST proxy servers (`restServers`): plain HTTP pass-through from `/{name}/...` to a target URL
+  - `RestProxyRegistry` - live name → target map (`app.state.rest_proxy_registry`), also used by `/api/rest-servers`
+  - `RestProxyRoute` / `install_rest_proxy()` - route inserted ahead of every other route, matching only registered names
+  - `validate_rest_server()` / `normalize_target()` - shared validation for config files, `fmcp validate` and the API
 
 ### Tunnel (`fluidmcp/cli/tunnel/`)
 Outbound tunnel to GPT Engine for sites that cannot accept incoming connections. Off unless `FMCP_TUNNEL_URL` is set. See [docs/TUNNEL.md](docs/TUNNEL.md).
@@ -145,6 +149,21 @@ MCP server configurations support three formats:
 - Requires installation from registry
 - Packages install to `.fmcp-packages/Author/Package/Version/`
 - Each package has a `metadata.json` with MCP server configuration
+
+**REST Proxy (`restServers`, alongside `mcpServers`)**
+```json
+{
+  "mcpServers": {},
+  "restServers": {
+    "gupshup-chat": { "type": "rest-proxy", "target-rest-endpoint": "media.gupshup.com" }
+  }
+}
+```
+- Not an MCP server: no tools, no JSON-RPC. `/{name}/...` (any method) is forwarded to the target with path, query, headers and body; the response comes back unchanged
+- A bare host means `https://`. No other fields are accepted. Names can't clash with MCP server names or reserved paths (`api`, `ui`, `health`, …)
+- Secure mode: FluidMCP's token goes in `FluidMCP-Authorization` so the caller's `Authorization` reaches the upstream untouched
+- `fmcp serve`: managed via `/api/rest-servers`, stored in MongoDB `fluidmcp_rest_servers`
+- See [docs/REST_PROXY.md](docs/REST_PROXY.md) and [examples/rest-proxy-config.json](examples/rest-proxy-config.json)
 
 ### Key Ports
 - `8090` - Individual package server (MCP_CLIENT_SERVER_PORT)
@@ -319,6 +338,9 @@ MCP_CLIENT_SERVER_ALL_PORT=8099
 
 # Server startup configuration
 MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (default: 5)
+
+# REST proxy (see docs/REST_PROXY.md)
+FMCP_REST_PROXY_TIMEOUT=60  # Seconds to wait for a REST proxy upstream (default: 60; connect limited to 10)
 
 # GPT Engine tunnel (see docs/TUNNEL.md)
 FMCP_TUNNEL_URL, FMCP_TUNNEL_TOKEN, FMCP_TUNNEL_CONNECTOR_ID, FMCP_TUNNEL_ALLOWED_SERVERS,
