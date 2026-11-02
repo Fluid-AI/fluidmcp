@@ -188,6 +188,10 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     if not validate_metadata_config(config, str(file_path)):
         raise ValueError(f"Invalid configuration in {file_path}")
 
+    # Fail fast on restServers before cloning repos or expanding package strings;
+    # checked again at the end in case expansion changed the MCP server names.
+    _extract_rest_servers(config, config.get("mcpServers") or {}, str(file_path))
+
     servers = config.get("mcpServers", {})
     llm_models = config.get("llmModels", {})  # Extract LLM models section
     replicate_models = config.get("replicateModels", {})  # Backward compatibility: old format

@@ -26,7 +26,10 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
-from .services.rest_proxy import RestProxyRegistry, install_rest_proxy, load_rest_servers, close_client as close_rest_proxy_client
+from .services.rest_proxy import (
+    RestProxyRegistry, install_rest_proxy, load_rest_servers, drop_shadowing_proxies,
+    close_client as close_rest_proxy_client,
+)
 from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
 
@@ -714,6 +717,7 @@ async def main(args):
         if loaded_models > 0:
             logger.info(f"✓ Loaded {loaded_models} model(s) from MongoDB on startup")
         loaded_rest = await load_rest_servers(persistence, app.state.rest_proxy_registry)
+        loaded_rest -= len(drop_shadowing_proxies(app, app.state.rest_proxy_registry))
         if loaded_rest > 0:
             logger.info(f"✓ Loaded {loaded_rest} REST proxy server(s) on startup: {', '.join(app.state.rest_proxy_registry.names())}")
     else:

@@ -297,6 +297,10 @@ class PersistenceBackend(ABC):
     # Non-abstract so backends without REST proxy storage keep working; their
     # REST proxies live only in the in-process registry.
 
+    def persists_rest_servers(self) -> bool:
+        """True if saved REST proxies survive a restart (and a failed save is an error)."""
+        return False
+
     async def save_rest_server(self, config: Dict[str, Any]) -> bool:
         """
         Create or replace a REST proxy config (restServers entry plus its "id").
@@ -305,7 +309,7 @@ class PersistenceBackend(ABC):
             config: {"id", "type", "target-rest-endpoint"}
 
         Returns:
-            True if persisted, False if this backend does not persist REST proxies
+            True if saved, False if this backend does not store REST proxies or the save failed
         """
         return False
 

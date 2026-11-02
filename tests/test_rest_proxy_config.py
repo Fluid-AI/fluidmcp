@@ -155,3 +155,27 @@ async def test_health_still_degraded_when_mcp_servers_are_down(upstream):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as c:
             health = await c.get("/health")
     assert health.status_code == 503 and health.json()["rest_servers"] == 1
+
+
+async def test_health_degraded_when_configured_mcp_servers_never_started(upstream):
+    # MCP servers that fail to launch are never registered as processes.
+    config = ServerConfig(
+        servers={"weather": {"command": "python3", "install_path": "/nonexistent"}},
+        rest_servers={"gupshup-chat": GUPSHUP}, source_type="file",
+    )
+    app = build_run_app(config)
+    with patch.object(run_servers_module, "_get_server_processes", return_value={}):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as c:
+            health = await c.get("/health")
+    assert health.status_code == 503 and health.json()["status"] == "degraded"
+
+
+def test_rest_errors_reported_before_github_clone(tmp_path):
+    path = write_config(tmp_path, {
+        "mcpServers": {"repo": {"github_repo": "owner/repo"}},
+        "restServers": {"api": GUPSHUP},
+    })
+    with patch("fluidmcp.cli.services.config_resolver._handle_github_server") as clone:
+        with pytest.raises(RestServersConfigError):
+            resolve_from_file(str(path))
+    clone.assert_not_called()

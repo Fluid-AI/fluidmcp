@@ -43,7 +43,7 @@ fmcp run examples/rest-proxy-config.json --file --start-server --secure --token 
 No other fields are accepted.
 
 **Names that can't be used:**
-- names reserved by FluidMCP: `api`, `ui`, `llm`, `health`, `metrics`, `docs`, `redoc`, `openapi.json`, `status`, `servers`, `documentation`, `inspector`;
+- names reserved by FluidMCP: `api`, `ui`, `llm`, `health`, `metrics`, `docs`, `redoc`, `status`, `servers`, `documentation`, `inspector`, plus the first path segment of any other route the running gateway serves. At startup, a proxy that would hide one of those routes is logged as an error and not started;
 - any name already used by an MCP server. REST proxy routes are matched first, so the MCP server would become unreachable.
 
 ### On the hosted gateway (`fmcp serve`)
@@ -71,7 +71,12 @@ curl -X DELETE https://<gateway>/api/rest-servers/gupshup-chat -H "Authorization
 
 The same endpoints exist under `fmcp run`, backed by memory only. They are lost on restart.
 
-Every add, update and delete is written to the audit log.
+How the API behaves:
+- Responses include `persisted`. It is `true` only when the proxy will be reloaded after a restart (MongoDB); with the in-memory backend it is `false`.
+- On MongoDB, a failed save or delete returns 500 and leaves the live proxy unchanged, so the gateway and the database never disagree.
+- A stored proxy that failed validation at startup (it is logged and not started) can be replaced with `PUT` or `POST`, or removed with `DELETE`.
+- Changes are serialized: two simultaneous adds of the same id give one 200 and one 409.
+- Every add, update and delete is written to the audit log.
 
 ## Calling a REST proxy
 
@@ -115,13 +120,13 @@ Headers the gateway itself adds to every response:
 
 ### Errors from FluidMCP
 
-Errors from the upstream (its 4xx and 5xx responses) are passed through unchanged. Errors produced by FluidMCP itself carry an `X-FluidMCP-Error` header and a JSON body `{"error": "<code>", "message": "..."}`:
+Errors from the upstream (its 4xx and 5xx responses) are passed through unchanged. Errors produced by FluidMCP itself carry an `X-FluidMCP-Error` header and a JSON body `{"error": "<code>", "message": "..."}`. Any `X-FluidMCP-*` or `FluidMCP-*` header sent by the upstream is removed, so an upstream error can't pass itself off as one from FluidMCP.
 
 | Status | `X-FluidMCP-Error` | Cause |
 |---|---|---|
 | 401 | `unauthorized` | Secure mode and a missing or wrong `FluidMCP-Authorization` |
 | 500 | `misconfigured` | Secure mode but no `FMCP_BEARER_TOKEN` on the gateway |
-| 400 | `bad_path` | `.` or `..` path segment (including `%2e%2e`) |
+| 400 | `bad_path` | A `.` or `..` path segment, however it is encoded: `%2e%2e`, double-encoded `%252e%252e`, or hidden behind an encoded slash or backslash (`..%2F`, `..%5C`, `\`) |
 | 502 | `upstream_unreachable` | DNS failure, connection refused, TLS error, … |
 | 504 | `upstream_timeout` | No response within the timeout |
 
@@ -142,7 +147,7 @@ Headers, query strings and bodies are never logged, because they carry API keys,
 
 Metrics are recorded under the server id `rest:<name>`.
 
-`GET /health` under `fmcp run` reports `rest_servers`. A gateway with only REST proxies is healthy. A gateway with MCP servers is still degraded when none of them is running.
+`GET /health` under `fmcp run` reports `rest_servers`. A gateway configured with only REST proxies is healthy. A gateway configured with MCP servers is degraded when none of them is running, including when they all failed to start.
 
 ## Limits
 

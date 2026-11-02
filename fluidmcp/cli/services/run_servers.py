@@ -33,7 +33,7 @@ from .vllm_config import validate_and_transform_llm_config, VLLMConfigError
 from .replicate_client import initialize_replicate_models, stop_all_replicate_models
 from .llm_provider_registry import initialize_llm_registry, update_model_endpoints
 from .frontend_utils import setup_frontend_routes
-from .rest_proxy import RestProxyRegistry, install_rest_proxy, close_client as close_rest_proxy_client
+from .rest_proxy import RestProxyRegistry, install_rest_proxy, drop_shadowing_proxies, close_client as close_rest_proxy_client
 from .server_manager import ServerManager, MCPHealthMonitor
 from ..repositories.memory import InMemoryBackend
 from ..auth import verify_token
@@ -287,6 +287,9 @@ def run_servers(
     for rest_name, rest_cfg in config.rest_servers.items():
         rest_registry.register(rest_name, rest_cfg)
     app.state.rest_proxy_registry = rest_registry
+    # /health needs the configured count: servers that fail to launch never
+    # appear among the running processes.
+    app.state.configured_mcp_servers = len(config.servers)
     install_rest_proxy(app, rest_registry)
     if config.rest_servers:
         logger.info(f"REST proxy routes ready for {len(rest_registry)} server(s): {', '.join(rest_registry.names())}")
@@ -541,6 +544,9 @@ def run_servers(
     from ..api.management import router as management_router
     app.include_router(management_router, prefix="/api", tags=["management"])
     logger.debug("Management API endpoints added")
+
+    # Every route is mounted now: a REST proxy must not hide one of them.
+    drop_shadowing_proxies(app, rest_registry)
 
     # Start FastAPI server if requested
     if start_server:
@@ -1109,9 +1115,11 @@ def _add_health_endpoint(app: FastAPI) -> None:
             running_count = sum(1 for p in processes.values() if p and p.poll() is None)
             rest_registry = getattr(app.state, "rest_proxy_registry", None)
             rest_count = len(rest_registry) if rest_registry is not None else 0
+            configured_mcp = getattr(app.state, "configured_mcp_servers", len(processes))
 
-            # Determine health status
-            healthy = running_count > 0 or (not processes and rest_count > 0)
+            # Determine health status. REST proxies alone count as healthy only
+            # when no MCP servers were configured at all.
+            healthy = running_count > 0 or (not processes and not configured_mcp and rest_count > 0)
             status = "healthy" if healthy else "degraded"
             status_code = 200 if healthy else 503
 

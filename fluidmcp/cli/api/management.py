@@ -65,7 +65,7 @@ from ..utils.env_utils import is_placeholder, has_env_var_syntax
 # StdioJsonRpcRouter: one stdout reader, responses matched by JSON-RPC ID.
 from ..services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 from ..services.metrics import MetricsCollector, get_registry as _get_metrics_registry
-from ..services.rest_proxy import REST_PROXY_TYPE, TARGET_FIELD, validate_rest_server
+from ..services.rest_proxy import REST_PROXY_TYPE, TARGET_FIELD, route_conflict, validate_rest_server
 
 try:
     import psutil as _psutil
@@ -4727,14 +4727,27 @@ def get_rest_registry(request: Request):
     return registry
 
 
-def _rest_server_view(id: str, target_url: str, stored: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+# One lock for every REST proxy change: the existence checks and the save/
+# register steps await in between, so concurrent requests could interleave.
+_rest_servers_lock: Optional[asyncio.Lock] = None
+
+
+def _rest_lock() -> asyncio.Lock:
+    global _rest_servers_lock
+    if _rest_servers_lock is None:
+        _rest_servers_lock = asyncio.Lock()
+    return _rest_servers_lock
+
+
+def _rest_server_view(id: str, target_url: str, stored: Optional[Dict[str, Any]], durable: bool) -> Dict[str, Any]:
     view = {
         "id": id,
         "type": REST_PROXY_TYPE,
         TARGET_FIELD: (stored or {}).get(TARGET_FIELD, target_url),
         "target_url": target_url,
         "path": f"/{id}/",
-        "persisted": stored is not None,
+        # True only when it will be reloaded after a restart (MongoDB).
+        "persisted": stored is not None and durable,
     }
     for key in ("created_at", "updated_at"):
         if stored and stored.get(key):
@@ -4742,7 +4755,7 @@ def _rest_server_view(id: str, target_url: str, stored: Optional[Dict[str, Any]]
     return view
 
 
-def _rest_server_entry(id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def _rest_server_entry(request: Request, id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """Validate a request body and return the restServers entry (without id)."""
     body = sanitize_input(body)
     if "id" in body and body["id"] != id:
@@ -4751,6 +4764,9 @@ def _rest_server_entry(id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     errors = validate_rest_server(id, entry)
     if errors:
         raise HTTPException(400, "; ".join(errors))
+    conflict = route_conflict(request.app, id)
+    if conflict:
+        raise HTTPException(409, conflict)
     return entry
 
 
@@ -4758,13 +4774,30 @@ async def _mcp_server_exists(manager, id: str) -> bool:
     return id in manager.configs or bool(await manager.db.get_server_config(id))
 
 
+async def _save_rest_server(manager, id: str, entry: Dict[str, Any]) -> bool:
+    """
+    Store a REST proxy. Returns True if it will survive a restart.
+
+    On a durable backend (MongoDB) a failed save is an error, so the live route
+    is never changed to something the database does not hold.
+    """
+    saved = await manager.db.save_rest_server({"id": id, **entry})
+    durable = manager.db.persists_rest_servers()
+    if durable and not saved:
+        raise HTTPException(500, f"Could not save REST server '{id}' to the database; nothing was changed")
+    if not durable:
+        logger.warning(f"REST server '{id}' is kept in memory only; it will be lost on restart")
+    return durable
+
+
 @router.get("/rest-servers")
 async def list_rest_servers(request: Request, token: str = Depends(get_token)):
     """List REST proxy servers (from the config file and/or the database)."""
     registry = get_rest_registry(request)
     manager = get_server_manager(request)
+    durable = manager.db.persists_rest_servers()
     stored = {doc["id"]: doc for doc in await manager.db.list_rest_servers()}
-    servers = [_rest_server_view(name, registry.get(name), stored.get(name)) for name in registry.names()]
+    servers = [_rest_server_view(name, registry.get(name), stored.get(name), durable) for name in registry.names()]
     return {"servers": servers, "count": len(servers)}
 
 
@@ -4775,7 +4808,7 @@ async def get_rest_server(id: str, request: Request, token: str = Depends(get_to
     if id not in registry:
         raise HTTPException(404, f"REST server '{id}' not found")
     manager = get_server_manager(request)
-    return _rest_server_view(id, registry.get(id), await manager.db.get_rest_server(id))
+    return _rest_server_view(id, registry.get(id), await manager.db.get_rest_server(id), manager.db.persists_rest_servers())
 
 
 @router.post("/rest-servers")
@@ -4798,19 +4831,21 @@ async def add_rest_server(
     id = body.get("id") if isinstance(body, dict) else None
     if not isinstance(id, str) or not id:
         raise HTTPException(400, "REST server id is required")
-    entry = _rest_server_entry(id, body)
+    entry = _rest_server_entry(request, id, body)
 
     registry = get_rest_registry(request)
     manager = get_server_manager(request)
-    if id in registry or await manager.db.get_rest_server(id):
-        raise HTTPException(409, f"REST server '{id}' already exists")
-    if await _mcp_server_exists(manager, id):
-        raise HTTPException(409, f"Id '{id}' is already used by an MCP server")
+    async with _rest_lock():
+        if id in registry:
+            raise HTTPException(409, f"REST server '{id}' already exists")
+        if await _mcp_server_exists(manager, id):
+            raise HTTPException(409, f"Id '{id}' is already used by an MCP server")
+        if await manager.db.get_rest_server(id):
+            # Stored but not live: it failed validation when loaded. Replacing it is the repair.
+            logger.warning(f"Replacing stored REST server '{id}' that was not loaded at startup")
 
-    persisted = await manager.db.save_rest_server({"id": id, **entry})
-    if not persisted:
-        logger.warning(f"REST server '{id}' not persisted; it will be lost on restart")
-    target_url = registry.register(id, entry)
+        persisted = await _save_rest_server(manager, id, entry)
+        target_url = registry.register(id, entry)
 
     await log_audit_event(manager.db, "add_rest_server", id, get_client_ip(request), {"target_url": target_url})
     logger.info(f"Added REST server '{id}' -> {target_url}")
@@ -4827,21 +4862,19 @@ async def update_rest_server(
     ),
     token: str = Depends(get_token),
 ):
-    """Change the target of an existing REST proxy server."""
+    """Change the target of a REST proxy server (also repairs a stored entry that failed to load)."""
     if not isinstance(body, dict):
         raise HTTPException(400, "Request body must be an object")
-    entry = _rest_server_entry(id, body)
+    entry = _rest_server_entry(request, id, body)
 
     registry = get_rest_registry(request)
-    if id not in registry:
-        raise HTTPException(404, f"REST server '{id}' not found")
     manager = get_server_manager(request)
-
-    persisted = await manager.db.save_rest_server({"id": id, **entry})
-    if not persisted:
-        logger.warning(f"REST server '{id}' update not persisted; it will be lost on restart")
-    old_target = registry.get(id)
-    target_url = registry.register(id, entry)
+    async with _rest_lock():
+        if id not in registry and not await manager.db.get_rest_server(id):
+            raise HTTPException(404, f"REST server '{id}' not found")
+        old_target = registry.get(id)
+        persisted = await _save_rest_server(manager, id, entry)
+        target_url = registry.register(id, entry)
 
     await log_audit_event(
         manager.db, "update_rest_server", id, get_client_ip(request),
@@ -4856,10 +4889,14 @@ async def delete_rest_server(id: str, request: Request, token: str = Depends(get
     """Delete a REST proxy server. Its /{id}/... route stops forwarding immediately."""
     registry = get_rest_registry(request)
     manager = get_server_manager(request)
-    deleted_db = await manager.db.delete_rest_server(id)
-    deleted_live = registry.unregister(id)
-    if not deleted_db and not deleted_live:
-        raise HTTPException(404, f"REST server '{id}' not found")
+    async with _rest_lock():
+        stored = await manager.db.get_rest_server(id)
+        if stored is None and id not in registry:
+            raise HTTPException(404, f"REST server '{id}' not found")
+        if stored is not None and not await manager.db.delete_rest_server(id):
+            # Unregistering now would bring the proxy back on the next restart.
+            raise HTTPException(500, f"Could not delete REST server '{id}' from the database; it is still active")
+        registry.unregister(id)
 
     await log_audit_event(manager.db, "delete_rest_server", id, get_client_ip(request))
     logger.info(f"Deleted REST server '{id}'")

@@ -368,7 +368,13 @@ async def test_mcp_root_path_prefix(monkeypatch):
     assert bare.status_code == 404 and len(upstream.requests) == 1
 
 
-@pytest.mark.parametrize("path", ["/gupshup-chat/a/%2e%2e/b", "/gupshup-chat/%2E%2E", "/gupshup-chat/%2e/x"])
+@pytest.mark.parametrize("path", [
+    "/gupshup-chat/a/%2e%2e/b", "/gupshup-chat/%2E%2E", "/gupshup-chat/%2e/x",
+    "/gupshup-chat/..%2F..%2Fadmin",      # encoded slash hides the segment boundary
+    "/gupshup-chat/%252e%252e/admin",     # double-encoded
+    "/gupshup-chat/a/..%5Cadmin",         # encoded backslash
+    "/gupshup-chat/a\\..\\admin",         # literal backslash
+])
 async def test_dot_segments_rejected(path):
     upstream = Upstream()
     app, _ = make_app(upstream)
@@ -514,3 +520,98 @@ def test_access_log_query_redacted_only_for_rest_proxies():
     assert proxied.getMessage() == '127.0.0.1:5000 - "GET /gupshup-chat/users?REDACTED HTTP/1.1" 200'
     assert "limit=5" in other.getMessage()
     assert no_query.getMessage() == '127.0.0.1:5000 - "GET /gupshup-chat/users HTTP/1.1" 200'
+
+
+@pytest.mark.parametrize("path", ["/gupshup-chat/a%2Fb", "/gupshup-chat/v1..2/x", "/gupshup-chat/...", "/gupshup-chat/.well-known/x"])
+async def test_paths_resembling_dot_segments_allowed(path):
+    upstream = Upstream()
+    app, _ = make_app(upstream)
+    async with caller(app) as c:
+        r = await c.send(httpx.Request("GET", httpx.URL("http://gateway").copy_with(raw_path=path.encode())))
+    assert r.status_code == 200 and len(upstream.requests) == 1
+
+
+async def test_upstream_cannot_fake_fluidmcp_error_header():
+    upstream = Upstream(lambda request: streamed(401, [
+        ("X-FluidMCP-Error", "unauthorized"), ("FluidMCP-Other", "x"), ("X-Upstream", "1"),
+    ], b'{"message": "bad apikey"}'))
+    app, _ = make_app(upstream)
+    async with caller(app) as c:
+        r = await c.get("/gupshup-chat/x")
+    assert r.status_code == 401
+    assert ERROR_HEADER.lower() not in r.headers and "fluidmcp-other" not in r.headers
+    assert r.headers["x-upstream"] == "1"
+
+
+# ── Releasing the upstream on early exit ────────────────────────────────────
+
+def _active(name):
+    from fluidmcp.cli.services.metrics import get_registry
+    gauge = get_registry().get_metric("fluidmcp_active_requests")
+    return gauge.samples.get(gauge._get_label_key({"server_id": f"rest:{name}"}), 0.0)
+
+
+class TrackedStream(httpx.AsyncByteStream):
+    def __init__(self, data=b"chunk"):
+        self.data = data
+        self.closed = False
+
+    async def __aiter__(self):
+        yield self.data
+
+    async def aclose(self):
+        self.closed = True
+
+
+async def test_active_requests_return_to_zero_after_normal_response():
+    upstream = Upstream()
+    app, _ = make_app(upstream, {"counted": "a.example"})
+    async with caller(app) as c:
+        await c.get("/counted/x")
+    assert _active("counted") == 0
+
+
+async def test_upstream_released_when_caller_disconnects_before_body():
+    stream = TrackedStream()
+    upstream = Upstream(lambda request: httpx.Response(200, stream=stream))
+    app, _ = make_app(upstream, {"gone": "a.example"})
+    messages = iter([{"type": "http.request", "body": b"", "more_body": False}])
+
+    async def receive():
+        # Like a real server: the request, then the disconnect (never a busy loop).
+        return next(messages, {"type": "http.disconnect"})
+
+    async def send(message):
+        raise OSError("client went away")
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
+        "scheme": "http", "path": "/gone/x", "raw_path": b"/gone/x", "root_path": "",
+        "query_string": b"", "headers": [], "server": ("gateway", 80), "client": ("1.2.3.4", 1),
+    }
+    with pytest.raises(Exception):
+        await app(scope, receive, send)
+    assert stream.closed is True
+    assert _active("gone") == 0
+
+
+async def test_counter_decremented_even_if_close_is_cancelled():
+    import asyncio
+
+    class CancelOnClose(TrackedStream):
+        async def aclose(self):
+            raise asyncio.CancelledError()
+
+    upstream = Upstream(lambda request: httpx.Response(200, stream=CancelOnClose()))
+    upstream_client = upstream.client()
+    registry = RestProxyRegistry()
+    registry.register("cancelled", {"type": "rest-proxy", "target-rest-endpoint": "a.example"})
+    request = rest_proxy.Request({
+        "type": "http", "method": "GET", "path": "/cancelled/x", "raw_path": b"/cancelled/x",
+        "query_string": b"", "headers": [], "scheme": "http", "server": ("gw", 80),
+    })
+    response = await rest_proxy.proxy_request(request, "cancelled", "https://a.example", b"/x", upstream_client)
+    assert _active("cancelled") == 1
+    with pytest.raises(asyncio.CancelledError):
+        await response.fluidmcp_close()
+    assert _active("cancelled") == 0

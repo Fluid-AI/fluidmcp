@@ -55,8 +55,10 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 # First path segments already owned by fmcp run / fmcp serve. A REST proxy route
 # is matched before every other route, so these names would hide those endpoints.
+# Checked when a config is validated (no app yet); at runtime the live routes are
+# also checked (RestProxyRoute.shadowed_segments), so this list may lag new routes.
 RESERVED_NAMES = frozenset({
-    "api", "ui", "llm", "health", "metrics", "docs", "redoc", "openapi.json",
+    "api", "ui", "llm", "health", "metrics", "docs", "redoc",
     "status", "servers", "documentation", "inspector",
 })
 
@@ -251,8 +253,13 @@ def _filter_request_headers(raw_headers: List[Tuple[bytes, bytes]]) -> List[Tupl
 
 
 def _filter_response_headers(raw_headers: List[Tuple[bytes, bytes]]) -> List[Tuple[bytes, bytes]]:
+    # X-FluidMCP-* marks errors produced by FluidMCP itself; an upstream must not be able to fake one.
     drop = HOP_BY_HOP_HEADERS | GATEWAY_RESPONSE_HEADERS | _connection_listed(raw_headers)
-    return [(key, value) for key, value in raw_headers if key.decode("latin-1").lower() not in drop]
+    return [
+        (key, value) for key, value in raw_headers
+        if key.decode("latin-1").lower() not in drop
+        and not key.lower().startswith((b"x-fluidmcp-", FLUIDMCP_HEADER_PREFIX))
+    ]
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -275,7 +282,19 @@ def build_upstream_url(target: str, tail: bytes, query_string: bytes) -> httpx.U
 
 
 def _has_dot_segment(tail: bytes) -> bool:
-    return any(unquote(seg.decode("latin-1")) in (".", "..") for seg in tail.split(b"/"))
+    """
+    True if any path segment is "." or "..", however it is written.
+
+    Decodes repeatedly (so %252e%252e and ..%2F are caught) and treats both "/"
+    and "\\" as separators, since some upstreams decode %2F or accept backslashes.
+    """
+    text = tail.decode("latin-1")
+    for _ in range(3):
+        decoded = unquote(text)
+        if decoded == text:
+            break
+        text = decoded
+    return any(seg in (".", "..") for seg in re.split(r"[/\\]", text))
 
 
 async def _request_body(request: Request) -> AsyncIterator[bytes]:
@@ -344,13 +363,15 @@ async def proxy_request(
     closed = False
 
     async def close() -> None:
-        # Runs from the body's finally and again as the background task, so the
-        # upstream connection is released even if the caller disconnects early.
+        # Runs from the body's finally, as the background task and from
+        # RestProxyRoute.handle, so the upstream connection is released even if
+        # the caller disconnects early. The counter is decremented before the
+        # await: a cancelled aclose() must not skip it.
         nonlocal closed
         if not closed:
             closed = True
-            await upstream.aclose()
             collector.decrement_active_requests()
+            await upstream.aclose()
 
     async def body() -> AsyncIterator[bytes]:
         try:
@@ -366,6 +387,7 @@ async def proxy_request(
     # Raw list keeps repeated headers such as Set-Cookie and the upstream's
     # Content-Length / Content-Encoding exactly as sent.
     response.raw_headers = _filter_response_headers(list(upstream.headers.raw))
+    response.fluidmcp_close = close
     return response
 
 
@@ -420,7 +442,36 @@ class RestProxyRoute(BaseRoute):
             tail = (b"/" + tail[2]) if tail[1] else b""
             client = self._client or await get_client()
             response = await proxy_request(request, name, target, tail, client)
-        await response(scope, receive, send)
+        try:
+            await response(scope, receive, send)
+        finally:
+            # If the caller went away before the body was streamed, neither the
+            # body's finally nor the background task runs; release the upstream here.
+            close = getattr(response, "fluidmcp_close", None)
+            if close is not None:
+                await close()
+
+    def shadowed_segments(self, app) -> set:
+        """
+        Static first path segments of the app's other routes (e.g. api, health, ui).
+
+        A REST proxy with one of these names would take over that route, since
+        this route is matched first. Read from the live app so new routes are
+        covered without updating RESERVED_NAMES.
+        """
+        segments = set()
+        for route in app.router.routes:
+            path = getattr(route, "path", None)
+            if route is self or not isinstance(path, str):
+                continue
+            if self.root_path:
+                if not path.startswith(self.root_path + "/"):
+                    continue
+                path = path[len(self.root_path):]
+            first = path.lstrip("/").split("/", 1)[0]
+            if first and "{" not in first:
+                segments.add(first)
+        return segments
 
 
 async def load_rest_servers(persistence, registry: RestProxyRegistry) -> int:
@@ -476,3 +527,32 @@ def install_rest_proxy(app, registry: RestProxyRegistry, client: Optional[httpx.
     app.router.routes.insert(0, route)
     _access_log_filter.routes.add(route)
     return route
+
+
+def find_rest_proxy_route(app) -> Optional[RestProxyRoute]:
+    return next((r for r in app.router.routes if isinstance(r, RestProxyRoute)), None)
+
+
+def route_conflict(app, name: str) -> Optional[str]:
+    """Return an error if a REST proxy called name would hide one of the app's routes."""
+    route = find_rest_proxy_route(app)
+    if route is not None and name in route.shadowed_segments(app):
+        return f"REST server '{name}': name is used by an existing FluidMCP route (/{name}/...)"
+    return None
+
+
+def drop_shadowing_proxies(app, registry: RestProxyRegistry) -> List[str]:
+    """
+    Unregister REST proxies whose names collide with the app's own routes.
+
+    Called once every route is mounted (fmcp run before starting, fmcp serve after
+    loading from persistence). Returns the names dropped; each is logged.
+    """
+    dropped = []
+    for name in registry.names():
+        error = route_conflict(app, name)
+        if error:
+            registry.unregister(name)
+            logger.error(f"{error}; REST proxy not started")
+            dropped.append(name)
+    return dropped

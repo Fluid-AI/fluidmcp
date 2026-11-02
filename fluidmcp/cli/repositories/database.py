@@ -1240,6 +1240,10 @@ class DatabaseManager(PersistenceBackend):
 
     # ==================== REST Proxy Persistence ====================
 
+    def persists_rest_servers(self) -> bool:
+        """REST proxies are stored in MongoDB and reloaded on startup."""
+        return True
+
     async def save_rest_server(self, config: Dict[str, Any]) -> bool:
         """
         Create or replace a REST proxy config, keyed by "id".

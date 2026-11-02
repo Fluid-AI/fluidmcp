@@ -60,8 +60,9 @@ PROXY_AUTH = {"FluidMCP-Authorization": f"Bearer {TOKEN}"}
 async def test_add_then_call_then_list(api, app, backend, upstream):
     r = await api.post("/api/rest-servers", json=GUPSHUP)
     assert r.status_code == 200, r.text
+    # In-memory backend: stored, but not persisted across restarts.
     assert r.json() == {"message": "REST server 'gupshup-chat' added", "id": "gupshup-chat",
-                        "target_url": "https://media.gupshup.com", "persisted": True}
+                        "target_url": "https://media.gupshup.com", "persisted": False}
 
     called = await api.post("/gupshup-chat/wa/msg", content=b"x", headers=PROXY_AUTH)
     assert called.status_code == 200 and called.content == b"upstream:media.gupshup.com"
@@ -72,7 +73,7 @@ async def test_add_then_call_then_list(api, app, backend, upstream):
     server = listed["servers"][0]
     assert server["id"] == "gupshup-chat" and server["target-rest-endpoint"] == "media.gupshup.com"
     assert server["target_url"] == "https://media.gupshup.com" and server["path"] == "/gupshup-chat/"
-    assert server["persisted"] is True and "created_at" in server
+    assert server["persisted"] is False and "created_at" in server
 
     assert (await backend.get_rest_server("gupshup-chat"))["target-rest-endpoint"] == "media.gupshup.com"
 
@@ -238,3 +239,109 @@ async def test_serve_app_end_to_end_with_mongodb(serve_test_app, upstream, monke
     fresh = RestProxyRegistry()
     assert await load_rest_servers(db, fresh) == 1
     assert fresh.get("gupshup-chat") == "https://media.gupshup.com"
+
+
+# ── Review fixes: durable backends, repair, concurrency, route clashes ──────
+
+class DurableBackend(InMemoryBackend):
+    """In-memory backend that claims durability, with switchable save/delete failures."""
+
+    def __init__(self):
+        super().__init__()
+        self.fail_save = False
+        self.fail_delete = False
+
+    def persists_rest_servers(self):
+        return True
+
+    async def save_rest_server(self, config):
+        return False if self.fail_save else await super().save_rest_server(config)
+
+    async def delete_rest_server(self, id):
+        return False if self.fail_delete else await super().delete_rest_server(id)
+
+
+@pytest.fixture
+def durable(app):
+    backend = DurableBackend()
+    app.state.server_manager = ServerManager(backend)
+    return backend
+
+
+async def test_durable_backend_reports_persisted(api, durable):
+    r = await api.post("/api/rest-servers", json=GUPSHUP)
+    assert r.json()["persisted"] is True
+    assert (await api.get("/api/rest-servers/gupshup-chat")).json()["persisted"] is True
+
+
+async def test_failed_save_on_durable_backend_changes_nothing(api, app, durable):
+    durable.fail_save = True
+    r = await api.post("/api/rest-servers", json=GUPSHUP)
+    assert r.status_code == 500
+    assert "gupshup-chat" not in app.state.rest_proxy_registry
+
+    durable.fail_save = False
+    await api.post("/api/rest-servers", json=GUPSHUP)
+    durable.fail_save = True
+    r = await api.put("/api/rest-servers/gupshup-chat", json={"type": "rest-proxy", "target-rest-endpoint": "evil.example"})
+    assert r.status_code == 500
+    assert app.state.rest_proxy_registry.get("gupshup-chat") == "https://media.gupshup.com"
+
+
+async def test_failed_db_delete_keeps_proxy_active(api, app, durable):
+    await api.post("/api/rest-servers", json=GUPSHUP)
+    durable.fail_delete = True
+    r = await api.delete("/api/rest-servers/gupshup-chat")
+    assert r.status_code == 500 and "still active" in r.json()["detail"]
+    assert "gupshup-chat" in app.state.rest_proxy_registry
+    assert await durable.get_rest_server("gupshup-chat") is not None
+
+
+async def test_stored_but_unloaded_entry_can_be_repaired(api, app, backend):
+    # Stored, but not live (as when it failed validation at startup).
+    await backend.save_rest_server(GUPSHUP)
+    assert (await api.get("/api/rest-servers/gupshup-chat")).status_code == 404
+    r = await api.put("/api/rest-servers/gupshup-chat", json={"type": "rest-proxy", "target-rest-endpoint": "fixed.example"})
+    assert r.status_code == 200 and app.state.rest_proxy_registry.get("gupshup-chat") == "https://fixed.example"
+
+    app.state.rest_proxy_registry.unregister("gupshup-chat")
+    assert (await api.post("/api/rest-servers", json=GUPSHUP)).status_code == 200
+
+
+async def test_delete_stored_but_unloaded_entry(api, backend):
+    await backend.save_rest_server(GUPSHUP)
+    assert (await api.delete("/api/rest-servers/gupshup-chat")).status_code == 200
+    assert await backend.get_rest_server("gupshup-chat") is None
+
+
+async def test_concurrent_adds_of_same_id(api):
+    import asyncio
+    results = await asyncio.gather(
+        api.post("/api/rest-servers", json={**GUPSHUP, "target-rest-endpoint": "a.example"}),
+        api.post("/api/rest-servers", json={**GUPSHUP, "target-rest-endpoint": "b.example"}),
+    )
+    assert sorted(r.status_code for r in results) == [200, 409]
+
+
+async def test_name_clashing_with_live_route_is_refused(api, app):
+    @app.get("/settings")
+    async def settings():
+        return {"settings": True}
+
+    r = await api.post("/api/rest-servers", json={**GUPSHUP, "id": "settings"})
+    assert r.status_code == 409 and "existing FluidMCP route" in r.json()["detail"]
+    assert (await api.get("/settings")).json() == {"settings": True}
+
+
+def test_drop_shadowing_proxies_at_startup(app):
+    from fluidmcp.cli.services.rest_proxy import drop_shadowing_proxies
+
+    @app.get("/settings/{x}")
+    async def settings(x: str):
+        return {}
+
+    registry = app.state.rest_proxy_registry
+    registry.register("settings", {"type": "rest-proxy", "target-rest-endpoint": "a.example"})
+    registry.register("gupshup-chat", {"type": "rest-proxy", "target-rest-endpoint": "a.example"})
+    assert drop_shadowing_proxies(app, registry) == ["settings"]
+    assert registry.names() == ["gupshup-chat"]
