@@ -28,6 +28,7 @@ class InMemoryBackend(PersistenceBackend):
         self._logs: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self._llm_models: Dict[str, Dict[str, Any]] = {}
         self._crash_events: Dict[str, deque] = {}
+        self._rest_servers: Dict[str, Dict[str, Any]] = {}
         self._connected = False
 
     async def connect(self) -> bool:
@@ -44,6 +45,7 @@ class InMemoryBackend(PersistenceBackend):
         self._logs.clear()
         self._llm_models.clear()
         self._crash_events.clear()
+        self._rest_servers.clear()
         self._connected = False
         logger.info("Disconnected in-memory backend")
 
@@ -220,6 +222,31 @@ class InMemoryBackend(PersistenceBackend):
             if event_ts > since_ts:
                 count += 1
         return count
+
+    # ==================== REST Proxy Persistence ====================
+
+    async def save_rest_server(self, config: Dict[str, Any]) -> bool:
+        """Create or replace a REST proxy config, keyed by "id"."""
+        now = datetime.utcnow()
+        existing = self._rest_servers.get(config["id"], {})
+        doc = {k: v for k, v in config.items() if k not in ("created_at", "updated_at")}
+        doc["created_at"] = existing.get("created_at", now)
+        doc["updated_at"] = now
+        self._rest_servers[config["id"]] = doc
+        return True
+
+    async def get_rest_server(self, id: str) -> Optional[Dict[str, Any]]:
+        """Return one REST proxy config, or None."""
+        doc = self._rest_servers.get(id)
+        return dict(doc) if doc else None
+
+    async def list_rest_servers(self) -> List[Dict[str, Any]]:
+        """Return all REST proxy configs, sorted by id."""
+        return [dict(self._rest_servers[k]) for k in sorted(self._rest_servers)]
+
+    async def delete_rest_server(self, id: str) -> bool:
+        """Delete a REST proxy config. Returns True if one was deleted."""
+        return self._rest_servers.pop(id, None) is not None
 
     # ==================== LLM Model Persistence ====================
 

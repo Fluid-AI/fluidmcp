@@ -20,7 +20,7 @@ from .services import (
 from .services.package_installer import package_exists
 from .services.package_list import get_latest_version_dir
 from .services.config_resolver import INSTALLATION_DIR, RestServersConfigError
-from .services.rest_proxy import TARGET_FIELD, normalize_target
+from .services.rest_proxy import TARGET_FIELD, RestProxyRegistry, install_rest_proxy, normalize_target
 
 
 def configure_logger(verbose: bool = False) -> None:
@@ -632,6 +632,9 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             )
             app.state.db_manager = db_manager
             app.state.server_manager = server_manager
+            # REST proxies can be added via /api/rest-servers (none from config here)
+            app.state.rest_proxy_registry = RestProxyRegistry()
+            install_rest_proxy(app, app.state.rest_proxy_registry)
 
             setup_frontend_routes(app, host="0.0.0.0", port=client_server_port)
 

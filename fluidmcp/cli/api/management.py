@@ -65,6 +65,7 @@ from ..utils.env_utils import is_placeholder, has_env_var_syntax
 # StdioJsonRpcRouter: one stdout reader, responses matched by JSON-RPC ID.
 from ..services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 from ..services.metrics import MetricsCollector, get_registry as _get_metrics_registry
+from ..services.rest_proxy import REST_PROXY_TYPE, TARGET_FIELD, validate_rest_server
 
 try:
     import psutil as _psutil
@@ -532,6 +533,18 @@ def get_database_manager(request: Request):
     return request.app.state.db_manager
 
 
+def _reject_rest_server_id(request: Request, id: str) -> None:
+    """
+    Refuse an MCP server id that is already a REST proxy name.
+
+    REST proxy routes are matched before the MCP router, so an MCP server with
+    the same name would be unreachable.
+    """
+    registry = getattr(request.app.state, "rest_proxy_registry", None)
+    if registry is not None and id in registry:
+        raise HTTPException(409, f"Id '{id}' is already used by a REST proxy server")
+
+
 def sanitize_input(value: Any) -> Any:
     """
     Sanitize user input to prevent MongoDB injection attacks.
@@ -763,6 +776,7 @@ async def add_server(
 
     id = config["id"]
     name = config["name"]
+    _reject_rest_server_id(request, id)
 
     # Check if server already exists (check both DB and in-memory)
     if id in manager.configs:
@@ -1007,6 +1021,7 @@ async def add_server_from_github(
                     f"Choose a different Server ID and try again, or set upsert=True to update.",
                 )
             manager.configs.pop(sid, None)  # evict stale in-memory entry if present
+            _reject_rest_server_id(request, sid)
 
             # Validate command and args for security (env is skipped here because
             # metadata.json from GitHub repos may use non-uppercase env key names,
@@ -4698,3 +4713,154 @@ async def get_generation_status(
         # Ensure the temporary client is closed to avoid resource leaks
         await client.close()
 
+
+
+# ==================== REST Proxy Servers ====================
+# REST proxies (services/rest_proxy.py) forward /{id}/... to a target URL.
+# Changes apply to the live route immediately; there is no start/stop step.
+
+def get_rest_registry(request: Request):
+    """The live REST proxy registry the /{id}/... route reads from."""
+    registry = getattr(request.app.state, "rest_proxy_registry", None)
+    if registry is None:
+        raise HTTPException(500, "REST proxy registry not initialized")
+    return registry
+
+
+def _rest_server_view(id: str, target_url: str, stored: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    view = {
+        "id": id,
+        "type": REST_PROXY_TYPE,
+        TARGET_FIELD: (stored or {}).get(TARGET_FIELD, target_url),
+        "target_url": target_url,
+        "path": f"/{id}/",
+        "persisted": stored is not None,
+    }
+    for key in ("created_at", "updated_at"):
+        if stored and stored.get(key):
+            view[key] = stored[key]
+    return view
+
+
+def _rest_server_entry(id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate a request body and return the restServers entry (without id)."""
+    body = sanitize_input(body)
+    if "id" in body and body["id"] != id:
+        raise HTTPException(400, "Field 'id' does not match the URL")
+    entry = {k: v for k, v in body.items() if k != "id"}
+    errors = validate_rest_server(id, entry)
+    if errors:
+        raise HTTPException(400, "; ".join(errors))
+    return entry
+
+
+async def _mcp_server_exists(manager, id: str) -> bool:
+    return id in manager.configs or bool(await manager.db.get_server_config(id))
+
+
+@router.get("/rest-servers")
+async def list_rest_servers(request: Request, token: str = Depends(get_token)):
+    """List REST proxy servers (from the config file and/or the database)."""
+    registry = get_rest_registry(request)
+    manager = get_server_manager(request)
+    stored = {doc["id"]: doc for doc in await manager.db.list_rest_servers()}
+    servers = [_rest_server_view(name, registry.get(name), stored.get(name)) for name in registry.names()]
+    return {"servers": servers, "count": len(servers)}
+
+
+@router.get("/rest-servers/{id}")
+async def get_rest_server(id: str, request: Request, token: str = Depends(get_token)):
+    """Get one REST proxy server."""
+    registry = get_rest_registry(request)
+    if id not in registry:
+        raise HTTPException(404, f"REST server '{id}' not found")
+    manager = get_server_manager(request)
+    return _rest_server_view(id, registry.get(id), await manager.db.get_rest_server(id))
+
+
+@router.post("/rest-servers")
+async def add_rest_server(
+    request: Request,
+    body: Dict[str, Any] = Body(
+        ...,
+        examples=[{"id": "gupshup-chat", "type": "rest-proxy", "target-rest-endpoint": "media.gupshup.com"}],
+    ),
+    token: str = Depends(get_token),
+):
+    """
+    Add a REST proxy server. Requests to /{id}/... are forwarded to the target.
+
+    Request Body:
+        id (str): Name used as the first path segment
+        type (str): Must be "rest-proxy"
+        target-rest-endpoint (str): Target URL or bare host (bare host means https)
+    """
+    id = body.get("id") if isinstance(body, dict) else None
+    if not isinstance(id, str) or not id:
+        raise HTTPException(400, "REST server id is required")
+    entry = _rest_server_entry(id, body)
+
+    registry = get_rest_registry(request)
+    manager = get_server_manager(request)
+    if id in registry or await manager.db.get_rest_server(id):
+        raise HTTPException(409, f"REST server '{id}' already exists")
+    if await _mcp_server_exists(manager, id):
+        raise HTTPException(409, f"Id '{id}' is already used by an MCP server")
+
+    persisted = await manager.db.save_rest_server({"id": id, **entry})
+    if not persisted:
+        logger.warning(f"REST server '{id}' not persisted; it will be lost on restart")
+    target_url = registry.register(id, entry)
+
+    await log_audit_event(manager.db, "add_rest_server", id, get_client_ip(request), {"target_url": target_url})
+    logger.info(f"Added REST server '{id}' -> {target_url}")
+    return {"message": f"REST server '{id}' added", "id": id, "target_url": target_url, "persisted": persisted}
+
+
+@router.put("/rest-servers/{id}")
+async def update_rest_server(
+    id: str,
+    request: Request,
+    body: Dict[str, Any] = Body(
+        ...,
+        examples=[{"type": "rest-proxy", "target-rest-endpoint": "https://media.gupshup.com"}],
+    ),
+    token: str = Depends(get_token),
+):
+    """Change the target of an existing REST proxy server."""
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Request body must be an object")
+    entry = _rest_server_entry(id, body)
+
+    registry = get_rest_registry(request)
+    if id not in registry:
+        raise HTTPException(404, f"REST server '{id}' not found")
+    manager = get_server_manager(request)
+
+    persisted = await manager.db.save_rest_server({"id": id, **entry})
+    if not persisted:
+        logger.warning(f"REST server '{id}' update not persisted; it will be lost on restart")
+    old_target = registry.get(id)
+    target_url = registry.register(id, entry)
+
+    await log_audit_event(
+        manager.db, "update_rest_server", id, get_client_ip(request),
+        {"old_target_url": old_target, "target_url": target_url},
+    )
+    logger.info(f"Updated REST server '{id}' -> {target_url}")
+    return {"message": f"REST server '{id}' updated", "id": id, "target_url": target_url, "persisted": persisted}
+
+
+@router.delete("/rest-servers/{id}")
+async def delete_rest_server(id: str, request: Request, token: str = Depends(get_token)):
+    """Delete a REST proxy server. Its /{id}/... route stops forwarding immediately."""
+    registry = get_rest_registry(request)
+    manager = get_server_manager(request)
+    deleted_db = await manager.db.delete_rest_server(id)
+    deleted_live = registry.unregister(id)
+    if not deleted_db and not deleted_live:
+        raise HTTPException(404, f"REST server '{id}' not found")
+
+    await log_audit_event(manager.db, "delete_rest_server", id, get_client_ip(request))
+    logger.info(f"Deleted REST server '{id}'")
+    return {"message": f"REST server '{id}' deleted", "id": id}

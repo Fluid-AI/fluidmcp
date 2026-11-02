@@ -293,6 +293,34 @@ class PersistenceBackend(ABC):
         """
         return 0
 
+    # ==================== REST Proxy Persistence ====================
+    # Non-abstract so backends without REST proxy storage keep working; their
+    # REST proxies live only in the in-process registry.
+
+    async def save_rest_server(self, config: Dict[str, Any]) -> bool:
+        """
+        Create or replace a REST proxy config (restServers entry plus its "id").
+
+        Args:
+            config: {"id", "type", "target-rest-endpoint"}
+
+        Returns:
+            True if persisted, False if this backend does not persist REST proxies
+        """
+        return False
+
+    async def get_rest_server(self, id: str) -> Optional[Dict[str, Any]]:
+        """Return one REST proxy config, or None."""
+        return None
+
+    async def list_rest_servers(self) -> List[Dict[str, Any]]:
+        """Return all REST proxy configs."""
+        return []
+
+    async def delete_rest_server(self, id: str) -> bool:
+        """Delete a REST proxy config. Returns True if one was deleted."""
+        return False
+
     def supports_rollback(self) -> bool:
         """
         Check if this backend supports model rollback/versioning.

@@ -418,6 +418,25 @@ class RestProxyRoute(BaseRoute):
         await response(scope, receive, send)
 
 
+async def load_rest_servers(persistence, registry: RestProxyRegistry) -> int:
+    """
+    Register every REST proxy stored in the persistence backend (fmcp serve startup).
+
+    An entry that no longer validates is logged and skipped rather than
+    stopping startup. Returns the number registered.
+    """
+    loaded = 0
+    for doc in await persistence.list_rest_servers():
+        name = doc.get("id")
+        entry = {k: doc[k] for k in ALLOWED_FIELDS if k in doc}
+        try:
+            registry.register(name, entry)
+            loaded += 1
+        except ValueError as e:
+            logger.error(f"Skipping stored REST server '{_sanitize_log_field(str(name))}': {e}")
+    return loaded
+
+
 def install_rest_proxy(app, registry: RestProxyRegistry, client: Optional[httpx.AsyncClient] = None) -> RestProxyRoute:
     """Put the REST proxy route ahead of every other route on the app."""
     route = RestProxyRoute(registry, root_path=os.environ.get("MCP_ROOT_PATH", ""), client=client)
