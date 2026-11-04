@@ -163,6 +163,12 @@ and add a "Required Variables" field to `ServerForm.tsx` (the real add/edit form
 real data). Since most cloned `metadata.json` won't set this, treat its
 absence as "unknown" (no warning), not "required."
 
+**Implementation note:** `GET .../instance/env` still reports `required: true` for a
+config key with no stored flag (legacy behavior), so "optional" must be stored as an
+explicit `required: false`. `ServerForm` therefore writes `required: false` for every
+key not in the Required Variables list once any `required` is declared
+(`src/lib/envPayload.ts`, covered by vitest).
+
 ## 5. API Changes Summary
 
 | Endpoint | Change | PR |

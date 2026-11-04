@@ -97,3 +97,18 @@ class TestRequiredFlag:
             servers = client.get("/api/servers").json()["servers"]
             cfg = next(s for s in servers if s["id"] == "srv")["config"]
             assert cfg["env_metadata"] == {"K": {"required": False, "description": "d"}}
+
+    def test_update_can_unset_required_with_explicit_false(self, manager):
+        with TestClient(_make_app(manager)) as client:
+            client.post("/api/servers", json=_body({
+                "A": {"value": "v", "required": True},
+                "B": {"value": "v", "required": True},
+            }))
+            resp = client.put("/api/servers/srv", json=_body({
+                "A": {"value": "v", "required": True},
+                "B": {"value": "v", "required": False},
+            }))
+            assert resp.status_code == 200, resp.text
+            meta = client.get("/api/servers/srv/instance/env").json()
+            assert meta["A"]["required"] is True
+            assert meta["B"]["required"] is False

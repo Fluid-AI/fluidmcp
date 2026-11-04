@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react';
+import { buildEnvPayload } from '../lib/envPayload';
+import type { EnvDeclarations } from '../types/server';
 
 interface ServerFormProps {
   mode: 'create' | 'edit';
@@ -16,7 +18,7 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
     command: initialData?.config?.command || '',
     args: initialData?.config?.args?.join(' ') || '',
     env: Object.entries(initialData?.config?.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
-    requiredEnv: Object.entries(initialData?.config?.env_metadata || {})
+    requiredEnv: Object.entries((initialData?.config?.env_metadata ?? {}) as EnvDeclarations)
       .filter(([, m]) => m?.required)
       .map(([k]) => k)
       .join(', '),
@@ -105,23 +107,7 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
       }
     });
 
-    // Keys with declared metadata are sent as {value, ...metadata}; the rest stay plain strings.
-    // Existing metadata (required:false, descriptions) is preserved; the Required field only
-    // controls the `required` flag.
-    const existingMeta = initialData?.config?.env_metadata || {};
-    const requiredKeys = new Set(
-      formData.requiredEnv.split(',').map(k => k.trim()).filter(Boolean)
-    );
-    const richEnv: Record<string, string | { value: string; required?: boolean; description?: string }> = {};
-    Object.entries(env).forEach(([k, v]) => {
-      const meta = { ...(existingMeta[k] || {}) };
-      if (requiredKeys.has(k)) {
-        meta.required = true;
-      } else if (meta.required === true) {
-        delete meta.required;
-      }
-      richEnv[k] = Object.keys(meta).length > 0 ? { value: v, ...meta } : v;
-    });
+    const richEnv = buildEnvPayload(env, formData.requiredEnv, initialData?.config?.env_metadata);
 
     const payload: any = {
       name: formData.name,

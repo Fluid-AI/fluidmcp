@@ -28,10 +28,10 @@ export interface ServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
-  env_metadata?: EnvMetadata;  // Declared per-key env flags (absent => unknown)
+  env_metadata?: EnvDeclarations;  // Declared per-key env flags (absent => unknown)
 }
 
-export type EnvMetadata = Record<string, { required?: boolean; description?: string }>;
+export type EnvDeclarations = Record<string, { required?: boolean; description?: string }>;
 
 export interface Server {
   id: string;
