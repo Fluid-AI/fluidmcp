@@ -72,6 +72,7 @@ class TestRequiredFlag:
             assert "env_metadata" not in manager.configs["srv"]
 
     @pytest.mark.parametrize("bad", [
+        {"K": {"required": True}},
         {"K": {"value": 1}},
         {"K": {"value": "v", "required": "yes"}},
         {"K": {"value": "v", "description": 5}},
@@ -87,3 +88,12 @@ class TestRequiredFlag:
             resp = client.put("/api/servers/srv", json=_body({"K": "v"}))
             assert resp.status_code == 200, resp.text
             assert "env_metadata" not in manager.configs["srv"]
+
+    def test_list_servers_exposes_env_metadata_in_config(self, manager):
+        with TestClient(_make_app(manager)) as client:
+            client.post("/api/servers", json=_body({
+                "K": {"value": "v", "required": False, "description": "d"},
+            }))
+            servers = client.get("/api/servers").json()["servers"]
+            cfg = next(s for s in servers if s["id"] == "srv")["config"]
+            assert cfg["env_metadata"] == {"K": {"required": False, "description": "d"}}

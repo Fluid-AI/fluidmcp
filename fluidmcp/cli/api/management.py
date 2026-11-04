@@ -602,7 +602,9 @@ def _normalize_env_with_metadata(config: Dict[str, Any]) -> None:
         if not isinstance(entry, dict):
             flat[key] = entry
             continue
-        value = entry.get("value", "")
+        if "value" not in entry:
+            raise HTTPException(400, f"Env '{key}': 'value' is required")
+        value = entry["value"]
         if not isinstance(value, str):
             raise HTTPException(400, f"Env '{key}': 'value' must be a string")
         required = entry.get("required")

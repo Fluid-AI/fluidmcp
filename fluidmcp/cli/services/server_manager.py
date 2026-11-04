@@ -755,6 +755,8 @@ class ServerManager:
                     "args": config.get("args", []),
                     "env": config.get("env", {})
                 }
+                if config.get("env_metadata"):
+                    mcp_config["env_metadata"] = config["env_metadata"]
 
             # Build response with nested structure
             server_info = {

@@ -28,14 +28,16 @@ export interface ServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  env_metadata?: EnvMetadata;  // Declared per-key env flags (absent => unknown)
 }
+
+export type EnvMetadata = Record<string, { required?: boolean; description?: string }>;
 
 export interface Server {
   id: string;
   name: string;
   description?: string;
   config: ServerConfig;
-  env_metadata?: Record<string, { required?: boolean; description?: string }>; // Declared per-key env flags
   enabled: boolean;
   deleted_at?: string;             // Soft delete timestamp
   status?: ServerStatus;
