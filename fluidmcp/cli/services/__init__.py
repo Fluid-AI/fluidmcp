@@ -2,7 +2,10 @@ from .package_installer import install_package
 from .package_installer import parse_package_string
 from .env_manager import edit_env_variables
 from .config_resolver import ServerConfig, resolve_config
-from .run_servers import run_servers, get_llm_processes, get_llm_health_monitor
+# Don't re-export the run_servers *function*: it would rebind this package's
+# `run_servers` attribute from the submodule to the function, and on Python 3.10
+# mock.patch("fluidmcp.cli.services.run_servers.X") then resolves to the function.
+from .run_servers import get_llm_processes, get_llm_health_monitor
 from .github_utils import (
     normalize_github_repo,
     clone_github_repo,
@@ -27,7 +30,6 @@ __all__ = [
     "parse_package_string",
     "ServerConfig",
     "resolve_config",
-    "run_servers",
     "get_llm_processes",
     "get_llm_health_monitor",
     "normalize_github_repo",

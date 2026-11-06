@@ -15,8 +15,8 @@ from .services import (
     edit_env_variables,
     parse_package_string,
     resolve_config,
-    run_servers,
 )
+from .services.run_servers import run_servers
 from .services.package_installer import package_exists
 from .services.package_list import get_latest_version_dir
 from .services.config_resolver import INSTALLATION_DIR

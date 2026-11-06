@@ -10,6 +10,7 @@ Run with: pytest tests/test_replicate_integration.py -v -m integration
 import pytest
 import os
 import asyncio
+import httpx
 from fluidmcp.cli.services.replicate_client import ReplicateClient
 from fluidmcp.cli.services.replicate_openai_adapter import (
     replicate_chat_completion,
