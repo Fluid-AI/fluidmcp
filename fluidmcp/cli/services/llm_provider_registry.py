@@ -9,6 +9,8 @@ import threading
 from typing import Dict, Optional, List
 from loguru import logger
 
+from ..utils.redact import register_secrets_from_mapping
+
 
 # Global registry mapping model_id -> config
 _llm_models_config: Dict[str, dict] = {}
@@ -28,6 +30,8 @@ def initialize_llm_registry(llm_models: Dict[str, dict]) -> None:
                    Each entry should have a "type" field (vllm, replicate, ollama, etc.)
     """
     global _llm_models_config
+    # Make API keys/tokens in model configs known to the log redactor
+    register_secrets_from_mapping(llm_models)
     with _registry_lock:
         _llm_models_config = llm_models.copy()
 
@@ -70,7 +74,11 @@ def get_model_config(model_id: str) -> Optional[dict]:
         Model configuration dict or None if not found
     """
     with _registry_lock:
-        return _llm_models_config.get(model_id).copy() if model_id in _llm_models_config else None
+        config = _llm_models_config.get(model_id).copy() if model_id in _llm_models_config else None
+    if config:
+        # Models added at runtime (REST API / DB) bypass initialize_llm_registry
+        register_secrets_from_mapping(config)
+    return config
 
 
 def get_model_type(model_id: str) -> Optional[str]:

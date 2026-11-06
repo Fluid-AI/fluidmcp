@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional, AsyncIterator, List
 from loguru import logger
 
 # Import rate limiter and cache at module level for efficiency
+from ..utils.redact import register_secret
 from .rate_limiter import get_rate_limiter, configure_rate_limiter, remove_rate_limiter
 from .response_cache import get_response_cache
 
@@ -87,6 +88,9 @@ class ReplicateClient:
             self.api_key = api_key_expanded
         else:
             self.api_key = api_key_raw
+
+        # Make the (expanded) key known to the log redactor
+        register_secret(self.api_key)
 
         # Validate API key is not empty or whitespace-only
         if not self.api_key:

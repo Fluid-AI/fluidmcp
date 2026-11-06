@@ -14,6 +14,7 @@ from pymongo.errors import DuplicateKeyError as PyMongoDuplicateKeyError, Connec
 from loguru import logger
 from .base import PersistenceBackend, DuplicateKeyError
 from ..utils.env_utils import is_placeholder
+from ..utils.redact import redact_log_entry
 
 
 def mask_mongodb_uri(uri: str) -> str:
@@ -30,18 +31,16 @@ def mask_mongodb_uri(uri: str) -> str:
         return uri
 
     try:
-        parts = uri.split('@')
-        if len(parts) != 2:
-            return uri
-
-        prefix_with_creds = parts[0]
-        host_and_path = parts[1]
+        # Split on the LAST '@' so an unencoded '@' in the password cannot
+        # cause the raw URI (and password) to be returned.
+        prefix_with_creds, host_and_path = uri.rsplit('@', 1)
 
         if '://' in prefix_with_creds:
             protocol, _ = prefix_with_creds.split('://', 1)
             return f"{protocol}://***:***@{host_and_path}"
 
-        return uri
+        # Unrecognized shape: fail closed rather than echo credentials
+        return "mongodb://***:***@[masked]"
     except Exception:
         return "mongodb://***:***@[masked]"
 
@@ -838,6 +837,9 @@ class DatabaseManager(PersistenceBackend):
         if "timestamp" not in log_entry:
             log_entry["timestamp"] = datetime.utcnow()
 
+        # SECURITY: never persist secrets from server output
+        redact_log_entry(log_entry)
+
         try:
             await self.db.fluidmcp_server_logs.insert_one(log_entry)
             self._log_buffer.success_count += 1
@@ -924,7 +926,11 @@ class DatabaseManager(PersistenceBackend):
             # Reverse to get chronological order
             logs.reverse()
 
-            return logs
+            # Drop Mongo's ObjectId (not JSON-serializable; list_crash_events does the
+            # same) and sanitize entries stored before redaction existed.
+            for entry in logs:
+                entry.pop("_id", None)
+            return [redact_log_entry(entry) for entry in logs]
 
         except Exception as e:
             logger.error(f"Error retrieving logs: {e}")
@@ -1199,7 +1205,7 @@ class DatabaseManager(PersistenceBackend):
     async def save_crash_event(self, event: Dict[str, Any]) -> bool:
         """Save a server crash event to MongoDB."""
         try:
-            doc = dict(event)
+            doc = redact_log_entry(dict(event))  # SECURITY: stderr_tail etc.
             doc["timestamp"] = doc.get("timestamp", datetime.utcnow())
             await self.db.fluidmcp_crash_events.insert_one(doc)
             logger.info(f"Saved crash event for server '{event.get('server_id')}' (exit_code={event.get('exit_code')})")
@@ -1217,6 +1223,7 @@ class DatabaseManager(PersistenceBackend):
             events = await cursor.to_list(length=limit)
             for event in events:
                 event.pop("_id", None)
+                redact_log_entry(event)  # SECURITY: covers pre-existing entries
             return events
         except Exception as e:
             logger.error(f"Error listing crash events for '{server_id}': {e}")

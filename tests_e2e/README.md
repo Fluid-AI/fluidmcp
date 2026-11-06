@@ -1,3 +1,9 @@
+# E2E tests
+
+- `test_response_isolation.py` - Streamable HTTP response isolation (below).
+- `test_security_redaction.py` - credential redaction and API authentication
+  (PR #967); see [Security redaction suite](#security-redaction-suite).
+
 # Streamable HTTP response-isolation E2E tests
 
 From the repository root:
@@ -74,3 +80,39 @@ logs are under `~/.fluidmcp/logs/`, keyed by unique test server names.
 Append `-k jsonrpc` or `-k tools-call` to select an endpoint. Tests do not skip,
 accept, or mark known failures `xfail`. See [BASELINE.md](BASELINE.md) for the
 original HTTP failure and the verification results after the fix.
+
+# Security redaction suite
+
+```bash
+/tmp/fluidmcp-e2e-venv/bin/python -m pytest -c tests_e2e/pytest.ini tests_e2e/test_security_redaction.py -s
+```
+
+Additionally requires **Docker** and **openssl**: a throwaway MongoDB container
+(`mongo:7.0`, override with `FMCP_E2E_MONGO_IMAGE`) runs with TLS from a
+test-only CA, because FluidMCP always connects with TLS and validates
+certificates. The root password deliberately contains `@ : / # %`. The
+container is removed after the run. No real credentials or network access to
+GitHub are used: every credential is a per-run dummy value, and
+`mock_github.py` serves real git Smart HTTP (via `git http-backend`) on
+localhost with GitHub-style token auth, redirected with `url.insteadOf`.
+
+Helpers: `leaky_mcp_server.py` (real MCP server that prints dummy secrets and
+optionally crashes), `logging_harness.py` (production logging/Sentry setup in
+a fresh process), `mock_github.py`.
+
+Covered end to end with the real source CLI (`serve`, `run`, `github`):
+GitHub clone/auto-reclone/from-github auth via `GITHUB_TOKEN` (wire-level
+credential checks, git argv, `.git/config`); MongoDB URI masking and
+fail-fast startup; bearer token handling across restarts; authentication of
+every documented route; sanitization of MCP child output in logs, APIs and
+MongoDB records (including legacy raw records); all credential categories in
+loguru, stdlib logging, tracebacks, API errors and Sentry envelopes; and
+regressions for normal MCP traffic, metrics and `run --secure`. A final test
+sweeps every captured artifact for any secret.
+
+Known, documented exception: per-server stderr files under
+`~/.fluidmcp/logs/` are written directly by the child process and stay raw on
+disk (owner-only `0600`); every reader sanitizes them.
+
+Run against `development` without PR #967, 27 of the 30 tests fail; the 3
+that pass are regression checks.

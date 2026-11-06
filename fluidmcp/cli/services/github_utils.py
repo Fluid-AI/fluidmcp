@@ -9,14 +9,242 @@ This module provides functionality to:
 """
 
 import json
+import os
 import re
+import shutil
+import stat
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Iterator
 from loguru import logger
+
+from ..utils.redact import redact_secrets, register_secret
 
 
 DEFAULT_GITHUB_BRANCH = "main"
+
+# Name of the env var that carries the token from FluidMCP to the askpass
+# helper. It is set ONLY in the environment of the git subprocess, never in
+# os.environ, so unrelated subprocesses (MCP servers, LLM servers) never see it.
+_ASKPASS_TOKEN_ENV = "FMCP_GIT_ASKPASS_TOKEN"
+
+# Disable any configured credential helper (store/cache/manager) so the token
+# is neither read from nor persisted to a helper. An empty value resets the
+# helper list. Contains no secret, so it is safe on the command line.
+_GIT_NO_CREDENTIAL_HELPER = ["-c", "credential.helper="]
+
+# Markers in git stderr that indicate an authentication problem.
+_AUTH_ERROR_MARKERS = (
+    "authentication failed",
+    "invalid username or password",
+    "invalid username or token",
+    "invalid credentials",
+    "bad credentials",
+    "could not read username",
+    "could not read password",
+    "terminal prompts disabled",
+    "password authentication is not supported",
+    "the requested url returned error: 401",
+)
+_NOT_FOUND_MARKERS = (
+    "repository not found",
+    "could not find remote ref",
+    "remote branch",  # "Remote branch X not found in upstream origin"
+    "not found in upstream",
+)
+_PERMISSION_MARKERS = (
+    "permission denied",
+    "the requested url returned error: 403",
+    "write access to repository not granted",
+)
+_NETWORK_MARKERS = (
+    "could not resolve host",
+    "network",
+    "connection",
+    "timed out",
+)
+
+
+def _clean_repo_url(owner: str, repo: str) -> str:
+    """Credential-free HTTPS clone URL."""
+    return f"https://github.com/{owner}/{repo}.git"
+
+
+def _askpass_script_contents() -> Tuple[str, str]:
+    """
+    Return (filename, contents) of a GIT_ASKPASS helper for this platform.
+
+    The helper answers git's username prompt with ``x-access-token`` and the
+    password prompt with the token read from the subprocess environment. The
+    token itself is never written to disk.
+    """
+    if os.name == "nt":
+        return "askpass.bat", (
+            "@echo off\r\n"
+            "echo %~1 | findstr /B /I \"Username\" >nul\r\n"
+            f"if %errorlevel%==0 (echo x-access-token) else (echo %{_ASKPASS_TOKEN_ENV}%)\r\n"
+        )
+    return "askpass.sh", (
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  Username*|username*) printf '%s\\n' 'x-access-token' ;;\n"
+        f"  *) printf '%s\\n' \"${_ASKPASS_TOKEN_ENV}\" ;;\n"
+        "esac\n"
+    )
+
+
+@contextmanager
+def _git_auth_env(github_token: Optional[str]) -> Iterator[Dict[str, str]]:
+    """
+    Build an environment for a git subprocess that authenticates via GIT_ASKPASS.
+
+    - The token is passed only through this env dict (not argv, not URL, not disk).
+    - The askpass helper lives in a private temp dir (0700) and is removed on exit.
+    - GIT_TERMINAL_PROMPT=0 makes git fail fast instead of trying to prompt
+      on a non-existent terminal (the source of "could not read Password").
+
+    Yields:
+        Environment dict to pass as ``env=`` to subprocess.run.
+    """
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"  # Git Credential Manager: never pop up UI
+
+    if not github_token:
+        yield env
+        return
+
+    register_secret(github_token)
+    tmp_dir = tempfile.mkdtemp(prefix="fmcp-git-askpass-")
+    try:
+        os.chmod(tmp_dir, stat.S_IRWXU)  # 0700
+        filename, contents = _askpass_script_contents()
+        script_path = os.path.join(tmp_dir, filename)
+        fd = os.open(script_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRWXU)  # 0700
+        with os.fdopen(fd, "w", newline="") as fh:
+            fh.write(contents)
+
+        env["GIT_ASKPASS"] = script_path
+        env[_ASKPASS_TOKEN_ENV] = github_token
+        # Ensure SSH_ASKPASS does not take precedence over GIT_ASKPASS
+        env.pop("SSH_ASKPASS", None)
+        yield env
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _summarize_git_output(output: str, github_token: Optional[str], max_lines: int = 5) -> str:
+    """Redact and shorten git stderr for inclusion in an error message."""
+    sanitized = redact_secrets(output or "", extra_secrets=[github_token])
+    lines = [line.strip() for line in sanitized.splitlines() if line.strip()]
+    if not lines:
+        return "no output"
+    return " | ".join(lines[-max_lines:])
+
+
+def _build_clone_error(
+    owner: str,
+    repo: str,
+    branch: str,
+    returncode: Optional[int],
+    stderr: str,
+    github_token: Optional[str],
+) -> RuntimeError:
+    """
+    Turn a failed ``git clone`` into a sanitized, actionable RuntimeError.
+
+    Raw git stderr is never propagated: it is redacted (token, URL credentials,
+    Base64 forms) and summarized before being included.
+    """
+    stderr_lower = (stderr or "").lower()
+    repo_ref = f"{owner}/{repo}"
+    git_detail = _summarize_git_output(stderr, github_token)
+
+    if any(marker in stderr_lower for marker in _AUTH_ERROR_MARKERS):
+        reason = "GitHub authentication failed"
+        causes = [
+            "Invalid, revoked or expired GitHub token (check GITHUB_TOKEN / FMCP_GITHUB_TOKEN)",
+            "Fine-grained token not granted access to this repository",
+            "Token lacks 'Contents: Read' (fine-grained) or 'repo' scope (classic) for private repos",
+        ]
+        suggestion = "Generate a new token at https://github.com/settings/tokens and update GITHUB_TOKEN"
+    elif any(marker in stderr_lower for marker in _NOT_FOUND_MARKERS):
+        reason = "Repository or branch not found"
+        causes = [
+            f"Repository '{repo_ref}' does not exist (check spelling)",
+            f"Branch '{branch}' does not exist",
+            "Repository is private and the token cannot access it",
+        ]
+        suggestion = "Verify the repository and branch exist and the token has access"
+    elif any(marker in stderr_lower for marker in _PERMISSION_MARKERS):
+        reason = "Permission denied"
+        causes = [
+            "Token lacks permission to read this repository",
+            "Organization requires SSO authorization for the token",
+        ]
+        suggestion = "Check repository visibility, token permissions and SSO authorization"
+    elif any(marker in stderr_lower for marker in _NETWORK_MARKERS):
+        reason = "Network error"
+        causes = [
+            "No internet connection or GitHub is unreachable",
+            "Firewall or proxy blocking access",
+        ]
+        suggestion = "Check your network connection and try again"
+    else:
+        reason = "Unexpected git error"
+        causes = []
+        suggestion = "Check GitHub authentication and repository permissions"
+
+    lines = [
+        f"Repository cloning failed for {repo_ref}, branch {branch}. "
+        f"Check GitHub authentication and repository permissions.",
+        f"  Reason: {reason}",
+        f"  Exit code: {returncode}",
+        f"  Git error: {git_detail}",
+    ]
+    if causes:
+        lines.append("  Possible causes:")
+        lines.extend(f"    - {cause}" for cause in causes)
+    lines.append(f"  Suggestion: {suggestion}")
+    return RuntimeError("\n".join(lines))
+
+
+_URL_WITH_CREDENTIALS = re.compile(r"url\s*=\s*\w[\w+.\-]*://[^/\s@]+@", re.IGNORECASE)
+
+
+def _scrub_remote_credentials(repo_dir: Path, owner: str, repo: str) -> None:
+    """
+    Remove credentials from the ``origin`` remote of an existing clone.
+
+    Clones made by older FluidMCP versions stored ``https://<token>@github.com/...``
+    in ``.git/config``. That file is readable by the MCP server processes that run
+    inside the repo directory, and git echoes the URL in error output. Rewrite it
+    to the clean URL. Only runs git when credentials are actually present.
+    """
+    git_config = repo_dir / ".git" / "config"
+    try:
+        if not git_config.is_file() or not _URL_WITH_CREDENTIALS.search(git_config.read_text(errors="ignore")):
+            return
+    except OSError:
+        return
+
+    try:
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", _clean_repo_url(owner, repo)],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            timeout=10,
+            text=True,
+        )
+        logger.info(f"Removed stored credentials from git remote of {owner}/{repo}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(
+            f"Could not remove stored credentials from git remote of {owner}/{repo}: "
+            f"{type(e).__name__}"
+        )
 
 
 def normalize_github_repo(repo_path: str) -> Tuple[str, str]:
@@ -93,89 +321,41 @@ def clone_github_repo(
     # Check if already cloned
     if dest_dir.exists() and any(dest_dir.iterdir()):
         logger.info(f"Repository already cloned at {dest_dir}, reusing existing files")
+        _scrub_remote_credentials(dest_dir, owner, repo)
         return dest_dir
 
-    # Clone with depth=1 for faster cloning
-    clone_url = f"https://{github_token}@github.com/{owner}/{repo}.git"
+    # SECURITY: the URL never contains credentials. The token is supplied to
+    # git through GIT_ASKPASS (see _git_auth_env), so it cannot appear in the
+    # process argument list, in git's error output, or in .git/config.
+    clone_url = _clean_repo_url(owner, repo)
 
-    try:
-        result = subprocess.run(
-            [
-                "git",
-                "clone",
-                "--depth", "1",
-                "--branch", target_branch,
-                clone_url,
-                str(dest_dir),
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        logger.info(f"Cloned {owner}/{repo}@{target_branch} to {dest_dir}")
-        return dest_dir
-
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.strip() if e.stderr else ""
-        stderr_lower = stderr.lower()
-
-        # Construct GitHub URL for error messages (without token)
-        github_url = f"https://github.com/{owner}/{repo}"
-
-        # Detect specific error types and provide actionable messages
-        if "authentication failed" in stderr_lower or "invalid username or password" in stderr_lower:
-            raise RuntimeError(
-                f"Authentication failed when cloning {github_url}\n"
-                f"  Branch: {target_branch}\n"
-                f"  Possible causes:\n"
-                f"    - Invalid GitHub token (check FMCP_GITHUB_TOKEN or GITHUB_TOKEN)\n"
-                f"    - Token lacks required permissions (needs 'repo' scope for private repos)\n"
-                f"    - Token has expired\n"
-                f"  Suggestion: Generate a new token at https://github.com/settings/tokens"
+    with _git_auth_env(github_token) as git_env:
+        try:
+            subprocess.run(
+                [
+                    "git",
+                    *_GIT_NO_CREDENTIAL_HELPER,
+                    "clone",
+                    "--depth", "1",
+                    "--branch", target_branch,
+                    clone_url,
+                    str(dest_dir),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=git_env,
             )
+        except subprocess.CalledProcessError as e:
+            # `from None` drops the CalledProcessError (which holds raw stderr)
+            # from the exception chain so it can never show up in a traceback.
+            raise _build_clone_error(
+                owner, repo, target_branch, e.returncode, e.stderr or "", github_token
+            ) from None
 
-        elif "repository not found" in stderr_lower or "could not find remote ref" in stderr_lower:
-            raise RuntimeError(
-                f"Repository or branch not found: {github_url}\n"
-                f"  Branch: {target_branch}\n"
-                f"  Possible causes:\n"
-                f"    - Repository doesn't exist (check spelling: '{owner}/{repo}')\n"
-                f"    - Branch '{target_branch}' doesn't exist\n"
-                f"    - Repository is private and token lacks access\n"
-                f"  Suggestion: Verify the repository exists and is accessible"
-            )
-
-        elif "permission denied" in stderr_lower or "403" in stderr_lower:
-            raise RuntimeError(
-                f"Permission denied when accessing {github_url}\n"
-                f"  Branch: {target_branch}\n"
-                f"  Possible causes:\n"
-                f"    - Repository is private and requires authentication\n"
-                f"    - Token lacks required permissions\n"
-                f"    - You don't have access to this repository\n"
-                f"  Suggestion: Check repository visibility and token permissions"
-            )
-
-        elif "could not resolve host" in stderr_lower or "network" in stderr_lower or "connection" in stderr_lower:
-            raise RuntimeError(
-                f"Network error when cloning {github_url}\n"
-                f"  Branch: {target_branch}\n"
-                f"  Possible causes:\n"
-                f"    - No internet connection\n"
-                f"    - GitHub is unreachable\n"
-                f"    - Firewall or proxy blocking access\n"
-                f"  Suggestion: Check your network connection and try again"
-            )
-
-        else:
-            # Generic error with original message
-            raise RuntimeError(
-                f"Failed to clone {github_url}\n"
-                f"  Branch: {target_branch}\n"
-                f"  Git error: {stderr if stderr else 'Unknown error'}\n"
-                f"  Suggestion: Check the repository URL and your GitHub token"
-            )
+    logger.info(f"Cloned {owner}/{repo}@{target_branch} to {dest_dir}")
+    return dest_dir
 
 
 def find_readme_file(directory: Path) -> Path:
@@ -433,21 +613,29 @@ def clone_or_update_repo(
 
     if dest_dir.exists() and any(dest_dir.iterdir()):
         logger.info(f"Repository already cloned at {dest_dir}, pulling latest changes...")
-        try:
-            subprocess.run(
-                ["git", "pull", "--rebase"],
-                cwd=dest_dir,
-                check=True,
-                capture_output=True,
-                timeout=30,
-                text=True,
-            )
-            logger.info(f"Successfully pulled latest changes for {owner}/{repo}@{target_branch}")
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr.strip() if e.stderr else "unknown error"
-            logger.warning(f"git pull --rebase failed (using existing clone): {stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("git pull --rebase timed out (using existing clone)")
+        # Older clones stored the token in the remote URL; remove it first so
+        # the pull authenticates via GIT_ASKPASS instead.
+        _scrub_remote_credentials(dest_dir, owner, repo)
+        with _git_auth_env(token) as git_env:
+            try:
+                subprocess.run(
+                    ["git", *_GIT_NO_CREDENTIAL_HELPER, "pull", "--rebase"],
+                    cwd=dest_dir,
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                    text=True,
+                    env=git_env,
+                )
+                logger.info(f"Successfully pulled latest changes for {owner}/{repo}@{target_branch}")
+            except subprocess.CalledProcessError as e:
+                detail = _summarize_git_output(e.stderr or "", token)
+                logger.warning(
+                    f"git pull --rebase failed for {owner}/{repo}@{target_branch} "
+                    f"(exit code {e.returncode}, using existing clone): {detail}"
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("git pull --rebase timed out (using existing clone)")
         return dest_dir
 
     logger.info(f"No existing clone found, cloning {owner}/{repo}@{target_branch}...")

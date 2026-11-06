@@ -21,13 +21,21 @@ from pathlib import Path
 from uvicorn import Config, Server
 
 from .repositories import DatabaseManager, InMemoryBackend, PersistenceBackend
+from .repositories.database import mask_mongodb_uri
 from .services.server_manager import ServerManager, MCPHealthMonitor
 from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
 from .api.inspector import router as inspector_router, cleanup_sessions
-from .auth import verify_token
+from .auth import verify_token, announce_generated_token
+from .utils.redact import (
+    install_log_redaction,
+    install_redacting_exception_handlers,
+    install_stream_redaction,
+    redact_jsonable,
+    redact_secrets,
+)
 
 
 import sentry_sdk
@@ -56,15 +64,18 @@ def init_sentry() -> None:
                 FastApiIntegration(),
                 AsyncioIntegration(),
             ],
-            # Filter out health check and metrics noise from error tracking
+            # Filter out health check and metrics noise from error tracking, and
+            # redact secrets from exception messages, stack frames and breadcrumbs.
             before_send=lambda event, hint: (
                 None
                 if any(
                     path in event.get("request", {}).get("url", "")
                     for path in ["/health", "/metrics"]
                 )
-                else event
+                else redact_jsonable(event)
             ),
+            send_default_pii=False,
+            include_local_variables=False,  # locals may hold tokens/API keys
         )
         logger.info(
             f"✅ Sentry initialized (env: {os.getenv('ENVIRONMENT', 'production')})"
@@ -89,13 +100,23 @@ def _json_sink(message):
     }
     if record["exception"]:
         import traceback
-        entry["exc"] = "".join(traceback.format_exception(*record["exception"]))
+        # Tracebacks (including chained exceptions) are formatted here, after the
+        # record patcher ran, so they must be redacted separately.
+        entry["exc"] = redact_secrets(
+            "".join(traceback.format_exception(*record["exception"]))
+        )
+    # Defense in depth: the patcher already redacted msg/extra fields.
+    entry["msg"] = redact_secrets(entry["msg"])
     print(json.dumps(entry), file=sys.stderr, flush=True)
 
 def _configure_json_logging() -> None:
     """Switch loguru to the JSON sink. Called once at server startup, not at import time."""
     logger.remove()
-    logger.add(_json_sink, level="DEBUG", colorize=False, format="{message}")
+    install_log_redaction()
+    # Console output of the server process is the deployment log: also redact
+    # print(), uncaught tracebacks and warnings written to stdout/stderr.
+    install_stream_redaction()
+    logger.add(_json_sink, level="DEBUG", colorize=False, format="{message}", diagnose=False)
 
 def save_token_to_file(token: str) -> Path:
     """
@@ -166,6 +187,8 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
 
     # Store persistence backend for cleanup
     app.state.persistence = db_manager
+
+    install_redacting_exception_handlers(app)
 
     # CORS setup - secure by default
     if allowed_origins is None:
@@ -658,7 +681,8 @@ async def main(args):
         db_connected = await persistence.connect()
     
     else:  # mongodb (default)
-        logger.info(f"Using MongoDB persistence backend at {args.mongodb_uri}")
+        # SECURITY: never log the raw URI - it contains the database password
+        logger.info(f"Using MongoDB persistence backend at {mask_mongodb_uri(args.mongodb_uri)}")
         persistence: PersistenceBackend = DatabaseManager(
             mongodb_uri=args.mongodb_uri,
             database_name=args.database
@@ -867,18 +891,11 @@ def run():
             # Save to secure file
             token_file = save_token_to_file(args.token)
 
-            # Print full token to console (NOT in logs)
-            print("\n" + "="*70)
-            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-            print("="*70)
-            print(f"\n{args.token}\n")
-            print("="*70)
-            print(f"Token saved to: {token_file}")
-            print("To retrieve later: fluidmcp token show")
-            print("="*70 + "\n")
+            # Show token on an interactive terminal only (never in deployment logs)
+            announce_generated_token(args.token, token_file)
 
-            # Only log masked version (show first 8 chars for better identification)
-            logger.info(f"Bearer token generated (starts with: {args.token[:8]}{'*' * (len(args.token) - 8)})")
+            # SECURITY: never log any part of the token (not even a prefix)
+            logger.info("Bearer token generated (value not logged)")
 
     try:
         asyncio.run(main(args))

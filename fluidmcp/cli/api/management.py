@@ -15,6 +15,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from loguru import logger
 import os
+import secrets
 import asyncio
 import httpx
 import time
@@ -64,6 +65,7 @@ from ..utils.env_utils import is_placeholder, has_env_var_syntax
 # All stdin writes / stdout reads for stdio servers go through the per-process
 # StdioJsonRpcRouter: one stdout reader, responses matched by JSON-RPC ID.
 from ..services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
+from ..utils.redact import redact_secrets
 from ..services.metrics import MetricsCollector, get_registry as _get_metrics_registry
 
 try:
@@ -152,29 +154,11 @@ def sanitize_error_message(error_msg: str) -> str:
     Returns:
         Sanitized error message with credentials redacted
     """
-    import re
+    # Delegates to the shared redaction module (single source of truth), which
+    # also covers GitHub tokens, URL credentials and Base64-encoded secrets.
+    from ..utils.redact import sanitize_error_message as _sanitize
 
-    if not isinstance(error_msg, str):
-        return str(error_msg)
-
-    # Redact Replicate API keys (r8_followed by alphanumeric)
-    error_msg = re.sub(r'\br8_[A-Za-z0-9]{20,}\b', 'r8_***REDACTED***', error_msg)
-
-    # Redact common API key patterns (sk_, pk_, tok_, key_ prefixes)
-    error_msg = re.sub(r'\b(sk|pk|tok|key)_[A-Za-z0-9_-]{10,}\b', r'\1_***REDACTED***', error_msg, flags=re.IGNORECASE)
-
-    # Redact Bearer tokens
-    error_msg = re.sub(r'Bearer\s+[A-Za-z0-9_\-\.]{20,}', 'Bearer ***REDACTED***', error_msg, flags=re.IGNORECASE)
-
-    # Redact long alphanumeric strings that look like tokens (20+ chars, mixed case/numbers)
-    # But only if they contain both letters and numbers (to avoid false positives with regular words)
-    error_msg = re.sub(
-        r'\b(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9_\-\.]{20,}\b',
-        '***REDACTED***',
-        error_msg
-    )
-
-    return error_msg
+    return _sanitize(error_msg)
 
 
 def get_client_ip(request: Request) -> str:
@@ -415,7 +399,16 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
     if not secure_mode:
         return None
-    if not credentials or credentials.scheme.lower() != "bearer" or credentials.credentials != bearer_token:
+    # Constant-time comparison prevents timing attacks on the token value.
+    # A missing/empty configured token never authenticates anyone.
+    if (
+        not bearer_token
+        or not credentials
+        or credentials.scheme.lower() != "bearer"
+        or not secrets.compare_digest(
+            credentials.credentials.encode("utf-8"), bearer_token.encode("utf-8")
+        )
+    ):
         raise HTTPException(status_code=401, detail="Invalid or missing authorization token")
     return credentials.credentials
 
@@ -1091,7 +1084,12 @@ async def add_server_from_github(
         raise HTTPException(500, f"Internal error: {truncate_error(str(e))}")
 
 @router.get("/servers")
-async def list_servers(request: Request, enabled_only: bool = True, include_deleted: bool = False):
+async def list_servers(
+    request: Request,
+    enabled_only: bool = True,
+    include_deleted: bool = False,
+    token: str = Depends(get_token),
+):
     """
     List all configured servers with their status.
 
@@ -1730,7 +1728,7 @@ async def stop_all_servers(request: Request, token: str = Depends(get_token)):
 # ==================== Status & Information ====================
 
 @router.get("/servers/{id}/status")
-async def get_server_status(request: Request, id: str):
+async def get_server_status(request: Request, id: str, token: str = Depends(get_token)):
     """
     Get detailed status of a server.
 
@@ -1754,7 +1752,8 @@ async def get_server_status(request: Request, id: str):
 async def get_server_logs(
     request: Request,
     id: str,
-    lines: int = Query(100, description="Number of recent log lines")
+    lines: int = Query(100, description="Number of recent log lines"),
+    token: str = Depends(get_token),
 ):
     """
     Get recent logs for a server.
@@ -2098,7 +2097,8 @@ async def get_server_debug(
                     f.seek(-read_bytes, os.SEEK_END)
                 data = f.read()
             text = data.decode("utf-8", errors="replace")
-            all_lines = text.splitlines()
+            # SECURITY: child-written file - sanitize before returning via API
+            all_lines = redact_secrets(text).splitlines()
             if truncated and len(all_lines) > 1:
                 all_lines = all_lines[1:]
             tail = all_lines[-stderr_lines:]
@@ -2125,7 +2125,7 @@ async def get_server_debug(
 # ==================== Environment Variable Management ====================
 
 @router.get("/servers/{id}/instance/env")
-async def get_server_instance_env(request: Request, id: str):
+async def get_server_instance_env(request: Request, id: str, token: str = Depends(get_token)):
     """
     Get environment variable metadata for a server instance.
 
@@ -2322,7 +2322,7 @@ async def delete_server_instance_env(
 # ==================== Tool Discovery & Execution (PDF Spec) ====================
 
 @router.get("/servers/{id}/tools")
-async def get_server_tools(request: Request, id: str):
+async def get_server_tools(request: Request, id: str, token: str = Depends(get_token)):
     """
     Get discovered tools for a server.
 
@@ -2827,8 +2827,9 @@ async def get_llm_model_logs(
                 buffer = data + buffer
                 newline_count = buffer.count(b"\n")
 
-        # Decode and split into lines
-        text = buffer.decode("utf-8", errors="ignore")
+        # Decode and split into lines.
+        # SECURITY: the LLM process writes this file directly - sanitize before returning.
+        text = redact_secrets(buffer.decode("utf-8", errors="ignore"))
         all_lines_read = text.splitlines(keepends=True)
         recent_lines = all_lines_read[-lines:] if len(all_lines_read) > lines else all_lines_read
 
