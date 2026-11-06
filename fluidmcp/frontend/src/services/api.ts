@@ -152,12 +152,22 @@ class ApiClient {
     params: ToolExecutionRequest
   ): Promise<ToolExecutionResponse> {
     return this.request<ToolExecutionResponse>(
-      `/api/servers/${serverId}/tools/${toolName}/run`,
+      // Encode segments: toolName can come from an MCP App widget, and an unencoded
+      // '../' would let it address another server's tools
+      `/api/servers/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}/run`,
       {
         method: 'POST',
         body: JSON.stringify(params),
       }
     );
+  }
+
+  // MCP Apps: fetch a ui:// widget resource from a managed server
+  async readServerResource(serverId: string, uri: string): Promise<any> {
+    return this.request(`/api/servers/${encodeURIComponent(serverId)}/resources/read`, {
+      method: 'POST',
+      body: JSON.stringify({ uri }),
+    });
   }
 
   // Server Logs API
@@ -307,7 +317,7 @@ class ApiClient {
     toolName: string,
     params: Record<string, any>
   ): Promise<any> {
-    return this.request(`/api/inspector/${sessionId}/tools/${toolName}/run`, {
+    return this.request(`/api/inspector/${encodeURIComponent(sessionId)}/tools/${encodeURIComponent(toolName)}/run`, {
       method: "POST",
       body: JSON.stringify(params),
     });

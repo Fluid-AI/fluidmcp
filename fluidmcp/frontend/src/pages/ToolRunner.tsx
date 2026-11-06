@@ -4,6 +4,8 @@ import { apiClient } from '../services/api';
 import { useToolRunner } from '../hooks/useToolRunner';
 import { JsonSchemaForm } from '../components/form/JsonSchemaForm';
 import { ToolResult } from '../components/result/ToolResult';
+import { WidgetSandbox } from '../components/WidgetSandbox';
+import { getWidgetResourceUri } from '../lib/mcp-apps';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import type { Server, Tool } from '../types/server';
 import { Navbar } from '@/components/Navbar';
@@ -21,6 +23,8 @@ export const ToolRunner: React.FC = () => {
   const [formValues, setFormValues] = useState<Record<string, any> | undefined>(undefined);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [paramsCollapsed, setParamsCollapsed] = useState(false);
+  // Arguments of the latest run (widgets receive them via ui/notifications/tool-input)
+  const [lastArgs, setLastArgs] = useState<Record<string, any>>({});
 
   const {
     execute,
@@ -91,6 +95,7 @@ export const ToolRunner: React.FC = () => {
   }, [serverId, toolName]);
 
   const handleSubmit = async (values: Record<string, any>) => {
+    setLastArgs(values);
     await execute(values);
     // Refresh server status so the auto-start banner clears after the server starts
     try {
@@ -157,6 +162,7 @@ export const ToolRunner: React.FC = () => {
 
   const hasResult = result !== null || !!executionError;
   const showCollapsed = hasResult && paramsCollapsed;
+  const widgetUri = result !== null && !executionError ? getWidgetResourceUri(tool, result) : undefined;
 
   return (
     <div className="dashboard" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -392,6 +398,17 @@ export const ToolRunner: React.FC = () => {
               error={executionError || undefined}
               loading={executing}
               executionTime={executionTime}
+              widget={widgetUri && (
+                <WidgetSandbox
+                  host={{
+                    readResource: (uri) => apiClient.readServerResource(serverId!, uri),
+                    callTool: (name, args) => apiClient.runTool(serverId!, name, args),
+                  }}
+                  resourceUri={widgetUri}
+                  toolInput={lastArgs}
+                  toolResult={result}
+                />
+              )}
             />
           </div>
         )}
