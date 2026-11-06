@@ -18,8 +18,8 @@ interface PollingResult {
 }
 
 export function usePolling(): PollingResult {
-  const timeoutRef = useRef<number | null>(null);
-  const intervalRef = useRef<number | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isPolling, setIsPolling] = useState(false);
 
   const stopPolling = useCallback(() => {
