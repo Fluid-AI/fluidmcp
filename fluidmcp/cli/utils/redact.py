@@ -285,38 +285,48 @@ def register_secret(value: Any) -> None:
                 register_secret(unquote(password))
 
 
-def register_secrets_from_mapping(obj: Any, _parent_key: Optional[str] = None) -> None:
+def collect_secrets_from_mapping(obj: Any, _parent_key: Optional[str] = None, _found: Optional[set] = None) -> set:
     """
-    Walk a configuration (dicts/lists) and register every value stored under a
+    Walk a configuration (dicts/lists) and return every value stored under a
     sensitive key - e.g. ``env.OPENAI_API_KEY``, ``api_key``, ``headers.Authorization``,
-    ``github_token`` - plus URL values that embed credentials.
-
-    Call this whenever a configuration enters the process (config file, REST API,
-    database) so that secrets which never reach ``os.environ`` are still redacted.
+    ``github_token`` - plus URL values that embed credentials and values passed as
+    ``--api-key VALUE`` / ``--api-key=VALUE`` in argument lists.
     """
+    found = set() if _found is None else _found
     if isinstance(obj, Mapping):
         for key, value in obj.items():
             if isinstance(value, str):
                 if is_sensitive_name(key) or _has_url_credentials(value):
-                    register_secret(value)
+                    found.add(value)
             else:
-                register_secrets_from_mapping(value, key if isinstance(key, str) else None)
+                collect_secrets_from_mapping(value, key if isinstance(key, str) else None, found)
     elif isinstance(obj, (list, tuple, set)):
         items = list(obj)
         for index, item in enumerate(items):
             if isinstance(item, str):
                 if _has_url_credentials(item):
-                    register_secret(item)
-                # Command-line style: "--api-key VALUE" or "--api-key=VALUE"
+                    found.add(item)
                 if item.startswith("-"):
                     flag, has_value, value = item.partition("=")
                     if _is_sensitive_flag(flag):
                         if has_value:
-                            register_secret(value)
+                            found.add(value)
                         elif index + 1 < len(items) and isinstance(items[index + 1], str):
-                            register_secret(items[index + 1])
+                            found.add(items[index + 1])
             else:
-                register_secrets_from_mapping(item, _parent_key)
+                collect_secrets_from_mapping(item, _parent_key, found)
+    return found
+
+
+def register_secrets_from_mapping(obj: Any) -> None:
+    """
+    Register every secret found by :func:`collect_secrets_from_mapping`.
+
+    Call this whenever a configuration enters the process (config file, REST API,
+    database) so that secrets which never reach ``os.environ`` are still redacted.
+    """
+    for value in collect_secrets_from_mapping(obj):
+        register_secret(value)
 
 
 def _env_secrets() -> List[str]:
@@ -406,14 +416,15 @@ def sanitize_error_message(error_msg: Any) -> str:
     return error_msg
 
 
-def redact_jsonable(obj: Any) -> Any:
+def redact_jsonable(obj: Any, extra_secrets: Iterable[Any] = ()) -> Any:
     """Recursively redact every string inside JSON-like data (dicts, lists)."""
+    extra = tuple(extra_secrets)
     if isinstance(obj, str):
-        return redact_secrets(obj)
+        return redact_secrets(obj, extra_secrets=extra)
     if isinstance(obj, Mapping):
-        return {k: redact_jsonable(v) for k, v in obj.items()}
+        return {k: redact_jsonable(v, extra) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
-        return [redact_jsonable(v) for v in obj]
+        return [redact_jsonable(v, extra) for v in obj]
     return obj
 
 
@@ -670,10 +681,18 @@ def install_redacting_exception_handlers(app) -> None:
     @app.exception_handler(RequestValidationError)
     async def _redacted_validation_error(request, exc: RequestValidationError):
         errors = jsonable_encoder(exc.errors())
+        # Sensitive values submitted in this request body (e.g. a raw api_key) are
+        # redacted wherever pydantic echoes them: input, msg or ctx.
+        submitted = collect_secrets_from_mapping(getattr(exc, "body", None))
         for error in errors:
-            if isinstance(error, dict) and "input" in error:
+            if not isinstance(error, dict) or "input" not in error:
+                continue
+            loc = error.get("loc") or ()
+            if loc and is_sensitive_name(str(loc[-1])):
+                error["input"] = REDACTED  # the field itself is a credential
+            else:
                 error["input"] = redact_mapping(error["input"])
-        return JSONResponse(status_code=422, content={"detail": redact_jsonable(errors)})
+        return JSONResponse(status_code=422, content={"detail": redact_jsonable(errors, submitted)})
 
 
 class RedactingStream:

@@ -264,7 +264,8 @@ class TestChildProcessOutput:
         class FakeCollection:
             async def insert_one(self, doc): inserted.append(dict(doc))
             def find(self, *a, **k):
-                return FakeCursor([{"server_name": "srv", "content": f"legacy {OPAQUE_KEY}", "timestamp": 1}])
+                return FakeCursor([{"_id": object(), "server_name": "srv", "content": f"legacy {OPAQUE_KEY}",
+                                    "timestamp": 1}])
 
         class FakeDB:
             fluidmcp_server_logs = FakeCollection()
@@ -283,6 +284,7 @@ class TestChildProcessOutput:
         logs = asyncio.run(run())
         assert all(OPAQUE_KEY not in str(doc) for doc in inserted) and len(inserted) == 2
         assert logs[0]["content"] == f"legacy {REDACTED}"
+        assert "_id" not in logs[0], "ObjectId must be dropped (not JSON-serializable for the /logs API)"
 
     async def test_crashing_mcp_server_end_to_end(self, tmp_path, loguru_capture, monkeypatch):
         """A real MCP subprocess that prints its env API key and argv key, then crashes."""
@@ -510,6 +512,27 @@ class TestApiErrorResponses:
         assert r.status_code == 422
         assert OPAQUE_KEY not in r.text and JWT not in r.text
         assert "count" in r.text  # still tells the client what is wrong
+
+    def test_validation_error_on_sensitive_field_never_echoes_its_value(self):
+        """An opaque, unregistered credential in a sensitive field must not come back in a 422."""
+
+        class Model(BaseModel):
+            name: str
+            api_key: int  # wrong type on purpose: pydantic echoes the submitted value as input
+
+        app = FastAPI()
+        install_redacting_exception_handlers(app)
+
+        @app.post("/m")
+        def endpoint(body: Model):
+            return {}
+
+        opaque = "opaque-unregistered-value-" + X
+        r = TestClient(app).post("/m", json={"name": 5, "api_key": opaque, "nested": {"password": opaque + "2"}})
+        assert r.status_code == 422
+        assert opaque not in r.text
+        locs = [tuple(e["loc"]) for e in r.json()["detail"]]
+        assert ("body", "api_key") in locs and ("body", "name") in locs  # still actionable
 
     def test_all_gateway_apps_install_handlers(self):
         for module in ("fluidmcp/cli/server.py", "fluidmcp/cli/services/run_servers.py", "fluidmcp/cli/cli.py"):

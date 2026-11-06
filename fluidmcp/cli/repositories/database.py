@@ -926,7 +926,10 @@ class DatabaseManager(PersistenceBackend):
             # Reverse to get chronological order
             logs.reverse()
 
-            # SECURITY: also sanitize entries stored before redaction existed
+            # Drop Mongo's ObjectId (not JSON-serializable; list_crash_events does the
+            # same) and sanitize entries stored before redaction existed.
+            for entry in logs:
+                entry.pop("_id", None)
             return [redact_log_entry(entry) for entry in logs]
 
         except Exception as e:
