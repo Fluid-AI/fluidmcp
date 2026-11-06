@@ -585,6 +585,45 @@ def sanitize_input(value: Any) -> Any:
         return value
 
 
+def _normalize_env_with_metadata(config: Dict[str, Any]) -> None:
+    """
+    Split rich env entries into flat env values plus ``env_metadata``.
+
+    ``env`` values may be a plain string (required-ness unknown) or an object
+    ``{"value": str, "required": bool, "description": str}``. The process
+    spawn path only understands flat strings, so ``config["env"]`` is rewritten
+    to ``{key: value}`` and the declared flags go to ``config["env_metadata"]``.
+    Plain strings produce no metadata entry. Mutates ``config`` in place.
+    """
+    env = config.get("env")
+    if not isinstance(env, dict):
+        return
+    flat: Dict[str, str] = {}
+    metadata: Dict[str, Dict[str, Any]] = dict(config.get("env_metadata") or {})
+    for key, entry in env.items():
+        if not isinstance(entry, dict):
+            flat[key] = entry
+            continue
+        if "value" not in entry:
+            raise HTTPException(400, f"Env '{key}': 'value' is required")
+        value = entry["value"]
+        if not isinstance(value, str):
+            raise HTTPException(400, f"Env '{key}': 'value' must be a string")
+        required = entry.get("required")
+        if required is not None and not isinstance(required, bool):
+            raise HTTPException(400, f"Env '{key}': 'required' must be a boolean")
+        description = entry.get("description")
+        if description is not None and (not isinstance(description, str) or len(description) > 500):
+            raise HTTPException(400, f"Env '{key}': 'description' must be a string up to 500 chars")
+        flat[key] = value
+        declared = {k: v for k, v in (("required", required), ("description", description)) if v is not None}
+        if declared:
+            metadata[key] = declared
+    config["env"] = flat
+    if metadata:
+        config["env_metadata"] = metadata
+
+
 def validate_server_config(config: Dict[str, Any]) -> None:
     """
     Validate server configuration to prevent command injection and ensure safety.
@@ -758,6 +797,8 @@ async def add_server(
     if "name" not in config:
         raise HTTPException(400, "Server name is required")
 
+    _normalize_env_with_metadata(config)
+
     # Validate configuration for security
     validate_server_config(config)
 
@@ -785,10 +826,12 @@ async def add_server(
     manager.configs[id] = config
 
     logger.info(f"Added server configuration: {name} (id: {id})")
+    unfilled_env = manager._get_unfilled_env_keys(config)
     return {
         "message": f"Server '{name}' configured successfully",
         "id": id,
-        "name": name
+        "name": name,
+        "unfilled_env": unfilled_env
     }
 
 
@@ -1058,6 +1101,7 @@ async def add_server_from_github(
                 "id": sid,
                 "name": display_name,
                 "status": "validated" if test_before_save else "added",
+                "unfilled_env": manager._get_unfilled_env_keys(server_config),
             })
             logger.info(f"Added GitHub server: {display_name} (id: {sid})")
 
@@ -1204,6 +1248,8 @@ async def get_server(request: Request, id: str, token: str = Depends(get_token))
     except Exception as e:
         logger.warning(f"Failed to load crash summary for '{id}': {e}")
 
+    status = {**status, "unfilled_env": manager._get_unfilled_env_keys(config)}
+
     return {
         "id": id,
         "name": config.get("name"),
@@ -1267,6 +1313,8 @@ async def update_server(
     # Validate required fields
     if "name" not in config:
         raise HTTPException(400, "Server name is required")
+
+    _normalize_env_with_metadata(config)
 
     # Validate configuration for security
     validate_server_config(config)
@@ -1439,9 +1487,11 @@ async def start_server(
     pid = process.pid if process else None
 
     logger.info(f"Started server '{id}' via API")
+    unfilled_env = manager._get_unfilled_env_keys(config)
     return {
         "message": f"Server '{id}' started successfully",
-        "pid": pid
+        "pid": pid,
+        "unfilled_env": unfilled_env
     }
 
 
@@ -2156,6 +2206,9 @@ async def get_server_instance_env(request: Request, id: str):
     # Get config env (default/required env vars from config)
     config_env = config.get("env", {})
 
+    # Declared per-key flags (absent => unknown, treated as required as before)
+    env_metadata = config.get("env_metadata") or {}
+
     # Build metadata response
     metadata = {}
 
@@ -2166,9 +2219,11 @@ async def get_server_instance_env(request: Request, id: str):
         has_value = bool(value and value.strip() and not is_placeholder(value))
         metadata[key] = {
             "present": has_value,
-            "required": True,  # All env vars in config are considered required
+            # Honor an explicit flag; keys without one stay required (unchanged behavior)
+            "required": env_metadata.get(key, {}).get("required", True),
             "masked": "****" if has_value else None,
-            "description": f"Environment variable for {config.get('name', id)}"
+            "description": env_metadata.get(key, {}).get("description")
+            or f"Environment variable for {config.get('name', id)}"
         }
 
     # Add any instance env vars not in config (user-added)

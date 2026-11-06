@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import apiClient from '../services/api';
+import { showWarning } from '../services/toast';
 import type { ServerDetailsResponse, ToolsResponse } from '../types/server';
 
 export function useServerDetails(serverId: string) {
@@ -80,7 +81,12 @@ export function useServerDetails(serverId: string) {
   // Server control actions
   const startServer = async () => {
     try {
-      await apiClient.startServer(serverId);
+      const response = await apiClient.startServer(serverId);
+      if (response.unfilled_env && response.unfilled_env.length > 0) {
+        showWarning(
+          `${response.unfilled_env.length} env var(s) still need real values: ${response.unfilled_env.join(', ')}`
+        );
+      }
       // NOTE: This refetch will be replaced by polling in follow-up PR
       if (isMountedRef.current) {
         await fetchDetails();

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiClient, { ApiHttpError } from '../services/api';
+import { showWarning } from '../services/toast';
 import type { CloneFromGithubServerResult } from '../types/server';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -230,7 +231,12 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
   async function handleStart(id: string) {
     setStartingId(id);
     try {
-      await apiClient.startServer(id);
+      const response = await apiClient.startServer(id);
+      if (response.unfilled_env && response.unfilled_env.length > 0) {
+        showWarning(
+          `${response.unfilled_env.length} env var(s) still need real values: ${response.unfilled_env.join(', ')}`
+        );
+      }
       onSuccess(); // refetch so status updates in table
     } catch (err) {
       // Ignore — user can start manually from manage page
@@ -323,27 +329,38 @@ export function CloneFromGithubForm({ onSuccess, onCancel }: Props) {
           {createdServers.map((server) => (
             <div
               key={server.id}
-              className="flex items-center justify-between bg-zinc-800/50 border border-zinc-700/50 rounded-lg px-4 py-3"
+              className="bg-zinc-800/50 border border-zinc-700/50 rounded-lg px-4 py-3"
             >
-              <div>
-                <p className="text-sm font-medium text-white">{server.name}</p>
-                <p className="text-xs text-zinc-400 font-mono">{server.id}</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-white">{server.name}</p>
+                  <p className="text-xs text-zinc-400 font-mono">{server.id}</p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleStart(server.id)}
+                    disabled={startingId === server.id}
+                    className="px-3 py-1 text-xs bg-green-700 hover:bg-green-600 disabled:opacity-50 disabled:cursor-wait text-white rounded-lg transition-colors"
+                  >
+                    {startingId === server.id ? 'Starting…' : 'Start'}
+                  </button>
+                  <button
+                    onClick={() => navigate(`/servers/${server.id}`)}
+                    className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors"
+                  >
+                    View Details
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => handleStart(server.id)}
-                  disabled={startingId === server.id}
-                  className="px-3 py-1 text-xs bg-green-700 hover:bg-green-600 disabled:opacity-50 disabled:cursor-wait text-white rounded-lg transition-colors"
-                >
-                  {startingId === server.id ? 'Starting…' : 'Start'}
-                </button>
-                <button
-                  onClick={() => navigate(`/servers/${server.id}`)}
-                  className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors"
-                >
-                  View Details
-                </button>
-              </div>
+              {server.unfilled_env && server.unfilled_env.length > 0 && (
+                <p className="mt-2 text-xs text-yellow-400 flex items-start space-x-1">
+                  <span>⚠️</span>
+                  <span>
+                    {server.unfilled_env.length} env var(s) still need real values:{' '}
+                    <span className="font-mono">{server.unfilled_env.join(', ')}</span>
+                  </span>
+                </p>
+              )}
             </div>
           ))}
         </div>

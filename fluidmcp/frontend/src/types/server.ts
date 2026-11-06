@@ -10,6 +10,8 @@ export interface ServerStatus {
   restart_count: number;
   exit_code?: number | null;
   env?: Record<string, string>; // Instance environment variables (for presence check)
+  last_error?: string | null;
+  unfilled_env?: string[];      // Config env keys still empty or placeholder-shaped
 }
 
 export interface Tool {
@@ -26,7 +28,10 @@ export interface ServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
+  env_metadata?: EnvDeclarations;  // Declared per-key env flags (absent => unknown)
 }
+
+export type EnvDeclarations = Record<string, { required?: boolean; description?: string }>;
 
 export interface Server {
   id: string;
@@ -158,6 +163,7 @@ export interface CloneFromGithubServerResult {
   id: string;
   name: string;
   status: 'validated' | 'added';
+  unfilled_env?: string[];      // Config env keys still empty or placeholder-shaped
 }
 
 export interface CloneFromGithubResponse {

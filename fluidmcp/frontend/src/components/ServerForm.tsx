@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react';
+import { buildEnvPayload } from '../lib/envPayload';
+import type { EnvDeclarations } from '../types/server';
 
 interface ServerFormProps {
   mode: 'create' | 'edit';
@@ -16,6 +18,10 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
     command: initialData?.config?.command || '',
     args: initialData?.config?.args?.join(' ') || '',
     env: Object.entries(initialData?.config?.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'),
+    requiredEnv: Object.entries((initialData?.config?.env_metadata ?? {}) as EnvDeclarations)
+      .filter(([, m]) => m?.required)
+      .map(([k]) => k)
+      .join(', '),
     enabled: initialData?.enabled ?? true,
   });
 
@@ -101,12 +107,14 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
       }
     });
 
+    const richEnv = buildEnvPayload(env, formData.requiredEnv, initialData?.config?.env_metadata);
+
     const payload: any = {
       name: formData.name,
       description: formData.description,
       command: formData.command,
       args,
-      env,
+      env: richEnv,
       enabled: formData.enabled,
     };
 
@@ -259,6 +267,19 @@ export const ServerForm: React.FC<ServerFormProps> = ({ mode, initialData, exist
         />
         <p className="mt-1 text-xs text-zinc-400">
           One per line in KEY=value format
+        </p>
+        <label className="block text-sm font-medium text-zinc-200 mt-3 mb-2">
+          Required Variables <span className="text-zinc-400 font-normal">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={formData.requiredEnv}
+          onChange={(e) => setFormData({ ...formData, requiredEnv: e.target.value })}
+          className="w-full px-3 py-2 bg-zinc-800/50 border border-zinc-700 text-white placeholder-zinc-400 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+          placeholder="API_KEY, DATABASE_URL"
+        />
+        <p className="mt-1 text-xs text-zinc-400">
+          Comma-separated keys the server cannot run without
         </p>
       </div>
 
