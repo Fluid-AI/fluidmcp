@@ -129,6 +129,55 @@ Timers (callers run `check_timers()` every few seconds):
 Every failure raises `ProtocolError`. The caller closes the WebSocket with code **1008** and an empty reason. The
 internal `code` is logged locally and never sent to the peer.
 
+## Security properties
+
+What is protected:
+
+- **Encrypted and authenticated:** every message after the handshake (`hello`, `request`, `response`, `error`,
+  re-key records), with AES-256-GCM.
+- **Authenticated but not encrypted:** the handshake messages (timestamps, ephemeral and identity public keys,
+  nonces, connector ID). They contain no secrets.
+- **Protected only by TLS:** the WebSocket upgrade request, including the tunnel token and `X-Connector-Id`.
+
+How each property is checked (see `tests/test_tunnel_protocol.py`):
+
+| Property | Mechanism |
+|---|---|
+| Server authentication | `sig_S` over the transcript, checked against 1–2 pinned GPT Engine keys |
+| Client authentication | `sig_C` over a transcript that includes the server's fresh `eph_pub_S` and `nonce_S` |
+| Handshake replay | A replayed CLIENT_FINISH fails against a new SERVER_HELLO. A replayed SERVER_HELLO fails against a new CLIENT_HELLO. Each handshake object accepts each message once |
+| Stale handshake | Both hellos carry a timestamp that must be within ±60 s; the whole handshake must finish within 10 s |
+| Record replay, reordering, loss | `seq` must equal the expected value; it never resets within a connection |
+| Record tampering | GCM tag over the inner message, with `sender_dir ‖ key_no ‖ seq` as associated data |
+| Cross-session or reflected records | Keys come from each connection's transcript; separate keys and `sender_dir` per direction |
+| Nonce reuse | The nonce is the per-direction `seq` under a per-direction key; at most 2²⁰ records per key, and `seq` < 2⁶³ |
+| Forward secrecy | Ephemeral X25519 per connection and per re-key; the chaining key ties each re-key to the earlier keys |
+
+Records carry no timestamps. Freshness comes from the per-connection keys, the sequence numbers and the timers
+(re-key every hour; the server closes a key older than 2 hours).
+
+Not protected:
+
+- **Stolen site key and token.** Anyone holding both can complete the handshake as the site. With only the
+  token, the handshake fails.
+- **Stolen GPT Engine private key.** Anyone holding it can act as GPT Engine to every site that pins it.
+- **Application-level duplicates.** The protocol delivers each record once. It doesn't stop the GPT Engine
+  application from sending two `request` messages with the same `id`; the FluidMCP client handles that above the
+  protocol, within the limits in [TUNNEL.md](TUNNEL.md#duplicate-request-ids).
+- **Metadata.** Message sizes and timing, and the connector ID in the handshake.
+- **Availability.** Anyone who can reach the endpoint can open connections.
+
+## Keys
+
+| Key | Where it lives | Created by | Rotation |
+|---|---|---|---|
+| Site identity (Ed25519) | FluidMCP host, `FMCP_TUNNEL_KEY_PATH` (default `~/.fmcp/tunnel/identity.key`), base64, mode 0600 (loading refuses group or other access) | `fmcp tunnel keygen` | `keygen --rotate`, then register the new public key with GPT Engine, run `activate-new-key`, restart, and remove the old key from GPT Engine |
+| GPT Engine identity (Ed25519) | GPT Engine secret store (`MCP_TUNNEL_SERVER_PRIVATE_KEY`); sites hold only the public key in `FMCP_TUNNEL_SERVER_PUBLIC_KEYS` | GPT Engine | Sites list both public keys during the change, then drop the old one |
+| Session keys | Memory only, per connection | Handshake / re-key | Every hour, or every 100 000 records |
+
+Each side accepts at most two identity keys at once, which is enough for one rotation at a time. Keys are loaded at
+startup, so a change takes effect after a restart.
+
 ## Using the module
 
 ```python

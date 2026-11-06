@@ -6,11 +6,14 @@ requests it receives to this gateway's own /{server}/mcp route on localhost.
 """
 
 import asyncio
+import hashlib
 import json
 import random
 import time
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Sequence, Set
+from typing import Any, Dict, Optional, Sequence, Set, Tuple
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -32,6 +35,20 @@ from .protocol import (
 
 class TunnelAuthError(Exception):
     """GPT Engine rejected the token or the handshake; retrying quickly would not help."""
+
+
+@dataclass
+class _Operation:
+    """One accepted request id. Every message carrying that id shares `task` and its outcome."""
+
+    fingerprint: str
+    task: asyncio.Task
+
+
+@dataclass
+class _Completed:
+    fingerprint: str
+    finished_at: float
 
 
 class _Connection:
@@ -56,6 +73,15 @@ class TunnelClient:
     MAX_BACKOFF = 60.0
     STABLE_AFTER = 30.0
     LOCAL_CONNECT_RETRY = 10.0
+    # A request id is never executed twice while it is in flight, or for DEDUP_WINDOW seconds after it
+    # finished (within this process). New ids are refused, not executed, if that would exceed DEDUP_MAX_IDS.
+    DEDUP_WINDOW = 600.0
+    DEDUP_MAX_IDS = 50_000
+    # Finished replies kept for duplicates; beyond this the oldest bodies are dropped (the ids are kept).
+    DEDUP_MAX_RESULT_BYTES = 64 * 1024 * 1024
+    MAX_REQUEST_ID_LEN = 128
+    # A request that gets a concurrency slot with less time left than this is not sent to the gateway.
+    MIN_CALL_TIME = 0.5
 
     def __init__(
         self,
@@ -86,7 +112,11 @@ class TunnelClient:
         self._env = env
         self._transport = transport
         self._semaphore = asyncio.Semaphore(max_concurrency)
-        self._requests: Set[asyncio.Task] = set()
+        self._deliveries: Set[asyncio.Task] = set()
+        self._inflight: Dict[str, _Operation] = {}
+        self._completed: "OrderedDict[str, _Completed]" = OrderedDict()
+        self._results: "OrderedDict[str, Tuple[Dict[str, Any], int]]" = OrderedDict()
+        self._result_bytes = 0
         self._task: Optional[asyncio.Task] = None
         self._connection: Optional[_Connection] = None
         self._last_connected_at: Optional[float] = None
@@ -109,6 +139,11 @@ class TunnelClient:
         except asyncio.CancelledError:
             pass
         self._task = None
+        # Calls that outlived their connection keep running until their deadline; stop them now.
+        operations = [op.task for op in self._inflight.values()]
+        for task in operations:
+            task.cancel()
+        await asyncio.gather(*operations, return_exceptions=True)
         self._log.info("Tunnel client stopped")
 
     def is_running(self) -> bool:
@@ -193,7 +228,9 @@ class TunnelClient:
                 await ws.close(1008)
                 raise
             finally:
-                for task in tasks + list(self._requests):
+                # Only the replies tied to this connection stop. Operations already accepted run to their
+                # deadline, so a duplicate of the same id after a reconnect gets their outcome.
+                for task in tasks + list(self._deliveries):
                     task.cancel()
                 self._connection = None
                 metrics.set_connected(False)
@@ -230,56 +267,223 @@ class TunnelClient:
                 continue
             if not isinstance(request, dict) or request.get("type") != "request":
                 continue
-            task = asyncio.create_task(self._handle(conn, http, request))
-            self._requests.add(task)
-            task.add_done_callback(self._requests.discard)
+            request_id = request.get("id")
+            if not isinstance(request_id, str) or not 0 < len(request_id) <= self.MAX_REQUEST_ID_LEN:
+                self._log.warning("Ignoring tunnel request without a valid id")
+                continue
+            self._dispatch(conn, http, request_id, request)
 
-    async def _handle(self, conn: _Connection, http: httpx.AsyncClient, request: Dict[str, Any]) -> None:
-        request_id, server, body = request.get("id"), request.get("server"), request.get("body")
-        if not isinstance(request_id, str):
-            self._log.warning("Ignoring tunnel request without an id")
+    def _dispatch(self, conn: _Connection, http: httpx.AsyncClient, request_id: str, request: Dict[str, Any]) -> None:
+        """
+        Start the request, or attach to the operation already started for its id.
+
+        Synchronous on purpose: the lookup and the registration of a new operation cannot be
+        interleaved with another message, so one id can only ever start one operation.
+        """
+        fingerprint = _fingerprint(request)
+        self._expire_completed()
+
+        operation = self._inflight.get(request_id)
+        if operation is not None:
+            if operation.fingerprint != fingerprint:
+                self._reply_later(conn, self._duplicate_error(request_id, request, "payload_mismatch"))
+            else:
+                self._log.info(f"Duplicate tunnel request {request_id}: waiting for the original call")
+                metrics.record_duplicate(self._server_label(request))
+                self._deliver(conn, request_id, operation)
             return
+
+        completed = self._completed.get(request_id)
+        if completed is not None:
+            if completed.fingerprint != fingerprint:
+                self._reply_later(conn, self._duplicate_error(request_id, request, "payload_mismatch"))
+            elif request_id in self._results:
+                self._log.info(f"Duplicate tunnel request {request_id}: returning the original outcome")
+                metrics.record_duplicate(self._server_label(request))
+                self._reply_later(conn, self._results[request_id][0])
+            else:
+                self._reply_later(conn, self._duplicate_error(request_id, request, "outcome_expired"))
+            return
+
+        if len(self._inflight) + len(self._completed) >= self.DEDUP_MAX_IDS:
+            # Evicting a remembered id could let a duplicate run again; refuse the new id instead.
+            self._log.warning(f"Tunnel request {request_id} refused: duplicate-protection capacity reached")
+            metrics.record_request(self._server_label(request), "not_delivered", 0.0)
+            self._reply_later(conn, _not_delivered(request_id, "dedup_capacity"))
+            return
+
+        # The deadline starts when the request is accepted, so time spent queued counts against it.
+        deadline = time.monotonic() + self._request_timeout
+        operation = _Operation(fingerprint, asyncio.create_task(self._execute(http, request_id, request, deadline)))
+        self._inflight[request_id] = operation
+        operation.task.add_done_callback(lambda task: self._finish(request_id, operation))
+        self._deliver(conn, request_id, operation)
+
+    def _finish(self, request_id: str, operation: _Operation) -> None:
+        """Move a finished operation to the completed set; keep its reply for later duplicates."""
+        if self._inflight.get(request_id) is operation:
+            del self._inflight[request_id]
+        self._completed[request_id] = _Completed(operation.fingerprint, time.monotonic())
+        task = operation.task
+        if not task.cancelled() and task.exception() is None:
+            reply, size = task.result()
+            self._results[request_id] = (reply, size)
+            self._result_bytes += size
+            while self._result_bytes > self.DEDUP_MAX_RESULT_BYTES and self._results:
+                _, (_, dropped) = self._results.popitem(last=False)
+                self._result_bytes -= dropped
+        self._expire_completed()
+
+    def _expire_completed(self) -> None:
+        cutoff = time.monotonic() - self.DEDUP_WINDOW
+        while self._completed:
+            request_id, completed = next(iter(self._completed.items()))
+            if completed.finished_at > cutoff:
+                break
+            del self._completed[request_id]
+            if request_id in self._results:
+                _, size = self._results.pop(request_id)
+                self._result_bytes -= size
+
+    def _duplicate_error(self, request_id: str, request: Dict[str, Any], reason: str) -> Dict[str, Any]:
+        self._log.warning(f"Tunnel request {request_id} not executed: id already used ({reason})")
+        metrics.record_request(self._server_label(request), "duplicate_request", 0.0)
+        return {"type": "error", "id": request_id, "code": "duplicate_request", "reason": reason}
+
+    def _server_label(self, request: Dict[str, Any]) -> str:
+        server = request.get("server")
+        return server if server in self._allowed_servers else "-"  # keep metric labels bounded
+
+    def _deliver(self, conn: _Connection, request_id: str, operation: _Operation) -> None:
+        """Send the operation's reply on `conn` once it is ready."""
+
+        async def deliver() -> None:
+            try:
+                # shield: cancelling this reply (disconnect, or one duplicate going away) never
+                # cancels the shared operation.
+                reply, _ = await asyncio.shield(operation.task)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._log.exception(f"Tunnel request {request_id} failed")
+                reply = {"type": "error", "id": request_id, "code": "local_call_failed"}
+            await self._reply(conn, reply)
+
+        self._track(asyncio.create_task(deliver()))
+
+    def _reply_later(self, conn: _Connection, message: Dict[str, Any]) -> None:
+        self._track(asyncio.create_task(self._reply(conn, message)))
+
+    def _track(self, task: asyncio.Task) -> None:
+        self._deliveries.add(task)
+        task.add_done_callback(self._deliveries.discard)
+
+    async def _execute(
+        self, http: httpx.AsyncClient, request_id: str, request: Dict[str, Any], deadline: float
+    ) -> Tuple[Dict[str, Any], int]:
+        """Run one accepted request. Returns (reply, approximate size of the reply in bytes)."""
+        server, body = request.get("server"), request.get("body")
         if server not in self._allowed_servers:
             self._log.warning(f"Rejected tunnel request for server not in allowlist: {server!r}")
             metrics.record_request("-", "server_not_allowed", 0.0)
-            await self._reply(conn, {"type": "error", "id": request_id, "code": "server_not_allowed"})
-            return
+            return {"type": "error", "id": request_id, "code": "server_not_allowed"}, 0
         if not isinstance(body, dict):
             metrics.record_request(server, "bad_request", 0.0)
-            await self._reply(conn, {"type": "error", "id": request_id, "code": "bad_request"})
-            return
+            return {"type": "error", "id": request_id, "code": "bad_request"}, 0
 
         headers = {"X-Trace-ID": request_id}
         if self._local_token:
             headers["Authorization"] = f"Bearer {self._local_token}"
         started = time.monotonic()
-        async with self._semaphore:
+        reply, result, size = await self._call_gateway(http, request_id, server, body, headers, deadline)
+        metrics.record_request(server, result, time.monotonic() - started)
+        return reply, size
+
+    async def _call_gateway(
+        self,
+        http: httpx.AsyncClient,
+        request_id: str,
+        server: str,
+        body: Dict[str, Any],
+        headers: Dict[str, str],
+        deadline: float,
+    ) -> Tuple[Dict[str, Any], str, int]:
+        """
+        Wait for a concurrency slot and call the gateway, both within `deadline` (monotonic).
+
+        Returns (reply, metrics result, size). `not_delivered` means the gateway never received the
+        request; `local_timeout` and `local_call_failed` mean it may have, and the tool may still run.
+        """
+        if not await self._acquire_slot(deadline):
+            return _not_delivered(request_id, "queue_timeout"), "not_delivered", 0
+        try:
+            # Don't start a call that has almost no time left: its outcome would be unknown.
+            if deadline - time.monotonic() < min(self.MIN_CALL_TIME, self._request_timeout / 2):
+                return _not_delivered(request_id, "queue_timeout"), "not_delivered", 0
+            progress = {"maybe_sent": False}
             try:
-                response = await self._post_local(http, server, body, headers)
-            except httpx.TimeoutException:
-                reply, result = {"type": "error", "id": request_id, "code": "local_timeout"}, "local_timeout"
+                response = await asyncio.wait_for(
+                    self._post_local(http, server, body, headers, deadline, progress), deadline - time.monotonic()
+                )
+            except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+                if not progress["maybe_sent"] or isinstance(e, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+                    return _not_delivered(request_id, "gateway_unreachable"), "not_delivered", 0
+                return {"type": "error", "id": request_id, "code": "local_timeout"}, "local_timeout", 0
+            except httpx.ConnectError:
+                self._log.warning(f"Local call to '{server}' failed: gateway not reachable")
+                return _not_delivered(request_id, "gateway_unreachable"), "not_delivered", 0
             except httpx.HTTPError as e:
                 self._log.warning(f"Local call to '{server}' failed: {type(e).__name__}")
-                reply, result = {"type": "error", "id": request_id, "code": "local_call_failed"}, "local_call_failed"
+                return {"type": "error", "id": request_id, "code": "local_call_failed"}, "local_call_failed", 0
+        finally:
+            self._semaphore.release()
+        reply = {"type": "response", "id": request_id, "status": response.status_code, "body": _decode_body(response)}
+        return reply, str(response.status_code), len(response.content) + 256
+
+    async def _acquire_slot(self, deadline: float) -> bool:
+        """Wait for a concurrency slot until `deadline`. True if acquired (the caller must release it)."""
+        # Not asyncio.wait_for: on Python 3.10 it can return an acquired slot and swallow a
+        # cancellation that arrives at the same moment (bpo-42130).
+        acquire = asyncio.ensure_future(self._semaphore.acquire())
+        try:
+            await asyncio.wait({acquire}, timeout=max(deadline - time.monotonic(), 0))
+        except BaseException:
+            if acquire.done() and not acquire.cancelled() and acquire.exception() is None:
+                self._semaphore.release()
             else:
-                reply = {"type": "response", "id": request_id, "status": response.status_code, "body": _decode_body(response)}
-                result = str(response.status_code)
-        metrics.record_request(server, result, time.monotonic() - started)
-        await self._reply(conn, reply)
+                acquire.cancel()
+            raise
+        if acquire.done():
+            return True
+        acquire.cancel()  # Semaphore.acquire hands a wake-up it can no longer use to the next waiter
+        return False
 
     async def _post_local(
-        self, http: httpx.AsyncClient, server: str, body: Dict[str, Any], headers: Dict[str, str]
+        self,
+        http: httpx.AsyncClient,
+        server: str,
+        body: Dict[str, Any],
+        headers: Dict[str, str],
+        deadline: float,
+        progress: Dict[str, bool],
     ) -> httpx.Response:
         # A refused connection means the request never reached the gateway, so retrying cannot
         # run a tool twice. This covers the gap between startup hooks and uvicorn binding its port.
-        deadline = time.monotonic() + self.LOCAL_CONNECT_RETRY
+        retry_until = min(time.monotonic() + self.LOCAL_CONNECT_RETRY, deadline)
         while True:
+            progress["maybe_sent"] = True
             try:
-                return await http.post(f"{self._local_base_url}/{server}/mcp", json=body, headers=headers)
+                return await http.post(
+                    f"{self._local_base_url}/{server}/mcp",
+                    json=body,
+                    headers=headers,
+                    timeout=max(deadline - time.monotonic(), 0.001),
+                )
             except httpx.ConnectError:
-                if time.monotonic() >= deadline:
+                progress["maybe_sent"] = False
+                if time.monotonic() >= retry_until:
                     raise
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(min(0.5, max(retry_until - time.monotonic(), 0)))
 
     async def _reply(self, conn: _Connection, message: Dict[str, Any]) -> None:
         try:
@@ -290,6 +494,19 @@ class TunnelClient:
                 await conn.send({"type": "error", "id": message["id"], "code": "response_too_large"})
         except (ConnectionClosed, ProtocolError):
             self._log.warning(f"Reply {message['id']} not sent: tunnel closed")
+
+
+def _fingerprint(request: Dict[str, Any]) -> str:
+    """Identifies what a request asks for, so a reused id with different content is recognised."""
+    canonical = json.dumps(
+        {"server": request.get("server"), "body": request.get("body")}, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _not_delivered(request_id: str, reason: str) -> Dict[str, Any]:
+    """The gateway never received this request, so the tool did not run and a retry is safe."""
+    return {"type": "error", "id": request_id, "code": "not_delivered", "reason": reason}
 
 
 def _decode_body(response: httpx.Response) -> Any:

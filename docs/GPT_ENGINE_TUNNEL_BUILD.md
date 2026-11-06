@@ -68,8 +68,14 @@ channel.check_timers()                   # every 5 s; raises ProtocolError when 
 | GPT Engine → FluidMCP | `{"type":"request","id":"<uuid4>","server":"<name>","body":{<JSON-RPC 2.0 request>}}` |
 | FluidMCP → GPT Engine | `{"type":"response","id":"<uuid4>","status":<int>,"body":<json, text or null>}` |
 | FluidMCP → GPT Engine | `{"type":"error","id":"<uuid4>","code":"server_not_allowed\|bad_request\|local_timeout\|local_call_failed\|response_too_large"}` |
+| FluidMCP → GPT Engine | `{"type":"error","id":"<uuid4>","code":"not_delivered\|duplicate_request","reason":"<detail>"}` |
 
 Limits: 10 MiB per WebSocket message, binary frames only. Re-keying is handled inside the protocol module.
+
+Use a new `id` for every call and never reuse one. FluidMCP runs each id at most once: a repeated id gets the
+original call's answer, and an id reused for a different request gets `duplicate_request` without running anything
+([TUNNEL.md](TUNNEL.md#duplicate-request-ids)). FluidMCP's deadline (`FMCP_TUNNEL_REQUEST_TIMEOUT`, 45 s) includes
+time spent waiting for a free slot, so it always answers before the bridge's 55 s timeout.
 
 ## Tasks
 
@@ -124,9 +130,9 @@ MCP_TUNNEL_BRIDGE_TOKEN=<random, at least 32 bytes>
 
 | Condition | Response |
 |---|---|
-| `NotDelivered` | **503** with header `X-Tunnel-Not-Delivered: 1` |
+| `NotDelivered`, or FluidMCP `not_delivered` (the gateway never received the request) | **503** with header `X-Tunnel-Not-Delivered: 1` |
 | `TunnelTimeout`, or FluidMCP `local_timeout` | **504** |
-| `TunnelLost`, or any other FluidMCP `error` | **502** with `{"error": "<code>"}` |
+| `TunnelLost`, or any other FluidMCP `error` (including `duplicate_request`) | **502** with `{"error": "<code>"}` |
 
 Error bodies must never contain the text `No valid session ID` (it switches the client to its session fallback).
 
