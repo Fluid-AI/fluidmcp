@@ -17,6 +17,32 @@ export const TableResultView: React.FC<TableResultViewProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Hooks must run before the early returns below, or React throws when a result
+  // switches between empty/too-large and a normal table without remounting
+  const sortedData = useMemo(() => {
+    if (!sortColumn || !data) return data;
+
+    return [...data].sort((a, b) => {
+      const aVal = a[sortColumn];
+      const bVal = b[sortColumn];
+
+      // Handle null/undefined
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+
+      // Compare values
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+      }
+
+      const aStr = String(aVal);
+      const bStr = String(bVal);
+      const comparison = aStr.localeCompare(bStr);
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [data, sortColumn, sortDirection]);
+
   if (!data || data.length === 0) {
     return <div className="result-text">Empty array</div>;
   }
@@ -49,30 +75,6 @@ export const TableResultView: React.FC<TableResultViewProps> = ({
     }
     setCurrentPage(1); // Reset to first page on sort
   };
-
-  const sortedData = useMemo(() => {
-    if (!sortColumn) return data;
-
-    return [...data].sort((a, b) => {
-      const aVal = a[sortColumn];
-      const bVal = b[sortColumn];
-
-      // Handle null/undefined
-      if (aVal == null && bVal == null) return 0;
-      if (aVal == null) return 1;
-      if (bVal == null) return -1;
-
-      // Compare values
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
-      }
-
-      const aStr = String(aVal);
-      const bStr = String(bVal);
-      const comparison = aStr.localeCompare(bStr);
-      return sortDirection === 'asc' ? comparison : -comparison;
-    });
-  }, [data, sortColumn, sortDirection]);
 
   // Pagination logic
   const totalPages = Math.ceil(sortedData.length / maxRowsPerPage);
