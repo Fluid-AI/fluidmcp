@@ -16,6 +16,7 @@ from fluidmcp.cli.services.run_servers import (
 )
 
 
+
 class TestRunServers:
     """Tests for run_servers function"""
 
@@ -47,7 +48,7 @@ class TestRunServers:
 
             mock_install.assert_not_called()
 
-    def test_launches_servers_and_adds_routers(self, tmp_path):
+    def test_launches_servers_and_registers_processes(self, tmp_path, run_launch_startup):
         # Setup mock package
         pkg_dir = tmp_path / "pkg"
         pkg_dir.mkdir()
@@ -59,41 +60,32 @@ class TestRunServers:
             servers={"test-server": {"install_path": str(pkg_dir)}}
         )
 
-        mock_router = Mock()
         mock_process = Mock()
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
-            mock_launch.return_value = ("test-pkg", mock_router, mock_process)
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                with patch('fluidmcp.cli.services.run_servers.FastAPI') as mock_fastapi:
-                    mock_app = Mock()
-                    mock_fastapi.return_value = mock_app
-                    run_servers(config, start_server=False)
+        app, spawn = run_launch_startup(config, spawn_result=mock_process)
 
-                    mock_launch.assert_called_once()
-                    # Check that our test router was added (will also include management router)
-                    assert any(call[0][0] == mock_router for call in mock_app.include_router.call_args_list)
+        spawn.assert_awaited_once()
+        assert spawn.await_args.args[0] == "test-server"
+        assert spawn.await_args.args[1]["working_dir"] == str(pkg_dir)
+        # Registered for the single dynamic router to dispatch to
+        assert app.state.server_manager.processes["test-server"] is mock_process
 
-    def test_skips_server_without_install_path(self):
+    def test_skips_server_without_install_path(self, run_launch_startup):
         config = ServerConfig(
             servers={"test-server": {"command": "echo"}}  # No install_path
         )
 
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+        _, spawn = run_launch_startup(config)
 
-            mock_launch.assert_not_called()
+        spawn.assert_not_awaited()
 
-    def test_skips_server_with_nonexistent_path(self, tmp_path):
+    def test_skips_server_with_nonexistent_path(self, tmp_path, run_launch_startup):
         config = ServerConfig(
             servers={"test-server": {"install_path": "/nonexistent/path"}}
         )
 
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy') as mock_launch:
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
+        _, spawn = run_launch_startup(config)
 
-            mock_launch.assert_not_called()
+        spawn.assert_not_awaited()
 
 
 class TestInstallPackagesFromConfig:

@@ -132,7 +132,7 @@ class TestRunCommandIntegration:
 class TestEndToEndServerLaunch:
     """End-to-end tests for server launching"""
 
-    def test_servers_launch_with_correct_config(self, tmp_path):
+    def test_servers_launch_with_correct_config(self, tmp_path, run_launch_startup):
         """Test that servers are launched with correct configuration"""
         # Setup package
         pkg_dir = tmp_path / "pkg"
@@ -151,19 +151,14 @@ class TestEndToEndServerLaunch:
             }
         )
 
-        mock_router = Mock()
-        mock_process = Mock()
-        launched_packages = []
+        _, spawn = run_launch_startup(config, spawn_result=Mock())
 
-        def capture_launch(dest_dir, process_lock=None):
-            launched_packages.append(str(dest_dir))
-            return ("test-pkg", mock_router, mock_process)
-
-        with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy', side_effect=capture_launch):
-            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                run_servers(config, start_server=False)
-
-        assert str(pkg_dir) in launched_packages
+        spawn.assert_awaited_once()
+        server_id, spawn_cfg = spawn.await_args.args
+        assert server_id == "test-server"
+        assert spawn_cfg["command"] == "echo"
+        assert spawn_cfg["args"] == ["test"]
+        assert spawn_cfg["working_dir"] == str(pkg_dir)
 
     def test_secure_mode_propagates_through_flow(self, tmp_path):
         """Test that secure mode settings propagate correctly"""
@@ -178,9 +173,8 @@ class TestEndToEndServerLaunch:
         )
 
         with patch.dict(os.environ, {}, clear=False):
-            with patch('fluidmcp.cli.services.run_servers.launch_mcp_using_fastapi_proxy', return_value=("pkg", Mock(), Mock())):
-                with patch('fluidmcp.cli.services.run_servers.uvicorn'):
-                    run_servers(config, secure_mode=True, token="secret123", start_server=False)
+            with patch('fluidmcp.cli.services.run_servers.uvicorn'):
+                run_servers(config, secure_mode=True, token="secret123", start_server=False)
 
             assert os.environ.get("FMCP_BEARER_TOKEN") == "secret123"
             assert os.environ.get("FMCP_SECURE_MODE") == "true"

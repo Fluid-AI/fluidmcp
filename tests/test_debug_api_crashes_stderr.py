@@ -3,6 +3,7 @@ Tests for P2 debugging endpoints:
 - GET /api/servers/{id}/crashes
 - GET /api/servers/{id}/stderr
 """
+import asyncio
 import os
 import pytest
 import tempfile
@@ -66,14 +67,13 @@ class TestGetServerCrashes:
         assert data["server"] == "srv1"
         assert data["crashes"] == []
         assert data["restart_count"] == 0
-        assert data["crashes_per_hour"] == 0
+        assert data["crashes_last_hour"] == 0
 
     def test_crashes_returned_with_exit_classification(self, client, server_manager, backend):
         self._register_server(server_manager, "srv1")
 
         # Save a crash event directly into the backend
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",
@@ -93,15 +93,13 @@ class TestGetServerCrashes:
         assert crash["exit_category"] == "resource"
         assert crash["exit_label"] == "oom_killed"
 
-    def test_crashes_per_hour_counts_recent(self, client, server_manager, backend):
+    def test_crashes_last_hour_counts_recent(self, client, server_manager, backend):
         self._register_server(server_manager, "srv1")
 
-        import asyncio
-        loop = asyncio.get_event_loop()
 
         # Two recent crashes (within last hour)
         for _ in range(2):
-            loop.run_until_complete(backend.save_crash_event({
+            asyncio.run(backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",
                 "exit_code": 1,
@@ -112,15 +110,13 @@ class TestGetServerCrashes:
 
         resp = client.get("/api/servers/srv1/crashes")
         assert resp.status_code == 200
-        assert resp.json()["crashes_per_hour"] == 2
+        assert resp.json()["crashes_last_hour"] == 2
 
     def test_limit_query_param_respected(self, client, server_manager, backend):
         self._register_server(server_manager, "srv1")
 
-        import asyncio
-        loop = asyncio.get_event_loop()
         for _ in range(5):
-            loop.run_until_complete(backend.save_crash_event({
+            asyncio.run(backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",
                 "exit_code": 1,
@@ -137,8 +133,7 @@ class TestGetServerCrashes:
         """If crash event already has exit_category, don't re-classify."""
         self._register_server(server_manager, "srv1")
 
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             backend.save_crash_event({
                 "server_id": "srv1",
                 "server_name": "Test Server",

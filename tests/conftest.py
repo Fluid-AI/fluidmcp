@@ -9,6 +9,7 @@ import asyncio
 import os
 import time
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -116,3 +117,35 @@ async def api_client(serve_test_app):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+
+def _run_launch_startup(config, spawn_result=None):
+    """Build the app via run_servers and run its MCP-launch startup hook.
+
+    Servers are spawned in an app startup handler (not inline in run_servers), so
+    capture the app instead of serving it and invoke that handler directly.
+    """
+    from fluidmcp.cli.services.run_servers import run_servers
+
+    captured = {}
+    spawn = AsyncMock(return_value=spawn_result)
+    with patch('fluidmcp.cli.services.run_servers._start_server',
+               side_effect=lambda app, *args, **kwargs: captured.update(app=app)), \
+            patch.object(ServerManager, '_spawn_mcp_process', new=spawn):
+        run_servers(config, start_server=True)
+        app = captured['app']
+        startup = next(h for h in app.router.on_startup if h.__name__ == '_launch_mcp_servers')
+        # Private loop: asyncio.run() would clear the main thread's loop, breaking later
+        # tests that call asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(startup())
+        finally:
+            loop.close()
+    return app, spawn
+
+
+@pytest.fixture
+def run_launch_startup():
+    return _run_launch_startup
