@@ -11,7 +11,7 @@ else:
 
 setup(
     name="fluidmcp",
-    version="1.0.0",
+    version="2.0.0",
     author="Fluid AI",
     author_email="info@fluid.ai",
     description="A CLI tool for installing and managing Model Context Protocol (MCP) servers",
@@ -27,7 +27,6 @@ setup(
     install_requires=[
         "requests",
         "loguru",
-        "pathlib",
         "psutil",
         "boto3",  # Added boto3 for S3 operations
         "fastapi",
@@ -35,9 +34,11 @@ setup(
         "httpx==0.28.1",  # Required for Replicate client (pinned to match requirements.txt)
         "httpx-sse==0.4.0",  # Decode event-stream responses from Streamable HTTP MCP servers
         "motor==3.7.1",  # MongoDB async driver (required for fmcp serve)
-        "pymongo==4.11.0",  # MongoDB driver (required for fmcp serve)
+        "pymongo==4.18.3",  # MongoDB driver (required for fmcp serve; keep in sync with requirements.txt)
         "websockets>=15.0.1",  # Tunnel client
         "cryptography>=42.0",  # Tunnel key exchange, signatures, encryption
+        "python-dotenv",  # Imported at startup by cli.py
+        "sentry-sdk[fastapi]",  # Imported at startup by server.py
     ],
     entry_points={
         'console_scripts': [
@@ -54,6 +55,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-    python_requires=">=3.6",
+    python_requires=">=3.10",
     keywords="mcp, model context protocol, llm, ai, fluidai",
 )
