@@ -70,7 +70,7 @@ Manual testing can also be done using sample configurations in the `examples/` d
   - `launch_llm_models()` / `stop_all_llm_models()` - Multi-model orchestration with error recovery
 
 ### Tunnel (`fluidmcp/cli/tunnel/`)
-Outbound tunnel to GPT Engine for sites that cannot accept incoming connections. Off unless `FMCP_TUNNEL_URL` is set. See [docs/TUNNEL.md](docs/TUNNEL.md).
+Outbound tunnel to GPT Engine for sites that cannot accept incoming connections. Off unless `FMCP_TUNNEL_URL` is set; the URL must be under `*.fluidgpt.ai` unless `FMCP_TUNNEL_ALLOW_ANY_HOST=true`, and redirects are never followed. See [docs/TUNNEL.md](docs/TUNNEL.md).
 - `protocol.py` - fmcp-tunnel/1 handshake and encrypted records ([docs/TUNNEL_PROTOCOL.md](docs/TUNNEL_PROTOCOL.md)). Shared byte-for-byte with GPT Engine; change it only together with `tests/tunnel_test_vectors.json` (`PYTHONPATH=. python scripts/gen_tunnel_vectors.py`)
 - `client.py` - `TunnelClient`: connect, handshake, forward requests to the local `/{server}/mcp` route, re-key, reconnect
 - `keys.py` - Site identity key (`~/.fmcp/tunnel/identity.key`)
@@ -322,7 +322,8 @@ MCP_PORT_RELEASE_TIMEOUT=5  # Timeout in seconds when waiting for port release (
 
 # GPT Engine tunnel (see docs/TUNNEL.md)
 FMCP_TUNNEL_URL, FMCP_TUNNEL_TOKEN, FMCP_TUNNEL_CONNECTOR_ID, FMCP_TUNNEL_ALLOWED_SERVERS,
-FMCP_TUNNEL_SERVER_PUBLIC_KEYS, FMCP_TUNNEL_KEY_PATH, FMCP_TUNNEL_MAX_CONCURRENCY, FMCP_TUNNEL_REQUEST_TIMEOUT
+FMCP_TUNNEL_SERVER_PUBLIC_KEYS, FMCP_TUNNEL_KEY_PATH, FMCP_TUNNEL_MAX_CONCURRENCY, FMCP_TUNNEL_REQUEST_TIMEOUT,
+FMCP_TUNNEL_ALLOW_ANY_HOST  # default false: FMCP_TUNNEL_URL must be under *.fluidgpt.ai
 ```
 
 ## Replicate Cloud Inference

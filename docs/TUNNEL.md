@@ -14,12 +14,14 @@ GPT Engine  ◄══ wss:// opened by FluidMCP ══  FluidMCP tunnel client �
 ## Security
 
 1. **TLS** (`wss://`). Plain `ws://` is accepted only for `localhost`, for testing.
-2. **Tunnel token**, checked by GPT Engine before it accepts the connection.
-3. **fmcp-tunnel/1** inside the connection ([TUNNEL_PROTOCOL.md](TUNNEL_PROTOCOL.md)):
+2. **Fixed destination**: the tunnel only connects to a host under `*.fluidgpt.ai` (not the bare `fluidgpt.ai`),
+   unless `FMCP_TUNNEL_ALLOW_ANY_HOST=true`, and it never follows a redirect.
+3. **Tunnel token**, checked by GPT Engine before it accepts the connection.
+4. **fmcp-tunnel/1** inside the connection ([TUNNEL_PROTOCOL.md](TUNNEL_PROTOCOL.md)):
    - both sides prove their identity with key pairs; FluidMCP's private key never leaves the client's server;
    - every message is encrypted and signed with session keys that are new for each connection and replaced every hour.
-4. **Allowlist**: only servers in `FMCP_TUNNEL_ALLOWED_SERVERS` can be called.
-5. **Gateway auth**: with `--secure` (or `FMCP_SECURE_MODE=true`), forwarded calls carry `FMCP_BEARER_TOKEN` like any other caller.
+5. **Allowlist**: only servers in `FMCP_TUNNEL_ALLOWED_SERVERS` can be called.
+6. **Gateway auth**: with `--secure` (or `FMCP_SECURE_MODE=true`), forwarded calls carry `FMCP_BEARER_TOKEN` like any other caller.
 
 Request and response bodies are never logged by the tunnel.
 
@@ -27,7 +29,7 @@ Request and response bodies are never logged by the tunnel.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `FMCP_TUNNEL_URL` | yes | | GPT Engine endpoint, e.g. `wss://<gpt-engine-domain>/ws/mcp-tunnel`. Setting it turns the tunnel on |
+| `FMCP_TUNNEL_URL` | yes | | GPT Engine endpoint, e.g. `wss://<site>.fluidgpt.ai/ws/mcp-tunnel`. The host must be under `*.fluidgpt.ai`. Setting it turns the tunnel on |
 | `FMCP_TUNNEL_TOKEN` | yes | | Tunnel token issued by GPT Engine |
 | `FMCP_TUNNEL_CONNECTOR_ID` | yes | | Name of this site in GPT Engine (letters, digits, `. _ : -`) |
 | `FMCP_TUNNEL_ALLOWED_SERVERS` | yes | | Comma-separated MCP server names GPT Engine may call |
@@ -35,8 +37,12 @@ Request and response bodies are never logged by the tunnel.
 | `FMCP_TUNNEL_KEY_PATH` | no | `~/.fmcp/tunnel/identity.key` | This site's private key |
 | `FMCP_TUNNEL_MAX_CONCURRENCY` | no | `20` | Requests forwarded at the same time |
 | `FMCP_TUNNEL_REQUEST_TIMEOUT` | no | `45` | Seconds to wait for the local gateway |
+| `FMCP_TUNNEL_ALLOW_ANY_HOST` | no | `false` | `true` accepts a `wss://` host outside `*.fluidgpt.ai`, for test setups such as a GPT Engine codespace. Any other value counts as `false` |
 
 If a setting is missing or invalid, FluidMCP logs `Tunnel disabled: ...` and runs without the tunnel.
+
+With `FMCP_TUNNEL_ALLOW_ANY_HOST=true` and a host outside `*.fluidgpt.ai`, FluidMCP logs a warning at every start and
+`/health` shows `"host_override": true` under `tunnel`. Remove the setting before production.
 
 ## Setting up a site
 
@@ -61,7 +67,7 @@ If a setting is missing or invalid, FluidMCP logs `Tunnel disabled: ...` and run
 
    ```bash
    curl -s http://localhost:<port>/health
-   # "tunnel": {"enabled": true, "connected": true, "last_connected_at": "...", "key_no": 1}
+   # "tunnel": {"enabled": true, "connected": true, "last_connected_at": "...", "key_no": 1, "host_override": false}
    ```
 
 The server clock must be synchronised (`timedatectl`); the handshake rejects clocks more than 60 s off.
@@ -119,6 +125,9 @@ rotation is complete.
 | `Tunnel rejected: handshake failed (...)` | Key not registered in GPT Engine, wrong `FMCP_TUNNEL_SERVER_PUBLIC_KEYS`, or clock skew |
 | `Tunnel protocol error (...); reconnecting` | The connection was corrupted or a timer expired; it reconnects with a fresh handshake |
 | `Rejected tunnel request for server not in allowlist` | GPT Engine asked for a server missing from `FMCP_TUNNEL_ALLOWED_SERVERS` |
+| `Tunnel disabled: FMCP_TUNNEL_URL host ... is not under *.fluidgpt.ai` | Wrong URL, or a test GPT Engine on another domain (set `FMCP_TUNNEL_ALLOW_ANY_HOST=true` for testing only) |
+| `FMCP_TUNNEL_ALLOW_ANY_HOST=true: tunnel host ... is not restricted to *.fluidgpt.ai` | The override is on; expected only in test setups |
+| `Tunnel connection failed: ConnectionError: HTTP 302 (redirects are not followed)` | The URL answered with a redirect instead of GPT Engine, for example a private Codespaces port (make it Public) or a wrong path |
 
 ## Local testing
 
