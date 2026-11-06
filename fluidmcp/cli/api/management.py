@@ -2650,8 +2650,8 @@ async def stop_llm_model(
             process.stop()
             stop_method = "graceful"
 
-        # Update state in persistence backend
-        db = get_db_manager()
+        # Update state in persistence backend (best-effort: the process is already stopped)
+        db = getattr(request.app.state, "db_manager", None)
         if db and hasattr(db, 'update_llm_model'):
             try:
                 await db.update_llm_model(model_id, {
@@ -2708,7 +2708,7 @@ async def start_llm_model(
             }
 
     # Get model config from database
-    db = get_db_manager()
+    db = getattr(request.app.state, "db_manager", None)
     if not db:
         raise HTTPException(500, "Database not available")
 
