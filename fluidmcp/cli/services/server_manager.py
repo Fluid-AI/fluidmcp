@@ -31,6 +31,7 @@ from .health_checker import HealthChecker
 from .network_handle import NetworkSubprocessHandle
 from .network_utils import find_free_port
 from .stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
+from ..utils.redact import redact_command, redact_secrets, register_secrets_from_mapping
 
 
 def _parse_mcp_response(resp) -> dict:
@@ -925,7 +926,12 @@ class ServerManager:
                         logger.info(f"Repository auto-recloned successfully to {working_dir}")
 
                     except Exception as e:
-                        logger.error(f"Failed to auto-reclone repository: {e}")
+                        # clone_github_repo raises sanitized errors; redact again as
+                        # defense in depth (e.g. unexpected exception types).
+                        logger.error(
+                            f"Failed to auto-reclone repository {repo}@{branch} for server '{id}': "
+                            f"{redact_secrets(str(e), extra_secrets=[github_token])}"
+                        )
                         return None
                 else:
                     logger.error(f"Working directory missing and source is not GitHub")
@@ -1000,9 +1006,11 @@ class ServerManager:
                 env["MCP_PORT"] = str(allocated_port)
                 logger.info(f"[{id}] Allocated port {allocated_port} for HTTP-transport server")
 
-            logger.debug(f"Spawning process: {cmd_list}")
+            # Make credentials from this server's env/args known to the log
+            # redactor (instance env from the DB never reaches os.environ).
+            register_secrets_from_mapping({"env": env_vars, "args": cmd_list})
+            logger.debug(f"Spawning process: {redact_command(cmd_list)}")
             logger.debug(f"Working directory: {working_dir}")
-            logger.debug(f"COMMAND: {cmd_list}")
             logger.debug(f"INSTALL_PATH: {install_path}")
             logger.info("Starting MCP server subprocess")
 
@@ -1067,8 +1075,9 @@ class ServerManager:
                         )
                     except Exception:
                         stderr_output = ""
+                    stderr_output = redact_secrets(stderr_output or "")
                 else:
-                    stderr_output = self._read_crash_stderr(id)
+                    stderr_output = self._read_crash_stderr(id)  # already sanitized
                 logger.error(f"Process died immediately after spawn. stderr: {stderr_output}")
                 return None
 
@@ -1670,7 +1679,9 @@ class ServerManager:
                 # Skip the first (possibly partial) line
                 lines = text.splitlines(keepends=True)
                 text = "".join(lines[1:]) if len(lines) > 1 else ""
-            return text
+            # SECURITY: the child writes this file directly (not via FluidMCP),
+            # so sanitize on read - before it reaches logs, crash events or APIs.
+            return redact_secrets(text)
         except Exception as e:
             logger.debug(f"Failed to read stderr log for '{server_id}': {e}")
             return ""
@@ -1708,7 +1719,9 @@ class ServerManager:
             data = f.read()
 
         text = data.decode("utf-8", errors="replace")
-        all_lines = text.splitlines()
+        # SECURITY: sanitize child output on read (redact whole text first so
+        # multi-line secrets such as PEM keys are caught)
+        all_lines = redact_secrets(text).splitlines()
 
         # Drop first line if truncated (may be a partial line from the seek)
         if truncated and len(all_lines) > 1:

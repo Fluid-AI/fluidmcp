@@ -177,10 +177,11 @@ class InspectorSession:
     MAX_LOGS = 250
 
     def add_log(self, log_type: str, message: str) -> None:
+        from ..utils.redact import redact_secrets
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": log_type,
-            "message": message,
+            "message": redact_secrets(message),  # SECURITY: served via inspector API
         }
         self.logs.append(entry)
         if len(self.logs) > self.MAX_LOGS:
@@ -358,6 +359,9 @@ class InspectorSession:
         # Layer user-supplied vars on top (they cannot see what's not in base)
         if self.env_vars:
             proc_env.update(self.env_vars)
+            # Make user-supplied credentials known to the log redactor
+            from ..utils.redact import register_secrets_from_mapping
+            register_secrets_from_mapping({"env": self.env_vars})
 
         if self.env_vars:
             logger.info(f"Inspector stdio: spawning {exe_basename!r} with env vars: {list(self.env_vars.keys())}")
@@ -398,9 +402,10 @@ class InspectorSession:
         while asyncio.get_event_loop().time() < deadline:
             if self._process.returncode is not None:
                 stderr_bytes = await self._process.stderr.read(4096)
+                from ..utils.redact import redact_secrets
                 raise Exception(
                     f"stdio process died during handshake (exit {self._process.returncode}): "
-                    f"{stderr_bytes.decode(errors='replace').strip()}"
+                    f"{redact_secrets(stderr_bytes.decode(errors='replace').strip())}"
                 )
             try:
                 raw = await asyncio.wait_for(self._process.stdout.readline(), timeout=2.0)

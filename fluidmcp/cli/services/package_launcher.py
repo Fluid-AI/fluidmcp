@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ..utils.env_utils import is_placeholder
+from ..utils.redact import redact_command, redact_mapping, redact_secrets, register_secrets_from_mapping
 from .metrics import MetricsCollector, RequestTimer
 from .network_handle import NetworkSubprocessHandle
 from .sse_handle import SseSubprocessHandle
@@ -69,6 +70,9 @@ def start_stderr_drainer(process: subprocess.Popen, key: str, log_fh=None) -> No
             if process.stderr is None:
                 return
             for line in process.stderr:
+                # SECURITY: sanitize child output at ingestion, before it is
+                # buffered (crash reports), logged or persisted to the log file.
+                line = redact_secrets(line)
                 stripped = line.rstrip()
                 with lock:
                     buf.append(stripped)
@@ -320,7 +324,9 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
             metadata = json.load(f)
         pkg = list(metadata["mcpServers"].keys())[0]
         servers = metadata['mcpServers'][pkg]
-        logger.debug(f"Package: {pkg}, Servers: {servers}")
+        # SECURITY: never log raw server config - its env block holds API keys
+        register_secrets_from_mapping(servers)
+        logger.debug(f"Package: {pkg}, Servers: {redact_mapping(servers)}")
     except FileNotFoundError:
         logger.warning(f"No metadata.json found in {dest_dir}")
         return None, None, None
@@ -356,9 +362,9 @@ def launch_mcp_using_fastapi_proxy(dest_dir: Union[str, Path], process_lock: thr
             elif npx_path and base_command == "npx":
                 base_command = npx_path
 
-        logger.debug(f"Raw args from metadata: {raw_args}")
+        logger.debug(f"Raw args from metadata: {redact_command(raw_args)}")
         args = [replace_path_placeholders(arg, dest_dir) for arg in raw_args]
-        logger.debug(f"Resolved args after placeholder replacement: {args}")
+        logger.debug(f"Resolved args after placeholder replacement: {redact_command(args)}")
         stdio_command = [base_command] + args
         env_vars = servers.get("env", {})
 

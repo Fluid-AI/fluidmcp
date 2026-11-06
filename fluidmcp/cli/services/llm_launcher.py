@@ -16,6 +16,8 @@ import httpx
 from typing import Dict, Any, Optional, Tuple
 from loguru import logger
 
+from ..utils.redact import redact_command, register_secrets_from_mapping
+
 # Constants
 DEFAULT_SHUTDOWN_TIMEOUT = 10  # Default seconds to wait for graceful shutdown
 PROCESS_START_DELAY = 0.5  # Seconds to wait for process initialization before status check
@@ -46,7 +48,8 @@ def sanitize_command_for_logging(command_parts: list) -> str:
     Sanitize command arguments for safe logging.
 
     Redacts sensitive patterns like API keys, tokens, passwords to prevent
-    credential leakage in log files.
+    credential leakage in log files. Delegates to the shared implementation in
+    ``fluidmcp.cli.utils.redact`` (single source of truth for redaction).
 
     Args:
         command_parts: List of command arguments
@@ -58,130 +61,7 @@ def sanitize_command_for_logging(command_parts: list) -> str:
         >>> sanitize_command_for_logging(["vllm", "--api-key", "secret123"])
         'vllm --api-key ***REDACTED***'
     """
-    # Exact flag names that should trigger redaction
-    # Using exact matching to avoid false positives like --api-key-rotation
-    # Note: Single-word entries like 'token', 'secret', 'password' are handled
-    # by sensitive_segments below to avoid duplication
-    sensitive_flags = {
-        # API keys (exact and with prefixes)
-        'api-key', 'apikey', 'api_key',
-        'my-api-key', 'your-api-key',  # Common prefixed variants
-        # Access keys
-        'access-key', 'accesskey', 'access_key',
-        # Secret keys
-        'secret-key', 'secretkey', 'secret_key',
-        # Auth keys
-        'auth-key', 'authkey', 'auth_key', 'authentication',
-        # Tokens
-        'auth-token', 'access-token', 'bearer-token',
-        # Passwords - 'pass' is too generic for exact match
-        # Credentials
-        'credential', 'credentials',
-    }
-
-    def matches_sensitive_pattern(text: str) -> bool:
-        """
-        Check if text is a sensitive flag that should trigger redaction.
-
-        Uses exact matching for known sensitive flags, plus suffix matching
-        to catch variants like --my-api-key, --prod-api-key, etc.
-        """
-        # Strip leading hyphens for comparison
-        flag_name = text.lstrip('-').lower()
-
-        # Exact match check
-        if flag_name in sensitive_flags:
-            return True
-
-        # Check if flag contains known sensitive segments (segment-based matching)
-        # This catches variants like --my-api-key, --prod-access-token, etc.,
-        # while avoiding false positives such as --tokenizer.
-        segments = re.split(r'[-_]+', flag_name)
-
-        # Single-word sensitive indicators
-        # These catch flags like --token, --secret, --auth, etc.
-        # Note: "pass" is intentionally excluded to avoid false positives
-        # with legitimate flags like --pass-through, --bypass, etc.
-        sensitive_segments = {
-            "token",
-            "secret",
-            "password",
-            "passwd",
-            "pwd",
-            "auth",
-            "authentication",
-            "credential",
-            "credentials",
-        }
-        if any(seg in sensitive_segments for seg in segments):
-            return True
-
-        # Two-word combinations like "api-key", "access-token", "bearer-token"
-        # Only treat flags as sensitive when they *end* with a sensitive pair.
-        # This still catches variants like --prod-api-key or --my-access-token,
-        # but avoids false positives such as --api-key-rotation.
-        sensitive_segment_pairs = {
-            ("api", "key"),
-            ("access", "key"),
-            ("secret", "key"),
-            ("private", "key"),
-            ("access", "token"),
-            ("auth", "token"),
-            ("bearer", "token"),
-            ("api", "token"),
-            ("prod", "key"),        # --prod-key
-            ("staging", "key"),     # --staging-key
-            ("prod", "token"),      # --prod-token
-            ("staging", "token"),   # --staging-token
-            ("prod", "secret"),     # --prod-secret
-            ("staging", "secret"),  # --staging-secret
-        }
-        if len(segments) >= 2 and (segments[-2], segments[-1]) in sensitive_segment_pairs:
-            return True
-
-        # Three-word combinations like "access-key-id", "api-key-id", "aws-access-key"
-        # Treat a flag as sensitive when it ends with a known sensitive pair
-        # followed by a credential-like suffix such as "id", while still
-        # ignoring benign variants like "--access-key-rotation" or "--access-key-config"
-        sensitive_suffixes_for_pairs = {"id", "secret"}
-        if len(segments) >= 3:
-            if (segments[-3], segments[-2]) in sensitive_segment_pairs and segments[-1] in sensitive_suffixes_for_pairs:
-                return True
-            # Also catch patterns like "aws-access-key"
-            if segments[-2] in ("access", "secret", "api") and segments[-1] in ("key", "token"):
-                return True
-
-        return False
-
-    safe_command = []
-    redact_next = False
-
-    for part in command_parts:
-        if redact_next:
-            # Previous argument indicated this value is sensitive
-            safe_command.append("***REDACTED***")
-            redact_next = False
-            continue
-
-        # Handle key=value style arguments by inspecting only the key name
-        if '=' in part:
-            key, _ = part.split('=', 1)
-            if matches_sensitive_pattern(key):
-                safe_command.append(f"{key}=***REDACTED***")
-            else:
-                safe_command.append(part)
-            continue
-
-        # For non key=value arguments, only treat flag-like args as potential
-        # indicators of sensitive values (e.g., --api-key, -token, etc.).
-        if part.startswith('-') and matches_sensitive_pattern(part):
-            # This is a flag like --api-key; redact the next value
-            safe_command.append(part)
-            redact_next = True
-        else:
-            safe_command.append(part)
-
-    return ' '.join(safe_command)
+    return redact_command(command_parts)
 
 
 def filter_safe_env_vars(system_env: Dict[str, str], additional_env: Dict[str, str]) -> Dict[str, str]:
@@ -270,6 +150,8 @@ class LLMProcess:
         """
         self.model_id = model_id
         self.config = config
+        # Make API keys/tokens in env/args known to the log redactor
+        register_secrets_from_mapping(config)
         self.process: Optional[subprocess.Popen] = None
         self._stderr_log: Optional[object] = None  # File handle for stderr logging
 

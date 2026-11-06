@@ -10,6 +10,9 @@ import platform
 import shutil
 from dotenv import load_dotenv
 
+from .auth import announce_generated_token
+from .utils.redact import install_stream_redaction
+
 from .services import (
     install_package,
     edit_env_variables,
@@ -29,18 +32,26 @@ def configure_logger(verbose: bool = False) -> None:
     Args:
         verbose: If True, set level to DEBUG; otherwise INFO
     """
+    from .utils.redact import RedactingStream, install_log_redaction
+
     # Remove default handler
     logger.remove()
+
+    # Redact secrets from every log record before it reaches any sink
+    install_log_redaction()
 
     # Set level based on verbose flag
     log_level = "DEBUG" if verbose else "INFO"
 
-    # Add new handler with specified level and simple format
+    # Add new handler with specified level and simple format.
+    # RedactingStream also scrubs formatted exception tracebacks; diagnose=False
+    # stops loguru from printing local variable values (e.g. tokens) in tracebacks.
     logger.add(
-        sys.stderr,
+        RedactingStream(sys.stderr),
         level=log_level,
         format="<level>{message}</level>",
-        colorize=True
+        colorize=True,
+        diagnose=False,
     )
 
 
@@ -610,6 +621,9 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
                 description=f"Unified gateway for {package_name} from GitHub",
                 version="2.0.0"
             )
+            # SECURITY: redact secrets from all API error responses
+            from .utils.redact import install_redacting_exception_handlers
+            install_redacting_exception_handlers(app)
             app.add_middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
@@ -799,15 +813,8 @@ def main():
             token_file.write_text(token)
             token_file.chmod(0o600)
 
-            # Print token to console (NOT in logs for security)
-            print("\n" + "="*70)
-            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-            print("="*70)
-            print(f"\n{token}\n")
-            print("="*70)
-            print(f"Token saved to: {token_file}")
-            print(f"View anytime with: fmcp token show")
-            print("="*70 + "\n")
+            # Show token on an interactive terminal only (never in deployment logs)
+            announce_generated_token(token, token_file)
         else:
             logger.debug("Using provided bearer token")
         # else use the provided token and set it in the environment variables
@@ -815,6 +822,12 @@ def main():
         os.environ["FMCP_SECURE_MODE"] = "true"
         # SECURITY: Do not log any part of the actual token
         logger.info("Secure mode enabled with bearer token authentication")
+
+    # Long-running server commands: console output is the deployment log, so
+    # also redact print()/uncaught tracebacks/warnings (not just logger output).
+    # Installed after the token announcement above, which is TTY-gated.
+    if args.command in ("serve", "run", "github"):
+        install_stream_redaction()
 
     # version flag
     if args.version:

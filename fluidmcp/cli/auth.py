@@ -7,12 +7,44 @@ All authentication logic should use these functions to ensure consistency and se
 
 import os
 import secrets
+import sys
+from pathlib import Path
 from typing import Optional
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Initialize HTTPBearer security scheme
 security = HTTPBearer(auto_error=False)
+
+
+def announce_generated_token(token: str, token_file: Optional[Path] = None) -> None:
+    """
+    Tell the operator about a newly generated bearer token.
+
+    The full token is printed ONLY when stdout is an interactive terminal.
+    In containers, CI and process managers stdout is captured into the
+    deployment logs (Railway, Docker, journald), so the token is never printed
+    there; instead the operator is told how to retrieve it or pin it.
+    """
+    bar = "=" * 70
+    if sys.stdout.isatty():
+        print("\n" + bar)
+        print("🔐 BEARER TOKEN GENERATED (save this securely!):")
+        print(bar)
+        print(f"\n{token}\n")
+        print(bar)
+        if token_file:
+            print(f"Token saved to: {token_file}")
+        print("View anytime with: fmcp token show")
+        print(bar + "\n")
+    else:
+        print("\n" + bar)
+        print("🔐 BEARER TOKEN GENERATED - not printed because output is not a terminal")
+        print("   (console output here may be stored in deployment logs).")
+        if token_file:
+            print(f"   Token saved to: {token_file} (retrieve with: fmcp token show)")
+        print("   To use a fixed token, set the FMCP_BEARER_TOKEN environment variable.")
+        print(bar + "\n")
 
 
 def _validate_bearer_token(credentials: HTTPAuthorizationCredentials, bearer_token: str) -> None:

@@ -262,6 +262,9 @@ def run_servers(
         description=f"Unified gateway for MCP servers from {config.source_type}",
         version="2.0.0"
     )
+    # SECURITY: redact secrets from all API error responses
+    from ..utils.redact import install_redacting_exception_handlers
+    install_redacting_exception_handlers(app)
     #CORS setup to allow React dev server access
     # "http://localhost:5173"
     app.add_middleware(

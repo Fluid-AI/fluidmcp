@@ -11,6 +11,7 @@ from datetime import datetime
 from loguru import logger
 from .base import PersistenceBackend, DuplicateKeyError
 from ..utils.env_utils import is_placeholder
+from ..utils.redact import redact_log_entry
 
 
 class InMemoryBackend(PersistenceBackend):
@@ -171,7 +172,8 @@ class InMemoryBackend(PersistenceBackend):
                             f"removed oldest log from {largest_server}"
                         )
 
-            self._logs[server_name].append(dict(log_entry))
+            # SECURITY: never store secrets from server output
+            self._logs[server_name].append(redact_log_entry(dict(log_entry)))
 
     async def get_logs(self, server_name: str, lines: int = 100) -> List[Dict[str, Any]]:
         """Get recent logs from memory."""
@@ -188,7 +190,7 @@ class InMemoryBackend(PersistenceBackend):
             return False
         if server_id not in self._crash_events:
             self._crash_events[server_id] = deque(maxlen=100)
-        self._crash_events[server_id].appendleft(dict(event))
+        self._crash_events[server_id].appendleft(redact_log_entry(dict(event)))  # SECURITY
         logger.debug(f"Saved crash event for server '{server_id}' to memory")
         return True
 
