@@ -8,6 +8,15 @@ import pytest
 from fluidmcp.cli import cli
 
 
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    # cli.main() writes FMCP_SECURE_MODE / FMCP_BEARER_TOKEN straight into os.environ.
+    # monkeypatch.delenv on an unset var records nothing to undo, so without this the
+    # values leak into later tests in the same worker (which then get 401s).
+    with patch.dict(os.environ):
+        yield
+
+
 def _run_serve(monkeypatch, tmp_path, argv, env_token=None):
     monkeypatch.delenv("FMCP_BEARER_TOKEN", raising=False)
     monkeypatch.delenv("FMCP_SECURE_MODE", raising=False)

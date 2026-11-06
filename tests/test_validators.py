@@ -14,6 +14,10 @@ from fluidmcp.cli.services.validators import (
     validate_mcpservers_config,
     is_valid_package_version,
 )
+import pytest
+from pydantic import ValidationError
+
+from fluidmcp.cli.models.api import AddServerFromGitHubRequest
 
 
 class TestValidatePackageString:
@@ -683,18 +687,18 @@ class TestServerIdValidation:
         _make_github_request("my-server")
         _make_github_request("pdf-to-excel")
 
-    def test_valid_underscores(self):
-        _make_github_request("pdf_to_excel_lic")
-        _make_github_request("my_server")
-
-    def test_valid_mixed_hyphens_and_underscores(self):
-        _make_github_request("my_pdf-server")
-        _make_github_request("tool_v2-prod")
+    def test_invalid_underscores(self):
+        # server_id is hyphen-only (^[a-z0-9-]+$), matching the frontend forms and
+        # server_builder's slugifier, which turn underscores into hyphens.
+        with pytest.raises(ValidationError):
+            _make_github_request("pdf_to_excel_lic")
+        with pytest.raises(ValidationError):
+            _make_github_request("my_pdf-server")
 
     def test_valid_numbers(self):
         _make_github_request("server123")
         _make_github_request("server-2")
-        _make_github_request("server_v2")
+        _make_github_request("server-v2")
 
     def test_valid_simple_lowercase(self):
         _make_github_request("filesystem")
