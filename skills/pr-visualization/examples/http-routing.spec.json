@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "title": "FluidMCP HTTP response isolation — starter example for PR #913",
+  "summary": {
+    "short_name": "HTTP Response Isolation",
+    "headline": "Give each upstream HTTP request a unique ID, validate the response ID, and restore the caller's original ID.",
+    "what": ["Keep caller IDs separate from upstream correlation IDs.", "Reject mismatched upstream responses before restoring the original ID.", "Exercise delayed echoes through both gateway endpoints under concurrent load."],
+    "why": "Different callers can send the same JSON-RPC ID; the shared upstream must still distinguish their requests.",
+    "tags": ["Streamable HTTP", "JSON-RPC", "concurrency"],
+    "impact": [{"label": "Transport scope", "level": "medium", "text": "This change and load suite cover Streamable HTTP; stdio and SSE transport clients are outside this example."}]
+  },
+  "layers": [{"id": "transport", "label": "HTTP transport", "color": "blue"}, {"id": "tests", "label": "End-to-end tests", "color": "green"}],
+  "flows": [{
+    "id": "http-ids", "title": "Request ID round trip", "kind": "sequence",
+    "description": "The proxy keeps correlation state local to the HTTP invocation. The response must match that invocation's upstream ID before it is relabeled for the caller.",
+    "participants": [{"id": "caller", "label": "Gateway caller"}, {"id": "proxy", "label": "HTTP proxy", "layer": "transport", "symbol": "http.proxy"}, {"id": "upstream", "label": "MCP server"}],
+    "messages": [
+      {"from": "caller", "to": "proxy", "label": "tools/call with original JSON-RPC ID", "kind": "call"},
+      {"from": "proxy", "to": "upstream", "label": "Same tool arguments, fresh upstream ID", "kind": "call"},
+      {"from": "upstream", "to": "proxy", "label": "Result or error with upstream ID", "kind": "return"},
+      {"from": "proxy", "to": "proxy", "label": "Check upstream ID before restoring original ID", "kind": "call"},
+      {"from": "proxy", "to": "caller", "label": "Response carrying original JSON-RPC ID", "kind": "return"}
+    ]
+  }],
+  "layout": {"groups": [
+    {"layer": "transport", "files": [{"path": "fluidmcp/cli/services/package_launcher.py", "change": "modified", "symbols": [{"id": "http.proxy", "name": "_proxy_to_http_server", "kind": "async function", "ref": "fluidmcp/cli/services/package_launcher.py:184-288", "summary": "Forward JSON-RPC over HTTP and validate response correlation before restoring the original ID.", "tags": ["async", "network"]}]}]},
+    {"layer": "tests", "files": [{"path": "tests_e2e/test_response_isolation.py", "change": "added", "symbols": [{"id": "test.load", "name": "run_load", "kind": "async function", "ref": "tests_e2e/test_response_isolation.py:34-137", "summary": "Compare concurrent caller markers with returned echoes and independent upstream execution records.", "tags": ["async", "network"]}]}]}
+  ]},
+  "review": {
+    "verdict": "Illustrative starter, not a completed review. Expand against the target PR and record actual validation results.",
+    "verdict_level": "comment", "findings": [],
+    "tests": [{"file": "tests_e2e/test_response_isolation.py", "what": "Defined scenarios cover 50/100 callers, raw JSON-RPC unique/reused IDs, and convenience tool calls; no execution is claimed by this example."}],
+    "untested": ["This example does not establish runtime test results, stdio coverage, SSE transport coverage, or secure-mode authorization."],
+    "deployment": []
+  }
+}
