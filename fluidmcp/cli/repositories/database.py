@@ -339,6 +339,10 @@ class DatabaseManager(PersistenceBackend):
             await self.db.fluidmcp_servers.create_index("id", unique=True)
             logger.info("Created unique index on fluidmcp_servers.id")
 
+            # Create unique index on fluidmcp_rest_servers collection (REST proxies)
+            await self.db.fluidmcp_rest_servers.create_index("id", unique=True)
+            logger.info("Created unique index on fluidmcp_rest_servers.id")
+
             # Create indexes on fluidmcp_server_instances collection
             await self.db.fluidmcp_server_instances.create_index("server_id")
             logger.info("Created index on fluidmcp_server_instances.server_id")
@@ -1233,6 +1237,61 @@ class DatabaseManager(PersistenceBackend):
         except Exception as e:
             logger.error(f"Error counting crash events for '{server_id}': {e}")
             return 0
+
+    # ==================== REST Proxy Persistence ====================
+
+    def persists_rest_servers(self) -> bool:
+        """REST proxies are stored in MongoDB and reloaded on startup."""
+        return True
+
+    async def save_rest_server(self, config: Dict[str, Any]) -> bool:
+        """
+        Create or replace a REST proxy config, keyed by "id".
+
+        Args:
+            config: {"id", "type", "target-rest-endpoint"}
+
+        Returns:
+            True if saved successfully
+        """
+        try:
+            doc = {k: v for k, v in config.items() if k not in ("_id", "created_at", "updated_at")}
+            doc["updated_at"] = datetime.utcnow()
+            await self.db.fluidmcp_rest_servers.update_one(
+                {"id": doc["id"]},
+                {"$set": doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+                upsert=True,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error saving REST server config: {e}")
+            return False
+
+    async def get_rest_server(self, id: str) -> Optional[Dict[str, Any]]:
+        """Return one REST proxy config, or None."""
+        try:
+            return await self.db.fluidmcp_rest_servers.find_one({"id": id}, {"_id": 0})
+        except Exception as e:
+            logger.error(f"Error retrieving REST server config: {e}")
+            return None
+
+    async def list_rest_servers(self) -> List[Dict[str, Any]]:
+        """Return all REST proxy configs, sorted by id."""
+        try:
+            cursor = self.db.fluidmcp_rest_servers.find({}, {"_id": 0}).sort("id", 1)
+            return await cursor.to_list(length=None)
+        except Exception as e:
+            logger.error(f"Error listing REST server configs: {e}")
+            return []
+
+    async def delete_rest_server(self, id: str) -> bool:
+        """Delete a REST proxy config. Returns True if one was deleted."""
+        try:
+            result = await self.db.fluidmcp_rest_servers.delete_one({"id": id})
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Error deleting REST server config: {e}")
+            return False
 
     # ==================== Connection Management ====================
 

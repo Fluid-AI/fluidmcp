@@ -8,7 +8,7 @@ All authentication logic should use these functions to ensure consistency and se
 import os
 import secrets
 from typing import Optional
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Initialize HTTPBearer security scheme
@@ -133,3 +133,35 @@ def get_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> 
 
     _validate_bearer_token(credentials, bearer_token)
     return credentials.credentials
+
+
+# REST proxy routes forward the caller's Authorization header to the upstream,
+# so FluidMCP's own token travels in this header instead.
+PROXY_AUTH_HEADER = "FluidMCP-Authorization"
+
+
+def verify_proxy_token(request: Request) -> None:
+    """
+    Validate the FluidMCP-Authorization header if secure mode is enabled.
+
+    Used by REST proxy routes (services/rest_proxy.py). Accepts "Bearer <token>"
+    or the bare token. A token sent in Authorization does not count: that header
+    belongs to the upstream.
+
+    Raises:
+        HTTPException:
+            - 401 if the token is invalid or missing in secure mode
+            - 500 if secure mode enabled but FMCP_BEARER_TOKEN not configured
+    """
+    bearer_token = os.environ.get("FMCP_BEARER_TOKEN")
+    secure_mode = os.environ.get("FMCP_SECURE_MODE") == "true"
+
+    if not secure_mode:
+        return None
+
+    value = request.headers.get(PROXY_AUTH_HEADER, "").strip()
+    scheme, _, rest = value.partition(" ")
+    token = rest.strip() if scheme.lower() == "bearer" else value
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token) if token else None
+    _validate_bearer_token(credentials, bearer_token)
+    return None

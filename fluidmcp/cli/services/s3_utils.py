@@ -88,12 +88,13 @@ def validate_metadata_config(config, source_name):
         logger.error(f"Invalid configuration format: Expected a JSON object in {source_name}")
         return False
 
-    # Check if the file has at least one of mcpServers or llmModels
+    # Check if the file has at least one of mcpServers, llmModels or restServers
     has_mcp_servers = "mcpServers" in config
     has_llm_models = "llmModels" in config
+    has_rest_servers = "restServers" in config
 
-    if not has_mcp_servers and not has_llm_models:
-        logger.error(f"Invalid configuration file: Neither 'mcpServers' nor 'llmModels' found in {source_name}")
+    if not has_mcp_servers and not has_llm_models and not has_rest_servers:
+        logger.error(f"Invalid configuration file: None of 'mcpServers', 'llmModels' or 'restServers' found in {source_name}")
         return False
 
     # Verify that mcpServers is a dictionary if present
@@ -104,6 +105,11 @@ def validate_metadata_config(config, source_name):
     # Verify that llmModels is a dictionary if present
     if has_llm_models and not isinstance(config["llmModels"], dict):
         logger.error("Invalid configuration format: 'llmModels' must be a JSON object")
+        return False
+
+    # Verify that restServers is a dictionary if present
+    if has_rest_servers and not isinstance(config["restServers"], dict):
+        logger.error("Invalid configuration format: 'restServers' must be a JSON object")
         return False
 
     # If all the checks pass, return True

@@ -19,7 +19,8 @@ from .services import (
 )
 from .services.package_installer import package_exists
 from .services.package_list import get_latest_version_dir
-from .services.config_resolver import INSTALLATION_DIR
+from .services.config_resolver import INSTALLATION_DIR, RestServersConfigError
+from .services.rest_proxy import TARGET_FIELD, RestProxyRegistry, install_rest_proxy, normalize_target
 
 
 def configure_logger(verbose: bool = False) -> None:
@@ -301,6 +302,9 @@ def validate_command(args) -> None:
     except FileNotFoundError as e:
         errors.append(str(e))
 
+    except RestServersConfigError as e:
+        errors.extend(e.errors)
+
     except ValueError as e:
         errors.append(f"Configuration error: {e}")
 
@@ -367,6 +371,11 @@ def validate_command(args) -> None:
                         # Missing non-token env var is a WARNING
                         warnings.append(f"Env var '{key}' is not set (server: {server_name})")
 
+    # REST proxies were fully validated while resolving the config; list them.
+    rest_lines = [
+        f"  - {name} → {normalize_target(cfg[TARGET_FIELD])}" for name, cfg in config.rest_servers.items()
+    ]
+
     # Print results
     logger.debug(f"Validation complete: {len(errors)} error(s), {len(warnings)} warning(s)")
 
@@ -386,10 +395,14 @@ def validate_command(args) -> None:
         for warn in warnings:
             print(f"  - {warn}")
         print("\n✔ No fatal errors found. You may proceed, but consider addressing the warnings above.")
+        if rest_lines:
+            print("REST proxies:\n" + "\n".join(rest_lines))
         sys.exit(0)
     else:
         logger.info("Validation passed with no issues")
         print("✔ Configuration is valid with no issues found.")
+        if rest_lines:
+            print("REST proxies:\n" + "\n".join(rest_lines))
         sys.exit(0)
 
 
@@ -619,6 +632,9 @@ def github_command(args, secure_mode: bool = False, token: str = None) -> None:
             )
             app.state.db_manager = db_manager
             app.state.server_manager = server_manager
+            # REST proxies can be added via /api/rest-servers (none from config here)
+            app.state.rest_proxy_registry = RestProxyRegistry()
+            install_rest_proxy(app, app.state.rest_proxy_registry)
 
             setup_frontend_routes(app, host="0.0.0.0", port=client_server_port)
 

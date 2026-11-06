@@ -15,7 +15,7 @@ import requests
 import boto3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from botocore.exceptions import ClientError
 from loguru import logger
 
@@ -23,6 +23,7 @@ from .network_utils import find_free_port
 from .package_list import get_latest_version_dir
 from .package_installer import parse_package_string, replace_package_metadata_from_package_name
 from .s3_utils import s3_download_file, s3_upload_file, load_json_file, write_json_file, validate_metadata_config
+from .rest_proxy import validate_rest_servers
 
 
 # Environment variables
@@ -50,6 +51,7 @@ class ServerConfig:
 
     servers: Dict[str, dict] = field(default_factory=dict)  # mcpServers config
     llm_models: Dict[str, dict] = field(default_factory=dict)  # llmModels config (all types)
+    rest_servers: Dict[str, dict] = field(default_factory=dict)  # restServers config (REST proxies)
     needs_install: bool = False  # Whether to install packages first
     sync_to_s3: bool = False  # Whether to sync metadata to S3
     source_type: str = "package"  # For logging: package, installed, file, s3_url, s3_master
@@ -186,6 +188,10 @@ def resolve_from_file(file_path: str) -> ServerConfig:
     if not validate_metadata_config(config, str(file_path)):
         raise ValueError(f"Invalid configuration in {file_path}")
 
+    # Fail fast on restServers before cloning repos or expanding package strings;
+    # checked again at the end in case expansion changed the MCP server names.
+    _extract_rest_servers(config, config.get("mcpServers") or {}, str(file_path))
+
     servers = config.get("mcpServers", {})
     llm_models = config.get("llmModels", {})  # Extract LLM models section
     replicate_models = config.get("replicateModels", {})  # Backward compatibility: old format
@@ -245,14 +251,41 @@ def resolve_from_file(file_path: str) -> ServerConfig:
             config = json.load(f)
         servers = config.get("mcpServers", {})
 
+    rest_servers = _extract_rest_servers(config, servers, str(file_path))
+
     return ServerConfig(
         servers=servers,
         llm_models=llm_models,  # Include all LLM models (vllm, replicate, etc.)
+        rest_servers=rest_servers,
         needs_install=needs_install,
         sync_to_s3=False,
         source_type="file",
         metadata_path=file_path
     )
+
+
+class RestServersConfigError(ValueError):
+    """Invalid restServers section; .errors lists every problem."""
+
+    def __init__(self, source_name: str, errors: List[str]):
+        self.errors = errors
+        super().__init__(f"Invalid restServers in {source_name}: " + "; ".join(errors))
+
+
+def _extract_rest_servers(config: Dict[str, Any], servers: Dict[str, Any], source_name: str) -> Dict[str, dict]:
+    """
+    Return the restServers section after validating it.
+
+    Raises RestServersConfigError listing every problem, so `fmcp validate` and
+    `fmcp run` report them all at once instead of failing on the first.
+    """
+    rest_servers = config.get("restServers") or {}
+    errors = validate_rest_servers(rest_servers, servers.keys())
+    if errors:
+        raise RestServersConfigError(source_name, errors)
+    if rest_servers:
+        logger.debug(f"Found {len(rest_servers)} REST proxy server(s) in {source_name}")
+    return rest_servers
 
 
 def resolve_from_s3_url(presigned_url: str) -> ServerConfig:
@@ -296,9 +329,12 @@ def resolve_from_s3_url(presigned_url: str) -> ServerConfig:
         logger.info("Merging into 'llmModels' with type='replicate' (consider updating config format)")
         llm_models = _merge_replicate_into_llm_models(llm_models, replicate_models)
 
+    rest_servers = _extract_rest_servers(config, servers, "S3 configuration")
+
     return ServerConfig(
         servers=servers,
         llm_models=llm_models,  # Include all LLM models (vllm, replicate, etc.)
+        rest_servers=rest_servers,
         needs_install=True,
         sync_to_s3=False,
         source_type="s3_url",
@@ -365,9 +401,12 @@ def resolve_from_s3_master() -> ServerConfig:
         logger.info("Merging into 'llmModels' with type='replicate' (consider updating config format)")
         llm_models = _merge_replicate_into_llm_models(llm_models, replicate_models)
 
+    rest_servers = _extract_rest_servers(s3_metadata, servers, str(meta_all_path))
+
     return ServerConfig(
         servers=servers,
         llm_models=llm_models,  # Include all LLM models (vllm, replicate, etc.)
+        rest_servers=rest_servers,
         needs_install=True,
         sync_to_s3=True,
         source_type="s3_master",

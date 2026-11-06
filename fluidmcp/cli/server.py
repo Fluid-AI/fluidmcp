@@ -26,6 +26,10 @@ from .api.management import router as mgmt_router
 from .services.package_launcher import create_dynamic_router
 from .services.metrics import get_registry
 from .services.frontend_utils import setup_frontend_routes
+from .services.rest_proxy import (
+    RestProxyRegistry, install_rest_proxy, load_rest_servers, drop_shadowing_proxies,
+    close_client as close_rest_proxy_client,
+)
 from .api.inspector import router as inspector_router, cleanup_sessions
 from .auth import verify_token
 
@@ -280,6 +284,11 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
     app.state.db_manager = db_manager
     app.state.server_manager = server_manager
 
+    # REST proxies: pass-through routes matched ahead of every other route.
+    # Managed via /api/rest-servers and loaded from persistence in main().
+    app.state.rest_proxy_registry = RestProxyRegistry()
+    install_rest_proxy(app, app.state.rest_proxy_registry)
+
     # Check MongoDB configuration and warn if not available
     if not hasattr(db_manager, 'client') or db_manager.client is None:
         logger.warning("=" * 80)
@@ -437,6 +446,7 @@ async def create_app(db_manager: DatabaseManager, server_manager: ServerManager,
         """Clean up resources on application shutdown."""
         from .api.management import cleanup_http_client
         await cleanup_http_client()
+        await close_rest_proxy_client()
         logger.info("HTTP client cleaned up")
 
         # Clean up Redis connection (if rate limiting is enabled)
@@ -706,6 +716,10 @@ async def main(args):
         loaded_models = await load_models_from_persistence(persistence)
         if loaded_models > 0:
             logger.info(f"✓ Loaded {loaded_models} model(s) from MongoDB on startup")
+        loaded_rest = await load_rest_servers(persistence, app.state.rest_proxy_registry)
+        loaded_rest -= len(drop_shadowing_proxies(app, app.state.rest_proxy_registry))
+        if loaded_rest > 0:
+            logger.info(f"✓ Loaded {loaded_rest} REST proxy server(s) on startup: {', '.join(app.state.rest_proxy_registry.names())}")
     else:
         logger.info("Skipping MongoDB model loading (not connected)")
 

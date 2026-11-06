@@ -1,0 +1,9 @@
+{
+  "mcpServers": {},
+  "restServers": {
+    "gupshup-chat": {
+      "type": "rest-proxy",
+      "target-rest-endpoint": "media.gupshup.com"
+    }
+  }
+}
