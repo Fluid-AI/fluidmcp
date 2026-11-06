@@ -222,6 +222,57 @@ def token_clear() -> None:
     print("Token removed successfully")
 
 
+def tunnel_keygen(rotate: bool) -> None:
+    """Create the tunnel identity key (or a rotation key) and print its public half."""
+    from .tunnel.keys import generate_key
+
+    try:
+        path, public_key = generate_key(rotate=rotate)
+    except (FileExistsError, FileNotFoundError) as e:
+        logger.error(str(e))
+        sys.exit(1)
+
+    print("\n" + "="*70)
+    print("TUNNEL PUBLIC KEY (register this with GPT Engine):")
+    print("="*70)
+    print(f"\n{public_key}\n")
+    print("="*70)
+    print(f"Private key saved to: {path} (keep it on this machine)")
+    if rotate:
+        print("After GPT Engine accepts it, run: fluidmcp tunnel activate-new-key")
+    print("="*70 + "\n")
+
+
+def tunnel_show_key() -> None:
+    """Print the public half of the tunnel identity key(s)."""
+    from .tunnel.keys import key_path, load_identity_key, next_key_path
+    from .tunnel.protocol import load_private_key_file, public_key_to_b64
+
+    if not key_path().exists():
+        logger.error("No tunnel key found. Create one with: fluidmcp tunnel keygen")
+        sys.exit(1)
+
+    print(f"\nActive public key:  {public_key_to_b64(load_identity_key())}")
+    if next_key_path().exists():
+        print(f"Rotated public key: {public_key_to_b64(load_private_key_file(next_key_path()))} (not active yet)")
+    print()
+
+
+def tunnel_activate_new_key() -> None:
+    """Make the rotated tunnel key the active one."""
+    from .tunnel.keys import activate_next_key, key_path
+
+    try:
+        public_key = activate_next_key()
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        sys.exit(1)
+
+    print(f"\nActive tunnel key is now: {public_key}")
+    print(f"Saved at: {key_path()}")
+    print("Restart FluidMCP to reconnect with it, then remove the old key from GPT Engine.\n")
+
+
 def validate_command(args) -> None:
     """
     Validate MCP configuration without running servers.
@@ -658,6 +709,14 @@ def main():
     # token clear
     token_clear_parser = token_subparsers.add_parser("clear", help="Remove saved token")
 
+    # tunnel command - Manage the tunnel identity key
+    tunnel_parser = subparsers.add_parser("tunnel", help="Manage the GPT Engine tunnel identity key")
+    tunnel_subparsers = tunnel_parser.add_subparsers(dest="tunnel_command", help="Tunnel key commands")
+    tunnel_keygen_parser = tunnel_subparsers.add_parser("keygen", help="Create the identity key and print its public key")
+    tunnel_keygen_parser.add_argument("--rotate", action="store_true", help="Create a second key to activate later")
+    tunnel_subparsers.add_parser("show-key", help="Print the public key(s)")
+    tunnel_subparsers.add_parser("activate-new-key", help="Switch to the key created by keygen --rotate")
+
     # edit-env commannd
     edit_env_parser = subparsers.add_parser("edit-env", help="Edit environment variables for a package")
     edit_env_parser.add_argument("package", type=str, help="<package[@version]>")
@@ -721,6 +780,12 @@ def main():
     # If secure mode is enabled
     if secure_mode:
         logger.debug("Secure mode requested")
+        # Precedence: --token > FMCP_BEARER_TOKEN env var > generate a new one.
+        # The env var keeps the token stable across restarts/redeploys (e.g. Railway).
+        if not token:
+            token = (os.environ.get("FMCP_BEARER_TOKEN") or "").strip() or None
+            if token:
+                logger.debug("Using bearer token from FMCP_BEARER_TOKEN")
         # generate a token if not provided
         if not token:
             # Generate a secure random token
@@ -783,6 +848,15 @@ def main():
             token_clear()
         else:
             token_parser.print_help()
+    elif args.command == "tunnel":
+        if args.tunnel_command == "keygen":
+            tunnel_keygen(args.rotate)
+        elif args.tunnel_command == "show-key":
+            tunnel_show_key()
+        elif args.tunnel_command == "activate-new-key":
+            tunnel_activate_new_key()
+        else:
+            tunnel_parser.print_help()
     elif args.command == "serve":
         # Check authentication requirements
         if not args.secure and not getattr(args, 'allow_insecure', False):
@@ -799,21 +873,6 @@ def main():
         # Run standalone API server
         from .server import main as server_main
         import asyncio
-
-        # Generate token if secure mode enabled but no token provided
-        if secure_mode and not token:
-            token = secrets.token_urlsafe(32)
-            # SECURITY FIX: Do not log the actual token (violates security policy at line 701)
-            logger.info("Generated bearer token (token value printed to console only)")
-
-            # Print token to console (NOT in logs for security)
-            print("\n" + "="*70)
-            print("🔐 BEARER TOKEN GENERATED (save this securely!):")
-            print("="*70)
-            print(f"\n{token}\n")
-            print("="*70)
-            print("This token is required for API authentication.")
-            print("="*70 + "\n")
 
         try:
             asyncio.run(server_main(args))

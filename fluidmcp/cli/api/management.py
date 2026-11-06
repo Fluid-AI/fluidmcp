@@ -19,7 +19,6 @@ import asyncio
 import httpx
 import time
 import json
-import threading
 from collections import defaultdict
 from time import time as current_time
 from datetime import datetime, timedelta, timezone
@@ -62,6 +61,9 @@ from ..services import omni_adapter
 from ..services.network_handle import NetworkSubprocessHandle
 
 from ..utils.env_utils import is_placeholder, has_env_var_syntax
+# All stdin writes / stdout reads for stdio servers go through the per-process
+# StdioJsonRpcRouter: one stdout reader, responses matched by JSON-RPC ID.
+from ..services.stdio_jsonrpc import StdioProcessClosed, StdioRequestTimeout, get_stdio_router
 from ..services.metrics import MetricsCollector, get_registry as _get_metrics_registry
 
 try:
@@ -2395,8 +2397,6 @@ async def run_tool(
     # Send tools/call request
     t0 = time.monotonic()
     try:
-        import json
-
         tool_request = {
             "jsonrpc": "2.0",
             "id": 2,
@@ -2408,20 +2408,17 @@ async def run_tool(
         }
 
         logger.info(f"Executing tool '{tool_name}' on server '{id}'")
-        process.stdin.write(json.dumps(tool_request) + "\n")
-        process.stdin.flush()
 
-        # Read response with 30 second timeout
+        # Shares the process's single stdout reader with the MCP proxy endpoints;
+        # the response is matched by JSON-RPC ID, never by read order.
         try:
-            response_line = await asyncio.wait_for(
-                asyncio.to_thread(process.stdout.readline),
-                timeout=30.0
-            )
-        except asyncio.TimeoutError:
+            response = await get_stdio_router(process, id).request(tool_request, timeout=30.0)
+        except StdioRequestTimeout:
             collector.record_tool_call(tool_name, "timeout", time.monotonic() - t0)
             raise HTTPException(504, "Tool execution timeout (>30s)")
-
-        response = json.loads(response_line.strip())
+        except (BrokenPipeError, OSError, StdioProcessClosed) as e:
+            collector.record_tool_call(tool_name, "error", time.monotonic() - t0)
+            raise HTTPException(503, f"Server '{id}' process pipe broken: {str(e)}")
 
         if "error" in response:
             collector.record_tool_call(tool_name, "error", time.monotonic() - t0)
@@ -2431,10 +2428,6 @@ async def run_tool(
         logger.info(f"Tool '{tool_name}' executed successfully on server '{id}'")
         return response.get("result", {})
 
-    except json.JSONDecodeError as e:
-        collector.record_tool_call(tool_name, "parse_error", time.monotonic() - t0)
-        logger.error(f"Failed to parse tool response for '{tool_name}' on '{id}': {e}")
-        raise HTTPException(500, "Failed to parse tool response")
     except HTTPException:
         raise
     except Exception as e:
