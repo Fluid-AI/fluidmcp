@@ -90,7 +90,14 @@ if [ "${ON_PREMISE}" = "true" ]; then
   echo ""
 
   echo "Starting fmcp run..."
-  MCP_CLIENT_SERVER_ALL_PORT="$PORT" fmcp run "$CONFIG_PATH" --file --start-server &
+  RUN_CMD=(fmcp run "$CONFIG_PATH" --file --start-server)
+  if [ -n "$FMCP_BEARER_TOKEN" ]; then
+    RUN_CMD+=(--secure --token "$FMCP_BEARER_TOKEN")
+    echo "Security: Bearer token authentication enabled"
+  else
+    echo "Warning: FMCP_BEARER_TOKEN not set — running without authentication"
+  fi
+  MCP_CLIENT_SERVER_ALL_PORT="$PORT" "${RUN_CMD[@]}" &
   SERVE_PID=$!
 
   if ! kill -0 "$SERVE_PID" 2>/dev/null; then

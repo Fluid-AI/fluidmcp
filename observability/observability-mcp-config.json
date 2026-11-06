@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "observability": {
+      "command": "python",
+      "args": ["-m", "fluidmcp.observability.mcp_server.server"],
+      "env": {
+        "PROMETHEUS_URL": "http://prometheus:9090",
+        "LOKI_URL": "http://loki:3100",
+        "TEMPO_URL": "http://tempo:3200",
+        "FLUIDMCP_URL": "http://fluidmcp:8099"
+      }
+    }
+  }
+}
