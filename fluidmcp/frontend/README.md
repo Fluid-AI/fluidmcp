@@ -16,13 +16,13 @@ This UI layer sits on top of FluidMCP's FastAPI gateway, consuming MCP endpoints
 - **Deployment**: Single-port deployment (frontend + backend on same port)
 
 **Production Mode (Single-Port Deployment):**
-- Frontend UI: `http://localhost:8099/ui`
-- Backend API: `http://localhost:8099/docs` (Swagger UI)
+- Frontend UI: `http://localhost:8499/ui`
+- Backend API: `http://localhost:8499/docs` (Swagger UI)
 - Both served from the same port for simplified deployment
 
 **Development Mode (Separate Servers):**
 - Frontend UI: `http://localhost:5173` (Vite dev server with hot reload)
-- Backend API: `http://localhost:8099/docs` (Swagger UI)
+- Backend API: `http://localhost:8499/docs` (Swagger UI)
 
 ## Current Implementation
 
@@ -163,8 +163,8 @@ cd ../..
 fmcp serve --allow-insecure
 
 # Access:
-# - Frontend UI: http://localhost:8099/ui
-# - Backend API: http://localhost:8099/docs
+# - Frontend UI: http://localhost:8499/ui
+# - Backend API: http://localhost:8499/docs
 ```
 
 This is the **recommended** approach for:
@@ -188,7 +188,7 @@ npm run dev
 
 # Access:
 # - Frontend UI: http://localhost:5173 (with hot reload)
-# - Backend API: http://localhost:8099/docs
+# - Backend API: http://localhost:8499/docs
 ```
 
 This is the **recommended** approach for:
@@ -199,7 +199,7 @@ This is the **recommended** approach for:
 
 **Codespaces URLs:**
 - Frontend: `https://<codespace-name>-5173.app.github.dev`
-- Backend: `https://<codespace-name>-8099.app.github.dev`
+- Backend: `https://<codespace-name>-8499.app.github.dev`
 
 ### Building for Production
 
@@ -233,16 +233,16 @@ Environment configuration depends on your deployment mode:
 Create a `.env` file inside `fluidmcp/frontend/`:
 
 ```bash
-# Local development (backend on port 8099)
-VITE_API_BASE_URL=http://localhost:8099
+# Local development (backend on port 8499)
+VITE_API_BASE_URL=http://localhost:8499
 
 # GitHub Codespaces
-# VITE_API_BASE_URL=https://<your-codespace-name>-8099.app.github.dev
+# VITE_API_BASE_URL=https://<your-codespace-name>-8499.app.github.dev
 ```
 
 **Note**: Replace `<your-codespace-name>` with the actual Codespaces URL shown in your browser when the backend is running.
 
-**Port Update:** The default backend port changed from `8090` to `8099`. Update any existing `.env` files accordingly.
+**Port Update:** The default backend port changed from `8090` to `8499`. Update any existing `.env` files accordingly.
 
 ## Development Notes
 
@@ -335,7 +335,7 @@ For persistent server management with the UI:
 
 ```bash
 fmcp serve --allow-insecure
-# Access UI at: http://localhost:8099/ui
+# Access UI at: http://localhost:8499/ui
 # Use the UI to start/stop servers, configure environments, and run tools
 ```
 
@@ -347,8 +347,8 @@ The frontend communicates with FluidMCP via standard HTTP requests:
 
 ```typescript
 // Example: Invoking an MCP tool
-// Production: POST http://localhost:8099/airbnb/mcp
-// Development: POST http://localhost:8099/airbnb/mcp (or configured via VITE_API_BASE_URL)
+// Production: POST http://localhost:8499/airbnb/mcp
+// Development: POST http://localhost:8499/airbnb/mcp (or configured via VITE_API_BASE_URL)
 {
   "jsonrpc": "2.0",
   "id": 1,
@@ -362,7 +362,7 @@ The frontend communicates with FluidMCP via standard HTTP requests:
 
 **Deployment Modes:**
 - **Production**: Frontend at `/ui` makes API calls to the same origin
-- **Development**: Frontend at `:5173` makes cross-origin API calls to `:8099` (requires CORS)
+- **Development**: Frontend at `:5173` makes cross-origin API calls to `:8499` (requires CORS)
 
 See `src/services/api.ts` for implementation details.
 

@@ -20,12 +20,12 @@ FluidMCP provides comprehensive Prometheus-compatible metrics for monitoring MCP
 fluidmcp run config.json --file --start-server
 ```
 
-The server exposes metrics at `http://localhost:8099/metrics`
+The server exposes metrics at `http://localhost:8499/metrics`
 
 ### 2. View Raw Metrics
 
 ```bash
-curl http://localhost:8099/metrics
+curl http://localhost:8499/metrics
 ```
 
 Output example:
@@ -104,7 +104,7 @@ scrape_configs:
   - job_name: 'fluidmcp'
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['localhost:8099']
+      - targets: ['localhost:8499']
 ```
 
 Or use the example configuration:
@@ -631,12 +631,12 @@ groups:
 
 1. **Check endpoint is accessible:**
    ```bash
-   curl http://localhost:8099/metrics
+   curl http://localhost:8499/metrics
    ```
 
 2. **Verify Prometheus scrape config:**
    - Check `prometheus.yml` has correct target
-   - Ensure port 8099 is not firewalled
+   - Ensure port 8499 is not firewalled
 
 3. **Check Prometheus logs:**
    ```bash
@@ -676,7 +676,7 @@ You can query metrics programmatically:
 import requests
 
 # Get all metrics
-response = requests.get("http://localhost:8099/metrics")
+response = requests.get("http://localhost:8499/metrics")
 print(response.text)
 
 # Parse with prometheus_client

@@ -12,7 +12,7 @@ fi
 
 set -e
 
-BASE_URL="${FLUIDMCP_URL:-http://localhost:8099}"
+BASE_URL="${FLUIDMCP_URL:-http://localhost:8499}"
 AUTH_TOKEN="${FLUIDMCP_TOKEN:-}"
 
 # Build auth header array if token is provided

@@ -50,9 +50,9 @@ mkdir -p /tmp/test-directory
 # Run with FluidMCP
 fluidmcp run examples/sample-config.json --file --start-server
 
-# Access the Swagger UI at http://localhost:8099/docs
+# Access the Swagger UI at http://localhost:8499/docs
 # Test an endpoint:
-curl -X POST http://localhost:8099/filesystem/mcp \
+curl -X POST http://localhost:8499/filesystem/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
@@ -183,12 +183,12 @@ mkdir -p /tmp/shared-workspace
 # 2. Run with FluidMCP
 fluidmcp run examples/multi-server-dependencies.json --file --start-server
 
-# Access the Swagger UI at http://localhost:8099/docs
+# Access the Swagger UI at http://localhost:8499/docs
 # Test filesystem endpoint:
-curl http://localhost:8099/filesystem/mcp/tools/list
+curl http://localhost:8499/filesystem/mcp/tools/list
 
 # Test sqlite endpoint:
-curl http://localhost:8099/sqlite/mcp/tools/list
+curl http://localhost:8499/sqlite/mcp/tools/list
 ```
 
 **Servers included**:
@@ -218,11 +218,11 @@ fluidmcp run examples/secure-mode.json --file --start-server --secure --token my
 
 # 3. Test with authentication (in another terminal)
 # This will succeed with correct token:
-curl http://localhost:8099/filesystem/mcp/tools/list \
+curl http://localhost:8499/filesystem/mcp/tools/list \
   -H "Authorization: Bearer mySecureToken123"
 
 # This will fail without authentication:
-curl http://localhost:8099/filesystem/mcp/tools/list
+curl http://localhost:8499/filesystem/mcp/tools/list
 ```
 
 **How to provide your token (3 methods)**:
@@ -267,7 +267,7 @@ fluidmcp run examples/sample-config.json --file --start-server
 fluidmcp run examples/sample-config.json --file --start-server --verbose
 
 # 3. In another terminal, test the endpoint
-curl http://localhost:8099/filesystem/mcp \
+curl http://localhost:8499/filesystem/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
 ```
@@ -291,7 +291,7 @@ fluidmcp run examples/sample-github-config.json --file --start-server
 fluidmcp run examples/sample-config.json --file --start-server --secure --token mytoken123
 
 # Test with authentication
-curl http://localhost:8099/filesystem/mcp \
+curl http://localhost:8499/filesystem/mcp \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer mytoken123" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'

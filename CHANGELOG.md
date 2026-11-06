@@ -174,10 +174,10 @@ Rate limits are now enforced by default. If you need custom limits:
 #### 5. Verify Deployment
 ```bash
 # Health check
-curl http://localhost:8099/health
+curl http://localhost:8499/health
 
 # Test rate limiting
-for i in {1..65}; do curl http://localhost:8099/api/llm/v1/models; done
+for i in {1..65}; do curl http://localhost:8499/api/llm/v1/models; done
 # Should see 429 (Rate Limit Exceeded) after 60 requests
 
 # Verify bearer token not in logs
@@ -223,11 +223,11 @@ None in this release. All deprecated endpoints were removed in v1.0.0.
 **Migration Guide**:
 ```bash
 # Old format (REMOVED)
-curl -X POST http://localhost:8099/api/llm/llama-2-70b/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/llama-2-70b/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "Hello"}]}'
 
 # New format (OpenAI-compatible)
-curl -X POST http://localhost:8099/api/llm/v1/chat/completions \
+curl -X POST http://localhost:8499/api/llm/v1/chat/completions \
   -d '{"model": "llama-2-70b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
